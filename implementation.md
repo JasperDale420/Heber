@@ -667,11 +667,11 @@
 
 ---
 
-## Phase 31: Train/Test Split (§30)
+## Phase 31: Train/Test Split (§30) ✅
 
-- [ ] Time-series split utilities
-- [ ] Purge window calculation
-- [ ] Embargo enforcement
+- [x] Time-series split utilities (walk_forward_splits, expanding_window_splits)
+- [x] Purge window calculation (purge_window function)
+- [x] Embargo enforcement (embargo parameter in splits)
 
 ---
 
