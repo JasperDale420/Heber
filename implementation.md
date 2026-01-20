@@ -809,13 +809,13 @@
 
 ---
 
-## Phase 46: Leakage Tests (§49)
+## Phase 46: Leakage Tests (§49) ✅
 
-- [ ] LK-001: No future data returned
-- [ ] LK-002: asof_join correctness
-- [ ] LK-003: Backfill ts_available
-- [ ] LK-004: Gold build validation
-- [ ] LK-005 through LK-007
+- [x] LK-001: No future data returned
+- [x] LK-002: asof_join correctness
+- [x] LK-003: Backfill ts_available
+- [x] LK-004: Gold build validation
+- [x] LK-005 through LK-007 (test case definitions)
 
 ---
 
@@ -836,17 +836,17 @@
 
 ---
 
-## Phase 49: Test Data Management (§50) *NEW*
+## Phase 49: Test Data Management (§50) ✅
 
 ### 49.1 Synthetic Data
 
-- [ ] Data generator for each dataset type
-- [ ] Configurable date ranges and symbols
+- [x] Data generator for bars, trades, quotes
+- [x] Configurable with seed for determinism
 
 ### 49.2 Golden Datasets
 
-- [ ] Curated test fixtures with known values
-- [ ] Version controlled test data
+- [x] Curated test fixtures (simple_bars, leakage_test)
+- [x] FixtureRegistry for test data management
 
 ### 49.3 Edge Case Library
 

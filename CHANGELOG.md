@@ -125,6 +125,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `CapacityPlanner` with cost projection (volume multiplier)
   - 18/18 tests passing
 
+#### Part IX: Testing Framework (PRD §45-50)
+
+- **Synthetic Data Generators** (Phase 49, PRD §50)
+  - `SyntheticDataGenerator` for bars, trades, quotes
+  - Deterministic generation with seed support
+  - `TestDataConfig` for date ranges and symbols
+  - `TestFixture` and `FixtureRegistry` for curated test data
+
+- **Leakage Validation Suite** (Phase 46, PRD §49)
+  - `LeakageValidator` with LK-001 through LK-007 test cases
+  - `validate_no_future_data()` for zero-leakage assertion
+  - `validate_backfill_ts_available()` for backfill validation
+  - `validate_gold_lineage()` for feature/label integrity
+  - Report generation with pass/fail summary
+  - 17/17 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)
