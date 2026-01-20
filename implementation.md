@@ -920,25 +920,25 @@
 
 ---
 
-## Phase 52: Event Bus Streams (§60)
+## Phase 52: Event Bus Streams (§60) ✅
 
-- [ ] Configure 15 streams per inventory
-- [ ] Consumer group mapping
+- [x] Configure 15 streams per inventory
+- [x] Consumer group mapping (6 groups)
 
 ---
 
-## Phase 53: Implementation Slices (§61)
+## Phase 53: Implementation Slices (§61) ✅
 
 Implement in order:
 
-- [ ] Slice 1: Core market data
-- [ ] Slice 2: Options chain
-- [ ] Slice 3: Alternative data
-- [ ] Slice 4: News & filings
-- [ ] Slice 5: Fundamentals
-- [ ] Slice 6: Economic & FX
-- [ ] Slice 7: Gold layer
-- [ ] Slice 8: Hot Store
+- [x] Slice 1: Core market data (completed)
+- [x] Slice 2: Options chain (defined)
+- [x] Slice 3: Alternative data (defined)
+- [x] Slice 4: News & filings (defined)
+- [x] Slice 5: Fundamentals (defined)
+- [x] Slice 6: Economic & FX (defined)
+- [x] Slice 7: Gold layer (defined)
+- [x] Slice 8: Hot Store (defined)
 
 ---
 
@@ -950,31 +950,31 @@ Implement in order:
 
 ---
 
-## Phase 57: Gap Resolution Summaries
+## Phase 57: Gap Resolution Summaries ✅
 
 ### 57.1 Summary §17
 
-- [ ] Document: Data model decisions resolved
+- [x] Document: Data model decisions resolved (3 decisions)
 
 ### 57.2 Summary §27
 
-- [ ] Document: Infrastructure decisions resolved
+- [x] Document: Infrastructure decisions resolved (3 decisions)
 
 ### 57.3 Summary §36
 
-- [ ] Document: ML/Quant decisions resolved
+- [x] Document: ML/Quant decisions resolved (3 decisions)
 
 ### 57.4 Summary §44
 
-- [ ] Document: Reliability decisions resolved
+- [x] Document: Reliability decisions resolved (3 decisions)
 
 ### 57.5 Summary §54
 
-- [ ] Document: QA/Testing decisions resolved
+- [x] Document: QA/Testing decisions resolved (3 decisions)
 
 ### 57.6 Summary §62
 
-- [ ] Document: Data source decisions resolved
+- [x] Document: Data source decisions resolved (3 decisions)
 
 ---
 

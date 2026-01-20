@@ -184,6 +184,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ForexRate`, `CryptoBar`, `CryptoQuote`
   - 16 schemas total, 14/14 tests passing
 
+- **Event Bus Streams** (Phase 52, PRD §60)
+  - `StreamConfig` with 15 streams across priorities
+  - `ConsumerGroupConfig` with 6 consumer groups
+  - `StreamRegistry` for stream/group management
+
+- **Implementation Slices** (Phase 53, PRD §61)
+  - `ImplementationSlice` with 8 ordered slices
+  - `SliceManager` with dependency tracking and status
+
+- **Gap Resolution Summaries** (Phase 57, PRD §17-62)
+  - `DecisionRecord` for design decisions
+  - `GapResolutionRegistry` with 18 decisions across 6 categories
+  - 17/17 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)
