@@ -857,29 +857,29 @@
 
 ---
 
-## Phase 50: Test Environments (§52) *NEW*
+## Phase 50: Test Environments (§52) ✅
 
-- [ ] Local: Docker Compose (MinIO, Postgres, Redis)
-- [ ] CI: GitHub Actions with testcontainers
-- [ ] Staging: Kubernetes with real infra
+- [x] Local: Docker Compose (MinIO, Postgres, Redis, ClickHouse)
+- [x] CI: GitHub Actions with testcontainers
+- [x] Staging: Kubernetes config defined
 
 ---
 
 # Part X: Data Sources
 
-## Phase 51: Provider Inventory (§55)
+## Phase 51: Provider Inventory (§55) ✅
 
-- [ ] Document Alpaca capabilities
-- [ ] Document Unusual Whales capabilities
-- [ ] Document Finnhub, Alpha Vantage, yFinance, News API, SEC Edgar
+- [x] Document Alpaca capabilities
+- [x] Document Unusual Whales capabilities
+- [x] Document Finnhub, Alpha Vantage, yFinance, News API, SEC Edgar
 
 ---
 
-## Phase 50: Structured vs Unstructured (§56)
+## Phase 50: Structured vs Unstructured (§56) ✅
 
-- [ ] Define Heber boundary (structured)
-- [ ] Define Document Store boundary (unstructured)
-- [ ] Cross-reference via doc_store_id
+- [x] Define Heber boundary (structured)
+- [x] Define Document Store boundary (unstructured)
+- [x] Cross-reference via storage boundary enum
 
 ---
 
