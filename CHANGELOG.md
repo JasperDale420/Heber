@@ -79,6 +79,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_delisted_instruments()`, `get_newly_listed_instruments()`
   - 13/13 tests passing
 
+#### Part VIII: Reliability Engineering (PRD §37-38)
+
+- **SLO Framework** (Phase 38, PRD §37)
+  - `SLI` dataclass for Service Level Indicators with PromQL queries
+  - `SLO` with target percentage and error budget ratio calculation
+  - `BurnRateAlert` with Prometheus rule generation
+  - `SLOManager` for status calculation and rule generation
+  - Default SLOs: Ingestion (99.9%), Write (99.95%), Catalog (99.9%)
+  - Burn rate alerts: 14x/1h (critical), 6x/6h (warning), 3x/1d, 1x/3d
+
+- **Error Budget Policy** (Phase 39, PRD §38)
+  - `ErrorBudget` with allowed/remaining calculation
+  - `BudgetState` enum: healthy (>50%), warning (25-50%), critical (<25%), exhausted
+  - `BudgetPolicy` with deploy gates by state
+  - `DeployRisk` levels: standard, high_risk, breaking_change, infrastructure
+  - `ErrorBudgetManager` for policy enforcement and reporting
+  - 20/20 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)

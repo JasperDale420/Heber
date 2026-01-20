@@ -732,19 +732,19 @@
 
 # Part VIII: Reliability Engineering
 
-## Phase 37: SLO Framework (§37)
+## Phase 37: SLO Framework (§37) ✅
 
-- [ ] SLI definitions
-- [ ] SLO targets
-- [ ] Burn rate alerts
+- [x] SLI definitions (ingestion, write, read latency, freshness, catalog)
+- [x] SLO targets (99.9% ingestion, 99.95% write, etc.)
+- [x] Burn rate alerts (14x/1h, 6x/6h, 3x/1d, 1x/3d)
 
 ---
 
-## Phase 38: Error Budget (§38)
+## Phase 38: Error Budget (§38) ✅
 
-- [ ] Budget calculation
-- [ ] Consumption tracking
-- [ ] Policy enforcement
+- [x] Budget calculation (allowed errors = (1-target) × total)
+- [x] Consumption tracking (BudgetState: healthy/warning/critical/exhausted)
+- [x] Policy enforcement (deploy gates by risk level)
 
 ---
 
