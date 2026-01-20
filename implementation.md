@@ -714,19 +714,19 @@
 
 ---
 
-## Phase 35: Backtest Integration (§34)
+## Phase 35: Backtest Integration (§34) ✅
 
-- [ ] Data loading helpers
-- [ ] Point-in-time fetching
-- [ ] Result storage
+- [x] Data loading helpers (BacktestDataLoader)
+- [x] Point-in-time fetching (asof_time handling)
+- [x] Result storage (BacktestResult, ExperimentTracker)
 
 ---
 
-## Phase 36: Survivor Bias (§35)
+## Phase 36: Survivor Bias (§35) ✅
 
-- [ ] Delisting tracking
-- [ ] Universe snapshots
-- [ ] Historical constituents
+- [x] Delisting tracking (InstrumentLifecycle, DelistReason)
+- [x] Universe snapshots (UniverseManager.get_universe)
+- [x] Historical constituents (filter_dataframe, exclude_future_delistings)
 
 ---
 
