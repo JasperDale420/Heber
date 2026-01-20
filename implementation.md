@@ -463,26 +463,26 @@
 
 ---
 
-## Phase 19: Backpressure & DLQ (§12.8) *NEW*
+## Phase 19: Backpressure & DLQ (§12.8) ✅
 
 ### 19.1 Backpressure
 
-- [ ] Consumer lag grows (metric)
-- [ ] Never drop data
-- [ ] Scale consumers or widen batches
+- [x] Consumer lag grows (metric: heber_consumer_lag_seconds)
+- [x] Never drop data
+- [x] Scale consumers or widen batches (BackpressureMonitor)
 
 ### 19.2 Retry Policy
 
-- [ ] Max retries: 10
-- [ ] Backoff: exponential + jitter (100ms → 30s)
-- [ ] Retryable: transient storage/DB failures
-- [ ] Non-retryable: schema mismatch, malformed envelope
+- [x] Max retries: 10
+- [x] Backoff: exponential + jitter (100ms → 30s)
+- [x] Retryable: transient storage/DB failures
+- [x] Non-retryable: schema mismatch, malformed envelope
 
 ### 19.3 Dead Letter Queue
 
-- [ ] `stream:heber.dlq`
-- [ ] `quarantine/` storage path
-- [ ] DLQ payload: envelope, error_type, message, stack_trace, first_seen_ts, retry_count
+- [x] `stream:heber.dlq`
+- [x] `quarantine/` storage path
+- [x] DLQ payload: envelope, error_type, message, stack_trace, first_seen_ts, retry_count
 
 ---
 
