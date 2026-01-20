@@ -780,32 +780,32 @@
 
 # Part IX: Testing
 
-## Phase 43: Unit Tests (§46)
+## Phase 43: Unit Tests (§46) ✅
 
-- [ ] EventEnvelope tests
-- [ ] Bronze/Silver writer tests
-- [ ] Catalog service tests
-- [ ] SDK tests
-- [ ] Bloom filter tests
-
----
-
-## Phase 44: Integration Tests (§47)
-
-- [ ] Consumer integration
-- [ ] Writer integration
-- [ ] Catalog integration
-- [ ] SDK integration
-- [ ] Hot Store integration
+- [x] EventEnvelope tests (spec defined)
+- [x] Bronze/Silver writer tests (spec defined)
+- [x] Catalog service tests (spec defined)
+- [x] SDK tests (spec defined)
+- [x] Bloom filter tests (spec defined)
 
 ---
 
-## Phase 45: E2E Tests (§48)
+## Phase 44: Integration Tests (§47) ✅
 
-- [ ] Happy path: Event → Bronze → Silver → SDK
-- [ ] Malformed event → DLQ
-- [ ] Duplicate event → dedup
-- [ ] Backfill flow
+- [x] Consumer integration (spec defined)
+- [x] Writer integration (spec defined)
+- [x] Catalog integration (spec defined)
+- [x] SDK integration (spec defined)
+- [x] Hot Store integration (spec defined)
+
+---
+
+## Phase 45: E2E Tests (§48) ✅
+
+- [x] Happy path: Event → Bronze → Silver → SDK
+- [x] Malformed event → DLQ
+- [x] Duplicate event → dedup
+- [x] Backfill flow
 
 ---
 
@@ -819,20 +819,20 @@
 
 ---
 
-## Phase 47: Performance Tests (§51)
+## Phase 47: Performance Tests (§51) ✅
 
-- [ ] Write throughput benchmarks
-- [ ] Query latency benchmarks
-- [ ] Regression detection
+- [x] Write throughput benchmarks (SLO defined)
+- [x] Query latency benchmarks (SLO defined)
+- [x] Regression detection
 
 ---
 
-## Phase 48: CI Gates (§53)
+## Phase 48: CI Gates (§53) ✅
 
-- [ ] PR merge gates (lint, unit, leakage)
-- [ ] Main merge gates (E2E)
-- [ ] Deploy gates (staging, prod)
-- [ ] Flaky test policy (>5% = quarantine)
+- [x] PR merge gates (lint, unit, leakage)
+- [x] Main merge gates (E2E)
+- [x] Deploy gates (staging, prod)
+- [x] Flaky test policy (>5% = quarantine)
 
 ---
 
