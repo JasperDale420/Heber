@@ -486,19 +486,19 @@
 
 ---
 
-## Phase 20: Dedupe Strategy (§12.11) *NEW*
+## Phase 20: Dedupe Strategy (§12.11) ✅
 
 ### 20.1 Dedupe Layers
 
-- [ ] Consumer: In-memory bloom filter (fast approx)
-- [ ] Writer: Append-only per batch
-- [ ] Compactor: Exact dedupe on merge
+- [x] Consumer: In-memory bloom filter (fast approx)
+- [x] Writer: Append-only per batch (dedupe_batch_at_writer)
+- [x] Compactor: Exact dedupe on merge (dedupe_at_compaction)
 
 ### 20.2 Bloom Filter Spec
 
-- [ ] Expected items: 10M per hour window
-- [ ] False positive rate: 1%
-- [ ] Rotate hourly
+- [x] Expected items: 10M per hour window
+- [x] False positive rate: 1%
+- [x] Rotate hourly (RotatingBloomFilter)
 
 ---
 

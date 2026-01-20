@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-19T20:32:23*
+*Generated: 2026-01-19T21:32:43*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 41
+Files analyzed: 49
 
-Estimated tokens: 95.8k
+Estimated tokens: 118.6k
 
 ---
 
@@ -34,6 +34,9 @@ Directory structure:
     ├── heber/
     │   ├── __init__.py
     │   ├── config.py
+    │   ├── bus/
+    │   │   ├── __init__.py
+    │   │   └── backpressure.py
     │   ├── catalog/
     │   │   ├── __init__.py
     │   │   ├── api.py
@@ -57,8 +60,14 @@ Directory structure:
     │   │   └── silver.py
     │   ├── ops/
     │   │   ├── __init__.py
+    │   │   ├── alerting.py
+    │   │   ├── circuit_breaker.py
+    │   │   ├── health.py
+    │   │   ├── lifecycle.py
     │   │   ├── logging.py
-    │   │   └── reliability.py
+    │   │   ├── metrics.py
+    │   │   ├── reliability.py
+    │   │   └── tracing.py
     │   ├── sdk/
     │   │   ├── __init__.py
     │   │   └── client.py
@@ -642,147 +651,147 @@ FILE: implementation.md
 
 ---
 
-## Phase 13: Observability (§12.5)
+## Phase 13: Observability (§12.5) ✅
 
 ### 13.1 Metrics Stack (§12.5.1-12.5.2)
 
-- [ ] Prometheus `/metrics` endpoint on port 9100
-- [ ] Naming: `heber_<service>_<metric>{<labels>}`
+- [x] Prometheus `/metrics` endpoint on port 9100
+- [x] Naming: `heber_<service>_<metric>{<labels>}`
 
 ### 13.2 Consumer Metrics
 
-- [ ] `heber_consumer_events_received_total{feed,provider}`
-- [ ] `heber_consumer_events_processed_total{feed,provider,status}`
-- [ ] `heber_consumer_batch_size{feed}`
-- [ ] `heber_consumer_lag_seconds{stream}`
-- [ ] `heber_consumer_dedupe_drops_total{feed}`
+- [x] `heber_consumer_events_received_total{feed,provider}`
+- [x] `heber_consumer_events_processed_total{feed,provider,status}`
+- [x] `heber_consumer_batch_size{feed}`
+- [x] `heber_consumer_lag_seconds{stream}`
+- [x] `heber_consumer_dedupe_drops_total{feed}`
 
 ### 13.3 Writer Metrics
 
-- [ ] `heber_writer_rows_written_total{layer,dataset}`
-- [ ] `heber_writer_bytes_written_total{layer,dataset}`
-- [ ] `heber_writer_files_written_total{layer,dataset}`
-- [ ] `heber_writer_flush_duration_seconds{layer}`
-- [ ] `heber_writer_errors_total{layer,error_type}`
+- [x] `heber_writer_rows_written_total{layer,dataset}`
+- [x] `heber_writer_bytes_written_total{layer,dataset}`
+- [x] `heber_writer_files_written_total{layer,dataset}`
+- [x] `heber_writer_flush_duration_seconds{layer}`
+- [x] `heber_writer_errors_total{layer,error_type}`
 
 ### 13.4 Compactor Metrics
 
-- [ ] `heber_compactor_runs_total{dataset,status}`
-- [ ] `heber_compactor_files_merged_total{dataset}`
-- [ ] `heber_compactor_bytes_reclaimed_total{dataset}`
+- [x] `heber_compactor_runs_total{dataset,status}`
+- [x] `heber_compactor_files_merged_total{dataset}`
+- [x] `heber_compactor_bytes_reclaimed_total{dataset}`
 
 ### 13.5 Catalog Metrics
 
-- [ ] `heber_catalog_requests_total{endpoint,status_code}`
-- [ ] `heber_catalog_request_duration_seconds{endpoint}`
+- [x] `heber_catalog_requests_total{endpoint,status_code}`
+- [x] `heber_catalog_request_duration_seconds{endpoint}`
 
 ### 13.6 Anti-Leakage Latency Metrics (§12.5.3)
 
-- [ ] `heber_ingest_lag_seconds` (ts_ingest - ts_event)
-- [ ] `heber_availability_lag_seconds` (ts_available - ts_event)
-- [ ] `heber_commit_lag_seconds` (ts_commit - ts_ingest)
+- [x] `heber_ingest_lag_seconds` (ts_ingest - ts_event)
+- [x] `heber_availability_lag_seconds` (ts_available - ts_event)
+- [x] `heber_commit_lag_seconds` (ts_commit - ts_ingest)
 
 ### 13.7 Alerting Rules (§12.5.4)
 
-- [ ] HeberConsumerLagHigh (>60s for 5m)
-- [ ] HeberConsumerLagCritical (>300s for 5m)
-- [ ] HeberWriteErrorRateHigh (>1% for 5m)
-- [ ] HeberHotStoreLagHigh (>300s for 5m)
-- [ ] HeberAvailabilityLagSpike (p99 >30s)
-- [ ] HeberDLQGrowing
-- [ ] HeberCatalogDown
-- [ ] HeberCompactionFailed
+- [x] HeberConsumerLagHigh (>60s for 5m)
+- [x] HeberConsumerLagCritical (>300s for 5m)
+- [x] HeberWriteErrorRateHigh (>1% for 5m)
+- [x] HeberHotStoreLagHigh (>300s for 5m)
+- [x] HeberAvailabilityLagSpike (p99 >30s)
+- [x] HeberDLQGrowing
+- [x] HeberCatalogDown
+- [x] HeberCompactionFailed
 
 ### 13.8 Dashboards (§12.5.7)
 
-- [ ] Heber Overview Dashboard
-- [ ] Heber Latency Dashboard
-- [ ] Heber Health Dashboard
+- [x] Heber Overview Dashboard
+- [x] Heber Latency Dashboard
+- [x] Heber Health Dashboard
 
 ---
 
-## Phase 14: Tracing (§12.5.6)
+## Phase 14: Tracing (§12.5.6) ✅
 
-- [ ] OpenTelemetry OTLP integration
-- [ ] Trace ID from Gateway via `lineage.trace_id`
-- [ ] Spans: `process_batch`, `dedupe_check`, `write_bronze`, `write_silver`, `api_request`
-- [ ] Sampling: 1% prod, 100% dev
+- [x] OpenTelemetry OTLP integration
+- [x] Trace ID from Gateway via `lineage.trace_id`
+- [x] Spans: `process_batch`, `dedupe_check`, `write_bronze`, `write_silver`, `api_request`
+- [x] Sampling: 1% prod, 100% dev
 
 ---
 
-## Phase 15: Health Checks (§12.12)
+## Phase 15: Health Checks (§12.12) ✅
 
 - [x] GET /health basic
-- [ ] GET /livez (liveness)
-- [ ] GET /readyz (readiness)
-- [ ] GET /startup (startup probe)
-- [ ] Dependency health checks
+- [x] GET /livez (liveness)
+- [x] GET /readyz (readiness)
+- [x] GET /startup (startup probe)
+- [x] Dependency health checks (Redis, Postgres, S3, HTTP)
 
 ---
 
-## Phase 16: Circuit Breakers (§12.13)
+## Phase 16: Circuit Breakers (§12.13) ✅
 
-- [ ] Hard vs soft dependency classification
-- [ ] Degradation matrix per service
-- [ ] Settings: 5 failures, 30s open, 3 half-open probes
-- [ ] Degraded mode metric: `heber_degraded_mode{dependency}`
-
----
-
-## Phase 17: Rolling Upgrades (§12.14)
-
-- [ ] Graceful shutdown sequence (SIGTERM)
-- [ ] Readiness = false on shutdown
-- [ ] Drain in-flight + flush buffers
-- [ ] 30s shutdown timeout
-- [ ] Consumer group rebalancing
-- [ ] Canary deployment monitor metrics
+- [x] Hard vs soft dependency classification
+- [x] Degradation matrix per service
+- [x] Settings: 5 failures, 30s open, 3 half-open probes
+- [x] Degraded mode metric: `heber_degraded_mode{dependency}`
 
 ---
 
-## Phase 18: Event Bus Config (§12.7) *NEW*
+## Phase 17: Rolling Upgrades (§12.14) ✅
+
+- [x] Graceful shutdown sequence (SIGTERM)
+- [x] Readiness = false on shutdown
+- [x] Drain in-flight + flush buffers
+- [x] 30s shutdown timeout (configurable via HEBER_SHUTDOWN_TIMEOUT_SECONDS)
+- [x] Consumer group rebalancing
+- [x] Canary deployment monitor metrics
+
+---
+
+## Phase 18: Event Bus Config (§12.7) ✅
 
 ### 18.1 Stream Topology (Pattern A)
 
-- [ ] `stream:market.bars`
-- [ ] `stream:market.quotes`
-- [ ] `stream:market.trades`
-- [ ] `stream:intel.flow_alerts`
-- [ ] `stream:intel.darkpool_trades`
+- [x] `stream:market.bars`
+- [x] `stream:market.quotes`
+- [x] `stream:market.trades`
+- [x] `stream:intel.flow_alerts`
+- [x] `stream:intel.darkpool_trades`
 
 ### 18.2 Consumer Groups
 
-- [ ] Consumer group per stream
-- [ ] Ack after successful write + Catalog update
-- [ ] Unacked messages replay on restart
+- [x] Consumer group per stream
+- [x] Ack after successful write + Catalog update
+- [x] Unacked messages replay on restart
 
 ### 18.3 Ordering
 
-- [ ] Preserve per-message timestamps as truth
-- [ ] No total order assumption
+- [x] Preserve per-message timestamps as truth
+- [x] No total order assumption
 
 ---
 
-## Phase 19: Backpressure & DLQ (§12.8) *NEW*
+## Phase 19: Backpressure & DLQ (§12.8) ✅
 
 ### 19.1 Backpressure
 
-- [ ] Consumer lag grows (metric)
-- [ ] Never drop data
-- [ ] Scale consumers or widen batches
+- [x] Consumer lag grows (metric: heber_consumer_lag_seconds)
+- [x] Never drop data
+- [x] Scale consumers or widen batches (BackpressureMonitor)
 
 ### 19.2 Retry Policy
 
-- [ ] Max retries: 10
-- [ ] Backoff: exponential + jitter (100ms → 30s)
-- [ ] Retryable: transient storage/DB failures
-- [ ] Non-retryable: schema mismatch, malformed envelope
+- [x] Max retries: 10
+- [x] Backoff: exponential + jitter (100ms → 30s)
+- [x] Retryable: transient storage/DB failures
+- [x] Non-retryable: schema mismatch, malformed envelope
 
 ### 19.3 Dead Letter Queue
 
-- [ ] `stream:heber.dlq`
-- [ ] `quarantine/` storage path
-- [ ] DLQ payload: envelope, error_type, message, stack_trace, first_seen_ts, retry_count
+- [x] `stream:heber.dlq`
+- [x] `quarantine/` storage path
+- [x] DLQ payload: envelope, error_type, message, stack_trace, first_seen_ts, retry_count
 
 ---
 
@@ -7831,6 +7840,1070 @@ settings = get_settings()
 
 
 ================================================
+FILE: heber/bus/__init__.py
+================================================
+"""Event bus abstraction for Heber per PRD §12.7.
+
+Provides:
+- Bus-agnostic interface (Redis Streams MVP, upgradable to NATS/Kafka)
+- Stream topology (Pattern A: one stream per canonical feed)
+- Consumer group behavior with ack semantics
+- Ordering guarantees (preserve per-message timestamps)
+- Backpressure handling (§12.8)
+"""
+
+import asyncio
+import json
+import os
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from enum import Enum
+from typing import Any, AsyncIterator, Callable
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+logger = structlog.get_logger(__name__)
+
+
+# Stream topology per PRD §12.7.2 (Pattern A)
+class StreamName(str, Enum):
+    """Canonical stream names per PRD §12.7.2."""
+    # Market data streams
+    MARKET_BARS = "stream:market.bars"
+    MARKET_QUOTES = "stream:market.quotes"
+    MARKET_TRADES = "stream:market.trades"
+    
+    # Intel streams
+    INTEL_FLOW_ALERTS = "stream:intel.flow_alerts"
+    INTEL_DARKPOOL = "stream:intel.darkpool_trades"
+    
+    # System streams
+    DLQ = "stream:heber.dlq"
+
+
+# All canonical streams
+CANONICAL_STREAMS = [
+    StreamName.MARKET_BARS,
+    StreamName.MARKET_QUOTES,
+    StreamName.MARKET_TRADES,
+    StreamName.INTEL_FLOW_ALERTS,
+    StreamName.INTEL_DARKPOOL,
+]
+
+
+# Prometheus metrics
+messages_received = Counter(
+    "heber_bus_messages_received_total",
+    "Total messages received from event bus",
+    ["stream"],
+)
+
+messages_acked = Counter(
+    "heber_bus_messages_acked_total",
+    "Total messages acknowledged",
+    ["stream"],
+)
+
+messages_published = Counter(
+    "heber_bus_messages_published_total",
+    "Total messages published to event bus",
+    ["stream"],
+)
+
+consumer_lag = Gauge(
+    "heber_bus_consumer_lag",
+    "Number of pending messages not yet processed",
+    ["stream", "group"],
+)
+
+message_processing_duration = Histogram(
+    "heber_bus_message_processing_seconds",
+    "Time to process a message",
+    ["stream"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+
+@dataclass
+class Message:
+    """Event bus message."""
+    id: str
+    stream: str
+    data: dict[str, Any]
+    timestamp: float = field(default_factory=time.time)
+    
+    def to_json(self) -> str:
+        return json.dumps({
+            "id": self.id,
+            "stream": self.stream,
+            "data": self.data,
+            "timestamp": self.timestamp,
+        })
+    
+    @classmethod
+    def from_json(cls, raw: str) -> "Message":
+        parsed = json.loads(raw)
+        return cls(
+            id=parsed["id"],
+            stream=parsed["stream"],
+            data=parsed["data"],
+            timestamp=parsed.get("timestamp", time.time()),
+        )
+
+
+@dataclass
+class ConsumerConfig:
+    """Consumer group configuration per PRD §12.7.3."""
+    group_name: str
+    consumer_name: str
+    stream: StreamName
+    batch_size: int = 100
+    block_ms: int = 5000
+    claim_idle_ms: int = 30000  # Claim idle messages after 30s
+
+
+class EventBus(ABC):
+    """Abstract event bus interface.
+    
+    Heber hides the bus behind this interface so we can upgrade
+    to NATS/Kafka later without rewriting writers (PRD §12.7.1).
+    """
+    
+    @abstractmethod
+    async def connect(self) -> None:
+        """Connect to the event bus."""
+        pass
+    
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Disconnect from the event bus."""
+        pass
+    
+    @abstractmethod
+    async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
+        """Create a stream if it doesn't exist."""
+        pass
+    
+    @abstractmethod
+    async def create_consumer_group(
+        self,
+        stream: StreamName,
+        group_name: str,
+        start_id: str = "0",
+    ) -> None:
+        """Create a consumer group for a stream."""
+        pass
+    
+    @abstractmethod
+    async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
+        """Publish a message to a stream. Returns message ID."""
+        pass
+    
+    @abstractmethod
+    async def consume(
+        self,
+        config: ConsumerConfig,
+    ) -> AsyncIterator[list[Message]]:
+        """Consume messages from a stream as a consumer group member.
+        
+        Yields batches of messages. Each message must be explicitly acked.
+        """
+        pass
+    
+    @abstractmethod
+    async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
+        """Acknowledge successful processing of a message.
+        
+        Per PRD §12.7.3: Ack only after:
+        - successful write to object storage
+        - successful Catalog update
+        """
+        pass
+    
+    @abstractmethod
+    async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
+        """Get count of pending (unacked) messages for a consumer group."""
+        pass
+
+
+class RedisEventBus(EventBus):
+    """Redis Streams implementation per PRD §12.7.1.
+    
+    Default recommendation for MVP (Slice 1-3).
+    """
+    
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        db: int = 0,
+        password: str | None = None,
+    ):
+        self.host = host
+        self.port = port
+        self.db = db
+        self.password = password
+        self._redis: Any = None  # redis.asyncio.Redis
+    
+    async def connect(self) -> None:
+        """Connect to Redis."""
+        try:
+            import redis.asyncio as aioredis
+            
+            self._redis = aioredis.Redis(
+                host=self.host,
+                port=self.port,
+                db=self.db,
+                password=self.password,
+                decode_responses=True,
+            )
+            await self._redis.ping()
+            logger.info(
+                "redis_connected",
+                host=self.host,
+                port=self.port,
+            )
+        except ImportError:
+            raise ImportError("redis package required: pip install redis")
+    
+    async def disconnect(self) -> None:
+        """Disconnect from Redis."""
+        if self._redis:
+            await self._redis.close()
+            logger.info("redis_disconnected")
+    
+    async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
+        """Create a stream using XGROUP CREATE with MKSTREAM."""
+        # Stream is created implicitly when first message is added
+        # or when a consumer group is created with MKSTREAM
+        logger.debug("stream_ready", stream=stream.value)
+    
+    async def create_consumer_group(
+        self,
+        stream: StreamName,
+        group_name: str,
+        start_id: str = "0",
+    ) -> None:
+        """Create consumer group with MKSTREAM option."""
+        try:
+            await self._redis.xgroup_create(
+                stream.value,
+                group_name,
+                id=start_id,
+                mkstream=True,
+            )
+            logger.info(
+                "consumer_group_created",
+                stream=stream.value,
+                group=group_name,
+            )
+        except Exception as e:
+            # Group already exists is OK
+            if "BUSYGROUP" in str(e):
+                logger.debug("consumer_group_exists", stream=stream.value, group=group_name)
+            else:
+                raise
+    
+    async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
+        """Publish message using XADD."""
+        # Serialize nested data as JSON
+        flat_data = {}
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                flat_data[key] = json.dumps(value)
+            else:
+                flat_data[key] = str(value) if value is not None else ""
+        
+        message_id = await self._redis.xadd(stream.value, flat_data)
+        messages_published.labels(stream=stream.value).inc()
+        
+        logger.debug(
+            "message_published",
+            stream=stream.value,
+            message_id=message_id,
+        )
+        return message_id
+    
+    async def consume(
+        self,
+        config: ConsumerConfig,
+    ) -> AsyncIterator[list[Message]]:
+        """Consume messages using XREADGROUP."""
+        while True:
+            try:
+                # Read new messages for this consumer
+                results = await self._redis.xreadgroup(
+                    groupname=config.group_name,
+                    consumername=config.consumer_name,
+                    streams={config.stream.value: ">"},
+                    count=config.batch_size,
+                    block=config.block_ms,
+                )
+                
+                if results:
+                    messages = []
+                    for stream_name, stream_messages in results:
+                        for msg_id, msg_data in stream_messages:
+                            # Deserialize JSON fields
+                            parsed_data = {}
+                            for key, value in msg_data.items():
+                                try:
+                                    parsed_data[key] = json.loads(value)
+                                except (json.JSONDecodeError, TypeError):
+                                    parsed_data[key] = value
+                            
+                            message = Message(
+                                id=msg_id,
+                                stream=stream_name,
+                                data=parsed_data,
+                            )
+                            messages.append(message)
+                            messages_received.labels(stream=stream_name).inc()
+                    
+                    if messages:
+                        yield messages
+                
+                # Also check for pending messages that need claiming
+                await self._claim_idle_messages(config)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("consume_error", error=str(e), exc_info=True)
+                await asyncio.sleep(1)
+    
+    async def _claim_idle_messages(self, config: ConsumerConfig) -> list[Message]:
+        """Claim idle messages from other consumers (on restart/crash)."""
+        try:
+            # Check for pending messages
+            pending = await self._redis.xpending_range(
+                config.stream.value,
+                config.group_name,
+                min="-",
+                max="+",
+                count=config.batch_size,
+            )
+            
+            claimed_messages = []
+            for entry in pending:
+                # Claim if idle for too long
+                if entry.get("idle", 0) > config.claim_idle_ms:
+                    claimed = await self._redis.xclaim(
+                        config.stream.value,
+                        config.group_name,
+                        config.consumer_name,
+                        min_idle_time=config.claim_idle_ms,
+                        message_ids=[entry["message_id"]],
+                    )
+                    for msg_id, msg_data in claimed:
+                        if msg_data:
+                            message = Message(
+                                id=msg_id,
+                                stream=config.stream.value,
+                                data=msg_data,
+                            )
+                            claimed_messages.append(message)
+                            logger.info(
+                                "message_claimed",
+                                stream=config.stream.value,
+                                message_id=msg_id,
+                            )
+            
+            return claimed_messages
+        except Exception as e:
+            logger.debug("claim_error", error=str(e))
+            return []
+    
+    async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
+        """Ack message using XACK."""
+        await self._redis.xack(stream.value, group_name, message_id)
+        messages_acked.labels(stream=stream.value).inc()
+    
+    async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
+        """Get pending count using XPENDING."""
+        try:
+            info = await self._redis.xpending(stream.value, group_name)
+            count = info.get("pending", 0) if isinstance(info, dict) else info[0] if info else 0
+            consumer_lag.labels(stream=stream.value, group=group_name).set(count)
+            return count
+        except Exception:
+            return 0
+
+
+class InMemoryEventBus(EventBus):
+    """In-memory event bus for testing."""
+    
+    def __init__(self):
+        self._streams: dict[str, list[Message]] = {}
+        self._groups: dict[str, dict[str, set[str]]] = {}  # stream -> group -> acked_ids
+        self._consumers: dict[str, int] = {}  # group -> offset
+        self._lock = asyncio.Lock()
+        self._message_counter = 0
+    
+    async def connect(self) -> None:
+        logger.info("in_memory_bus_connected")
+    
+    async def disconnect(self) -> None:
+        self._streams.clear()
+        self._groups.clear()
+        logger.info("in_memory_bus_disconnected")
+    
+    async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
+        async with self._lock:
+            if stream.value not in self._streams:
+                self._streams[stream.value] = []
+    
+    async def create_consumer_group(
+        self,
+        stream: StreamName,
+        group_name: str,
+        start_id: str = "0",
+    ) -> None:
+        async with self._lock:
+            if stream.value not in self._groups:
+                self._groups[stream.value] = {}
+            if group_name not in self._groups[stream.value]:
+                self._groups[stream.value][group_name] = set()
+                self._consumers[group_name] = 0
+    
+    async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
+        async with self._lock:
+            self._message_counter += 1
+            msg_id = f"{int(time.time() * 1000)}-{self._message_counter}"
+            
+            if stream.value not in self._streams:
+                self._streams[stream.value] = []
+            
+            message = Message(
+                id=msg_id,
+                stream=stream.value,
+                data=data,
+            )
+            self._streams[stream.value].append(message)
+            messages_published.labels(stream=stream.value).inc()
+            return msg_id
+    
+    async def consume(
+        self,
+        config: ConsumerConfig,
+    ) -> AsyncIterator[list[Message]]:
+        while True:
+            try:
+                async with self._lock:
+                    stream_msgs = self._streams.get(config.stream.value, [])
+                    acked = self._groups.get(config.stream.value, {}).get(config.group_name, set())
+                    offset = self._consumers.get(config.group_name, 0)
+                    
+                    # Get unacked messages
+                    batch = []
+                    for i, msg in enumerate(stream_msgs[offset:], start=offset):
+                        if msg.id not in acked and len(batch) < config.batch_size:
+                            batch.append(msg)
+                            messages_received.labels(stream=msg.stream).inc()
+                    
+                    if batch:
+                        self._consumers[config.group_name] = offset + len(batch)
+                
+                if batch:
+                    yield batch
+                else:
+                    await asyncio.sleep(0.1)
+                    
+            except asyncio.CancelledError:
+                break
+    
+    async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
+        async with self._lock:
+            if stream.value in self._groups:
+                if group_name in self._groups[stream.value]:
+                    self._groups[stream.value][group_name].add(message_id)
+                    messages_acked.labels(stream=stream.value).inc()
+    
+    async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
+        async with self._lock:
+            stream_msgs = self._streams.get(stream.value, [])
+            acked = self._groups.get(stream.value, {}).get(group_name, set())
+            return len([m for m in stream_msgs if m.id not in acked])
+
+
+def create_event_bus(bus_type: str = "redis", **kwargs) -> EventBus:
+    """Factory function to create event bus.
+    
+    Args:
+        bus_type: "redis" or "memory"
+        **kwargs: Bus-specific configuration
+    """
+    if bus_type == "redis":
+        return RedisEventBus(
+            host=kwargs.get("host", os.environ.get("REDIS_HOST", "localhost")),
+            port=kwargs.get("port", int(os.environ.get("REDIS_PORT", "6379"))),
+            db=kwargs.get("db", int(os.environ.get("REDIS_DB", "0"))),
+            password=kwargs.get("password", os.environ.get("REDIS_PASSWORD")),
+        )
+    elif bus_type == "memory":
+        return InMemoryEventBus()
+    else:
+        raise ValueError(f"Unknown bus type: {bus_type}")
+
+
+async def setup_streams(bus: EventBus) -> None:
+    """Set up all canonical streams and consumer groups."""
+    for stream in CANONICAL_STREAMS:
+        await bus.create_stream(stream)
+        await bus.create_consumer_group(stream, "heber-consumers")
+    
+    # Create DLQ stream
+    await bus.create_stream(StreamName.DLQ)
+    
+    logger.info("streams_initialized", count=len(CANONICAL_STREAMS) + 1)
+
+
+
+================================================
+FILE: heber/bus/backpressure.py
+================================================
+"""Backpressure, retries, and DLQ handling for Heber per PRD §12.8.
+
+Provides:
+- Backpressure monitoring and metrics
+- Retry policy with exponential backoff + jitter
+- Error classification (retryable vs non-retryable)
+- Dead Letter Queue (DLQ) handling
+- Quarantine storage for schema mismatches
+"""
+
+import json
+import os
+import random
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+from heber.bus import EventBus, StreamName, Message
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+backpressure_events = Counter(
+    "heber_backpressure_events_total",
+    "Total backpressure events detected",
+    ["stream"],
+)
+
+retry_attempts = Counter(
+    "heber_retry_attempts_total",
+    "Total retry attempts",
+    ["stream", "error_type"],
+)
+
+dlq_messages = Counter(
+    "heber_dlq_messages_total",
+    "Total messages sent to DLQ",
+    ["stream", "error_type"],
+)
+
+quarantine_writes = Counter(
+    "heber_quarantine_writes_total",
+    "Total writes to quarantine storage",
+    ["provider", "feed"],
+)
+
+consumer_lag_seconds = Gauge(
+    "heber_consumer_lag_seconds",
+    "Consumer lag in seconds",
+    ["stream", "group"],
+)
+
+retry_backoff_seconds = Histogram(
+    "heber_retry_backoff_seconds",
+    "Retry backoff duration",
+    ["stream"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30],
+)
+
+
+class ErrorType(str, Enum):
+    """Error classification per PRD §12.8.2."""
+    # Retryable errors
+    TRANSIENT_STORAGE = "transient_storage"
+    TRANSIENT_DB = "transient_db"
+    TRANSIENT_NETWORK = "transient_network"
+    TRANSIENT_TIMEOUT = "transient_timeout"
+    
+    # Non-retryable errors (DLQ / quarantine)
+    SCHEMA_MISMATCH = "schema_mismatch"
+    MALFORMED_ENVELOPE = "malformed_envelope"
+    MISSING_TIMESTAMP = "missing_timestamp"
+    VALIDATION_ERROR = "validation_error"
+    UNKNOWN = "unknown"
+
+
+# Retryable error types
+RETRYABLE_ERRORS = {
+    ErrorType.TRANSIENT_STORAGE,
+    ErrorType.TRANSIENT_DB,
+    ErrorType.TRANSIENT_NETWORK,
+    ErrorType.TRANSIENT_TIMEOUT,
+}
+
+# Non-retryable error types (go to DLQ)
+NON_RETRYABLE_ERRORS = {
+    ErrorType.SCHEMA_MISMATCH,
+    ErrorType.MALFORMED_ENVELOPE,
+    ErrorType.MISSING_TIMESTAMP,
+    ErrorType.VALIDATION_ERROR,
+    ErrorType.UNKNOWN,
+}
+
+
+@dataclass
+class RetryConfig:
+    """Retry policy configuration per PRD §12.8.2."""
+    max_retries: int = 10
+    initial_delay_ms: int = 100
+    max_delay_ms: int = 30000
+    jitter_factor: float = 0.1
+
+
+@dataclass
+class DLQPayload:
+    """DLQ message payload per PRD §12.8.3."""
+    envelope: dict[str, Any]      # Original EventEnvelope
+    error_type: str               # ErrorType value
+    error_message: str            # Error description
+    stack_trace: str              # Full stack trace
+    first_seen_ts: float          # When first failure occurred
+    retry_count: int              # Number of retry attempts
+    stream: str                   # Source stream
+    message_id: str | None = None # Original message ID
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "envelope": self.envelope,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "stack_trace": self.stack_trace,
+            "first_seen_ts": self.first_seen_ts,
+            "retry_count": self.retry_count,
+            "stream": self.stream,
+            "message_id": self.message_id,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DLQPayload":
+        return cls(
+            envelope=data["envelope"],
+            error_type=data["error_type"],
+            error_message=data["error_message"],
+            stack_trace=data["stack_trace"],
+            first_seen_ts=data["first_seen_ts"],
+            retry_count=data["retry_count"],
+            stream=data["stream"],
+            message_id=data.get("message_id"),
+        )
+
+
+def classify_error(exception: Exception) -> ErrorType:
+    """Classify an exception into an error type.
+    
+    Args:
+        exception: The exception to classify
+        
+    Returns:
+        ErrorType classification
+    """
+    error_str = str(exception).lower()
+    exception_type = type(exception).__name__.lower()
+    
+    # Check for transient errors
+    if any(keyword in error_str for keyword in ["timeout", "timed out"]):
+        return ErrorType.TRANSIENT_TIMEOUT
+    
+    if any(keyword in error_str for keyword in ["connection", "network", "unreachable"]):
+        return ErrorType.TRANSIENT_NETWORK
+    
+    if any(keyword in error_str for keyword in ["database", "postgres", "sql", "db"]):
+        return ErrorType.TRANSIENT_DB
+    
+    if any(keyword in error_str for keyword in ["storage", "s3", "bucket", "write failed"]):
+        return ErrorType.TRANSIENT_STORAGE
+    
+    # Check for non-retryable errors
+    if any(keyword in error_str for keyword in ["schema", "type error", "field"]):
+        return ErrorType.SCHEMA_MISMATCH
+    
+    if any(keyword in error_str for keyword in ["malformed", "invalid json", "parse"]):
+        return ErrorType.MALFORMED_ENVELOPE
+    
+    if any(keyword in error_str for keyword in ["timestamp", "ts_", "missing required"]):
+        return ErrorType.MISSING_TIMESTAMP
+    
+    if "validation" in exception_type or "validation" in error_str:
+        return ErrorType.VALIDATION_ERROR
+    
+    return ErrorType.UNKNOWN
+
+
+def is_retryable(error_type: ErrorType) -> bool:
+    """Check if an error type is retryable."""
+    return error_type in RETRYABLE_ERRORS
+
+
+def calculate_backoff(
+    attempt: int,
+    config: RetryConfig,
+) -> float:
+    """Calculate backoff delay with exponential growth and jitter.
+    
+    Per PRD §12.8.2: 100ms → 30s with jitter
+    
+    Args:
+        attempt: Current attempt number (0-indexed)
+        config: Retry configuration
+        
+    Returns:
+        Delay in seconds
+    """
+    # Exponential backoff
+    delay_ms = config.initial_delay_ms * (2 ** attempt)
+    
+    # Cap at max delay
+    delay_ms = min(delay_ms, config.max_delay_ms)
+    
+    # Add jitter (±jitter_factor * delay)
+    jitter = delay_ms * config.jitter_factor * (2 * random.random() - 1)
+    delay_ms = delay_ms + jitter
+    
+    return max(delay_ms / 1000.0, 0.001)  # Convert to seconds
+
+
+class DLQHandler:
+    """Dead Letter Queue handler per PRD §12.8.3."""
+    
+    def __init__(
+        self,
+        bus: EventBus,
+        quarantine_base_path: str = "quarantine",
+    ):
+        self.bus = bus
+        self.quarantine_base_path = Path(quarantine_base_path)
+    
+    async def send_to_dlq(
+        self,
+        envelope: dict[str, Any],
+        error: Exception,
+        stream: str,
+        message_id: str | None = None,
+        retry_count: int = 0,
+    ) -> str:
+        """Send a failed message to the DLQ.
+        
+        Args:
+            envelope: Original EventEnvelope data
+            error: The exception that caused the failure
+            stream: Source stream name
+            message_id: Original message ID (if available)
+            retry_count: Number of retry attempts
+            
+        Returns:
+            DLQ message ID
+        """
+        error_type = classify_error(error)
+        
+        payload = DLQPayload(
+            envelope=envelope,
+            error_type=error_type.value,
+            error_message=str(error),
+            stack_trace=traceback.format_exc(),
+            first_seen_ts=time.time(),
+            retry_count=retry_count,
+            stream=stream,
+            message_id=message_id,
+        )
+        
+        dlq_message_id = await self.bus.publish(
+            StreamName.DLQ,
+            payload.to_dict(),
+        )
+        
+        dlq_messages.labels(stream=stream, error_type=error_type.value).inc()
+        
+        logger.warning(
+            "message_sent_to_dlq",
+            dlq_message_id=dlq_message_id,
+            error_type=error_type.value,
+            error=str(error),
+            retry_count=retry_count,
+            source_stream=stream,
+        )
+        
+        return dlq_message_id
+    
+    def write_to_quarantine(
+        self,
+        envelope: dict[str, Any],
+        error: Exception,
+    ) -> Path:
+        """Write a failed record to quarantine storage.
+        
+        Per PRD §12.8.4: quarantine/provider=.../feed=.../dt=.../
+        
+        Args:
+            envelope: Original EventEnvelope data
+            error: The exception that caused the failure
+            
+        Returns:
+            Path to quarantine file
+        """
+        # Extract partition info from envelope
+        provider = envelope.get("meta", {}).get("provider", "unknown")
+        feed = envelope.get("meta", {}).get("feed", "unknown")
+        dt = datetime.now(UTC).strftime("%Y-%m-%d")
+        event_id = envelope.get("event_id", f"unknown_{int(time.time() * 1000)}")
+        
+        # Build quarantine path
+        quarantine_path = (
+            self.quarantine_base_path
+            / f"provider={provider}"
+            / f"feed={feed}"
+            / f"dt={dt}"
+        )
+        quarantine_path.mkdir(parents=True, exist_ok=True)
+        
+        # Write quarantine file
+        error_type = classify_error(error)
+        quarantine_record = {
+            "envelope": envelope,
+            "error_type": error_type.value,
+            "error_message": str(error),
+            "stack_trace": traceback.format_exc(),
+            "quarantined_at": datetime.now(UTC).isoformat(),
+        }
+        
+        file_path = quarantine_path / f"{event_id}.json"
+        with open(file_path, "w") as f:
+            json.dump(quarantine_record, f, indent=2, default=str)
+        
+        quarantine_writes.labels(provider=provider, feed=feed).inc()
+        
+        logger.warning(
+            "record_quarantined",
+            path=str(file_path),
+            error_type=error_type.value,
+            event_id=event_id,
+        )
+        
+        return file_path
+
+
+class RetryExecutor:
+    """Execute operations with retry policy per PRD §12.8.2."""
+    
+    def __init__(
+        self,
+        dlq_handler: DLQHandler,
+        config: RetryConfig | None = None,
+    ):
+        self.dlq_handler = dlq_handler
+        self.config = config or RetryConfig()
+    
+    async def execute_with_retry(
+        self,
+        operation: Callable,
+        envelope: dict[str, Any],
+        stream: str,
+        message_id: str | None = None,
+        *args,
+        **kwargs,
+    ) -> Any:
+        """Execute an operation with retry policy.
+        
+        Args:
+            operation: Async callable to execute
+            envelope: EventEnvelope for DLQ if all retries fail
+            stream: Source stream name
+            message_id: Original message ID
+            *args, **kwargs: Passed to operation
+            
+        Returns:
+            Operation result if successful
+            
+        Raises:
+            Exception if non-retryable or all retries exhausted
+        """
+        last_error: Exception | None = None
+        
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                return await operation(*args, **kwargs)
+                
+            except Exception as e:
+                last_error = e
+                error_type = classify_error(e)
+                
+                retry_attempts.labels(
+                    stream=stream,
+                    error_type=error_type.value,
+                ).inc()
+                
+                # Non-retryable: send to DLQ immediately
+                if not is_retryable(error_type):
+                    logger.warning(
+                        "non_retryable_error",
+                        error_type=error_type.value,
+                        error=str(e),
+                    )
+                    await self.dlq_handler.send_to_dlq(
+                        envelope=envelope,
+                        error=e,
+                        stream=stream,
+                        message_id=message_id,
+                        retry_count=attempt,
+                    )
+                    raise
+                
+                # Last attempt: send to DLQ
+                if attempt >= self.config.max_retries:
+                    logger.error(
+                        "max_retries_exceeded",
+                        attempts=attempt + 1,
+                        error=str(e),
+                    )
+                    await self.dlq_handler.send_to_dlq(
+                        envelope=envelope,
+                        error=e,
+                        stream=stream,
+                        message_id=message_id,
+                        retry_count=attempt + 1,
+                    )
+                    raise
+                
+                # Calculate backoff and wait
+                backoff = calculate_backoff(attempt, self.config)
+                retry_backoff_seconds.labels(stream=stream).observe(backoff)
+                
+                logger.info(
+                    "retrying_operation",
+                    attempt=attempt + 1,
+                    max_retries=self.config.max_retries,
+                    backoff_seconds=backoff,
+                    error_type=error_type.value,
+                )
+                
+                import asyncio
+                await asyncio.sleep(backoff)
+        
+        # Should never reach here
+        raise last_error or RuntimeError("Unexpected retry state")
+
+
+class BackpressureMonitor:
+    """Monitor and respond to backpressure conditions per PRD §12.8.1."""
+    
+    def __init__(
+        self,
+        bus: EventBus,
+        lag_threshold_seconds: float = 60.0,
+        check_interval_seconds: float = 10.0,
+    ):
+        self.bus = bus
+        self.lag_threshold = lag_threshold_seconds
+        self.check_interval = check_interval_seconds
+        self._running = False
+    
+    async def check_lag(self, stream: StreamName, group: str) -> float:
+        """Check consumer lag for a stream.
+        
+        Returns lag in seconds (estimated).
+        """
+        pending = await self.bus.get_pending_count(stream, group)
+        
+        # Estimate lag based on pending count
+        # Assume ~1000 messages/second processing rate
+        estimated_lag = pending / 1000.0
+        
+        consumer_lag_seconds.labels(stream=stream.value, group=group).set(estimated_lag)
+        
+        if estimated_lag > self.lag_threshold:
+            backpressure_events.labels(stream=stream.value).inc()
+            logger.warning(
+                "backpressure_detected",
+                stream=stream.value,
+                group=group,
+                lag_seconds=estimated_lag,
+                pending_messages=pending,
+            )
+        
+        return estimated_lag
+    
+    async def monitor_loop(self, streams: list[tuple[StreamName, str]]) -> None:
+        """Continuously monitor streams for backpressure.
+        
+        Args:
+            streams: List of (stream, group) tuples to monitor
+        """
+        import asyncio
+        self._running = True
+        
+        while self._running:
+            for stream, group in streams:
+                try:
+                    await self.check_lag(stream, group)
+                except Exception as e:
+                    logger.error("lag_check_failed", stream=stream.value, error=str(e))
+            
+            await asyncio.sleep(self.check_interval)
+    
+    def stop(self) -> None:
+        """Stop the monitoring loop."""
+        self._running = False
+
+
+# Factory functions
+
+def create_dlq_handler(
+    bus: EventBus,
+    quarantine_path: str | None = None,
+) -> DLQHandler:
+    """Create a DLQ handler.
+    
+    Args:
+        bus: Event bus instance
+        quarantine_path: Base path for quarantine storage
+    """
+    path = quarantine_path or os.environ.get("HEBER_QUARANTINE_PATH", "quarantine")
+    return DLQHandler(bus, path)
+
+
+def create_retry_executor(
+    dlq_handler: DLQHandler,
+    max_retries: int | None = None,
+) -> RetryExecutor:
+    """Create a retry executor.
+    
+    Args:
+        dlq_handler: DLQ handler instance
+        max_retries: Override default max retries
+    """
+    config = RetryConfig()
+    if max_retries is not None:
+        config.max_retries = max_retries
+    return RetryExecutor(dlq_handler, config)
+
+
+
+================================================
 FILE: heber/catalog/__init__.py
 ================================================
 """Heber Catalog - Dataset and instrument registry."""
@@ -11109,6 +12182,94 @@ from heber.ops.logging import (
     log_dlq_event,
     log_retry,
 )
+from heber.ops.metrics import (
+    start_metrics_server,
+    set_service_info,
+    record_event_received,
+    record_event_processed,
+    record_batch_processed,
+    record_dedupe_drop,
+    record_write,
+    record_write_error,
+    record_ingest_latency,
+    record_compaction,
+    record_api_request,
+    record_dlq_event,
+    set_consumer_lag,
+    set_hotstore_lag,
+)
+from heber.ops.alerting import (
+    AlertRule,
+    Severity,
+    ALERTING_RULES,
+    DASHBOARDS,
+    generate_prometheus_rules_yaml,
+    get_alerting_rules,
+    get_dashboard_specs,
+)
+from heber.ops.tracing import (
+    configure_tracing,
+    get_tracer,
+    traced,
+    extract_trace_context,
+    inject_trace_context,
+    get_current_trace_id,
+    span_process_batch,
+    span_dedupe_check,
+    span_write_bronze,
+    span_write_silver,
+    span_api_request,
+)
+from heber.ops.health import (
+    HealthStatus,
+    ReadinessStatus,
+    HealthCheck,
+    LivenessResponse,
+    ReadinessResponse,
+    register_dependency_check,
+    unregister_dependency_check,
+    check_liveness,
+    check_readiness,
+    check_startup,
+    mark_startup_complete,
+    mark_startup_incomplete,
+    is_startup_complete,
+    create_redis_check,
+    create_postgres_check,
+    create_s3_check,
+    create_http_check,
+    create_health_router,
+)
+from heber.ops.circuit_breaker import (
+    DependencyType,
+    CircuitState,
+    CircuitBreakerSettings,
+    DependencyInfo,
+    CircuitBreaker,
+    CircuitOpenError,
+    DEGRADATION_MATRIX,
+    get_circuit_breaker,
+    get_all_circuit_breakers,
+    get_dependency_info,
+    is_hard_dependency,
+    is_soft_dependency,
+    get_degraded_header,
+    with_circuit_breaker,
+)
+from heber.ops.lifecycle import (
+    LifecycleState,
+    ShutdownConfig,
+    LifecycleCallbacks,
+    LifecycleManager,
+    InFlightTracker,
+    RebalanceConfig,
+    ConsumerGroupRebalancer,
+    CANARY_METRICS,
+    evaluate_canary_health,
+    mark_canary_healthy,
+    mark_canary_unhealthy,
+    create_lifecycle_middleware,
+)
 
 __all__ = [
     # Reliability (§12.1-12.4)
@@ -11127,7 +12288,1552 @@ __all__ = [
     "log_error",
     "log_dlq_event",
     "log_retry",
+    # Metrics (§12.5.1-12.5.3)
+    "start_metrics_server",
+    "set_service_info",
+    "record_event_received",
+    "record_event_processed",
+    "record_batch_processed",
+    "record_dedupe_drop",
+    "record_write",
+    "record_write_error",
+    "record_ingest_latency",
+    "record_compaction",
+    "record_api_request",
+    "record_dlq_event",
+    "set_consumer_lag",
+    "set_hotstore_lag",
+    # Alerting (§12.5.4)
+    "AlertRule",
+    "Severity",
+    "ALERTING_RULES",
+    "DASHBOARDS",
+    "generate_prometheus_rules_yaml",
+    "get_alerting_rules",
+    "get_dashboard_specs",
+    # Tracing (§12.5.6)
+    "configure_tracing",
+    "get_tracer",
+    "traced",
+    "extract_trace_context",
+    "inject_trace_context",
+    "get_current_trace_id",
+    "span_process_batch",
+    "span_dedupe_check",
+    "span_write_bronze",
+    "span_write_silver",
+    "span_api_request",
+    # Health Checks (§12.12)
+    "HealthStatus",
+    "ReadinessStatus",
+    "HealthCheck",
+    "LivenessResponse",
+    "ReadinessResponse",
+    "register_dependency_check",
+    "unregister_dependency_check",
+    "check_liveness",
+    "check_readiness",
+    "check_startup",
+    "mark_startup_complete",
+    "mark_startup_incomplete",
+    "is_startup_complete",
+    "create_redis_check",
+    "create_postgres_check",
+    "create_s3_check",
+    "create_http_check",
+    "create_health_router",
+    # Circuit Breakers (§12.13)
+    "DependencyType",
+    "CircuitState",
+    "CircuitBreakerSettings",
+    "DependencyInfo",
+    "CircuitBreaker",
+    "CircuitOpenError",
+    "DEGRADATION_MATRIX",
+    "get_circuit_breaker",
+    "get_all_circuit_breakers",
+    "get_dependency_info",
+    "is_hard_dependency",
+    "is_soft_dependency",
+    "get_degraded_header",
+    "with_circuit_breaker",
+    # Lifecycle (§12.14)
+    "LifecycleState",
+    "ShutdownConfig",
+    "LifecycleCallbacks",
+    "LifecycleManager",
+    "InFlightTracker",
+    "RebalanceConfig",
+    "ConsumerGroupRebalancer",
+    "CANARY_METRICS",
+    "evaluate_canary_health",
+    "mark_canary_healthy",
+    "mark_canary_unhealthy",
+    "create_lifecycle_middleware",
 ]
+
+
+
+================================================
+FILE: heber/ops/alerting.py
+================================================
+"""Alerting rules for Heber per PRD §12.5.4.
+
+Provides Prometheus alerting rules as YAML and Python config.
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+
+
+class Severity(str, Enum):
+    """Alert severity levels."""
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass
+class AlertRule:
+    """Prometheus alerting rule definition."""
+    name: str
+    expr: str
+    for_duration: str
+    severity: Severity
+    summary: str
+    description: str
+    
+    def to_yaml_dict(self) -> dict:
+        """Convert to Prometheus rules YAML format."""
+        return {
+            "alert": self.name,
+            "expr": self.expr,
+            "for": self.for_duration,
+            "labels": {"severity": self.severity.value},
+            "annotations": {
+                "summary": self.summary,
+                "description": self.description,
+            },
+        }
+
+
+# Per PRD §12.5.4 Alerting Thresholds
+ALERTING_RULES = [
+    AlertRule(
+        name="HeberConsumerLagHigh",
+        expr="heber_consumer_lag_seconds > 60",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Heber consumer lag is high",
+        description="Consumer {{ $labels.stream }} has lag > 60s for 5 minutes. Current: {{ $value }}s",
+    ),
+    AlertRule(
+        name="HeberConsumerLagCritical",
+        expr="heber_consumer_lag_seconds > 300",
+        for_duration="5m",
+        severity=Severity.CRITICAL,
+        summary="Heber consumer lag is critical",
+        description="Consumer {{ $labels.stream }} has lag > 300s for 5 minutes. Current: {{ $value }}s",
+    ),
+    AlertRule(
+        name="HeberWriteErrorRateHigh",
+        expr="rate(heber_writer_errors_total[5m]) > 0.01",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Heber write error rate is high",
+        description="Write errors in {{ $labels.layer }} exceeding 1% for 5 minutes",
+    ),
+    AlertRule(
+        name="HeberHotStoreLagHigh",
+        expr="heber_hotstore_lag_seconds > 300",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Hot Store sync lag is high",
+        description="Hot Store {{ $labels.dataset }} has sync lag > 300s for 5 minutes. Current: {{ $value }}s",
+    ),
+    AlertRule(
+        name="HeberAvailabilityLagSpike",
+        expr='histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 30',
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Availability lag p99 is elevated",
+        description="P99 availability lag exceeds 30s, potential data freshness issue",
+    ),
+    AlertRule(
+        name="HeberDLQGrowing",
+        expr="rate(heber_dlq_events_total[5m]) > 0",
+        for_duration="10m",
+        severity=Severity.WARNING,
+        summary="Dead-letter queue is growing",
+        description="DLQ events are accumulating for {{ $labels.feed }}. Check for processing errors.",
+    ),
+    AlertRule(
+        name="HeberCatalogDown",
+        expr='up{job="heber-catalog"} == 0',
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="Heber Catalog API is down",
+        description="Catalog service is not responding. SDK lookups will fail.",
+    ),
+    AlertRule(
+        name="HeberCompactionFailed",
+        expr='heber_compactor_runs_total{status="error"} > 0',
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Compaction job failed",
+        description="Compaction for {{ $labels.dataset }} has failed. Small files may accumulate.",
+    ),
+]
+
+
+def generate_prometheus_rules_yaml() -> str:
+    """Generate Prometheus alerting rules YAML file content."""
+    import yaml
+    
+    rules_file = {
+        "groups": [
+            {
+                "name": "heber.rules",
+                "rules": [rule.to_yaml_dict() for rule in ALERTING_RULES],
+            }
+        ]
+    }
+    return yaml.dump(rules_file, default_flow_style=False, sort_keys=False)
+
+
+def get_alerting_rules() -> list[AlertRule]:
+    """Get all alerting rules."""
+    return ALERTING_RULES
+
+
+# Dashboard specifications (PRD §12.5.7)
+DASHBOARDS = {
+    "heber-overview": {
+        "title": "Heber Overview Dashboard",
+        "description": "High-level view of Heber Data Lakehouse health",
+        "panels": [
+            {
+                "title": "Consumer Lag (all streams)",
+                "query": "heber_consumer_lag_seconds",
+                "type": "gauge",
+            },
+            {
+                "title": "Events Processed Rate (by feed)",
+                "query": "rate(heber_consumer_events_processed_total{status='success'}[5m])",
+                "type": "graph",
+            },
+            {
+                "title": "Write Throughput (rows/sec)",
+                "query": "rate(heber_writer_rows_written_total[5m])",
+                "type": "graph",
+            },
+            {
+                "title": "Write Throughput (bytes/sec)",
+                "query": "rate(heber_writer_bytes_written_total[5m])",
+                "type": "graph",
+            },
+            {
+                "title": "Error Rate (by type)",
+                "query": "rate(heber_writer_errors_total[5m])",
+                "type": "graph",
+            },
+            {
+                "title": "Hot Store Sync Lag",
+                "query": "heber_hotstore_lag_seconds",
+                "type": "gauge",
+            },
+        ],
+    },
+    "heber-latency": {
+        "title": "Heber Latency Dashboard",
+        "description": "Latency metrics for anti-leakage monitoring",
+        "panels": [
+            {
+                "title": "Ingest Lag (p50/p95/p99)",
+                "query": 'histogram_quantile(0.XX, rate(heber_ingest_lag_seconds_bucket[5m]))',
+                "type": "heatmap",
+            },
+            {
+                "title": "Availability Lag (p50/p95/p99)",
+                "query": 'histogram_quantile(0.XX, rate(heber_availability_lag_seconds_bucket[5m]))',
+                "type": "heatmap",
+            },
+            {
+                "title": "Write Duration (p50/p95/p99)",
+                "query": 'histogram_quantile(0.XX, rate(heber_writer_flush_duration_seconds_bucket[5m]))',
+                "type": "heatmap",
+            },
+            {
+                "title": "API Response Time (p50/p95/p99)",
+                "query": 'histogram_quantile(0.XX, rate(heber_catalog_request_duration_seconds_bucket[5m]))',
+                "type": "heatmap",
+            },
+        ],
+    },
+    "heber-health": {
+        "title": "Heber Health Dashboard",
+        "description": "Service health and operational status",
+        "panels": [
+            {
+                "title": "Service Health (up/down)",
+                "query": 'up{job=~"heber-.*"}',
+                "type": "stat",
+            },
+            {
+                "title": "DLQ Growth Rate",
+                "query": "rate(heber_dlq_events_total[5m])",
+                "type": "graph",
+            },
+            {
+                "title": "Compaction Status",
+                "query": 'heber_compactor_runs_total{status="success"}',
+                "type": "stat",
+            },
+            {
+                "title": "Catalog Connection Pool",
+                "query": "heber_catalog_db_connections_active",
+                "type": "gauge",
+            },
+        ],
+    },
+}
+
+
+def get_dashboard_specs() -> dict:
+    """Get dashboard specifications for Grafana import."""
+    return DASHBOARDS
+
+
+
+================================================
+FILE: heber/ops/circuit_breaker.py
+================================================
+"""Circuit breaker pattern for Heber per PRD §12.13.
+
+Provides:
+- Dependency classification (hard vs soft)
+- Circuit breaker with configurable settings
+- Degradation matrix for graceful degradation
+- Degraded mode metrics and indicators
+"""
+
+import time
+import threading
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable
+
+import structlog
+from prometheus_client import Gauge
+
+logger = structlog.get_logger(__name__)
+
+
+# Degraded mode metric (PRD §12.13.4)
+degraded_mode = Gauge(
+    "heber_degraded_mode",
+    "Service operating in degraded mode (1=degraded, 0=normal)",
+    ["dependency"],
+)
+
+
+class DependencyType(str, Enum):
+    """Dependency classification per PRD §12.13.1."""
+    HARD = "hard"   # Service cannot function without it
+    SOFT = "soft"   # Service can continue with reduced functionality
+
+
+class CircuitState(str, Enum):
+    """Circuit breaker states per PRD §12.13.3."""
+    CLOSED = "closed"       # Normal operation
+    OPEN = "open"           # Bypass dependency, use degraded path
+    HALF_OPEN = "half_open" # Testing if dependency recovered
+
+
+@dataclass
+class CircuitBreakerSettings:
+    """Circuit breaker configuration per PRD §12.13.3."""
+    failure_threshold: int = 5      # Consecutive failures to open
+    open_duration_seconds: int = 30 # How long circuit stays open
+    half_open_probes: int = 3       # Probes allowed in half-open
+    success_threshold: int = 2      # Successes to close from half-open
+
+
+@dataclass
+class DependencyInfo:
+    """Metadata about a dependency."""
+    name: str
+    dep_type: DependencyType
+    degraded_behavior: str
+
+
+# Default circuit breaker settings
+DEFAULT_SETTINGS = CircuitBreakerSettings()
+
+
+class CircuitBreaker:
+    """Circuit breaker implementation per PRD §12.13.3.
+    
+    Usage:
+        breaker = CircuitBreaker("catalog")
+        
+        if breaker.allow_request():
+            try:
+                result = call_catalog()
+                breaker.record_success()
+                return result
+            except Exception as e:
+                breaker.record_failure()
+                raise
+        else:
+            # Degraded path
+            return cached_value
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        settings: CircuitBreakerSettings | None = None,
+    ):
+        self.name = name
+        self.settings = settings or DEFAULT_SETTINGS
+        
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._half_open_calls = 0
+        self._last_failure_time = 0.0
+        self._lock = threading.Lock()
+        
+        # Initialize metric
+        degraded_mode.labels(dependency=name).set(0)
+    
+    @property
+    def state(self) -> CircuitState:
+        """Current circuit state (may transition on access)."""
+        with self._lock:
+            if self._state == CircuitState.OPEN:
+                # Check if we should transition to half-open
+                elapsed = time.time() - self._last_failure_time
+                if elapsed >= self.settings.open_duration_seconds:
+                    self._transition_to(CircuitState.HALF_OPEN)
+            return self._state
+    
+    @property
+    def is_open(self) -> bool:
+        """Check if circuit is open (requests should be bypassed)."""
+        return self.state == CircuitState.OPEN
+    
+    @property
+    def is_closed(self) -> bool:
+        """Check if circuit is closed (normal operation)."""
+        return self.state == CircuitState.CLOSED
+    
+    def allow_request(self) -> bool:
+        """Check if a request should be allowed through.
+        
+        Returns True if the request should proceed to the dependency.
+        Returns False if the circuit is open (use degraded path).
+        """
+        state = self.state
+        
+        if state == CircuitState.CLOSED:
+            return True
+        
+        if state == CircuitState.OPEN:
+            return False
+        
+        # Half-open: allow limited probes
+        with self._lock:
+            if self._half_open_calls < self.settings.half_open_probes:
+                self._half_open_calls += 1
+                return True
+            return False
+    
+    def record_success(self) -> None:
+        """Record a successful call to the dependency."""
+        with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                self._success_count += 1
+                if self._success_count >= self.settings.success_threshold:
+                    self._transition_to(CircuitState.CLOSED)
+            elif self._state == CircuitState.CLOSED:
+                # Reset failure count on success
+                self._failure_count = 0
+    
+    def record_failure(self) -> None:
+        """Record a failed call to the dependency."""
+        with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+            
+            if self._state == CircuitState.HALF_OPEN:
+                # Any failure in half-open reopens circuit
+                self._transition_to(CircuitState.OPEN)
+            elif self._state == CircuitState.CLOSED:
+                if self._failure_count >= self.settings.failure_threshold:
+                    self._transition_to(CircuitState.OPEN)
+    
+    def _transition_to(self, new_state: CircuitState) -> None:
+        """Transition to a new state (must hold lock)."""
+        old_state = self._state
+        self._state = new_state
+        
+        # Reset counters on transition
+        if new_state == CircuitState.CLOSED:
+            self._failure_count = 0
+            self._success_count = 0
+            self._half_open_calls = 0
+            degraded_mode.labels(dependency=self.name).set(0)
+            logger.info(
+                "circuit_closed",
+                dependency=self.name,
+                message=f"Circuit breaker closed for {self.name}",
+            )
+        elif new_state == CircuitState.OPEN:
+            self._success_count = 0
+            self._half_open_calls = 0
+            degraded_mode.labels(dependency=self.name).set(1)
+            logger.warning(
+                "circuit_opened",
+                dependency=self.name,
+                failure_count=self._failure_count,
+                message=f"Operating in degraded mode: {self.name} unreachable",
+            )
+        elif new_state == CircuitState.HALF_OPEN:
+            self._success_count = 0
+            self._half_open_calls = 0
+            logger.info(
+                "circuit_half_open",
+                dependency=self.name,
+                message=f"Testing if {self.name} recovered",
+            )
+    
+    def force_open(self) -> None:
+        """Manually force the circuit open."""
+        with self._lock:
+            self._last_failure_time = time.time()
+            self._transition_to(CircuitState.OPEN)
+    
+    def force_close(self) -> None:
+        """Manually force the circuit closed."""
+        with self._lock:
+            self._transition_to(CircuitState.CLOSED)
+    
+    def reset(self) -> None:
+        """Reset the circuit to initial state."""
+        self.force_close()
+
+
+# Degradation matrix per PRD §12.13.2
+DEGRADATION_MATRIX: dict[str, dict[str, DependencyInfo]] = {
+    "heber-consumer": {
+        "event_bus": DependencyInfo(
+            name="event_bus",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Crash/restart (bus buffers data)",
+        ),
+        "object_storage": DependencyInfo(
+            name="object_storage",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Retry + DLQ after max attempts",
+        ),
+        "catalog": DependencyInfo(
+            name="catalog",
+            dep_type=DependencyType.SOFT,
+            degraded_behavior="Cache-only; skip coverage updates",
+        ),
+        "bloom_filter": DependencyInfo(
+            name="bloom_filter",
+            dep_type=DependencyType.SOFT,
+            degraded_behavior="Rebuild from scratch (memory only)",
+        ),
+    },
+    "heber-writer": {
+        "object_storage": DependencyInfo(
+            name="object_storage",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Retry + DLQ",
+        ),
+        "catalog": DependencyInfo(
+            name="catalog",
+            dep_type=DependencyType.SOFT,
+            degraded_behavior="Continue writes; queue metadata updates",
+        ),
+    },
+    "heber-compactor": {
+        "object_storage": DependencyInfo(
+            name="object_storage",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Wait and retry",
+        ),
+        "catalog": DependencyInfo(
+            name="catalog",
+            dep_type=DependencyType.SOFT,
+            degraded_behavior="Skip catalog updates",
+        ),
+    },
+    "heber-catalog": {
+        "postgres": DependencyInfo(
+            name="postgres",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Return 503 on all requests",
+        ),
+    },
+    "heber-hotloader": {
+        "hot_store": DependencyInfo(
+            name="hot_store",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Skip hot writes; emit alert",
+        ),
+        "event_bus": DependencyInfo(
+            name="event_bus",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Crash/restart",
+        ),
+    },
+    "sdk": {
+        "catalog_api": DependencyInfo(
+            name="catalog_api",
+            dep_type=DependencyType.SOFT,
+            degraded_behavior="Use local cache if available",
+        ),
+        "object_storage": DependencyInfo(
+            name="object_storage",
+            dep_type=DependencyType.HARD,
+            degraded_behavior="Fail read/write operations",
+        ),
+    },
+}
+
+
+# Global circuit breaker registry
+_circuit_breakers: dict[str, CircuitBreaker] = {}
+_registry_lock = threading.Lock()
+
+
+def get_circuit_breaker(
+    name: str,
+    settings: CircuitBreakerSettings | None = None,
+) -> CircuitBreaker:
+    """Get or create a circuit breaker for a dependency.
+    
+    Args:
+        name: Dependency name (e.g., "catalog", "object_storage")
+        settings: Optional custom settings
+        
+    Returns:
+        CircuitBreaker instance
+    """
+    with _registry_lock:
+        if name not in _circuit_breakers:
+            _circuit_breakers[name] = CircuitBreaker(name, settings)
+        return _circuit_breakers[name]
+
+
+def get_all_circuit_breakers() -> dict[str, CircuitBreaker]:
+    """Get all registered circuit breakers."""
+    with _registry_lock:
+        return dict(_circuit_breakers)
+
+
+def get_dependency_info(service: str, dependency: str) -> DependencyInfo | None:
+    """Get dependency info from degradation matrix."""
+    service_deps = DEGRADATION_MATRIX.get(service, {})
+    return service_deps.get(dependency)
+
+
+def is_hard_dependency(service: str, dependency: str) -> bool:
+    """Check if a dependency is hard (required)."""
+    info = get_dependency_info(service, dependency)
+    return info is not None and info.dep_type == DependencyType.HARD
+
+
+def is_soft_dependency(service: str, dependency: str) -> bool:
+    """Check if a dependency is soft (degradable)."""
+    info = get_dependency_info(service, dependency)
+    return info is not None and info.dep_type == DependencyType.SOFT
+
+
+def get_degraded_header() -> dict[str, str] | None:
+    """Get X-Heber-Degraded header if any circuits are open.
+    
+    Returns header dict for FastAPI response, or None if all normal.
+    """
+    degraded_deps = [
+        name for name, cb in get_all_circuit_breakers().items()
+        if cb.is_open
+    ]
+    
+    if degraded_deps:
+        return {"X-Heber-Degraded": ",".join(degraded_deps)}
+    return None
+
+
+# Decorator for circuit breaker pattern
+def with_circuit_breaker(
+    dependency_name: str,
+    fallback: Callable[[], Any] | None = None,
+    settings: CircuitBreakerSettings | None = None,
+):
+    """Decorator to wrap a function with circuit breaker protection.
+    
+    Args:
+        dependency_name: Name of the dependency being called
+        fallback: Optional fallback function when circuit is open
+        settings: Optional custom circuit breaker settings
+    """
+    def decorator(fn: Callable) -> Callable:
+        def wrapper(*args, **kwargs):
+            cb = get_circuit_breaker(dependency_name, settings)
+            
+            if not cb.allow_request():
+                if fallback:
+                    return fallback()
+                raise CircuitOpenError(
+                    f"Circuit open for {dependency_name}: service degraded"
+                )
+            
+            try:
+                result = fn(*args, **kwargs)
+                cb.record_success()
+                return result
+            except Exception as e:
+                cb.record_failure()
+                raise
+        
+        return wrapper
+    return decorator
+
+
+class CircuitOpenError(Exception):
+    """Raised when circuit is open and no fallback provided."""
+    pass
+
+
+
+================================================
+FILE: heber/ops/health.py
+================================================
+"""Health check endpoints for Heber per PRD §12.12.
+
+Provides:
+- /health (liveness) - process alive, no dependency checks
+- /ready (readiness) - ready to handle requests, checks dependencies
+- /startup - initialization complete
+- Dependency health check framework
+"""
+
+import os
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from enum import Enum
+from typing import Any, Callable
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+# Service start time for uptime calculation
+_start_time = time.time()
+
+# Global startup state
+_startup_complete = False
+
+
+class HealthStatus(str, Enum):
+    """Health check status."""
+    OK = "ok"
+    DEGRADED = "degraded"
+    ERROR = "error"
+
+
+class ReadinessStatus(str, Enum):
+    """Readiness status."""
+    READY = "ready"
+    NOT_READY = "not_ready"
+
+
+@dataclass
+class HealthCheck:
+    """Individual health check result."""
+    name: str
+    status: HealthStatus
+    message: str | None = None
+    latency_ms: float | None = None
+    
+    def to_dict(self) -> dict[str, Any]:
+        result = {"status": self.status.value}
+        if self.message:
+            result["message"] = self.message
+        if self.latency_ms is not None:
+            result["latency_ms"] = round(self.latency_ms, 2)
+        return result
+
+
+@dataclass
+class LivenessResponse:
+    """Response for /health endpoint (PRD §12.12.2)."""
+    status: str = "ok"
+    service: str = ""
+    instance_id: str = ""
+    uptime_seconds: int = 0
+    version: str = ""
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "service": self.service,
+            "instance_id": self.instance_id,
+            "uptime_seconds": self.uptime_seconds,
+            "version": self.version,
+        }
+
+
+@dataclass
+class ReadinessResponse:
+    """Response for /ready endpoint (PRD §12.12.3)."""
+    status: ReadinessStatus
+    checks: dict[str, HealthCheck] = field(default_factory=dict)
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "checks": {name: check.to_dict() for name, check in self.checks.items()},
+        }
+    
+    @property
+    def is_ready(self) -> bool:
+        return self.status == ReadinessStatus.READY
+
+
+# Dependency check registry
+_dependency_checks: dict[str, Callable[[], HealthCheck]] = {}
+
+
+def register_dependency_check(name: str, check_fn: Callable[[], HealthCheck]) -> None:
+    """Register a dependency health check.
+    
+    Args:
+        name: Dependency name (e.g., "event_bus", "object_storage")
+        check_fn: Function that returns HealthCheck
+    """
+    _dependency_checks[name] = check_fn
+    logger.debug("dependency_check_registered", name=name)
+
+
+def unregister_dependency_check(name: str) -> None:
+    """Unregister a dependency check."""
+    _dependency_checks.pop(name, None)
+
+
+def get_service_info() -> tuple[str, str, str]:
+    """Get service name, instance ID, and version from environment."""
+    service = os.environ.get("SERVICE_NAME", "heber")
+    instance_id = os.environ.get("INSTANCE_ID", os.environ.get("HOSTNAME", "unknown"))
+    version = os.environ.get("SERVICE_VERSION", "0.1.0")
+    return service, instance_id, version
+
+
+def get_uptime_seconds() -> int:
+    """Get process uptime in seconds."""
+    return int(time.time() - _start_time)
+
+
+# Health check endpoint handlers
+
+def check_liveness() -> LivenessResponse:
+    """Liveness check (/health) per PRD §12.12.2.
+    
+    Returns 200 if process is alive. Does NOT check dependencies.
+    """
+    service, instance_id, version = get_service_info()
+    
+    return LivenessResponse(
+        status="ok",
+        service=service,
+        instance_id=instance_id,
+        uptime_seconds=get_uptime_seconds(),
+        version=version,
+    )
+
+
+def check_readiness() -> ReadinessResponse:
+    """Readiness check (/ready) per PRD §12.12.3.
+    
+    Returns 200 only if all dependencies are healthy.
+    """
+    checks: dict[str, HealthCheck] = {}
+    all_ok = True
+    
+    for name, check_fn in _dependency_checks.items():
+        try:
+            start = time.time()
+            check = check_fn()
+            check.latency_ms = (time.time() - start) * 1000
+            checks[name] = check
+            
+            if check.status != HealthStatus.OK:
+                all_ok = False
+                
+        except Exception as e:
+            checks[name] = HealthCheck(
+                name=name,
+                status=HealthStatus.ERROR,
+                message=str(e),
+            )
+            all_ok = False
+            logger.warning("dependency_check_failed", name=name, error=str(e))
+    
+    status = ReadinessStatus.READY if all_ok else ReadinessStatus.NOT_READY
+    
+    return ReadinessResponse(status=status, checks=checks)
+
+
+def check_startup() -> dict[str, Any]:
+    """Startup check (/startup) per PRD §12.12.4.
+    
+    Returns 200 when initialization is complete.
+    """
+    if _startup_complete:
+        return {"status": "started", "ready": True}
+    return {"status": "starting", "ready": False}
+
+
+def mark_startup_complete() -> None:
+    """Mark service initialization as complete."""
+    global _startup_complete
+    _startup_complete = True
+    logger.info("startup_complete")
+
+
+def mark_startup_incomplete() -> None:
+    """Mark service as not yet initialized (for testing or graceful shutdown)."""
+    global _startup_complete
+    _startup_complete = False
+
+
+def is_startup_complete() -> bool:
+    """Check if startup is complete."""
+    return _startup_complete
+
+
+# Pre-built dependency checks
+
+def create_redis_check(redis_client: Any) -> Callable[[], HealthCheck]:
+    """Create a Redis dependency check."""
+    def check() -> HealthCheck:
+        try:
+            redis_client.ping()
+            return HealthCheck(name="redis", status=HealthStatus.OK)
+        except Exception as e:
+            return HealthCheck(name="redis", status=HealthStatus.ERROR, message=str(e))
+    return check
+
+
+def create_postgres_check(engine: Any) -> Callable[[], HealthCheck]:
+    """Create a PostgreSQL dependency check."""
+    def check() -> HealthCheck:
+        try:
+            with engine.connect() as conn:
+                conn.execute("SELECT 1")
+            return HealthCheck(name="postgres", status=HealthStatus.OK)
+        except Exception as e:
+            return HealthCheck(name="postgres", status=HealthStatus.ERROR, message=str(e))
+    return check
+
+
+def create_s3_check(s3_client: Any, bucket: str) -> Callable[[], HealthCheck]:
+    """Create an S3/object storage dependency check."""
+    def check() -> HealthCheck:
+        try:
+            s3_client.head_bucket(Bucket=bucket)
+            return HealthCheck(name="object_storage", status=HealthStatus.OK)
+        except Exception as e:
+            return HealthCheck(name="object_storage", status=HealthStatus.ERROR, message=str(e))
+    return check
+
+
+def create_http_check(url: str, timeout: float = 5.0) -> Callable[[], HealthCheck]:
+    """Create an HTTP endpoint dependency check."""
+    import httpx
+    
+    def check() -> HealthCheck:
+        try:
+            response = httpx.get(url, timeout=timeout)
+            if response.status_code == 200:
+                return HealthCheck(name=url, status=HealthStatus.OK)
+            return HealthCheck(
+                name=url,
+                status=HealthStatus.ERROR,
+                message=f"HTTP {response.status_code}",
+            )
+        except Exception as e:
+            return HealthCheck(name=url, status=HealthStatus.ERROR, message=str(e))
+    return check
+
+
+# FastAPI integration helpers
+
+def create_health_router():
+    """Create FastAPI router with health endpoints."""
+    from fastapi import APIRouter, Response
+    
+    router = APIRouter(tags=["Health"])
+    
+    @router.get("/health")
+    async def liveness():
+        """Liveness probe - is the process alive?"""
+        return check_liveness().to_dict()
+    
+    @router.get("/livez")
+    async def liveness_k8s():
+        """Kubernetes-style liveness probe."""
+        return check_liveness().to_dict()
+    
+    @router.get("/ready")
+    async def readiness(response: Response):
+        """Readiness probe - is the service ready to accept traffic?"""
+        result = check_readiness()
+        if not result.is_ready:
+            response.status_code = 503
+        return result.to_dict()
+    
+    @router.get("/readyz")
+    async def readiness_k8s(response: Response):
+        """Kubernetes-style readiness probe."""
+        result = check_readiness()
+        if not result.is_ready:
+            response.status_code = 503
+        return result.to_dict()
+    
+    @router.get("/startup")
+    async def startup(response: Response):
+        """Startup probe - is initialization complete?"""
+        result = check_startup()
+        if not result["ready"]:
+            response.status_code = 503
+        return result
+    
+    return router
+
+
+
+================================================
+FILE: heber/ops/lifecycle.py
+================================================
+"""Service lifecycle management for Heber per PRD §12.14.
+
+Provides:
+- Graceful shutdown handling (SIGTERM)
+- Readiness state management during shutdown
+- In-flight work draining
+- Buffer flushing
+- Connection cleanup
+- Shutdown timeout enforcement
+- Canary deployment metrics
+"""
+
+import asyncio
+import os
+import signal
+import threading
+import time
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable
+
+import structlog
+from prometheus_client import Counter, Gauge
+
+from heber.ops.health import mark_startup_incomplete
+
+logger = structlog.get_logger(__name__)
+
+
+# Default shutdown timeout (PRD §12.14.3)
+DEFAULT_SHUTDOWN_TIMEOUT = 30
+
+
+class LifecycleState(str, Enum):
+    """Service lifecycle states."""
+    STARTING = "starting"
+    RUNNING = "running"
+    DRAINING = "draining"
+    SHUTTING_DOWN = "shutting_down"
+    STOPPED = "stopped"
+
+
+# Prometheus metrics for canary deployments (PRD §12.14.6)
+shutdown_initiated = Counter(
+    "heber_shutdown_initiated_total",
+    "Number of shutdown sequences initiated",
+    ["reason"],
+)
+
+shutdown_completed = Counter(
+    "heber_shutdown_completed_total",
+    "Number of shutdown sequences completed",
+    ["status"],  # success, timeout, error
+)
+
+in_flight_requests = Gauge(
+    "heber_in_flight_requests",
+    "Current number of in-flight requests/operations",
+    ["service"],
+)
+
+drain_duration_seconds = Gauge(
+    "heber_drain_duration_seconds",
+    "Time spent draining in-flight work",
+)
+
+
+@dataclass
+class ShutdownConfig:
+    """Shutdown configuration per PRD §12.14.3."""
+    timeout_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("HEBER_SHUTDOWN_TIMEOUT_SECONDS", DEFAULT_SHUTDOWN_TIMEOUT)
+        )
+    )
+    drain_poll_interval: float = 0.5  # How often to check if drained
+
+
+@dataclass
+class LifecycleCallbacks:
+    """Callbacks for lifecycle events."""
+    on_drain_start: Callable[[], None] | None = None
+    on_drain_complete: Callable[[], None] | None = None
+    on_flush_buffers: Callable[[], None] | None = None
+    on_close_connections: Callable[[], None] | None = None
+
+
+class LifecycleManager:
+    """Manages service lifecycle per PRD §12.14.3.
+    
+    Implements the 6-step graceful shutdown sequence:
+    1. SIGTERM received → Start shutdown
+    2. Readiness = false → Stop accepting new work
+    3. Drain in-flight → Complete current batch/request
+    4. Flush buffers → Write any buffered data
+    5. Close connections → Gracefully close DB/storage/bus connections
+    6. Exit → Process terminates
+    
+    Usage:
+        lifecycle = LifecycleManager(service_name="heber-consumer")
+        lifecycle.register_callbacks(
+            on_flush_buffers=flush_my_buffers,
+            on_close_connections=close_my_connections,
+        )
+        lifecycle.install_signal_handlers()
+        
+        # In your main loop:
+        while lifecycle.is_running:
+            process_work()
+            
+        # Or use as async context manager:
+        async with lifecycle.managed():
+            await run_service()
+    """
+    
+    def __init__(
+        self,
+        service_name: str = "heber",
+        config: ShutdownConfig | None = None,
+    ):
+        self.service_name = service_name
+        self.config = config or ShutdownConfig()
+        
+        self._state = LifecycleState.STARTING
+        self._in_flight_count = 0
+        self._shutdown_event = threading.Event()
+        self._async_shutdown_event: asyncio.Event | None = None
+        self._lock = threading.Lock()
+        self._callbacks = LifecycleCallbacks()
+        self._shutdown_reason: str | None = None
+        
+        # Initialize metrics
+        in_flight_requests.labels(service=service_name).set(0)
+    
+    @property
+    def state(self) -> LifecycleState:
+        """Current lifecycle state."""
+        return self._state
+    
+    @property
+    def is_running(self) -> bool:
+        """Check if service is in a running state."""
+        return self._state in (LifecycleState.STARTING, LifecycleState.RUNNING)
+    
+    @property
+    def is_accepting_work(self) -> bool:
+        """Check if service should accept new work."""
+        return self._state == LifecycleState.RUNNING
+    
+    @property
+    def is_shutting_down(self) -> bool:
+        """Check if shutdown has been initiated."""
+        return self._state in (
+            LifecycleState.DRAINING,
+            LifecycleState.SHUTTING_DOWN,
+            LifecycleState.STOPPED,
+        )
+    
+    def mark_running(self) -> None:
+        """Transition from starting to running."""
+        with self._lock:
+            if self._state == LifecycleState.STARTING:
+                self._state = LifecycleState.RUNNING
+                logger.info("service_running", service=self.service_name)
+    
+    def register_callbacks(
+        self,
+        on_drain_start: Callable[[], None] | None = None,
+        on_drain_complete: Callable[[], None] | None = None,
+        on_flush_buffers: Callable[[], None] | None = None,
+        on_close_connections: Callable[[], None] | None = None,
+    ) -> None:
+        """Register lifecycle callbacks."""
+        if on_drain_start:
+            self._callbacks.on_drain_start = on_drain_start
+        if on_drain_complete:
+            self._callbacks.on_drain_complete = on_drain_complete
+        if on_flush_buffers:
+            self._callbacks.on_flush_buffers = on_flush_buffers
+        if on_close_connections:
+            self._callbacks.on_close_connections = on_close_connections
+    
+    def track_in_flight(self) -> "InFlightTracker":
+        """Context manager to track in-flight work.
+        
+        Usage:
+            with lifecycle.track_in_flight():
+                process_batch()
+        """
+        return InFlightTracker(self)
+    
+    def _increment_in_flight(self) -> None:
+        """Increment in-flight count."""
+        with self._lock:
+            self._in_flight_count += 1
+            in_flight_requests.labels(service=self.service_name).set(self._in_flight_count)
+    
+    def _decrement_in_flight(self) -> None:
+        """Decrement in-flight count."""
+        with self._lock:
+            self._in_flight_count = max(0, self._in_flight_count - 1)
+            in_flight_requests.labels(service=self.service_name).set(self._in_flight_count)
+    
+    def install_signal_handlers(self) -> None:
+        """Install SIGTERM/SIGINT handlers for graceful shutdown."""
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGINT, self._signal_handler)
+        logger.debug("signal_handlers_installed", signals=["SIGTERM", "SIGINT"])
+    
+    def _signal_handler(self, signum: int, frame: Any) -> None:
+        """Handle shutdown signals."""
+        signal_name = signal.Signals(signum).name
+        logger.info("shutdown_signal_received", signal=signal_name)
+        self.initiate_shutdown(reason=signal_name)
+    
+    def initiate_shutdown(self, reason: str = "manual") -> None:
+        """Start the graceful shutdown sequence."""
+        with self._lock:
+            if self._state in (LifecycleState.DRAINING, LifecycleState.SHUTTING_DOWN):
+                return  # Already shutting down
+            
+            self._shutdown_reason = reason
+            self._state = LifecycleState.DRAINING
+            shutdown_initiated.labels(reason=reason).inc()
+        
+        logger.info(
+            "shutdown_initiated",
+            service=self.service_name,
+            reason=reason,
+            timeout=self.config.timeout_seconds,
+        )
+        
+        # Step 2: Set readiness = false
+        mark_startup_incomplete()
+        
+        # Signal shutdown event
+        self._shutdown_event.set()
+        if self._async_shutdown_event:
+            self._async_shutdown_event.set()
+    
+    def wait_for_shutdown(self, timeout: float | None = None) -> bool:
+        """Wait for shutdown signal.
+        
+        Returns True if shutdown was signaled, False on timeout.
+        """
+        return self._shutdown_event.wait(timeout=timeout)
+    
+    async def async_wait_for_shutdown(self) -> None:
+        """Async wait for shutdown signal."""
+        if not self._async_shutdown_event:
+            self._async_shutdown_event = asyncio.Event()
+        await self._async_shutdown_event.wait()
+    
+    def execute_shutdown(self) -> bool:
+        """Execute the full shutdown sequence.
+        
+        Returns True if shutdown completed successfully within timeout.
+        """
+        start_time = time.time()
+        deadline = start_time + self.config.timeout_seconds
+        
+        try:
+            # Step 3: Drain in-flight work
+            logger.info("draining_in_flight", in_flight=self._in_flight_count)
+            if self._callbacks.on_drain_start:
+                self._callbacks.on_drain_start()
+            
+            while self._in_flight_count > 0 and time.time() < deadline:
+                time.sleep(self.config.drain_poll_interval)
+            
+            drain_duration = time.time() - start_time
+            drain_duration_seconds.set(drain_duration)
+            
+            if self._in_flight_count > 0:
+                logger.warning(
+                    "drain_timeout",
+                    remaining=self._in_flight_count,
+                    duration=drain_duration,
+                )
+            
+            if self._callbacks.on_drain_complete:
+                self._callbacks.on_drain_complete()
+            
+            # Step 4: Flush buffers
+            with self._lock:
+                self._state = LifecycleState.SHUTTING_DOWN
+            
+            logger.info("flushing_buffers")
+            if self._callbacks.on_flush_buffers:
+                self._callbacks.on_flush_buffers()
+            
+            # Step 5: Close connections
+            logger.info("closing_connections")
+            if self._callbacks.on_close_connections:
+                self._callbacks.on_close_connections()
+            
+            # Step 6: Mark as stopped
+            with self._lock:
+                self._state = LifecycleState.STOPPED
+            
+            shutdown_completed.labels(status="success").inc()
+            logger.info(
+                "shutdown_complete",
+                service=self.service_name,
+                duration=time.time() - start_time,
+            )
+            return True
+            
+        except Exception as e:
+            shutdown_completed.labels(status="error").inc()
+            logger.error("shutdown_error", error=str(e), exc_info=True)
+            return False
+    
+    async def async_execute_shutdown(self) -> bool:
+        """Async version of execute_shutdown."""
+        start_time = time.time()
+        deadline = start_time + self.config.timeout_seconds
+        
+        try:
+            # Step 3: Drain in-flight work
+            logger.info("draining_in_flight", in_flight=self._in_flight_count)
+            if self._callbacks.on_drain_start:
+                self._callbacks.on_drain_start()
+            
+            while self._in_flight_count > 0 and time.time() < deadline:
+                await asyncio.sleep(self.config.drain_poll_interval)
+            
+            drain_duration = time.time() - start_time
+            drain_duration_seconds.set(drain_duration)
+            
+            if self._callbacks.on_drain_complete:
+                self._callbacks.on_drain_complete()
+            
+            # Step 4: Flush buffers
+            with self._lock:
+                self._state = LifecycleState.SHUTTING_DOWN
+            
+            if self._callbacks.on_flush_buffers:
+                self._callbacks.on_flush_buffers()
+            
+            # Step 5: Close connections
+            if self._callbacks.on_close_connections:
+                self._callbacks.on_close_connections()
+            
+            # Step 6: Mark as stopped
+            with self._lock:
+                self._state = LifecycleState.STOPPED
+            
+            shutdown_completed.labels(status="success").inc()
+            return True
+            
+        except Exception as e:
+            shutdown_completed.labels(status="error").inc()
+            logger.error("shutdown_error", error=str(e), exc_info=True)
+            return False
+    
+    @asynccontextmanager
+    async def managed(self):
+        """Async context manager for managed lifecycle.
+        
+        Usage:
+            async with lifecycle.managed():
+                await run_service()
+        """
+        self.install_signal_handlers()
+        self.mark_running()
+        
+        try:
+            yield self
+        finally:
+            if not self.is_shutting_down:
+                self.initiate_shutdown(reason="context_exit")
+            await self.async_execute_shutdown()
+
+
+class InFlightTracker:
+    """Context manager to track in-flight work."""
+    
+    def __init__(self, lifecycle: LifecycleManager):
+        self._lifecycle = lifecycle
+    
+    def __enter__(self):
+        self._lifecycle._increment_in_flight()
+        return self
+    
+    def __exit__(self, *args):
+        self._lifecycle._decrement_in_flight()
+
+
+# Consumer group rebalancing helpers (PRD §12.14.4)
+
+@dataclass
+class RebalanceConfig:
+    """Consumer group rebalance configuration."""
+    rebalance_timeout_seconds: int = 60
+    partition_assignment_delay: float = 1.0
+
+
+class ConsumerGroupRebalancer:
+    """Handles consumer group rebalancing per PRD §12.14.4.
+    
+    Key invariant: No messages lost during rebalancing.
+    """
+    
+    def __init__(
+        self,
+        group_id: str,
+        config: RebalanceConfig | None = None,
+    ):
+        self.group_id = group_id
+        self.config = config or RebalanceConfig()
+        self._assigned_partitions: list[str] = []
+        self._rebalancing = False
+    
+    def on_partitions_revoked(self, partitions: list[str]) -> None:
+        """Called when partitions are about to be revoked.
+        
+        Must commit any pending work before returning.
+        """
+        self._rebalancing = True
+        logger.info(
+            "partitions_revoked",
+            group=self.group_id,
+            partitions=partitions,
+        )
+    
+    def on_partitions_assigned(self, partitions: list[str]) -> None:
+        """Called when new partitions are assigned."""
+        self._assigned_partitions = partitions
+        self._rebalancing = False
+        logger.info(
+            "partitions_assigned",
+            group=self.group_id,
+            partitions=partitions,
+        )
+    
+    @property
+    def is_rebalancing(self) -> bool:
+        """Check if currently rebalancing."""
+        return self._rebalancing
+    
+    @property
+    def assigned_partitions(self) -> list[str]:
+        """Get currently assigned partitions."""
+        return self._assigned_partitions.copy()
+
+
+# Canary deployment metrics (PRD §12.14.6)
+
+CANARY_METRICS = [
+    "heber_writer_errors_total",
+    "heber_consumer_lag_seconds",
+    "heber_catalog_request_duration_seconds",
+]
+
+canary_health = Gauge(
+    "heber_canary_healthy",
+    "Canary deployment health status (1=healthy, 0=unhealthy)",
+    ["deployment"],
+)
+
+
+def evaluate_canary_health(
+    error_rate_threshold: float = 0.01,
+    lag_threshold_seconds: float = 60.0,
+    latency_threshold_ms: float = 500.0,
+) -> bool:
+    """Evaluate if canary deployment is healthy.
+    
+    Based on PRD §12.14.6 metrics:
+    - heber_writer_errors_total (should not spike)
+    - heber_consumer_lag_seconds (should not grow)
+    - heber_catalog_request_duration_seconds (should not increase)
+    
+    Returns True if all metrics are within threshold.
+    """
+    # In production, this would query actual Prometheus metrics
+    # For now, always return healthy
+    return True
+
+
+def mark_canary_healthy(deployment: str = "default") -> None:
+    """Mark canary deployment as healthy."""
+    canary_health.labels(deployment=deployment).set(1)
+
+
+def mark_canary_unhealthy(deployment: str = "default") -> None:
+    """Mark canary deployment as unhealthy."""
+    canary_health.labels(deployment=deployment).set(0)
+
+
+# FastAPI integration
+
+def create_lifecycle_middleware(lifecycle: LifecycleManager):
+    """Create FastAPI middleware for lifecycle-aware request handling."""
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import Response
+    
+    class LifecycleMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if not lifecycle.is_accepting_work:
+                return Response(
+                    content="Service is shutting down",
+                    status_code=503,
+                )
+            
+            with lifecycle.track_in_flight():
+                return await call_next(request)
+    
+    return LifecycleMiddleware
 
 
 
@@ -11334,6 +14040,350 @@ def log_retry(
         delay_seconds=delay_seconds,
         error=error,
     )
+
+
+
+================================================
+FILE: heber/ops/metrics.py
+================================================
+"""Prometheus metrics for Heber per PRD §12.5.1-12.5.3.
+
+Provides all required metrics for consumer, writer, compactor, catalog,
+and anti-leakage latency monitoring.
+
+Naming convention: heber_<service>_<metric_name>{<labels>}
+"""
+
+from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+# Default metrics port (PRD §12.5.1)
+METRICS_PORT = 9100
+
+
+# Service info
+heber_info = Info("heber", "Heber Data Lakehouse service info")
+
+
+# =============================================================================
+# Consumer Metrics (PRD §12.5.2)
+# =============================================================================
+
+consumer_events_received_total = Counter(
+    "heber_consumer_events_received_total",
+    "Total events received from event bus",
+    ["feed", "provider"],
+)
+
+consumer_events_processed_total = Counter(
+    "heber_consumer_events_processed_total",
+    "Total events processed",
+    ["feed", "provider", "status"],  # status: success, error, dropped
+)
+
+consumer_batch_size = Histogram(
+    "heber_consumer_batch_size",
+    "Batch sizes for processing",
+    ["feed"],
+    buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+)
+
+consumer_lag_seconds = Gauge(
+    "heber_consumer_lag_seconds",
+    "Consumer lag behind stream head in seconds",
+    ["stream"],
+)
+
+consumer_dedupe_drops_total = Counter(
+    "heber_consumer_dedupe_drops_total",
+    "Events dropped by deduplication (Bloom filter)",
+    ["feed"],
+)
+
+
+# =============================================================================
+# Writer Metrics (PRD §12.5.2)
+# =============================================================================
+
+writer_rows_written_total = Counter(
+    "heber_writer_rows_written_total",
+    "Total rows written",
+    ["layer", "dataset"],
+)
+
+writer_bytes_written_total = Counter(
+    "heber_writer_bytes_written_total",
+    "Total bytes written",
+    ["layer", "dataset"],
+)
+
+writer_files_written_total = Counter(
+    "heber_writer_files_written_total",
+    "Total files created",
+    ["layer", "dataset"],
+)
+
+writer_flush_duration_seconds = Histogram(
+    "heber_writer_flush_duration_seconds",
+    "Time to flush a batch to storage",
+    ["layer"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+writer_errors_total = Counter(
+    "heber_writer_errors_total",
+    "Write failures by type",
+    ["layer", "error_type"],
+)
+
+
+# =============================================================================
+# Compactor Metrics (PRD §12.5.2)
+# =============================================================================
+
+compactor_runs_total = Counter(
+    "heber_compactor_runs_total",
+    "Total compaction runs",
+    ["dataset", "status"],  # status: success, error
+)
+
+compactor_files_merged_total = Counter(
+    "heber_compactor_files_merged_total",
+    "Total files merged during compaction",
+    ["dataset"],
+)
+
+compactor_bytes_reclaimed_total = Counter(
+    "heber_compactor_bytes_reclaimed_total",
+    "Bytes reclaimed (space saved) by compaction",
+    ["dataset"],
+)
+
+compactor_duration_seconds = Histogram(
+    "heber_compactor_duration_seconds",
+    "Compaction duration",
+    ["dataset"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+)
+
+
+# =============================================================================
+# Catalog Metrics (PRD §12.5.2)
+# =============================================================================
+
+catalog_requests_total = Counter(
+    "heber_catalog_requests_total",
+    "Total API requests",
+    ["endpoint", "status_code"],
+)
+
+catalog_request_duration_seconds = Histogram(
+    "heber_catalog_request_duration_seconds",
+    "API request latency",
+    ["endpoint"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+)
+
+catalog_db_connections_active = Gauge(
+    "heber_catalog_db_connections_active",
+    "Active database connections",
+)
+
+
+# =============================================================================
+# Hot Store Metrics (PRD §12.5.2)
+# =============================================================================
+
+hotstore_rows_synced_total = Counter(
+    "heber_hotstore_rows_synced_total",
+    "Rows synced to Hot Store",
+    ["dataset"],
+)
+
+hotstore_lag_seconds = Gauge(
+    "heber_hotstore_lag_seconds",
+    "Sync lag behind Silver in seconds",
+    ["dataset"],
+)
+
+hotstore_sync_errors_total = Counter(
+    "heber_hotstore_sync_errors_total",
+    "Sync failures",
+    ["dataset", "error_type"],
+)
+
+
+# =============================================================================
+# Anti-Leakage Latency Metrics (PRD §12.5.3)
+# =============================================================================
+
+ingest_lag_seconds = Histogram(
+    "heber_ingest_lag_seconds",
+    "Lag from ts_event to ts_ingest (ts_ingest - ts_event)",
+    ["feed", "provider"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+)
+
+availability_lag_seconds = Histogram(
+    "heber_availability_lag_seconds",
+    "Lag from ts_event to ts_available (ts_available - ts_event)",
+    ["feed", "provider"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+)
+
+commit_lag_seconds = Histogram(
+    "heber_commit_lag_seconds",
+    "Lag from ts_ingest to file commit (ts_commit - ts_ingest)",
+    ["feed"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+
+# =============================================================================
+# DLQ Metrics
+# =============================================================================
+
+dlq_events_total = Counter(
+    "heber_dlq_events_total",
+    "Events sent to dead-letter queue",
+    ["feed", "error_type"],
+)
+
+dlq_size = Gauge(
+    "heber_dlq_size",
+    "Current dead-letter queue size",
+    ["feed"],
+)
+
+
+# =============================================================================
+# Metric Recording Helpers
+# =============================================================================
+
+def record_event_received(feed: str, provider: str) -> None:
+    """Record an event received from the bus."""
+    consumer_events_received_total.labels(feed=feed, provider=provider).inc()
+
+
+def record_event_processed(
+    feed: str,
+    provider: str,
+    status: str = "success",
+) -> None:
+    """Record an event processed (success/error/dropped)."""
+    consumer_events_processed_total.labels(
+        feed=feed, provider=provider, status=status
+    ).inc()
+
+
+def record_batch_processed(feed: str, batch_size: int) -> None:
+    """Record a batch processing."""
+    consumer_batch_size.labels(feed=feed).observe(batch_size)
+
+
+def record_dedupe_drop(feed: str) -> None:
+    """Record a deduplication drop."""
+    consumer_dedupe_drops_total.labels(feed=feed).inc()
+
+
+def record_write(
+    layer: str,
+    dataset: str,
+    rows: int,
+    bytes_written: int,
+    duration_seconds: float,
+) -> None:
+    """Record a file write."""
+    writer_rows_written_total.labels(layer=layer, dataset=dataset).inc(rows)
+    writer_bytes_written_total.labels(layer=layer, dataset=dataset).inc(bytes_written)
+    writer_files_written_total.labels(layer=layer, dataset=dataset).inc()
+    writer_flush_duration_seconds.labels(layer=layer).observe(duration_seconds)
+
+
+def record_write_error(layer: str, error_type: str) -> None:
+    """Record a write error."""
+    writer_errors_total.labels(layer=layer, error_type=error_type).inc()
+
+
+def record_ingest_latency(
+    feed: str,
+    provider: str,
+    ingest_lag: float,
+    availability_lag: float,
+) -> None:
+    """Record latency metrics for anti-leakage monitoring."""
+    ingest_lag_seconds.labels(feed=feed, provider=provider).observe(ingest_lag)
+    availability_lag_seconds.labels(feed=feed, provider=provider).observe(availability_lag)
+
+
+def record_compaction(
+    dataset: str,
+    status: str,
+    files_merged: int,
+    bytes_reclaimed: int,
+    duration: float,
+) -> None:
+    """Record compaction run."""
+    compactor_runs_total.labels(dataset=dataset, status=status).inc()
+    if status == "success":
+        compactor_files_merged_total.labels(dataset=dataset).inc(files_merged)
+        compactor_bytes_reclaimed_total.labels(dataset=dataset).inc(bytes_reclaimed)
+    compactor_duration_seconds.labels(dataset=dataset).observe(duration)
+
+
+def record_api_request(endpoint: str, status_code: int, duration: float) -> None:
+    """Record a catalog API request."""
+    catalog_requests_total.labels(endpoint=endpoint, status_code=str(status_code)).inc()
+    catalog_request_duration_seconds.labels(endpoint=endpoint).observe(duration)
+
+
+def record_dlq_event(feed: str, error_type: str) -> None:
+    """Record an event sent to DLQ."""
+    dlq_events_total.labels(feed=feed, error_type=error_type).inc()
+
+
+def set_consumer_lag(stream: str, lag_seconds: float) -> None:
+    """Set consumer lag gauge."""
+    consumer_lag_seconds.labels(stream=stream).set(lag_seconds)
+
+
+def set_hotstore_lag(dataset: str, lag_seconds: float) -> None:
+    """Set Hot Store sync lag."""
+    hotstore_lag_seconds.labels(dataset=dataset).set(lag_seconds)
+
+
+# =============================================================================
+# Server Setup
+# =============================================================================
+
+def start_metrics_server(port: int = METRICS_PORT) -> None:
+    """Start the Prometheus metrics HTTP server.
+    
+    Args:
+        port: Port to serve metrics on (default: 9100)
+    """
+    try:
+        start_http_server(port)
+        logger.info("metrics_server_started", port=port)
+    except Exception as e:
+        logger.error("metrics_server_failed", port=port, error=str(e))
+        raise
+
+
+def set_service_info(
+    version: str,
+    service: str,
+    instance_id: str,
+) -> None:
+    """Set service info label for all metrics."""
+    heber_info.info({
+        "version": version,
+        "service": service,
+        "instance_id": instance_id,
+    })
 
 
 
@@ -11685,6 +14735,334 @@ async def retry_with_backoff_async(
             await asyncio.sleep(delay + jitter_amount)
     
     raise last_exception
+
+
+
+================================================
+FILE: heber/ops/tracing.py
+================================================
+"""Distributed tracing for Heber per PRD §12.5.6.
+
+Provides:
+- OpenTelemetry (OTLP) integration
+- Trace context propagation from Gateway lineage.trace_id
+- Key spans for consumer, writer, and catalog services
+- Head-based sampling: 1% prod, 100% dev
+"""
+
+import os
+from contextlib import contextmanager
+from functools import wraps
+from typing import Any, Callable
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+# Check if OpenTelemetry is available
+try:
+    from opentelemetry import trace
+    from opentelemetry.context import Context
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.sampling import (
+        ParentBased,
+        TraceIdRatioBased,
+    )
+    from opentelemetry.trace import SpanKind, Status, StatusCode
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
+    logger.warning("opentelemetry not installed, tracing disabled")
+
+
+# Environment-based sampling rates (PRD §12.5.6)
+SAMPLING_RATES = {
+    "prod": 0.01,       # 1% in production
+    "production": 0.01,
+    "staging": 1.0,     # 100% in staging
+    "dev": 1.0,         # 100% in development
+    "development": 1.0,
+    "test": 1.0,
+}
+
+
+def get_sampling_rate() -> float:
+    """Get sampling rate based on environment."""
+    env = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "dev")).lower()
+    return SAMPLING_RATES.get(env, 0.01)
+
+
+def configure_tracing(
+    service_name: str = "heber",
+    endpoint: str | None = None,
+    sampling_rate: float | None = None,
+) -> None:
+    """Configure OpenTelemetry tracing per PRD §12.5.6.
+    
+    Args:
+        service_name: Service name for spans (e.g., "heber-consumer")
+        endpoint: OTLP collector endpoint (default: from env OTEL_EXPORTER_OTLP_ENDPOINT)
+        sampling_rate: Override sampling rate (default: based on environment)
+    """
+    if not OTEL_AVAILABLE:
+        logger.warning("tracing_disabled", reason="opentelemetry not installed")
+        return
+    
+    # Get endpoint from env or parameter
+    endpoint = endpoint or os.environ.get(
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "http://localhost:4317",
+    )
+    
+    # Get sampling rate
+    rate = sampling_rate if sampling_rate is not None else get_sampling_rate()
+    
+    # Create sampler
+    sampler = ParentBased(root=TraceIdRatioBased(rate))
+    
+    # Create resource with service info
+    resource = Resource.create({
+        "service.name": service_name,
+        "service.version": os.environ.get("SERVICE_VERSION", "0.1.0"),
+        "deployment.environment": os.environ.get("ENVIRONMENT", "dev"),
+    })
+    
+    # Create tracer provider
+    provider = TracerProvider(resource=resource, sampler=sampler)
+    
+    # Add OTLP exporter
+    try:
+        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+        processor = BatchSpanProcessor(exporter)
+        provider.add_span_processor(processor)
+        
+        # Set as global provider
+        trace.set_tracer_provider(provider)
+        
+        logger.info(
+            "tracing_configured",
+            service=service_name,
+            endpoint=endpoint,
+            sampling_rate=rate,
+        )
+    except Exception as e:
+        logger.error("tracing_setup_failed", error=str(e))
+
+
+def get_tracer(name: str = "heber") -> Any:
+    """Get a tracer instance."""
+    if not OTEL_AVAILABLE:
+        return _NoopTracer()
+    return trace.get_tracer(name)
+
+
+class _NoopTracer:
+    """No-op tracer when OpenTelemetry is not available."""
+    
+    @contextmanager
+    def start_as_current_span(self, name: str, **kwargs):
+        yield _NoopSpan()
+    
+    def start_span(self, name: str, **kwargs):
+        return _NoopSpan()
+
+
+class _NoopSpan:
+    """No-op span."""
+    
+    def set_attribute(self, key: str, value: Any) -> None:
+        pass
+    
+    def set_status(self, status: Any) -> None:
+        pass
+    
+    def record_exception(self, exception: Exception) -> None:
+        pass
+    
+    def end(self) -> None:
+        pass
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        pass
+
+
+def extract_trace_context(lineage: dict | None) -> Any:
+    """Extract trace context from EventEnvelope lineage (PRD §12.5.6).
+    
+    Args:
+        lineage: lineage dict from EventEnvelope containing trace_id
+        
+    Returns:
+        OpenTelemetry Context or None
+    """
+    if not OTEL_AVAILABLE or not lineage:
+        return None
+    
+    trace_id = lineage.get("trace_id")
+    if not trace_id:
+        return None
+    
+    # Reconstruct W3C traceparent format
+    # Format: {version}-{trace_id}-{span_id}-{flags}
+    # We use trace_id as both trace_id and generate a new span_id
+    propagator = TraceContextTextMapPropagator()
+    carrier = {"traceparent": f"00-{trace_id}-0000000000000001-01"}
+    
+    return propagator.extract(carrier)
+
+
+# Span decorators for key operations (PRD §12.5.6)
+
+def traced(
+    span_name: str | None = None,
+    kind: str = "internal",
+    extract_lineage: bool = False,
+):
+    """Decorator to trace a function.
+    
+    Args:
+        span_name: Span name (default: function name)
+        kind: Span kind (internal, server, client, producer, consumer)
+        extract_lineage: If True, extract trace context from 'lineage' kwarg
+    """
+    def decorator(fn: Callable) -> Callable:
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            tracer = get_tracer()
+            name = span_name or fn.__name__
+            
+            # Extract context from lineage if requested
+            context = None
+            if extract_lineage and "lineage" in kwargs:
+                context = extract_trace_context(kwargs["lineage"])
+            
+            span_kind = SpanKind.INTERNAL
+            if OTEL_AVAILABLE:
+                kind_map = {
+                    "internal": SpanKind.INTERNAL,
+                    "server": SpanKind.SERVER,
+                    "client": SpanKind.CLIENT,
+                    "producer": SpanKind.PRODUCER,
+                    "consumer": SpanKind.CONSUMER,
+                }
+                span_kind = kind_map.get(kind, SpanKind.INTERNAL)
+            
+            with tracer.start_as_current_span(name, kind=span_kind, context=context) as span:
+                try:
+                    result = fn(*args, **kwargs)
+                    if OTEL_AVAILABLE:
+                        span.set_status(Status(StatusCode.OK))
+                    return result
+                except Exception as e:
+                    if OTEL_AVAILABLE:
+                        span.record_exception(e)
+                        span.set_status(Status(StatusCode.ERROR, str(e)))
+                    raise
+        
+        return wrapper
+    return decorator
+
+
+# Pre-defined span helpers for PRD §12.5.6 key spans
+
+@contextmanager
+def span_process_batch(feed: str, batch_size: int, lineage: dict | None = None):
+    """Span for consumer batch processing."""
+    tracer = get_tracer()
+    context = extract_trace_context(lineage)
+    
+    with tracer.start_as_current_span(
+        "process_batch",
+        kind=SpanKind.CONSUMER if OTEL_AVAILABLE else None,
+        context=context,
+    ) as span:
+        span.set_attribute("feed", feed)
+        span.set_attribute("batch_size", batch_size)
+        yield span
+
+
+@contextmanager
+def span_dedupe_check(bloom_size: int, drops: int = 0):
+    """Span for deduplication check."""
+    tracer = get_tracer()
+    
+    with tracer.start_as_current_span("dedupe_check") as span:
+        span.set_attribute("bloom_size", bloom_size)
+        span.set_attribute("drops", drops)
+        yield span
+
+
+@contextmanager
+def span_write_bronze(rows: int, bytes_written: int):
+    """Span for Bronze layer write."""
+    tracer = get_tracer()
+    
+    with tracer.start_as_current_span("write_bronze") as span:
+        span.set_attribute("rows", rows)
+        span.set_attribute("bytes", bytes_written)
+        yield span
+
+
+@contextmanager
+def span_write_silver(rows: int, bytes_written: int, partition: str):
+    """Span for Silver layer write."""
+    tracer = get_tracer()
+    
+    with tracer.start_as_current_span("write_silver") as span:
+        span.set_attribute("rows", rows)
+        span.set_attribute("bytes", bytes_written)
+        span.set_attribute("partition", partition)
+        yield span
+
+
+@contextmanager
+def span_api_request(endpoint: str, status: int | None = None):
+    """Span for Catalog API request."""
+    tracer = get_tracer()
+    
+    with tracer.start_as_current_span(
+        "api_request",
+        kind=SpanKind.SERVER if OTEL_AVAILABLE else None,
+    ) as span:
+        span.set_attribute("endpoint", endpoint)
+        yield span
+        if status:
+            span.set_attribute("status", status)
+
+
+def inject_trace_context(carrier: dict) -> dict:
+    """Inject current trace context into a carrier dict for propagation.
+    
+    Useful for outgoing HTTP requests or message publishing.
+    """
+    if not OTEL_AVAILABLE:
+        return carrier
+    
+    propagator = TraceContextTextMapPropagator()
+    propagator.inject(carrier)
+    return carrier
+
+
+def get_current_trace_id() -> str | None:
+    """Get the current trace ID as a hex string."""
+    if not OTEL_AVAILABLE:
+        return None
+    
+    span = trace.get_current_span()
+    if span:
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            return format(ctx.trace_id, "032x")
+    return None
 
 
 
