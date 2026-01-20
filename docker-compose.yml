@@ -1,0 +1,124 @@
+services:
+  # Infrastructure
+  postgres:
+    image: postgres:16-alpine
+    container_name: heber-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-heber}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heber_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-heber_catalog}
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/postgres/data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U heber -d heber_catalog" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: heber-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/redis/data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: heber-clickhouse
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/data:/var/lib/clickhouse
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/logs:/var/log/clickhouse-server
+    ports:
+      - "8124:8123" # HTTP
+      - "9002:9000" # Native
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: [ "CMD", "clickhouse-client", "--query", "SELECT 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Heber Services
+  heber-catalog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-catalog
+    command: [ "python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+      - HEBER_REDIS_URL=redis://redis:6379
+      - HEBER_CLICKHOUSE_HOST=clickhouse
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "8085:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  heber-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-consumer
+    command: [ "python", "-m", "heber.writer.consumer" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+      - HEBER_REDIS_URL=redis://redis:6379
+      - HEBER_CLICKHOUSE_HOST=clickhouse
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      heber-catalog:
+        condition: service_healthy
+    restart: unless-stopped
+
+  heber-compactor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-compactor
+    command: [ "python", "-m", "heber.writer.compactor" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  heber-data:
+    driver: local

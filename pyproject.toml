@@ -1,0 +1,70 @@
+[project]
+name = "heber"
+version = "0.1.0"
+description = "Heber Data Lakehouse - Centralized storage for market and intelligence data"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Core
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    
+    # API
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+    
+    # Database
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    
+    # Data processing
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+    "polars>=0.20",
+    
+    # Event bus
+    "redis>=5.0",
+    
+    # Hot Store
+    "clickhouse-connect>=0.7",
+    
+    # Feature Store
+    "feast>=0.38",
+    
+    # Observability
+    "structlog>=24.0",
+    "prometheus-client>=0.19",
+    
+    # Utils
+    "httpx>=0.26",
+    "tenacity>=8.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "ruff>=0.2",
+    "mypy>=1.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

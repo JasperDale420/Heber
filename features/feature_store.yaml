@@ -1,0 +1,30 @@
+# Feast Feature Store Configuration for Heber
+project: heber
+provider: local
+
+# Registry: where feature metadata is stored
+# In production, this would be the Heber Catalog (Postgres)
+registry: 
+  registry_type: file
+  path: /data/feast/registry.pb
+
+# Offline Store: historical feature storage (Gold Parquet)
+offline_store:
+  type: file
+
+# Online Store: real-time feature serving (ClickHouse)
+# Note: Using SQLite for local dev, switch to ClickHouse for production
+online_store:
+  type: sqlite
+  path: /data/feast/online.db
+
+# For production, use:
+# online_store:
+#   type: clickhouse
+#   host: clickhouse
+#   port: 9000
+#   database: feast_online
+#   user: default
+
+# Entity key TTL (time to live)
+entity_key_serialization_version: 2
