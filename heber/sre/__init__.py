@@ -1,6 +1,6 @@
-"""SRE Module (PRD §37-38).
+"""SRE Module (PRD §37-40).
 
-Service Level Objectives, error budgets, and reliability engineering.
+Service Level Objectives, error budgets, runbooks, and on-call management.
 """
 
 from heber.sre.slo import (
@@ -25,6 +25,25 @@ from heber.sre.error_budget import (
     DEFAULT_POLICIES,
     DEFAULT_DEPLOY_APPROVALS,
 )
+from heber.sre.runbooks import (
+    IncidentSeverity,
+    TriageStep,
+    ResolutionAction,
+    Runbook,
+    RunbookRegistry,
+    DEFAULT_RUNBOOKS,
+)
+from heber.sre.oncall import (
+    OnCallRole,
+    OnCallSchedule,
+    EscalationPolicy,
+    CommunicationChannel,
+    ChannelConfig,
+    Incident,
+    OnCallManager,
+    DEFAULT_ESCALATION_POLICIES,
+    DEFAULT_CHANNEL_CONFIGS,
+)
 
 __all__ = [
     # SLO Framework
@@ -47,4 +66,21 @@ __all__ = [
     "ErrorBudgetManager",
     "DEFAULT_POLICIES",
     "DEFAULT_DEPLOY_APPROVALS",
+    # Runbooks
+    "IncidentSeverity",
+    "TriageStep",
+    "ResolutionAction",
+    "Runbook",
+    "RunbookRegistry",
+    "DEFAULT_RUNBOOKS",
+    # On-Call
+    "OnCallRole",
+    "OnCallSchedule",
+    "EscalationPolicy",
+    "CommunicationChannel",
+    "ChannelConfig",
+    "Incident",
+    "OnCallManager",
+    "DEFAULT_ESCALATION_POLICIES",
+    "DEFAULT_CHANNEL_CONFIGS",
 ]

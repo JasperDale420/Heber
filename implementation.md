@@ -748,19 +748,19 @@
 
 ---
 
-## Phase 39: Runbooks (§39)
+## Phase 39: Runbooks (§39) ✅
 
-- [ ] Consumer lag runbook
-- [ ] Catalog unavailable runbook
-- [ ] Data corruption runbook
-- [ ] Disk full runbook
+- [x] Consumer lag runbook
+- [x] Catalog unavailable runbook
+- [x] Data corruption runbook (leakage violation)
+- [x] Compaction stuck / Hot Store / DLQ runbooks
 
 ---
 
-## Phase 40: On-Call (§40)
+## Phase 40: On-Call (§40) ✅
 
-- [ ] Escalation matrix
-- [ ] PagerDuty integration
+- [x] Escalation matrix (P1-P4 with response times)
+- [x] OnCallManager with incident lifecycle
 
 ---
 

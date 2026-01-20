@@ -97,6 +97,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ErrorBudgetManager` for policy enforcement and reporting
   - 20/20 tests passing
 
+- **Incident Runbooks** (Phase 40, PRD §39)
+  - `Runbook` with symptoms, triage steps, resolutions
+  - `RunbookRegistry` with lookup by key or alert name
+  - 6 default runbooks: consumer lag, DLQ, Hot Store, Catalog, compaction, leakage
+  - Markdown export for documentation
+
+- **On-Call & Escalation** (Phase 41, PRD §40)
+  - `OnCallSchedule` with active time checking
+  - `EscalationPolicy` with P1-P4 response/escalation times
+  - `Incident` lifecycle: create, acknowledge, resolve
+  - `OnCallManager` with escalation logic and channel routing
+  - 18/18 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)
