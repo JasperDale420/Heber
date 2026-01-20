@@ -705,12 +705,12 @@
 
 ---
 
-## Phase 34: Data Quality (§33)
+## Phase 34: Data Quality (§33) ✅
 
-- [ ] Null rate thresholds
-- [ ] Value range checks
-- [ ] Freshness SLOs
-- [ ] Quality dashboard
+- [x] Null rate thresholds (non_null_rate check)
+- [x] Value range checks (fill_rate, gap_duration)
+- [x] Freshness SLOs (max_lag_hours check)
+- [x] Quality dashboard (QualityReport with metrics)
 
 ---
 
