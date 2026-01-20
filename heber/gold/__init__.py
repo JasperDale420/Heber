@@ -1,23 +1,21 @@
-"""Gold Dataset Versioning & Reproducibility (PRD §28).
+"""Label Management Module (PRD §29).
 
-This package provides versioning, lineage tracking, and compatibility checks
-for Gold layer datasets, enabling reproducible ML experiments and backtests.
+Provides utilities for managing forward-looking labels with proper
+availability tracking to prevent leakage in ML training.
 """
 
-from heber.gold.versioning import (
-    GoldVersion,
-    VersionLineage,
-    VersionManifest,
-    resolve_version,
-    check_compatibility,
-    CompatibilityResult,
+from heber.gold.labels import (
+    LabelDataset,
+    LabelMetadata,
+    write_label,
+    read_label,
+    compute_availability_time,
 )
 
 __all__ = [
-    "GoldVersion",
-    "VersionLineage",
-    "VersionManifest",
-    "resolve_version",
-    "check_compatibility",
-    "CompatibilityResult",
+    "LabelDataset",
+    "LabelMetadata",
+    "write_label",
+    "read_label",
+    "compute_availability_time",
 ]

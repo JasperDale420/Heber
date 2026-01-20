@@ -659,11 +659,11 @@
 
 ---
 
-## Phase 30: Label Management (§29)
+## Phase 30: Label Management (§29) ✅
 
-- [ ] Label dataset patterns
-- [ ] Forward-looking ts_available
-- [ ] SDK label helpers
+- [x] Label dataset patterns (LabelDataset, LabelMetadata)
+- [x] Forward-looking ts_available (compute_availability_time)
+- [x] SDK label helpers (write_label, read_label with asof filtering)
 
 ---
 
