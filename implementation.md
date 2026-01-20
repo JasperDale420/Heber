@@ -698,10 +698,10 @@
 
 ---
 
-## Phase 33: Feature Templates (§32)
+## Phase 33: Feature Templates (§32) ✅
 
-- [ ] Implement all templates from PRD §32
-- [ ] Registration helpers
+- [x] Implement all templates from PRD §32 (momentum, volatility, flow, microstructure, cross_asset, labels)
+- [x] Registration helpers (heber/features/templates/ package)
 
 ---
 
