@@ -594,29 +594,30 @@
 
 ---
 
-## Phase 24: Secrets (§21)
+## Phase 24: Secrets (§21) ✅
 
-- [ ] External Secrets Operator
-- [ ] Vault (if needed)
-- [ ] Rotation policy
-
----
-
-## Phase 25: IaC (§22)
-
-- [ ] Terraform/Pulumi modules
-- [ ] GCS/S3 buckets
-- [ ] Database provisioning
+- [x] External Secrets Operator (ClusterSecretStore, ExternalSecret)
+- [x] AWS Secrets Manager integration with refresh
+- [x] Local dev secrets template
+- [x] Rotation policy documented
 
 ---
 
-## Phase 26: CI/CD (§23)
+## Phase 25: IaC (§22) ✅
 
-- [ ] GitHub Actions workflow
-- [ ] Lint + type check
-- [ ] Unit/integration tests
-- [ ] Docker build & push
-- [ ] Deploy to staging/prod
+- [x] Terraform main module with VPC/S3/RDS/ElastiCache/ECR/EKS
+- [x] Environment configs (dev/staging/prod per PRD §22.3)
+- [x] S3 + DynamoDB state backend
+
+---
+
+## Phase 26: CI/CD (§23) ✅
+
+- [x] GitHub Actions workflow
+- [x] Lint + type check (ruff, mypy)
+- [x] Unit tests (pytest + coverage)
+- [x] Docker build & push
+- [x] Deploy to staging/prod with rollout status
 
 ---
 
