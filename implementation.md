@@ -531,14 +531,14 @@
 
 ---
 
-## Phase 23: Backfill Pipeline (§13)
+## Phase 23: Backfill Pipeline (§13) ✅
 
-- [ ] REST backfill patterns
-- [ ] Gap detection
-- [ ] ts_available = ts_commit for historical
-- [ ] Backfill job API (POST /backfill)
-- [ ] Progress tracking
-- [ ] heber-backfill service
+- [x] REST backfill patterns (BackfillCoordinator, data_fetcher)
+- [x] Gap detection (GapDetector.detect_gaps, get_coverage_summary)
+- [x] ts_available = ts_commit for historical (TsAvailablePolicy, BackfillWriter)
+- [x] Backfill job API (POST /backfill, GET /backfill/{id}, GET /backfill)
+- [x] Progress tracking (progress_dates_completed, backfill_progress_percent)
+- [x] heber-backfill service (BackfillCoordinator.run_job)
 
 ---
 
