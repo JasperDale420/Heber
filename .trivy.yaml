@@ -1,0 +1,46 @@
+# Trivy Vulnerability Scanner Configuration per PRD §19.3
+# =============================================================================
+# Runs as part of CI before push to detect CVEs
+# =============================================================================
+
+# Cache directory (speeds up subsequent scans)
+cache:
+  dir: /tmp/trivy-cache
+
+# Scan configuration
+scan:
+  # Scanners to enable
+  scanners:
+    - vuln      # CVE scanning
+    - secret    # Secrets detection
+    - misconfig # Dockerfile misconfigurations
+
+# Severity thresholds
+severity:
+  # Stop build on CRITICAL or HIGH vulnerabilities
+  - CRITICAL
+  - HIGH
+
+# Timeout for scan
+timeout: 15m
+
+# Output format
+format: table
+
+# Ignore unfixed vulnerabilities 
+ignore-unfixed: true
+
+# Exit code on vulnerabilities found
+exit-code: 1
+
+# Vulnerability database
+db:
+  # Update vulnerability database
+  skip-update: false
+  
+# Ignore specific vulnerabilities (false positives)
+# Add CVEs here if they're accepted risks
+vulnerability:
+  ignore:
+    # Example: - CVE-2024-XXXXX
+    []

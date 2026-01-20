@@ -572,13 +572,13 @@
 
 # Part VI: Infrastructure
 
-## Phase 22: Container Build (§19)
+## Phase 22: Container Build (§19) ✅
 
-- [x] Dockerfile
-- [ ] Multi-stage optimization
-- [ ] Image registry (ghcr.io)
-- [ ] Version tagging
-- [ ] Vulnerability scanning
+- [x] Dockerfile (multi-stage with per-service targets)
+- [x] Multi-stage optimization (builder + runtime stages)
+- [x] Image registry (ghcr.io scripts, configurable via HEBER_REGISTRY)
+- [x] Version tagging (git SHA + semver per PRD §19.5)
+- [x] Vulnerability scanning (Trivy config + security-scan.sh)
 
 ---
 
