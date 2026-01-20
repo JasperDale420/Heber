@@ -551,12 +551,12 @@
 
 ---
 
-## Phase 20: Retention & Lifecycle (§15)
+## Phase 20: Retention & Lifecycle (§15) ✅
 
-- [ ] TTL policies per dataset
-- [ ] Partition cleanup automation
-- [ ] Archive to cold storage
-- [ ] Retention metadata in Catalog
+- [x] TTL policies per dataset (RetentionPolicy, DatasetRetentionConfig)
+- [x] Partition cleanup automation (ReaperWorker, ReaperScheduler)
+- [x] Archive to cold storage (Archiver, LifecycleAction.ARCHIVE)
+- [x] Retention metadata in Catalog (DEFAULT_RETENTION, pinned_versions)
 
 ---
 
