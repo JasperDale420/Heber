@@ -621,40 +621,41 @@
 
 ---
 
-## Phase 27: Backup & DR (§24)
+## Phase 27: Backup & DR (§24) ✅
 
-- [ ] Postgres backup
-- [ ] Parquet backup
-- [ ] Recovery procedures
-- [ ] RTO/RPO
-
----
-
-## Phase 28: Network (§25)
-
-- [ ] VPC design
-- [ ] Firewall rules
-- [ ] Service mesh (optional)
+- [x] Postgres backup (RDS snapshots + PITR in runbook)
+- [x] Parquet backup (S3 versioning + cross-region replication)
+- [x] Recovery procedures (6-step DR runbook)
+- [x] RTO/RPO (Catalog: 1h/4h documented)
 
 ---
 
-## Phase 29: Cost Estimates (§26) *NEW*
+## Phase 28: Network (§25) ✅
 
-- [ ] Document: Monthly production costs
-- [ ] Compute estimates (CPU/RAM)
-- [ ] Storage estimates (Parquet, Postgres, ClickHouse)
-- [ ] Network egress estimates
+- [x] VPC design (3-tier: public/private/data)
+- [x] Firewall rules (6 security groups documented)
+- [x] Service mesh (roadmap documented, future with Linkerd/Istio)
+
+---
+
+## Phase 29: Cost Estimates (§26) ✅
+
+- [x] Document: Monthly production costs (~$1.6K total)
+- [x] Compute estimates (~$950: EKS + ClickHouse)
+- [x] Storage estimates (~$460: S3, RDS, Redis)
+- [x] Network egress estimates (~$190: NAT, ALB, endpoints)
 
 ---
 
 # Part VII: ML/Research Features
 
-## Phase 29: Gold Versioning (§28)
+## Phase 29: Gold Versioning (§28) ✅
 
-- [ ] Version numbering
-- [ ] Manifest format
-- [ ] Lineage tracking
-- [ ] Reproducibility metadata
+- [x] Version numbering (GoldVersion with semver v{major}.{minor}.{patch})
+- [x] Manifest format (VersionManifest with JSON persistence)
+- [x] Lineage tracking (VersionLineage with upstream_deps, code_commit, config_hash)
+- [x] Reproducibility metadata (immutability guarantee, schema_columns tracking)
+- [x] SDK methods: list_gold_versions(), check_version_compatibility(), get_version_lineage(), read_gold_versioned()
 
 ---
 

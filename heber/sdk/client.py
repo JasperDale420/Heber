@@ -13,6 +13,15 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.gold.versioning import (
+    GoldVersion,
+    VersionManifest,
+    CompatibilityResult,
+    resolve_version,
+    check_compatibility,
+    list_available_versions,
+    get_manifest_path,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -472,3 +481,134 @@ class HeberClient:
         )
 
         return output_paths[0] if output_paths else None
+
+    def list_gold_versions(self, dataset: str) -> list[str]:
+        """List all available versions for a Gold dataset (PRD §28.2).
+        
+        Args:
+            dataset: Dataset name
+            
+        Returns:
+            List of version strings, newest first (e.g., ["v3.5.0", "v3.2.1", "v1.0.0"])
+        """
+        gold_root = self.data_root / "gold"
+        versions = list_available_versions(gold_root, dataset)
+        return [str(v) for v in versions]
+
+    def check_version_compatibility(
+        self,
+        dataset: str,
+        from_version: str,
+        to_version: str,
+    ) -> dict:
+        """Check compatibility between two Gold versions (PRD §28.3).
+        
+        Args:
+            dataset: Dataset name
+            from_version: Source version (e.g., "v3.2.1")
+            to_version: Target version (e.g., "v3.5.0")
+            
+        Returns:
+            Dict with keys: compatible, breaking, changes
+        """
+        gold_root = self.data_root / "gold"
+        
+        from_manifest_path = get_manifest_path(
+            gold_root, dataset, GoldVersion.parse(from_version)
+        )
+        to_manifest_path = get_manifest_path(
+            gold_root, dataset, GoldVersion.parse(to_version)
+        )
+        
+        if not from_manifest_path.exists():
+            raise ValueError(f"Version {from_version} not found for {dataset}")
+        if not to_manifest_path.exists():
+            raise ValueError(f"Version {to_version} not found for {dataset}")
+        
+        from_manifest = VersionManifest.load(from_manifest_path)
+        to_manifest = VersionManifest.load(to_manifest_path)
+        
+        result = check_compatibility(from_manifest, to_manifest)
+        return result.to_dict()
+
+    def get_version_lineage(self, dataset: str, version: str) -> dict:
+        """Get lineage metadata for a Gold version (PRD §28.4).
+        
+        Args:
+            dataset: Dataset name
+            version: Version string
+            
+        Returns:
+            Lineage dict with upstream_deps, code_commit, config_hash
+        """
+        gold_root = self.data_root / "gold"
+        manifest_path = get_manifest_path(
+            gold_root, dataset, GoldVersion.parse(version)
+        )
+        
+        if not manifest_path.exists():
+            raise ValueError(f"Version {version} not found for {dataset}")
+        
+        manifest = VersionManifest.load(manifest_path)
+        return {
+            "version": str(manifest.version),
+            "created_at": manifest.created_at.isoformat(),
+            "created_by": manifest.created_by,
+            **manifest.lineage.to_dict(),
+        }
+
+    def read_gold_versioned(
+        self,
+        dataset: str,
+        version: str | None = None,
+        asof_time: datetime | str | None = None,
+        time_range: tuple[datetime | str, datetime | str] | None = None,
+        instrument_keys: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Read Gold data with semantic version resolution (PRD §28.2).
+        
+        Supports:
+        - Exact version: version="v3.2.1"
+        - Wildcard: version="v3.*" (latest v3.x)
+        - Latest: version=None
+        
+        Args:
+            dataset: Dataset name
+            version: Version string or wildcard pattern
+            asof_time: Point-in-time cutoff
+            time_range: (start, end) datetime range
+            instrument_keys: Filter to specific instruments
+            
+        Returns:
+            DataFrame with Gold data
+        """
+        gold_root = self.data_root / "gold"
+        available = list_available_versions(gold_root, dataset)
+        
+        if not available:
+            logger.warning("No versions found for Gold dataset", dataset=dataset)
+            return pd.DataFrame()
+        
+        resolved = resolve_version(available, version)
+        if resolved is None:
+            logger.warning(
+                "Version pattern matched no versions",
+                dataset=dataset,
+                pattern=version,
+            )
+            return pd.DataFrame()
+        
+        logger.info(
+            "Resolved Gold version",
+            dataset=dataset,
+            pattern=version,
+            resolved=str(resolved),
+        )
+        
+        return self.read_gold(
+            dataset=dataset,
+            version=str(resolved),
+            asof_time=asof_time,
+            time_range=time_range,
+            instrument_keys=instrument_keys,
+        )
