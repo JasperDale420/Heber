@@ -764,17 +764,17 @@
 
 ---
 
-## Phase 41: Chaos Engineering (§41)
+## Phase 41: Chaos Engineering (§41) ✅
 
-- [ ] Failure injection tests
-- [ ] Weekly chaos runs
+- [x] Failure injection tests (7 experiments)
+- [x] ChaosRegistry with scheduling by frequency
 
 ---
 
-## Phase 42: Capacity Planning (§42)
+## Phase 42: Capacity Planning (§42) ✅
 
-- [ ] Growth projections
-- [ ] Resource forecasting
+- [x] Growth projections (forecasts Q1-Q4 2026)
+- [x] Resource forecasting (scaling triggers, cost projections)
 
 ---
 

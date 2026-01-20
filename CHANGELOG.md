@@ -110,6 +110,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `OnCallManager` with escalation logic and channel routing
   - 18/18 tests passing
 
+- **Chaos Engineering** (Phase 42, PRD §41)
+  - `ChaosExperiment` with hypothesis, procedure, success criteria
+  - `ChaosRegistry` with scheduling by frequency (weekly/monthly/quarterly)
+  - 7 default experiments: kill pods, throttle S3, block Catalog, bad events, etc.
+  - `ExperimentRun` lifecycle: start, complete, pass/fail tracking
+  - Markdown runbook export
+
+- **Capacity Planning** (Phase 43, PRD §42)
+  - `BaselineMetric` with 5 defaults: events/day, peak rate, storage
+  - `ScalingTrigger` with 7 thresholds: CPU, lag, memory, connections
+  - `CapacityForecast` for Q1-Q4 2026 projections
+  - `BottleneckAnalysis` for 5 components
+  - `CapacityPlanner` with cost projection (volume multiplier)
+  - 18/18 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)
