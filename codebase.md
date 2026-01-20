@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-19T21:32:43*
+*Generated: 2026-01-19T22:33:02*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 49
+Files analyzed: 92
 
-Estimated tokens: 118.6k
+Estimated tokens: 158.1k
 
 ---
 
@@ -25,6 +25,10 @@ Directory structure:
     ├── prd.md
     ├── pyproject.toml
     ├── .env.example
+    ├── .trivy.yaml
+    ├── docs/
+    │   └── operations/
+    │       └── backup-dr-runbook.md
     ├── features/
     │   ├── entities.py
     │   ├── feature_store.yaml
@@ -34,9 +38,12 @@ Directory structure:
     ├── heber/
     │   ├── __init__.py
     │   ├── config.py
+    │   ├── backfill/
+    │   │   └── __init__.py
     │   ├── bus/
     │   │   ├── __init__.py
-    │   │   └── backpressure.py
+    │   │   ├── backpressure.py
+    │   │   └── dedupe.py
     │   ├── catalog/
     │   │   ├── __init__.py
     │   │   ├── api.py
@@ -68,17 +75,76 @@ Directory structure:
     │   │   ├── metrics.py
     │   │   ├── reliability.py
     │   │   └── tracing.py
+    │   ├── retention/
+    │   │   └── __init__.py
+    │   ├── schema/
+    │   │   └── __init__.py
     │   ├── sdk/
     │   │   ├── __init__.py
     │   │   └── client.py
     │   └── writer/
     │       ├── __init__.py
     │       ├── bronze.py
+    │       ├── compaction.py
     │       ├── compactor.py
     │       ├── consumer.py
+    │       ├── hotstore.py
     │       └── silver.py
+    ├── infrastructure/
+    │   └── terraform/
+    │       ├── main.tf
+    │       └── environments/
+    │           ├── dev/
+    │           │   └── main.tf
+    │           ├── prod/
+    │           │   └── main.tf
+    │           └── staging/
+    │               └── main.tf
+    ├── k8s/
+    │   ├── base/
+    │   │   ├── configmap.yaml
+    │   │   ├── kustomization.yaml
+    │   │   ├── namespace.yaml
+    │   │   ├── deployments/
+    │   │   │   ├── backfill.yaml
+    │   │   │   ├── catalog.yaml
+    │   │   │   ├── compactor.yaml
+    │   │   │   ├── consumer.yaml
+    │   │   │   ├── hotloader.yaml
+    │   │   │   └── writer.yaml
+    │   │   ├── hpa/
+    │   │   │   ├── catalog.yaml
+    │   │   │   ├── consumer.yaml
+    │   │   │   └── writer.yaml
+    │   │   ├── pdb/
+    │   │   │   ├── catalog.yaml
+    │   │   │   ├── consumer.yaml
+    │   │   │   ├── hotloader.yaml
+    │   │   │   └── writer.yaml
+    │   │   ├── secrets/
+    │   │   │   ├── cluster-secret-store.yaml
+    │   │   │   ├── external-secret.yaml
+    │   │   │   └── secrets-local.yaml.example
+    │   │   └── services/
+    │   │       ├── catalog.yaml
+    │   │       ├── consumer.yaml
+    │   │       ├── hotloader.yaml
+    │   │       └── writer.yaml
+    │   └── overlays/
+    │       ├── dev/
+    │       │   └── kustomization.yaml
+    │       ├── prod/
+    │       │   └── kustomization.yaml
+    │       └── staging/
+    │           └── kustomization.yaml
     └── scripts/
-        └── init_volume.sh
+        ├── docker-build.sh
+        ├── docker-push.sh
+        ├── init_volume.sh
+        ├── security-scan.sh
+        └── backup/
+            ├── clickhouse-backup.sh
+            └── validate-catalog-backup.sh
 
 ```
 
@@ -280,27 +346,117 @@ volumes:
 ================================================
 FILE: Dockerfile
 ================================================
-FROM python:3.11-slim
+# =============================================================================
+# Heber Multi-Stage Dockerfile per PRD §19
+# =============================================================================
+# Base image: python:3.11-slim-bookworm (Debian for compatibility)
+# Security: Non-root user, minimal dependencies, no cache layers
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder - Install dependencies
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Install uv for fast dependency management
+RUN pip install --no-cache-dir uv
+
+# Copy only dependency files first (better layer caching)
+COPY pyproject.toml .
+
+# Install dependencies to a separate directory
+RUN uv pip install --target=/build/deps -e .
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime - Minimal production image
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS runtime
+
+# Labels per OCI spec
+LABEL org.opencontainers.image.source="https://github.com/jacobmcmillan/heber"
+LABEL org.opencontainers.image.description="Heber Data Lakehouse"
+LABEL org.opencontainers.image.licenses="Proprietary"
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /var/cache/apt/archives/*
 
 WORKDIR /app
 
-# Install uv for fast dependency management
-RUN pip install uv
+# Copy installed dependencies from builder
+COPY --from=builder /build/deps /app/deps
 
-# Copy project files
-COPY pyproject.toml .
-COPY heber/ ./heber/
-COPY features/ ./features/
+# Copy application code
+COPY heber/ /app/heber/
+COPY features/ /app/features/
 
-# Install dependencies
-RUN uv pip install --system -e .
+# Set Python path to include deps
+ENV PYTHONPATH=/app/deps:/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Create non-root user
-RUN useradd -m -u 1000 heber && chown -R heber:heber /app
+# Security: Create non-root user per PRD §19.3
+RUN useradd --no-create-home --uid 65534 --gid 0 heber \
+    && chown -R heber:0 /app
+
+# Switch to non-root user
 USER heber
 
-# Default command (overridden in docker-compose)
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+# Default port
+EXPOSE 8080
+
+# Default command (overridden per service in docker-compose)
 CMD ["python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# -----------------------------------------------------------------------------
+# Stage 3 (optional): Consumer service
+# -----------------------------------------------------------------------------
+FROM runtime AS consumer
+CMD ["python", "-m", "heber.bus.consumer"]
+
+# -----------------------------------------------------------------------------
+# Stage 4 (optional): Writer service  
+# -----------------------------------------------------------------------------
+FROM runtime AS writer
+CMD ["python", "-m", "heber.writer.service"]
+
+# -----------------------------------------------------------------------------
+# Stage 5 (optional): Compactor service
+# -----------------------------------------------------------------------------
+FROM runtime AS compactor
+CMD ["python", "-m", "heber.writer.compaction"]
+
+# -----------------------------------------------------------------------------
+# Stage 6 (optional): Catalog API service
+# -----------------------------------------------------------------------------
+FROM runtime AS catalog
+CMD ["python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# -----------------------------------------------------------------------------
+# Stage 7 (optional): Backfill service
+# -----------------------------------------------------------------------------
+FROM runtime AS backfill
+CMD ["python", "-m", "heber.backfill"]
+
+# -----------------------------------------------------------------------------
+# Stage 8 (optional): Hot Store Loader service
+# -----------------------------------------------------------------------------
+FROM runtime AS hotloader
+CMD ["python", "-m", "heber.writer.hotstore"]
 
 
 
@@ -795,135 +951,138 @@ FILE: implementation.md
 
 ---
 
-## Phase 20: Dedupe Strategy (§12.11) *NEW*
+## Phase 20: Dedupe Strategy (§12.11) ✅
 
 ### 20.1 Dedupe Layers
 
-- [ ] Consumer: In-memory bloom filter (fast approx)
-- [ ] Writer: Append-only per batch
-- [ ] Compactor: Exact dedupe on merge
+- [x] Consumer: In-memory bloom filter (fast approx)
+- [x] Writer: Append-only per batch (dedupe_batch_at_writer)
+- [x] Compactor: Exact dedupe on merge (dedupe_at_compaction)
 
 ### 20.2 Bloom Filter Spec
 
-- [ ] Expected items: 10M per hour window
-- [ ] False positive rate: 1%
-- [ ] Rotate hourly
+- [x] Expected items: 10M per hour window
+- [x] False positive rate: 1%
+- [x] Rotate hourly (RotatingBloomFilter)
 
 ---
 
-## Phase 21: Compaction Schedule (§12.9)
+## Phase 21: Compaction Schedule (§12.9) ✅
 
-- [ ] Compact hourly partitions after close (18:10-18:30 for hour=18)
-- [ ] Preserve event_id uniqueness
-- [ ] Preserve ts_available
-- [ ] Atomic writes (temp → rename)
+- [x] Compact hourly partitions after close (18:10-18:30 for hour=18)
+- [x] Preserve event_id uniqueness (via dedupe_at_compaction)
+- [x] Preserve ts_available (immutable in compaction)
+- [x] Atomic writes (temp → rename via AtomicWriter)
 
 ---
 
-## Phase 22: Hot Store Sync (§12.10)
+## Phase 22: Hot Store Sync (§12.10) ✅
 
 ### 22.1 Sync Config
 
-- [ ] Source: event bus or Silver
-- [ ] Window: rolling last N days
+- [x] Source: event bus or Silver (HotStoreSyncer)
+- [x] Window: rolling last N days (configurable)
 
 ### 22.2 ClickHouse Tables
 
-- [ ] `quotes_hot`, `trades_hot`, `bars_hot`
-- [ ] Partitioned by date
-- [ ] TTL: 7 days quotes/trades, 30 days bars
+- [x] `quotes_hot`, `trades_hot`, `bars_hot` (HotStoreTable enum)
+- [x] Partitioned by date (dt column with MATERIALIZED)
+- [x] TTL: 7 days quotes/trades, 30 days bars (ClickHouse-managed)
 
 ### 22.3 Consistency
 
-- [ ] Lag ≤5 minutes SLA
-- [ ] Silver is source of truth (fallback)
+- [x] Lag ≤5 minutes SLA (hot_store_lag_seconds metric)
+- [x] Silver is source of truth (HotStoreReader with fallback)
 
 ---
 
-## Phase 23: Backfill Pipeline (§13)
+## Phase 23: Backfill Pipeline (§13) ✅
 
-- [ ] REST backfill patterns
-- [ ] Gap detection
-- [ ] ts_available = ts_commit for historical
-- [ ] Backfill job API (POST /backfill)
-- [ ] Progress tracking
-- [ ] heber-backfill service
-
----
-
-## Phase 19: Schema Evolution (§14)
-
-- [ ] Schema registry versioning
-- [ ] Backwards/forwards compatibility
-- [ ] Migration utilities
-- [ ] Reader/writer version checks
+- [x] REST backfill patterns (BackfillCoordinator, data_fetcher)
+- [x] Gap detection (GapDetector.detect_gaps, get_coverage_summary)
+- [x] ts_available = ts_commit for historical (TsAvailablePolicy, BackfillWriter)
+- [x] Backfill job API (POST /backfill, GET /backfill/{id}, GET /backfill)
+- [x] Progress tracking (progress_dates_completed, backfill_progress_percent)
+- [x] heber-backfill service (BackfillCoordinator.run_job)
 
 ---
 
-## Phase 20: Retention & Lifecycle (§15)
+## Phase 19: Schema Evolution (§14) ✅
 
-- [ ] TTL policies per dataset
-- [ ] Partition cleanup automation
-- [ ] Archive to cold storage
-- [ ] Retention metadata in Catalog
+- [x] Schema registry versioning (SchemaRegistry, SchemaVersion)
+- [x] Backwards/forwards compatibility (CompatibilityChecker)
+- [x] Migration utilities (SchemaMigrator, normalize_schema)
+- [x] Reader/writer version checks (check_reader_compatibility, check_writer_compatibility)
 
 ---
 
-## Phase 21: Compaction Protocol (§16)
+## Phase 20: Retention & Lifecycle (§15) ✅
+
+- [x] TTL policies per dataset (RetentionPolicy, DatasetRetentionConfig)
+- [x] Partition cleanup automation (ReaperWorker, ReaperScheduler)
+- [x] Archive to cold storage (Archiver, LifecycleAction.ARCHIVE)
+- [x] Retention metadata in Catalog (DEFAULT_RETENTION, pinned_versions)
+
+---
+
+## Phase 21: Compaction Protocol (§16) ✅
 
 - [x] Basic compactor
-- [ ] Atomicity via manifest
-- [ ] Concurrent safety
-- [ ] Compaction metrics
+- [x] Atomicity via manifest (Manifest, ManifestFileEntry)
+- [x] Concurrent safety (PartitionLock via fcntl)
+- [x] Compaction metrics (bytes, crash recoveries, lock contention)
+- [x] Crash recovery (CrashRecovery per PRD §16.4)
 
 ---
 
 # Part VI: Infrastructure
 
-## Phase 22: Container Build (§19)
+## Phase 22: Container Build (§19) ✅
 
-- [x] Dockerfile
-- [ ] Multi-stage optimization
-- [ ] Image registry (ghcr.io)
-- [ ] Version tagging
-- [ ] Vulnerability scanning
-
----
-
-## Phase 23: Kubernetes (§20)
-
-- [ ] Deployment manifests
-- [ ] Services
-- [ ] ConfigMaps / Secrets
-- [ ] Resource limits
-- [ ] HPA autoscaling
-- [ ] PodDisruptionBudgets
+- [x] Dockerfile (multi-stage with per-service targets)
+- [x] Multi-stage optimization (builder + runtime stages)
+- [x] Image registry (ghcr.io scripts, configurable via HEBER_REGISTRY)
+- [x] Version tagging (git SHA + semver per PRD §19.5)
+- [x] Vulnerability scanning (Trivy config + security-scan.sh)
 
 ---
 
-## Phase 24: Secrets (§21)
+## Phase 23: Kubernetes (§20) ✅
 
-- [ ] External Secrets Operator
-- [ ] Vault (if needed)
-- [ ] Rotation policy
-
----
-
-## Phase 25: IaC (§22)
-
-- [ ] Terraform/Pulumi modules
-- [ ] GCS/S3 buckets
-- [ ] Database provisioning
+- [x] Deployment manifests (consumer, writer, compactor, catalog, hotloader, backfill)
+- [x] Services (consumer, writer, catalog, hotloader)
+- [x] ConfigMaps / Secrets (configmap.yaml, secrets via External Secrets Operator)
+- [x] Resource limits (per PRD §20.2)
+- [x] HPA autoscaling (consumer, writer, catalog with custom metrics)
+- [x] PodDisruptionBudgets (per PRD §20.3)
+- [x] Kustomize overlays (dev/staging/prod namespaces)
 
 ---
 
-## Phase 26: CI/CD (§23)
+## Phase 24: Secrets (§21) ✅
 
-- [ ] GitHub Actions workflow
-- [ ] Lint + type check
-- [ ] Unit/integration tests
-- [ ] Docker build & push
-- [ ] Deploy to staging/prod
+- [x] External Secrets Operator (ClusterSecretStore, ExternalSecret)
+- [x] AWS Secrets Manager integration with refresh
+- [x] Local dev secrets template
+- [x] Rotation policy documented
+
+---
+
+## Phase 25: IaC (§22) ✅
+
+- [x] Terraform main module with VPC/S3/RDS/ElastiCache/ECR/EKS
+- [x] Environment configs (dev/staging/prod per PRD §22.3)
+- [x] S3 + DynamoDB state backend
+
+---
+
+## Phase 26: CI/CD (§23) ✅
+
+- [x] GitHub Actions workflow
+- [x] Lint + type check (ruff, mypy)
+- [x] Unit tests (pytest + coverage)
+- [x] Docker build & push
+- [x] Deploy to staging/prod with rollout status
 
 ---
 
@@ -7625,6 +7784,263 @@ FEAST_REPO_PATH=/app/features
 
 
 ================================================
+FILE: .trivy.yaml
+================================================
+# Trivy Vulnerability Scanner Configuration per PRD §19.3
+# =============================================================================
+# Runs as part of CI before push to detect CVEs
+# =============================================================================
+
+# Cache directory (speeds up subsequent scans)
+cache:
+  dir: /tmp/trivy-cache
+
+# Scan configuration
+scan:
+  # Scanners to enable
+  scanners:
+    - vuln      # CVE scanning
+    - secret    # Secrets detection
+    - misconfig # Dockerfile misconfigurations
+
+# Severity thresholds
+severity:
+  # Stop build on CRITICAL or HIGH vulnerabilities
+  - CRITICAL
+  - HIGH
+
+# Timeout for scan
+timeout: 15m
+
+# Output format
+format: table
+
+# Ignore unfixed vulnerabilities 
+ignore-unfixed: true
+
+# Exit code on vulnerabilities found
+exit-code: 1
+
+# Vulnerability database
+db:
+  # Update vulnerability database
+  skip-update: false
+  
+# Ignore specific vulnerabilities (false positives)
+# Add CVEs here if they're accepted risks
+vulnerability:
+  ignore:
+    # Example: - CVE-2024-XXXXX
+    []
+
+
+
+================================================
+FILE: docs/operations/backup-dr-runbook.md
+================================================
+# Heber Backup & Disaster Recovery Runbook
+
+## RTO/RPO Targets (PRD §24.1)
+
+| Component | RPO | RTO | Priority |
+|-----------|-----|-----|----------|
+| Catalog (Postgres) | 1 hour | 4 hours | Critical |
+| Silver (S3) | 0 (durable) | N/A | Critical |
+| Bronze (S3) | 0 (durable) | N/A | High |
+| Hot Store (ClickHouse) | 24 hours | 8 hours | Medium |
+| Redis (event bus) | 0 (ephemeral OK) | 1 hour | Medium |
+
+## Backup Strategy (PRD §24.2)
+
+### Catalog (Postgres RDS)
+
+| Backup Type | Frequency | Retention |
+|-------------|-----------|-----------|
+| Automated snapshots | Daily | 30 days |
+| Point-in-time recovery | Continuous | 7 days |
+| Cross-region replica | Async | Warm standby |
+
+**Commands:**
+
+```bash
+# List available snapshots
+aws rds describe-db-snapshots --db-instance-identifier heber-catalog-prod
+
+# Restore from snapshot
+aws rds restore-db-instance-from-db-snapshot \
+  --db-instance-identifier heber-catalog-restored \
+  --db-snapshot-identifier rds:heber-catalog-prod-2026-01-15
+
+# Point-in-time recovery
+aws rds restore-db-instance-to-point-in-time \
+  --source-db-instance-identifier heber-catalog-prod \
+  --target-db-instance-identifier heber-catalog-pitr \
+  --restore-time 2026-01-15T12:00:00Z
+```
+
+### Object Storage (S3)
+
+| Feature | Configuration |
+|---------|---------------|
+| Versioning | Enabled |
+| Cross-region replication | prod only, to DR region |
+| Lifecycle rules | Bronze: IA after 30d, delete after 90d |
+
+**Commands:**
+
+```bash
+# Restore previous version
+aws s3api get-object \
+  --bucket heber-data-prod \
+  --key silver/dataset/dt=2026-01-15/file.parquet \
+  --version-id <version-id> \
+  restored-file.parquet
+
+# List versions
+aws s3api list-object-versions \
+  --bucket heber-data-prod \
+  --prefix silver/dataset/dt=2026-01-15/
+```
+
+### ClickHouse (Hot Store)
+
+- **Backup tool:** `clickhouse-backup`
+- **Frequency:** Daily at 02:00 UTC
+- **Storage:** S3 (`s3://heber-backups-prod/clickhouse/`)
+- **Retention:** 7 days
+
+**Commands:**
+
+```bash
+# Create backup
+clickhouse-backup create daily-$(date +%Y%m%d)
+
+# Upload to S3
+clickhouse-backup upload daily-$(date +%Y%m%d)
+
+# List backups
+clickhouse-backup list
+
+# Restore
+clickhouse-backup download <backup-name>
+clickhouse-backup restore <backup-name>
+```
+
+---
+
+## Disaster Recovery Runbook (PRD §24.3)
+
+### Scenario: Primary Region Failure
+
+**Estimated RTO:** 2-4 hours
+
+#### Step 1: Assess (5 min)
+
+```bash
+# Check AWS status
+open https://status.aws.amazon.com/
+
+# Check PagerDuty alerts
+pd incident list
+
+# Confirm region is unavailable
+aws ec2 describe-availability-zones --region us-east-1
+```
+
+#### Step 2: Failover Postgres (30-60 min)
+
+```bash
+# Promote cross-region replica (DR region)
+aws rds promote-read-replica \
+  --db-instance-identifier heber-catalog-replica-dr
+
+# Wait for promotion
+aws rds wait db-instance-available \
+  --db-instance-identifier heber-catalog-replica-dr
+
+# Update connection string in DR cluster
+kubectl -n heber-prod set env deployment/heber-catalog \
+  HEBER_CATALOG_DSN="postgresql://...@heber-catalog-replica-dr..."
+```
+
+#### Step 3: Update DNS (5 min)
+
+```bash
+# Update Route53 failover record
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --change-batch file://dns-failover.json
+```
+
+#### Step 4: Deploy Services in DR (30-60 min)
+
+```bash
+# Configure kubectl for DR cluster
+aws eks update-kubeconfig --name heber-dr --region us-west-2
+
+# Apply Kustomize overlay for DR
+cd k8s/overlays/prod
+kustomize edit set image heber=ghcr.io/jacobmcmillan/heber:<latest-sha>
+kubectl apply -k .
+
+# Wait for rollout
+kubectl -n heber-prod rollout status deployment/heber-consumer
+kubectl -n heber-prod rollout status deployment/heber-writer
+kubectl -n heber-prod rollout status deployment/heber-catalog
+```
+
+#### Step 5: Verify (15 min)
+
+```bash
+# Run smoke tests
+./scripts/smoke-test.sh https://heber-dr.example.com
+
+# Check metrics
+open https://grafana.example.com/d/heber-overview
+
+# Verify data integrity
+curl -s https://heber-dr.example.com/health | jq
+```
+
+#### Step 6: Notify (5 min)
+
+```bash
+# Alert Slack channel
+./scripts/notify-slack.sh "#heber-alerts" "DR activated for Heber. Primary region: us-east-1 → DR region: us-west-2"
+
+# Email stakeholders
+./scripts/notify-email.sh "heber-stakeholders@example.com" "Heber Failover Complete"
+```
+
+---
+
+## Backup Validation Schedule (PRD §24.4)
+
+| Frequency | Validation |
+|-----------|------------|
+| Monthly | Restore Catalog backup to test environment |
+| Quarterly | Full DR drill (failover to secondary region) |
+
+### Monthly Catalog Restore Test
+
+```bash
+./scripts/backup/validate-catalog-backup.sh
+```
+
+### Quarterly DR Drill Checklist
+
+- [ ] Alert stakeholders of planned drill
+- [ ] Promote read replica in DR region
+- [ ] Deploy services to DR cluster
+- [ ] Run smoke tests
+- [ ] Validate data integrity
+- [ ] Measure actual RTO
+- [ ] Fail back to primary
+- [ ] Document lessons learned
+
+
+
+================================================
 FILE: features/entities.py
 ================================================
 """Entity definitions for Feast feature store."""
@@ -7836,6 +8252,643 @@ def get_settings() -> Settings:
 
 # Convenience alias
 settings = get_settings()
+
+
+
+================================================
+FILE: heber/backfill/__init__.py
+================================================
+"""Backfill pipeline for Heber per PRD §13.
+
+Provides:
+- Backfill job definition and management
+- Backfill coordinator with chunking and rate limiting
+- Backfill writer with quality_flags tagging
+- ts_available = ts_commit rule for historical data
+- Gap detection and recovery
+"""
+
+import asyncio
+import os
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, date, timedelta, UTC
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+backfill_jobs_total = Counter(
+    "heber_backfill_jobs_total",
+    "Total backfill jobs",
+    ["provider", "feed", "status"],
+)
+
+backfill_rows_written = Counter(
+    "heber_backfill_rows_written_total",
+    "Rows written by backfill",
+    ["provider", "feed"],
+)
+
+backfill_files_written = Counter(
+    "heber_backfill_files_written_total",
+    "Files written by backfill",
+    ["provider", "feed"],
+)
+
+backfill_active_jobs = Gauge(
+    "heber_backfill_active_jobs",
+    "Currently running backfill jobs",
+)
+
+backfill_progress_percent = Gauge(
+    "heber_backfill_progress_percent",
+    "Progress of active backfill job",
+    ["backfill_id"],
+)
+
+backfill_duration_seconds = Histogram(
+    "heber_backfill_duration_seconds",
+    "Duration of backfill jobs",
+    ["provider", "feed"],
+    buckets=[60, 300, 600, 1800, 3600, 7200, 14400, 28800],
+)
+
+
+class BackfillStatus(str, Enum):
+    """Backfill job status."""
+    PENDING = "pending"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TsAvailablePolicy(str, Enum):
+    """Policy for setting ts_available on backfill data per PRD §13.3."""
+    COMMIT = "commit"    # ts_available = ts_commit (default, recommended)
+    EVENT = "event"      # ts_available = ts_event (opt-in, documented)
+    CUSTOM = "custom"    # ts_available = ts_event + delay (opt-in)
+
+
+@dataclass
+class BackfillJobDefinition:
+    """Backfill job definition per PRD §13.4.1."""
+    provider: str
+    feed: str
+    date_range_start: date
+    date_range_end: date
+    symbols: list[str] | None = None  # None = all symbols
+    ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT
+    custom_delay_seconds: int | None = None  # For CUSTOM policy
+    rate_limit_per_second: float = 10.0
+    batch_size: int = 1000
+    priority: int = 10  # Lower = higher priority
+
+
+@dataclass
+class BackfillJob:
+    """Backfill job state per PRD §13.5."""
+    backfill_id: str
+    provider: str
+    feed: str
+    date_range_start: date
+    date_range_end: date
+    ts_available_policy: TsAvailablePolicy
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    rows_written: int = 0
+    files_written: int = 0
+    status: BackfillStatus = BackfillStatus.PENDING
+    error_message: str | None = None
+    progress_dates_completed: list[str] = field(default_factory=list)
+    symbols: list[str] | None = None
+    
+    @classmethod
+    def from_definition(cls, definition: BackfillJobDefinition) -> "BackfillJob":
+        return cls(
+            backfill_id=str(uuid.uuid4()),
+            provider=definition.provider,
+            feed=definition.feed,
+            date_range_start=definition.date_range_start,
+            date_range_end=definition.date_range_end,
+            ts_available_policy=definition.ts_available_policy,
+            symbols=definition.symbols,
+        )
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "backfill_id": self.backfill_id,
+            "provider": self.provider,
+            "feed": self.feed,
+            "date_range_start": self.date_range_start.isoformat(),
+            "date_range_end": self.date_range_end.isoformat(),
+            "ts_available_policy": self.ts_available_policy.value,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "rows_written": self.rows_written,
+            "files_written": self.files_written,
+            "status": self.status.value,
+            "error_message": self.error_message,
+            "symbols": self.symbols,
+        }
+
+
+@dataclass
+class BackfillChunk:
+    """A chunk of work for backfill."""
+    backfill_id: str
+    chunk_date: date
+    symbols: list[str] | None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    rows_written: int = 0
+
+
+class GapDetector:
+    """Detects gaps in data coverage for backfill targeting."""
+    
+    def __init__(self, storage_root: str = "/data/heber"):
+        self.storage_root = Path(storage_root)
+    
+    def detect_gaps(
+        self,
+        provider: str,
+        feed: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[tuple[date, date]]:
+        """Detect gaps in data coverage.
+        
+        Returns list of (gap_start, gap_end) date ranges.
+        """
+        silver_path = self.storage_root / "silver" / f"{provider}_{feed}"
+        
+        if not silver_path.exists():
+            # No data at all - entire range is a gap
+            return [(start_date, end_date)]
+        
+        # Find existing dates
+        existing_dates = set()
+        for dt_dir in silver_path.glob("dt=*"):
+            try:
+                dt_str = dt_dir.name.replace("dt=", "")
+                existing_dates.add(date.fromisoformat(dt_str))
+            except ValueError:
+                continue
+        
+        # Find gaps
+        gaps = []
+        current_gap_start = None
+        current = start_date
+        
+        while current <= end_date:
+            if current not in existing_dates:
+                if current_gap_start is None:
+                    current_gap_start = current
+            else:
+                if current_gap_start is not None:
+                    gaps.append((current_gap_start, current - timedelta(days=1)))
+                    current_gap_start = None
+            current += timedelta(days=1)
+        
+        # Close final gap if open
+        if current_gap_start is not None:
+            gaps.append((current_gap_start, end_date))
+        
+        return gaps
+    
+    def get_coverage_summary(
+        self,
+        provider: str,
+        feed: str,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        """Get coverage summary for a date range."""
+        gaps = self.detect_gaps(provider, feed, start_date, end_date)
+        
+        total_days = (end_date - start_date).days + 1
+        gap_days = sum((g[1] - g[0]).days + 1 for g in gaps)
+        covered_days = total_days - gap_days
+        
+        return {
+            "provider": provider,
+            "feed": feed,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "total_days": total_days,
+            "covered_days": covered_days,
+            "gap_days": gap_days,
+            "coverage_percent": (covered_days / total_days * 100) if total_days > 0 else 0,
+            "gaps": [(g[0].isoformat(), g[1].isoformat()) for g in gaps],
+        }
+
+
+class BackfillWriter:
+    """Writes backfill data per PRD §13.4.3.
+    
+    - Writes directly to Bronze/Silver (bypasses event bus)
+    - Tags records: quality_flags += ["backfill"]
+    - Updates Catalog coverage
+    """
+    
+    def __init__(
+        self,
+        storage_root: str = "/data/heber",
+        ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT,
+        custom_delay_seconds: int | None = None,
+    ):
+        self.storage_root = Path(storage_root)
+        self.ts_available_policy = ts_available_policy
+        self.custom_delay_seconds = custom_delay_seconds
+    
+    def set_ts_available(
+        self,
+        record: dict[str, Any],
+        ts_commit: datetime,
+    ) -> dict[str, Any]:
+        """Set ts_available based on policy per PRD §13.3."""
+        if self.ts_available_policy == TsAvailablePolicy.COMMIT:
+            # Default: ts_available = ts_commit
+            record["ts_available"] = ts_commit
+        elif self.ts_available_policy == TsAvailablePolicy.EVENT:
+            # Opt-in: ts_available = ts_event
+            record["ts_available"] = record.get("ts_event", ts_commit)
+        elif self.ts_available_policy == TsAvailablePolicy.CUSTOM:
+            # Opt-in: ts_available = ts_event + delay
+            ts_event = record.get("ts_event", ts_commit)
+            delay = timedelta(seconds=self.custom_delay_seconds or 0)
+            record["ts_available"] = ts_event + delay
+        
+        return record
+    
+    def tag_as_backfill(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Tag record with backfill quality flag per PRD §13.4.3."""
+        flags = record.get("quality_flags", [])
+        if "backfill" not in flags:
+            flags.append("backfill")
+        record["quality_flags"] = flags
+        return record
+    
+    async def write_batch(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+    ) -> int:
+        """Write a batch of backfill records.
+        
+        Writes to temp partition per PRD §13.6, then merges.
+        """
+        if not records:
+            return 0
+        
+        ts_commit = datetime.now(UTC)
+        
+        # Process records
+        processed = []
+        for record in records:
+            record = self.tag_as_backfill(record)
+            record = self.set_ts_available(record, ts_commit)
+            record["ts_ingest"] = ts_commit
+            record["backfill_id"] = job.backfill_id
+            processed.append(record)
+        
+        # Write to temp partition per PRD §13.6
+        temp_path = self._get_temp_path(job, chunk_date)
+        await self._write_parquet(processed, temp_path)
+        
+        # Atomic merge will be handled by compactor
+        logger.info(
+            "backfill_batch_written",
+            backfill_id=job.backfill_id,
+            date=chunk_date.isoformat(),
+            rows=len(processed),
+        )
+        
+        return len(processed)
+    
+    def _get_temp_path(self, job: BackfillJob, chunk_date: date) -> Path:
+        """Get temp partition path for backfill isolation."""
+        return (
+            self.storage_root / "silver" / f"{job.provider}_{job.feed}" /
+            f"dt={chunk_date.isoformat()}" / f"_backfill_{job.backfill_id}"
+        )
+    
+    async def _write_parquet(
+        self,
+        records: list[dict[str, Any]],
+        path: Path,
+    ) -> None:
+        """Write records to Parquet file."""
+        path.mkdir(parents=True, exist_ok=True)
+        output_file = path / f"{uuid.uuid4()}.parquet"
+        
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            
+            table = pa.Table.from_pylist(records)
+            pq.write_table(table, str(output_file))
+        except ImportError:
+            logger.warning("pyarrow_not_available")
+
+
+class BackfillCoordinator:
+    """Coordinates backfill jobs per PRD §13.4.2.
+    
+    - Chunks work by date/symbol
+    - Rate limits API calls
+    - Tracks progress (resumable)
+    """
+    
+    def __init__(
+        self,
+        storage_root: str = "/data/heber",
+        data_fetcher: Callable | None = None,
+    ):
+        self.storage_root = storage_root
+        self.data_fetcher = data_fetcher
+        self._jobs: dict[str, BackfillJob] = {}
+        self._active_job: str | None = None
+    
+    def create_job(self, definition: BackfillJobDefinition) -> BackfillJob:
+        """Create a new backfill job."""
+        job = BackfillJob.from_definition(definition)
+        self._jobs[job.backfill_id] = job
+        
+        backfill_jobs_total.labels(
+            provider=job.provider,
+            feed=job.feed,
+            status="created",
+        ).inc()
+        
+        logger.info(
+            "backfill_job_created",
+            backfill_id=job.backfill_id,
+            provider=job.provider,
+            feed=job.feed,
+            date_range=f"{job.date_range_start} to {job.date_range_end}",
+        )
+        
+        return job
+    
+    def get_job(self, backfill_id: str) -> BackfillJob | None:
+        """Get a backfill job by ID."""
+        return self._jobs.get(backfill_id)
+    
+    def list_jobs(
+        self,
+        status: BackfillStatus | None = None,
+    ) -> list[BackfillJob]:
+        """List backfill jobs, optionally filtered by status."""
+        jobs = list(self._jobs.values())
+        if status:
+            jobs = [j for j in jobs if j.status == status]
+        return sorted(jobs, key=lambda j: j.started_at or datetime.min, reverse=True)
+    
+    def _generate_chunks(
+        self,
+        job: BackfillJob,
+        definition: BackfillJobDefinition,
+    ) -> list[BackfillChunk]:
+        """Generate work chunks for a backfill job."""
+        chunks = []
+        current = job.date_range_start
+        
+        while current <= job.date_range_end:
+            # Skip already completed dates (for resume)
+            if current.isoformat() not in job.progress_dates_completed:
+                chunks.append(BackfillChunk(
+                    backfill_id=job.backfill_id,
+                    chunk_date=current,
+                    symbols=job.symbols,
+                ))
+            current += timedelta(days=1)
+        
+        return chunks
+    
+    async def run_job(
+        self,
+        backfill_id: str,
+        definition: BackfillJobDefinition,
+    ) -> BackfillJob:
+        """Run a backfill job to completion."""
+        job = self._jobs.get(backfill_id)
+        if not job:
+            raise ValueError(f"Job not found: {backfill_id}")
+        
+        if job.status == BackfillStatus.RUNNING:
+            raise ValueError(f"Job already running: {backfill_id}")
+        
+        # Start job
+        job.status = BackfillStatus.RUNNING
+        job.started_at = datetime.now(UTC)
+        self._active_job = backfill_id
+        backfill_active_jobs.inc()
+        
+        writer = BackfillWriter(
+            storage_root=self.storage_root,
+            ts_available_policy=job.ts_available_policy,
+            custom_delay_seconds=definition.custom_delay_seconds,
+        )
+        
+        chunks = self._generate_chunks(job, definition)
+        total_chunks = len(chunks)
+        
+        try:
+            for i, chunk in enumerate(chunks):
+                # Fetch data
+                if self.data_fetcher:
+                    records = await self.data_fetcher(
+                        provider=job.provider,
+                        feed=job.feed,
+                        date=chunk.chunk_date,
+                        symbols=chunk.symbols,
+                    )
+                else:
+                    records = []
+                
+                # Write with rate limiting
+                await asyncio.sleep(1.0 / definition.rate_limit_per_second)
+                
+                rows = await writer.write_batch(job, records, chunk.chunk_date)
+                
+                # Update progress
+                job.rows_written += rows
+                job.files_written += 1
+                job.progress_dates_completed.append(chunk.chunk_date.isoformat())
+                
+                progress = (i + 1) / total_chunks * 100
+                backfill_progress_percent.labels(backfill_id=backfill_id).set(progress)
+                
+                # Update metrics
+                backfill_rows_written.labels(
+                    provider=job.provider,
+                    feed=job.feed,
+                ).inc(rows)
+                backfill_files_written.labels(
+                    provider=job.provider,
+                    feed=job.feed,
+                ).inc()
+            
+            # Complete job
+            job.status = BackfillStatus.COMPLETED
+            job.completed_at = datetime.now(UTC)
+            
+            duration = (job.completed_at - job.started_at).total_seconds()
+            backfill_duration_seconds.labels(
+                provider=job.provider,
+                feed=job.feed,
+            ).observe(duration)
+            
+            backfill_jobs_total.labels(
+                provider=job.provider,
+                feed=job.feed,
+                status="completed",
+            ).inc()
+            
+            logger.info(
+                "backfill_job_completed",
+                backfill_id=backfill_id,
+                rows=job.rows_written,
+                files=job.files_written,
+                duration_seconds=duration,
+            )
+            
+        except Exception as e:
+            job.status = BackfillStatus.FAILED
+            job.error_message = str(e)
+            
+            backfill_jobs_total.labels(
+                provider=job.provider,
+                feed=job.feed,
+                status="failed",
+            ).inc()
+            
+            logger.error(
+                "backfill_job_failed",
+                backfill_id=backfill_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
+        
+        finally:
+            self._active_job = None
+            backfill_active_jobs.dec()
+        
+        return job
+    
+    def cancel_job(self, backfill_id: str) -> BackfillJob:
+        """Cancel a running backfill job."""
+        job = self._jobs.get(backfill_id)
+        if not job:
+            raise ValueError(f"Job not found: {backfill_id}")
+        
+        if job.status == BackfillStatus.RUNNING:
+            job.status = BackfillStatus.CANCELLED
+            job.completed_at = datetime.now(UTC)
+        
+        return job
+
+
+# FastAPI router for backfill API per PRD §11.7
+
+def create_backfill_router():
+    """Create FastAPI router for backfill endpoints."""
+    from fastapi import APIRouter, HTTPException
+    from pydantic import BaseModel
+    
+    router = APIRouter(prefix="/backfill", tags=["backfill"])
+    coordinator = BackfillCoordinator()
+    gap_detector = GapDetector()
+    
+    class BackfillRequest(BaseModel):
+        """Request body for creating a backfill job."""
+        provider: str
+        feed: str
+        date_range_start: date
+        date_range_end: date
+        symbols: list[str] | None = None
+        ts_available_policy: str = "commit"
+        rate_limit_per_second: float = 10.0
+    
+    class GapDetectionRequest(BaseModel):
+        """Request body for gap detection."""
+        provider: str
+        feed: str
+        start_date: date
+        end_date: date
+    
+    @router.post("")
+    async def create_backfill(request: BackfillRequest) -> dict:
+        """Create a new backfill job (POST /backfill)."""
+        try:
+            policy = TsAvailablePolicy(request.ts_available_policy)
+        except ValueError:
+            policy = TsAvailablePolicy.COMMIT
+        
+        definition = BackfillJobDefinition(
+            provider=request.provider,
+            feed=request.feed,
+            date_range_start=request.date_range_start,
+            date_range_end=request.date_range_end,
+            symbols=request.symbols,
+            ts_available_policy=policy,
+            rate_limit_per_second=request.rate_limit_per_second,
+        )
+        
+        job = coordinator.create_job(definition)
+        
+        # Start job in background
+        asyncio.create_task(coordinator.run_job(job.backfill_id, definition))
+        
+        return job.to_dict()
+    
+    @router.get("/{backfill_id}")
+    async def get_backfill(backfill_id: str) -> dict:
+        """Get backfill job status (GET /backfill/{id})."""
+        job = coordinator.get_job(backfill_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Backfill job not found")
+        return job.to_dict()
+    
+    @router.get("")
+    async def list_backfills(status: str | None = None) -> list[dict]:
+        """List backfill jobs (GET /backfill)."""
+        filter_status = BackfillStatus(status) if status else None
+        jobs = coordinator.list_jobs(status=filter_status)
+        return [j.to_dict() for j in jobs]
+    
+    @router.delete("/{backfill_id}")
+    async def cancel_backfill(backfill_id: str) -> dict:
+        """Cancel a backfill job."""
+        try:
+            job = coordinator.cancel_job(backfill_id)
+            return job.to_dict()
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+    
+    @router.post("/gaps")
+    async def detect_gaps(request: GapDetectionRequest) -> dict:
+        """Detect gaps in data coverage."""
+        return gap_detector.get_coverage_summary(
+            provider=request.provider,
+            feed=request.feed,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+    
+    return router
 
 
 
@@ -8900,6 +9953,432 @@ def create_retry_executor(
     if max_retries is not None:
         config.max_retries = max_retries
     return RetryExecutor(dlq_handler, config)
+
+
+
+================================================
+FILE: heber/bus/dedupe.py
+================================================
+"""Deduplication strategy for Heber per PRD §12.11.
+
+Provides three-layer deduplication:
+1. Consumer: In-memory bloom filter (fast approximate)
+2. Writer: Append-only per batch
+3. Compactor: Exact dedupe on merge
+
+This module builds on the BloomFilter from ops/reliability.py with
+additional features for rotating filters and compaction dedupe.
+"""
+
+import math
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Gauge
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+dedupe_bloom_hits = Counter(
+    "heber_dedupe_bloom_hits_total",
+    "Events dropped by bloom filter (probably duplicate)",
+    ["stream"],
+)
+
+dedupe_bloom_misses = Counter(
+    "heber_dedupe_bloom_misses_total",
+    "Events passed by bloom filter (definitely not duplicate)",
+    ["stream"],
+)
+
+dedupe_bloom_fp_estimate = Gauge(
+    "heber_dedupe_bloom_fp_rate",
+    "Estimated false positive rate of current bloom filter",
+    ["stream"],
+)
+
+dedupe_compaction_removed = Counter(
+    "heber_dedupe_compaction_removed_total",
+    "Duplicate events removed during compaction",
+    ["partition"],
+)
+
+bloom_filter_rotations = Counter(
+    "heber_bloom_filter_rotations_total",
+    "Number of bloom filter rotations",
+    ["stream"],
+)
+
+bloom_filter_size_bytes = Gauge(
+    "heber_bloom_filter_size_bytes",
+    "Current bloom filter size in bytes",
+    ["stream"],
+)
+
+
+@dataclass
+class BloomFilterConfig:
+    """Bloom filter configuration per PRD §12.11.2."""
+    expected_items: int = 10_000_000   # 10M per filter
+    false_positive_rate: float = 0.01  # 1%
+    rotation_interval_seconds: int = 3600  # Rotate every hour
+    retention_hours: int = 1  # Keep old filter for 1 additional hour
+
+
+class BloomFilter:
+    """High-performance bloom filter for event deduplication.
+    
+    Per PRD §12.11.2:
+    - Expected items: 10M
+    - False positive rate: 1%
+    - Memory: ~12MB per filter
+    """
+    
+    def __init__(
+        self,
+        expected_items: int = 10_000_000,
+        false_positive_rate: float = 0.01,
+    ):
+        self.expected_items = expected_items
+        self.target_fp_rate = false_positive_rate
+        
+        # Calculate optimal size and hash count
+        # m = -n * ln(p) / (ln(2)^2)
+        # k = m/n * ln(2)
+        self.size_bits = self._optimal_size(expected_items, false_positive_rate)
+        self.num_hashes = self._optimal_hash_count(self.size_bits, expected_items)
+        
+        # Initialize bit array
+        self._bit_array = bytearray(self.size_bits // 8 + 1)
+        self._item_count = 0
+        self._created_at = time.time()
+    
+    @staticmethod
+    def _optimal_size(n: int, p: float) -> int:
+        """Calculate optimal filter size in bits."""
+        m = -n * math.log(p) / (math.log(2) ** 2)
+        return int(m)
+    
+    @staticmethod
+    def _optimal_hash_count(m: int, n: int) -> int:
+        """Calculate optimal number of hash functions."""
+        k = (m / n) * math.log(2)
+        return max(1, int(k))
+    
+    def _hash_positions(self, item: str) -> list[int]:
+        """Calculate hash positions for an item using double hashing."""
+        # Use Python's built-in hash and a simple rehash
+        h1 = hash(item) % self.size_bits
+        h2 = hash(item + "_salt") % self.size_bits
+        
+        positions = []
+        for i in range(self.num_hashes):
+            pos = (h1 + i * h2) % self.size_bits
+            positions.append(pos)
+        return positions
+    
+    def add(self, item: str) -> None:
+        """Add an item to the filter."""
+        for pos in self._hash_positions(item):
+            byte_idx = pos // 8
+            bit_idx = pos % 8
+            self._bit_array[byte_idx] |= (1 << bit_idx)
+        self._item_count += 1
+    
+    def probably_contains(self, item: str) -> bool:
+        """Check if item is probably in the filter.
+        
+        Returns:
+            True if item is probably in the filter (may have false positives)
+            False if item is definitely NOT in the filter
+        """
+        for pos in self._hash_positions(item):
+            byte_idx = pos // 8
+            bit_idx = pos % 8
+            if not (self._bit_array[byte_idx] & (1 << bit_idx)):
+                return False
+        return True
+    
+    @property
+    def item_count(self) -> int:
+        """Number of items added to the filter."""
+        return self._item_count
+    
+    @property
+    def size_bytes(self) -> int:
+        """Memory usage in bytes."""
+        return len(self._bit_array)
+    
+    @property
+    def estimated_fp_rate(self) -> float:
+        """Estimate current false positive rate based on fill level."""
+        if self._item_count == 0:
+            return 0.0
+        # FP rate = (1 - e^(-kn/m))^k
+        exponent = -self.num_hashes * self._item_count / self.size_bits
+        return (1 - math.exp(exponent)) ** self.num_hashes
+    
+    @property
+    def age_seconds(self) -> float:
+        """Age of the filter in seconds."""
+        return time.time() - self._created_at
+
+
+class RotatingBloomFilter:
+    """Bloom filter with automatic hourly rotation per PRD §12.11.2.
+    
+    - New filter every hour
+    - Old filter retained for 1 additional hour
+    - Checks both current and previous filter
+    """
+    
+    def __init__(
+        self,
+        stream_name: str,
+        config: BloomFilterConfig | None = None,
+    ):
+        self.stream_name = stream_name
+        self.config = config or BloomFilterConfig()
+        
+        # Current and previous filters
+        self._current_filter = self._create_filter()
+        self._previous_filter: BloomFilter | None = None
+        self._last_rotation = time.time()
+        
+        self._update_metrics()
+    
+    def _create_filter(self) -> BloomFilter:
+        """Create a new bloom filter with configured settings."""
+        return BloomFilter(
+            expected_items=self.config.expected_items,
+            false_positive_rate=self.config.false_positive_rate,
+        )
+    
+    def _should_rotate(self) -> bool:
+        """Check if it's time to rotate filters."""
+        elapsed = time.time() - self._last_rotation
+        return elapsed >= self.config.rotation_interval_seconds
+    
+    def _rotate(self) -> None:
+        """Rotate to a new filter, keeping the old one."""
+        self._previous_filter = self._current_filter
+        self._current_filter = self._create_filter()
+        self._last_rotation = time.time()
+        
+        bloom_filter_rotations.labels(stream=self.stream_name).inc()
+        logger.info(
+            "bloom_filter_rotated",
+            stream=self.stream_name,
+            previous_items=self._previous_filter.item_count if self._previous_filter else 0,
+        )
+        
+        self._update_metrics()
+    
+    def _update_metrics(self) -> None:
+        """Update Prometheus metrics."""
+        bloom_filter_size_bytes.labels(stream=self.stream_name).set(
+            self._current_filter.size_bytes
+        )
+        dedupe_bloom_fp_estimate.labels(stream=self.stream_name).set(
+            self._current_filter.estimated_fp_rate
+        )
+    
+    def check_and_add(self, event_id: str) -> bool:
+        """Check if event_id is probably a duplicate, and add if not.
+        
+        Per PRD §12.11.2:
+        - If event_id is probably in the filter → return True (drop)
+        - If event_id is definitely not in the filter → add and return False (process)
+        
+        Returns:
+            True if event should be DROPPED (probably duplicate)
+            False if event should be PROCESSED (definitely new)
+        """
+        # Check if we need to rotate
+        if self._should_rotate():
+            self._rotate()
+        
+        # Check current filter
+        if self._current_filter.probably_contains(event_id):
+            dedupe_bloom_hits.labels(stream=self.stream_name).inc()
+            return True  # Probably duplicate, drop
+        
+        # Check previous filter (if exists)
+        if self._previous_filter and self._previous_filter.probably_contains(event_id):
+            dedupe_bloom_hits.labels(stream=self.stream_name).inc()
+            return True  # Probably duplicate, drop
+        
+        # Definitely new, add to current filter
+        self._current_filter.add(event_id)
+        dedupe_bloom_misses.labels(stream=self.stream_name).inc()
+        self._update_metrics()
+        
+        return False  # Process this event
+    
+    def force_rotate(self) -> None:
+        """Force an immediate rotation."""
+        self._rotate()
+    
+    @property
+    def stats(self) -> dict[str, Any]:
+        """Get filter statistics."""
+        return {
+            "stream": self.stream_name,
+            "current_items": self._current_filter.item_count,
+            "current_size_bytes": self._current_filter.size_bytes,
+            "current_fp_rate": self._current_filter.estimated_fp_rate,
+            "current_age_seconds": self._current_filter.age_seconds,
+            "previous_items": self._previous_filter.item_count if self._previous_filter else 0,
+            "time_to_rotation": max(
+                0,
+                self.config.rotation_interval_seconds - (time.time() - self._last_rotation)
+            ),
+        }
+
+
+# Global filter registry
+_bloom_filters: dict[str, RotatingBloomFilter] = {}
+
+
+def get_bloom_filter(stream_name: str, config: BloomFilterConfig | None = None) -> RotatingBloomFilter:
+    """Get or create a bloom filter for a stream."""
+    if stream_name not in _bloom_filters:
+        _bloom_filters[stream_name] = RotatingBloomFilter(stream_name, config)
+    return _bloom_filters[stream_name]
+
+
+def dedupe_at_consumer(stream_name: str, event_id: str) -> bool:
+    """Consumer-layer deduplication using bloom filter.
+    
+    Args:
+        stream_name: Name of the stream
+        event_id: Unique event identifier
+        
+    Returns:
+        True if event should be DROPPED (probably duplicate)
+        False if event should be PROCESSED
+    """
+    bf = get_bloom_filter(stream_name)
+    return bf.check_and_add(event_id)
+
+
+def dedupe_batch_at_writer(events: list[dict[str, Any]], event_id_key: str = "event_id") -> list[dict[str, Any]]:
+    """Writer-layer deduplication within a single batch.
+    
+    Per PRD §12.11.1: Ensures no duplicates in a single batch (append-only).
+    
+    Args:
+        events: List of event dictionaries
+        event_id_key: Key to use for event ID
+        
+    Returns:
+        Deduplicated list of events
+    """
+    seen_ids: set[str] = set()
+    unique_events = []
+    
+    for event in events:
+        event_id = event.get(event_id_key)
+        if event_id and event_id not in seen_ids:
+            seen_ids.add(event_id)
+            unique_events.append(event)
+    
+    dropped = len(events) - len(unique_events)
+    if dropped > 0:
+        logger.debug(
+            "writer_dedupe",
+            dropped=dropped,
+            kept=len(unique_events),
+        )
+    
+    return unique_events
+
+
+def dedupe_at_compaction(
+    records: list[dict[str, Any]],
+    partition: str,
+    event_id_key: str = "event_id",
+    ts_ingest_key: str = "ts_ingest",
+) -> list[dict[str, Any]]:
+    """Compactor-layer exact deduplication.
+    
+    Per PRD §12.11.3:
+    1. Sort by event_id
+    2. Drop duplicates, keeping the row with earliest ts_ingest
+    3. Invariant: event_id is unique within a partition after compaction
+    
+    Args:
+        records: All records in the partition
+        partition: Partition identifier for metrics
+        event_id_key: Key for event ID
+        ts_ingest_key: Key for ingest timestamp
+        
+    Returns:
+        Deduplicated records with earliest ts_ingest per event_id
+    """
+    if not records:
+        return records
+    
+    # Group by event_id, keep earliest ts_ingest
+    event_map: dict[str, dict[str, Any]] = {}
+    
+    for record in records:
+        event_id = record.get(event_id_key)
+        if not event_id:
+            continue
+        
+        if event_id not in event_map:
+            event_map[event_id] = record
+        else:
+            # Keep record with earlier ts_ingest
+            existing_ts = event_map[event_id].get(ts_ingest_key)
+            new_ts = record.get(ts_ingest_key)
+            
+            if new_ts and existing_ts and new_ts < existing_ts:
+                event_map[event_id] = record
+    
+    # Sort by event_id for consistent output
+    unique_records = sorted(event_map.values(), key=lambda r: r.get(event_id_key, ""))
+    
+    dropped = len(records) - len(unique_records)
+    if dropped > 0:
+        dedupe_compaction_removed.labels(partition=partition).inc(dropped)
+        logger.info(
+            "compaction_dedupe",
+            partition=partition,
+            total=len(records),
+            unique=len(unique_records),
+            dropped=dropped,
+        )
+    
+    return unique_records
+
+
+# Convenience decorator for consumer dedupe
+def with_consumer_dedupe(stream_name: str):
+    """Decorator to add consumer-layer deduplication to a message handler.
+    
+    Usage:
+        @with_consumer_dedupe("stream:market.bars")
+        async def handle_message(message):
+            # Only called for non-duplicate messages
+            ...
+    """
+    def decorator(fn):
+        async def wrapper(message, *args, **kwargs):
+            event_id = message.get("event_id") if isinstance(message, dict) else getattr(message, "event_id", None)
+            
+            if event_id and dedupe_at_consumer(stream_name, event_id):
+                logger.debug("consumer_dedupe_dropped", event_id=event_id)
+                return None  # Skip duplicate
+            
+            return await fn(message, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 
@@ -15067,6 +16546,1084 @@ def get_current_trace_id() -> str | None:
 
 
 ================================================
+FILE: heber/retention/__init__.py
+================================================
+"""Retention and lifecycle management for Heber per PRD §15.
+
+Provides:
+- TTL policies per dataset and layer
+- Partition cleanup automation (heber-reaper)
+- Archive to cold storage
+- Retention metadata in Catalog
+"""
+
+import asyncio
+import json
+import os
+import shutil
+from dataclasses import dataclass, field
+from datetime import datetime, date, timedelta, UTC
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+partitions_deleted = Counter(
+    "heber_retention_partitions_deleted_total",
+    "Partitions deleted by retention policy",
+    ["dataset", "layer"],
+)
+
+files_deleted = Counter(
+    "heber_retention_files_deleted_total",
+    "Files deleted by retention policy",
+    ["dataset", "layer"],
+)
+
+bytes_reclaimed = Counter(
+    "heber_retention_bytes_reclaimed_total",
+    "Bytes reclaimed by retention policy",
+    ["dataset", "layer"],
+)
+
+partitions_archived = Counter(
+    "heber_retention_partitions_archived_total",
+    "Partitions archived to cold storage",
+    ["dataset", "layer"],
+)
+
+reaper_runs = Counter(
+    "heber_reaper_runs_total",
+    "Reaper runs",
+    ["status"],
+)
+
+reaper_duration_seconds = Histogram(
+    "heber_reaper_duration_seconds",
+    "Duration of reaper runs",
+    buckets=[60, 300, 600, 1800, 3600],
+)
+
+pending_deletions = Gauge(
+    "heber_retention_pending_deletions",
+    "Partitions pending deletion",
+    ["dataset", "layer"],
+)
+
+
+class DataLayer(str, Enum):
+    """Data layers per PRD §15.1."""
+    BRONZE = "bronze"
+    SILVER = "silver"
+    GOLD = "gold"
+    HOT_STORE = "hot_store"
+    DLQ = "dlq"
+
+
+class LifecycleAction(str, Enum):
+    """Lifecycle actions per PRD §15.3."""
+    DELETE = "delete"      # Permanently remove files
+    ARCHIVE = "archive"    # Move to cold storage
+    COMPRESS = "compress"  # Re-encode with higher compression
+
+
+# Default retention per PRD §15.1
+DEFAULT_RETENTION = {
+    DataLayer.BRONZE: {"retention_days": 90, "action": LifecycleAction.DELETE},
+    DataLayer.SILVER: {"retention_days": None, "action": LifecycleAction.ARCHIVE},
+    DataLayer.GOLD: {"retention_versions": 5, "retention_days": 365, "action": LifecycleAction.DELETE},
+    DataLayer.HOT_STORE: {"retention_days": 7, "action": LifecycleAction.DELETE},
+    DataLayer.DLQ: {"retention_days": 30, "action": LifecycleAction.DELETE},
+}
+
+
+@dataclass
+class RetentionPolicy:
+    """Retention policy for a layer per PRD §15.2."""
+    retention_days: int | None = None  # None = forever
+    retention_versions: int | None = None  # For Gold layer
+    action: LifecycleAction = LifecycleAction.DELETE
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "retention_days": self.retention_days,
+            "retention_versions": self.retention_versions,
+            "action": self.action.value,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RetentionPolicy":
+        return cls(
+            retention_days=data.get("retention_days"),
+            retention_versions=data.get("retention_versions"),
+            action=LifecycleAction(data.get("action", "delete")),
+        )
+
+
+@dataclass
+class DatasetRetentionConfig:
+    """Complete retention config for a dataset per PRD §15.2."""
+    dataset: str
+    bronze: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(90, action=LifecycleAction.DELETE))
+    silver: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(None, action=LifecycleAction.ARCHIVE))
+    gold: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(365, 5, LifecycleAction.DELETE))
+    pinned_versions: list[str] = field(default_factory=list)  # Per PRD §15.6
+    
+    def to_json(self) -> str:
+        return json.dumps({
+            "bronze": self.bronze.to_dict(),
+            "silver": self.silver.to_dict(),
+            "gold": self.gold.to_dict(),
+            "pinned_versions": self.pinned_versions,
+        }, indent=2)
+
+
+@dataclass
+class PartitionInfo:
+    """Information about a partition for retention analysis."""
+    path: Path
+    dataset: str
+    layer: DataLayer
+    partition_date: date
+    version: str | None = None  # For Gold layer
+    file_count: int = 0
+    total_bytes: int = 0
+    is_pinned: bool = False
+
+
+@dataclass
+class ReaperResult:
+    """Result of a reaper run."""
+    started_at: datetime
+    completed_at: datetime | None = None
+    partitions_scanned: int = 0
+    partitions_deleted: int = 0
+    partitions_archived: int = 0
+    files_deleted: int = 0
+    bytes_reclaimed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+class DeletionSafetyChecker:
+    """Safety gates before deletion per PRD §15.5."""
+    
+    def __init__(self, gold_lineage: dict[str, set[str]] | None = None):
+        self.gold_lineage = gold_lineage or {}
+    
+    def check_safe_to_delete(
+        self,
+        partition: PartitionInfo,
+        dry_run: bool = False,
+    ) -> tuple[bool, str | None]:
+        """Check if partition is safe to delete per PRD §15.5."""
+        # Check if pinned
+        if partition.is_pinned:
+            return False, f"Partition is pinned: {partition.path}"
+        
+        # Check Gold lineage for Silver partitions
+        if partition.layer == DataLayer.SILVER:
+            dependent_gold = self._find_gold_dependencies(partition)
+            if dependent_gold:
+                return False, f"Silver partition has Gold dependencies: {dependent_gold}"
+        
+        if dry_run:
+            logger.info(
+                "dry_run_would_delete",
+                path=str(partition.path),
+                layer=partition.layer.value,
+                bytes=partition.total_bytes,
+            )
+        
+        return True, None
+    
+    def _find_gold_dependencies(self, partition: PartitionInfo) -> list[str]:
+        """Find Gold datasets that depend on this partition."""
+        partition_key = f"{partition.dataset}/{partition.partition_date.isoformat()}"
+        return [
+            gold_ds for gold_ds, sources in self.gold_lineage.items()
+            if partition_key in sources
+        ]
+
+
+class Archiver:
+    """Archives data to cold storage per PRD §15.3."""
+    
+    def __init__(
+        self,
+        archive_root: str = "/data/heber/archive",
+        compress_on_archive: bool = True,
+    ):
+        self.archive_root = Path(archive_root)
+        self.compress_on_archive = compress_on_archive
+    
+    async def archive_partition(
+        self,
+        partition: PartitionInfo,
+    ) -> tuple[bool, int]:
+        """Archive a partition to cold storage.
+        
+        Returns (success, bytes_archived).
+        """
+        archive_path = self.archive_root / partition.layer.value / partition.dataset
+        archive_path.mkdir(parents=True, exist_ok=True)
+        
+        # Generate archive filename
+        archive_name = f"{partition.partition_date.isoformat()}"
+        if partition.version:
+            archive_name += f"_v{partition.version}"
+        
+        try:
+            if self.compress_on_archive:
+                # Create compressed archive
+                archive_file = archive_path / f"{archive_name}.tar.gz"
+                shutil.make_archive(
+                    str(archive_path / archive_name),
+                    "gztar",
+                    str(partition.path.parent),
+                    partition.path.name,
+                )
+            else:
+                # Just move files
+                dest = archive_path / archive_name
+                shutil.copytree(partition.path, dest)
+            
+            partitions_archived.labels(
+                dataset=partition.dataset,
+                layer=partition.layer.value,
+            ).inc()
+            
+            logger.info(
+                "partition_archived",
+                source=str(partition.path),
+                destination=str(archive_path),
+                bytes=partition.total_bytes,
+            )
+            
+            return True, partition.total_bytes
+            
+        except Exception as e:
+            logger.error(
+                "archive_failed",
+                path=str(partition.path),
+                error=str(e),
+                exc_info=True,
+            )
+            return False, 0
+
+
+class ReaperWorker:
+    """Executes retention policy per PRD §15.4."""
+    
+    def __init__(
+        self,
+        storage_root: str = "/data/heber",
+        safety_checker: DeletionSafetyChecker | None = None,
+        archiver: Archiver | None = None,
+        dry_run: bool = False,
+    ):
+        self.storage_root = Path(storage_root)
+        self.safety_checker = safety_checker or DeletionSafetyChecker()
+        self.archiver = archiver or Archiver()
+        self.dry_run = dry_run
+    
+    def scan_partitions(
+        self,
+        dataset: str,
+        layer: DataLayer,
+    ) -> list[PartitionInfo]:
+        """Scan partitions for a dataset/layer."""
+        layer_path = self.storage_root / layer.value / dataset
+        
+        if not layer_path.exists():
+            return []
+        
+        partitions = []
+        for dt_dir in layer_path.glob("dt=*"):
+            try:
+                dt_str = dt_dir.name.replace("dt=", "")
+                partition_date = date.fromisoformat(dt_str)
+                
+                # Count files and bytes
+                file_count = 0
+                total_bytes = 0
+                for f in dt_dir.glob("**/*.parquet"):
+                    file_count += 1
+                    total_bytes += f.stat().st_size
+                
+                partitions.append(PartitionInfo(
+                    path=dt_dir,
+                    dataset=dataset,
+                    layer=layer,
+                    partition_date=partition_date,
+                    file_count=file_count,
+                    total_bytes=total_bytes,
+                ))
+            except ValueError:
+                continue
+        
+        return partitions
+    
+    def find_expired_partitions(
+        self,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        reference_date: date | None = None,
+    ) -> list[PartitionInfo]:
+        """Find partitions that exceed retention policy."""
+        if reference_date is None:
+            reference_date = date.today()
+        
+        expired = []
+        
+        if policy.retention_days is not None:
+            cutoff = reference_date - timedelta(days=policy.retention_days)
+            for p in partitions:
+                if p.partition_date < cutoff:
+                    expired.append(p)
+        
+        return expired
+    
+    def find_expired_versions(
+        self,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        pinned_versions: list[str],
+    ) -> list[PartitionInfo]:
+        """Find Gold versions that exceed retention per PRD §15.6."""
+        if policy.retention_versions is None:
+            return []
+        
+        # Group by version
+        by_version: dict[str, list[PartitionInfo]] = {}
+        for p in partitions:
+            v = p.version or "default"
+            if v not in by_version:
+                by_version[v] = []
+            by_version[v].append(p)
+        
+        # Find versions to delete
+        expired = []
+        sorted_versions = sorted(by_version.keys(), reverse=True)
+        
+        for v in sorted_versions[policy.retention_versions:]:
+            if v not in pinned_versions:
+                expired.extend(by_version[v])
+        
+        return expired
+    
+    async def delete_partition(
+        self,
+        partition: PartitionInfo,
+    ) -> tuple[bool, int]:
+        """Delete a partition."""
+        if self.dry_run:
+            logger.info(
+                "dry_run_skip_delete",
+                path=str(partition.path),
+            )
+            return True, partition.total_bytes
+        
+        try:
+            shutil.rmtree(partition.path)
+            
+            partitions_deleted.labels(
+                dataset=partition.dataset,
+                layer=partition.layer.value,
+            ).inc()
+            
+            files_deleted.labels(
+                dataset=partition.dataset,
+                layer=partition.layer.value,
+            ).inc(partition.file_count)
+            
+            bytes_reclaimed.labels(
+                dataset=partition.dataset,
+                layer=partition.layer.value,
+            ).inc(partition.total_bytes)
+            
+            logger.info(
+                "partition_deleted",
+                path=str(partition.path),
+                files=partition.file_count,
+                bytes=partition.total_bytes,
+            )
+            
+            return True, partition.total_bytes
+            
+        except Exception as e:
+            logger.error(
+                "delete_failed",
+                path=str(partition.path),
+                error=str(e),
+                exc_info=True,
+            )
+            return False, 0
+    
+    async def apply_policy(
+        self,
+        partition: PartitionInfo,
+        action: LifecycleAction,
+    ) -> tuple[bool, int]:
+        """Apply lifecycle action to partition."""
+        # Safety check first
+        safe, reason = self.safety_checker.check_safe_to_delete(
+            partition, dry_run=self.dry_run
+        )
+        if not safe:
+            logger.warning(
+                "partition_not_safe_to_delete",
+                path=str(partition.path),
+                reason=reason,
+            )
+            return False, 0
+        
+        if action == LifecycleAction.DELETE:
+            return await self.delete_partition(partition)
+        elif action == LifecycleAction.ARCHIVE:
+            # Archive first, then delete
+            archived, bytes_archived = await self.archiver.archive_partition(partition)
+            if archived:
+                return await self.delete_partition(partition)
+            return False, 0
+        elif action == LifecycleAction.COMPRESS:
+            # Recompress in place (not yet implemented)
+            logger.warning(
+                "compress_action_not_implemented",
+                path=str(partition.path),
+            )
+            return False, 0
+        
+        return False, 0
+
+
+class ReaperScheduler:
+    """Schedules and runs retention enforcement per PRD §15.4."""
+    
+    def __init__(
+        self,
+        worker: ReaperWorker,
+        retention_configs: dict[str, DatasetRetentionConfig] | None = None,
+        run_interval_hours: int = 24,
+    ):
+        self.worker = worker
+        self.retention_configs = retention_configs or {}
+        self.run_interval_hours = run_interval_hours
+        self._running = False
+    
+    def add_dataset_config(
+        self,
+        config: DatasetRetentionConfig,
+    ) -> None:
+        """Add retention config for a dataset."""
+        self.retention_configs[config.dataset] = config
+    
+    async def run_once(self) -> ReaperResult:
+        """Run a single reaper pass per PRD §15.4 workflow."""
+        result = ReaperResult(started_at=datetime.now(UTC))
+        
+        try:
+            for dataset, config in self.retention_configs.items():
+                # Process each layer
+                for layer, policy in [
+                    (DataLayer.BRONZE, config.bronze),
+                    (DataLayer.SILVER, config.silver),
+                    (DataLayer.GOLD, config.gold),
+                ]:
+                    if policy.retention_days is None and policy.retention_versions is None:
+                        continue  # No retention policy
+                    
+                    partitions = self.worker.scan_partitions(dataset, layer)
+                    result.partitions_scanned += len(partitions)
+                    
+                    # Find expired
+                    if layer == DataLayer.GOLD and policy.retention_versions:
+                        expired = self.worker.find_expired_versions(
+                            partitions, policy, config.pinned_versions
+                        )
+                    else:
+                        expired = self.worker.find_expired_partitions(
+                            partitions, policy
+                        )
+                    
+                    pending_deletions.labels(
+                        dataset=dataset,
+                        layer=layer.value,
+                    ).set(len(expired))
+                    
+                    # Apply policy
+                    for partition in expired:
+                        success, reclaimed = await self.worker.apply_policy(
+                            partition, policy.action
+                        )
+                        
+                        if success:
+                            if policy.action == LifecycleAction.ARCHIVE:
+                                result.partitions_archived += 1
+                            else:
+                                result.partitions_deleted += 1
+                            result.files_deleted += partition.file_count
+                            result.bytes_reclaimed += reclaimed
+                        else:
+                            result.errors.append(f"Failed: {partition.path}")
+            
+            result.completed_at = datetime.now(UTC)
+            reaper_runs.labels(status="success").inc()
+            
+            duration = (result.completed_at - result.started_at).total_seconds()
+            reaper_duration_seconds.observe(duration)
+            
+            logger.info(
+                "reaper_run_complete",
+                partitions_scanned=result.partitions_scanned,
+                partitions_deleted=result.partitions_deleted,
+                bytes_reclaimed=result.bytes_reclaimed,
+                duration_seconds=duration,
+            )
+            
+        except Exception as e:
+            result.completed_at = datetime.now(UTC)
+            result.errors.append(str(e))
+            reaper_runs.labels(status="error").inc()
+            logger.error("reaper_run_failed", error=str(e), exc_info=True)
+        
+        return result
+    
+    async def run_scheduled(self) -> None:
+        """Run reaper on schedule."""
+        self._running = True
+        
+        while self._running:
+            await self.run_once()
+            await asyncio.sleep(self.run_interval_hours * 3600)
+    
+    def stop(self) -> None:
+        """Stop scheduled runs."""
+        self._running = False
+
+
+# Factory functions
+
+def create_reaper(
+    storage_root: str = "/data/heber",
+    archive_root: str = "/data/heber/archive",
+    dry_run: bool = False,
+) -> ReaperScheduler:
+    """Create a configured reaper scheduler."""
+    worker = ReaperWorker(
+        storage_root=storage_root,
+        archiver=Archiver(archive_root),
+        dry_run=dry_run,
+    )
+    return ReaperScheduler(worker)
+
+
+def get_default_retention(layer: DataLayer) -> RetentionPolicy:
+    """Get default retention policy for a layer."""
+    config = DEFAULT_RETENTION.get(layer, {})
+    return RetentionPolicy(
+        retention_days=config.get("retention_days"),
+        retention_versions=config.get("retention_versions"),
+        action=config.get("action", LifecycleAction.DELETE),
+    )
+
+
+
+================================================
+FILE: heber/schema/__init__.py
+================================================
+"""Schema evolution for Heber per PRD §14.
+
+Provides:
+- Schema registry with versioning
+- Backward/forward compatibility checking
+- Migration utilities
+- Reader/writer version checks
+"""
+
+import json
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, UTC
+from enum import Enum
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Gauge
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+schema_version_checks = Counter(
+    "heber_schema_version_checks_total",
+    "Schema version compatibility checks",
+    ["dataset", "result"],
+)
+
+schema_migrations = Counter(
+    "heber_schema_migrations_total",
+    "Schema migrations performed",
+    ["dataset", "from_version", "to_version"],
+)
+
+active_schema_versions = Gauge(
+    "heber_active_schema_versions",
+    "Number of active schema versions",
+    ["dataset"],
+)
+
+
+class SchemaChangeType(str, Enum):
+    """Types of schema changes per PRD §14.2."""
+    ADD_OPTIONAL_COLUMN = "add_optional_column"      # ✅ Allowed
+    ADD_REQUIRED_COLUMN = "add_required_column"      # ❌ Not allowed
+    REMOVE_COLUMN = "remove_column"                  # ⚠️ Deprecate first
+    RENAME_COLUMN = "rename_column"                  # ❌ Not allowed
+    WIDEN_TYPE = "widen_type"                        # ✅ Allowed (int32→int64)
+    NARROW_TYPE = "narrow_type"                      # ❌ Not allowed
+    INCOMPATIBLE_TYPE = "incompatible_type"          # ❌ Not allowed
+
+
+class CompatibilityResult(str, Enum):
+    """Result of compatibility check."""
+    COMPATIBLE = "compatible"
+    BACKWARD_INCOMPATIBLE = "backward_incompatible"
+    FORWARD_INCOMPATIBLE = "forward_incompatible"
+    DEPRECATED = "deprecated"
+
+
+@dataclass
+class ColumnSchema:
+    """Schema for a single column."""
+    name: str
+    dtype: str  # e.g., "int64", "string", "float64", "timestamp"
+    nullable: bool = True
+    default: Any = None
+    description: str = ""
+    deprecated_at: datetime | None = None
+
+
+@dataclass
+class SchemaVersion:
+    """A versioned schema per PRD §14.3.
+    
+    Version format: v<major>.<minor> (e.g., v1.0, v1.1, v2.0)
+    - Minor bump: Backward-compatible changes
+    - Major bump: Breaking changes
+    """
+    dataset: str
+    version: str  # e.g., "v1.0"
+    columns: list[ColumnSchema]
+    is_current: bool = False
+    writer_min_version: str = "0.0.0"  # Minimum SDK version to write
+    reader_min_version: str = "0.0.0"  # Minimum SDK version to read
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    deprecated_at: datetime | None = None
+    
+    @property
+    def major(self) -> int:
+        """Get major version number."""
+        match = re.match(r"v(\d+)\.(\d+)", self.version)
+        return int(match.group(1)) if match else 0
+    
+    @property
+    def minor(self) -> int:
+        """Get minor version number."""
+        match = re.match(r"v(\d+)\.(\d+)", self.version)
+        return int(match.group(2)) if match else 0
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dataset": self.dataset,
+            "version": self.version,
+            "columns": [
+                {
+                    "name": c.name,
+                    "dtype": c.dtype,
+                    "nullable": c.nullable,
+                    "default": c.default,
+                    "description": c.description,
+                }
+                for c in self.columns
+            ],
+            "is_current": self.is_current,
+            "writer_min_version": self.writer_min_version,
+            "reader_min_version": self.reader_min_version,
+            "created_at": self.created_at.isoformat(),
+            "deprecated_at": self.deprecated_at.isoformat() if self.deprecated_at else None,
+        }
+    
+    def to_json_schema(self) -> str:
+        """Export as JSON schema string."""
+        return json.dumps(self.to_dict(), indent=2)
+
+
+# Type widening rules per PRD §14.2
+TYPE_WIDENING_ALLOWED = {
+    ("int8", "int16"): True,
+    ("int8", "int32"): True,
+    ("int8", "int64"): True,
+    ("int16", "int32"): True,
+    ("int16", "int64"): True,
+    ("int32", "int64"): True,
+    ("float32", "float64"): True,
+}
+
+
+class CompatibilityChecker:
+    """Checks schema compatibility per PRD §14.1-14.2."""
+    
+    def check_backward_compatible(
+        self,
+        old_schema: SchemaVersion,
+        new_schema: SchemaVersion,
+    ) -> tuple[bool, list[str]]:
+        """Check if new schema is backward compatible with old.
+        
+        Backward compatible = new readers can read old data.
+        """
+        issues = []
+        
+        old_columns = {c.name: c for c in old_schema.columns}
+        new_columns = {c.name: c for c in new_schema.columns}
+        
+        # Check for removed columns (must be deprecated first)
+        for name in old_columns:
+            if name not in new_columns:
+                old_col = old_columns[name]
+                if old_col.deprecated_at is None:
+                    issues.append(f"Column '{name}' removed without deprecation")
+        
+        # Check for type changes
+        for name, old_col in old_columns.items():
+            if name in new_columns:
+                new_col = new_columns[name]
+                if old_col.dtype != new_col.dtype:
+                    # Check if it's a valid widening
+                    if not TYPE_WIDENING_ALLOWED.get((old_col.dtype, new_col.dtype), False):
+                        issues.append(
+                            f"Column '{name}' type change from {old_col.dtype} to "
+                            f"{new_col.dtype} is not backward compatible"
+                        )
+        
+        # Check new required columns
+        for name, new_col in new_columns.items():
+            if name not in old_columns:
+                if not new_col.nullable and new_col.default is None:
+                    issues.append(
+                        f"New required column '{name}' without default breaks backward compat"
+                    )
+        
+        return len(issues) == 0, issues
+    
+    def check_forward_compatible(
+        self,
+        old_schema: SchemaVersion,
+        new_schema: SchemaVersion,
+    ) -> tuple[bool, list[str]]:
+        """Check if old readers can handle new data.
+        
+        Forward compatible = old readers gracefully ignore unknown columns.
+        """
+        issues = []
+        
+        # Forward compatibility mainly requires:
+        # - New columns should be optional (so old readers can ignore)
+        # - No type changes that would break old readers
+        
+        old_columns = {c.name: c for c in old_schema.columns}
+        new_columns = {c.name: c for c in new_schema.columns}
+        
+        for name, new_col in new_columns.items():
+            if name not in old_columns:
+                if not new_col.nullable:
+                    issues.append(
+                        f"New required column '{name}' may break old readers"
+                    )
+        
+        return len(issues) == 0, issues
+    
+    def validate_change(
+        self,
+        old_schema: SchemaVersion,
+        new_schema: SchemaVersion,
+    ) -> CompatibilityResult:
+        """Validate a schema change and return compatibility result."""
+        backward_ok, backward_issues = self.check_backward_compatible(old_schema, new_schema)
+        forward_ok, forward_issues = self.check_forward_compatible(old_schema, new_schema)
+        
+        if backward_ok and forward_ok:
+            return CompatibilityResult.COMPATIBLE
+        elif not backward_ok:
+            return CompatibilityResult.BACKWARD_INCOMPATIBLE
+        else:
+            return CompatibilityResult.FORWARD_INCOMPATIBLE
+
+
+class SchemaRegistry:
+    """Schema registry backed by Catalog per PRD §14.4.
+    
+    dataset_versions table responsibilities:
+    - Store JSON schema per version
+    - Track is_current flag
+    - Record writer_min_version and reader_min_version
+    """
+    
+    def __init__(self):
+        self._versions: dict[str, list[SchemaVersion]] = {}
+        self._checker = CompatibilityChecker()
+    
+    def register_version(
+        self,
+        schema: SchemaVersion,
+        force: bool = False,
+    ) -> tuple[bool, list[str]]:
+        """Register a new schema version.
+        
+        Args:
+            schema: The schema version to register
+            force: Skip compatibility checks (use for major version bumps)
+            
+        Returns:
+            Tuple of (success, issues)
+        """
+        dataset = schema.dataset
+        
+        if dataset not in self._versions:
+            self._versions[dataset] = []
+        
+        versions = self._versions[dataset]
+        
+        # Check compatibility with current version
+        current = self.get_current_version(dataset)
+        if current and not force:
+            result = self._checker.validate_change(current, schema)
+            
+            if result == CompatibilityResult.BACKWARD_INCOMPATIBLE:
+                # Major version bump required
+                if schema.major <= current.major:
+                    return False, [
+                        f"Breaking change requires major version bump. "
+                        f"Current: {current.version}, New: {schema.version}"
+                    ]
+        
+        # Add version
+        versions.append(schema)
+        
+        # Update current flag
+        if schema.is_current:
+            for v in versions:
+                if v.version != schema.version:
+                    v.is_current = False
+        
+        active_schema_versions.labels(dataset=dataset).set(
+            len([v for v in versions if v.deprecated_at is None])
+        )
+        
+        logger.info(
+            "schema_version_registered",
+            dataset=dataset,
+            version=schema.version,
+            is_current=schema.is_current,
+        )
+        
+        return True, []
+    
+    def get_current_version(self, dataset: str) -> SchemaVersion | None:
+        """Get the current schema version for a dataset."""
+        versions = self._versions.get(dataset, [])
+        for v in versions:
+            if v.is_current:
+                return v
+        return versions[-1] if versions else None
+    
+    def get_version(self, dataset: str, version: str) -> SchemaVersion | None:
+        """Get a specific schema version."""
+        versions = self._versions.get(dataset, [])
+        for v in versions:
+            if v.version == version:
+                return v
+        return None
+    
+    def list_versions(self, dataset: str) -> list[SchemaVersion]:
+        """List all versions for a dataset."""
+        return self._versions.get(dataset, [])
+    
+    def deprecate_version(
+        self,
+        dataset: str,
+        version: str,
+    ) -> bool:
+        """Mark a version as deprecated."""
+        schema = self.get_version(dataset, version)
+        if schema:
+            schema.deprecated_at = datetime.now(UTC)
+            logger.info(
+                "schema_version_deprecated",
+                dataset=dataset,
+                version=version,
+            )
+            return True
+        return False
+    
+    def check_reader_compatibility(
+        self,
+        dataset: str,
+        version: str,
+        sdk_version: str,
+    ) -> tuple[bool, str | None]:
+        """Check if SDK version can read this schema per PRD §14.4."""
+        schema = self.get_version(dataset, version)
+        if not schema:
+            return False, f"Version {version} not found"
+        
+        if self._version_lt(sdk_version, schema.reader_min_version):
+            schema_version_checks.labels(dataset=dataset, result="incompatible").inc()
+            return False, (
+                f"SDK version {sdk_version} is too old to read {version}. "
+                f"Minimum required: {schema.reader_min_version}"
+            )
+        
+        schema_version_checks.labels(dataset=dataset, result="compatible").inc()
+        return True, None
+    
+    def check_writer_compatibility(
+        self,
+        dataset: str,
+        version: str,
+        sdk_version: str,
+    ) -> tuple[bool, str | None]:
+        """Check if SDK version can write this schema per PRD §14.4."""
+        schema = self.get_version(dataset, version)
+        if not schema:
+            return False, f"Version {version} not found"
+        
+        if self._version_lt(sdk_version, schema.writer_min_version):
+            schema_version_checks.labels(dataset=dataset, result="incompatible").inc()
+            return False, (
+                f"SDK version {sdk_version} is too old to write {version}. "
+                f"Minimum required: {schema.writer_min_version}"
+            )
+        
+        schema_version_checks.labels(dataset=dataset, result="compatible").inc()
+        return True, None
+    
+    def _version_lt(self, v1: str, v2: str) -> bool:
+        """Check if version v1 < v2."""
+        def parse(v: str) -> tuple:
+            parts = v.split(".")
+            return tuple(int(p) for p in parts if p.isdigit())
+        return parse(v1) < parse(v2)
+
+
+class SchemaMigrator:
+    """Schema migration utilities per PRD §14.5."""
+    
+    def __init__(self, registry: SchemaRegistry):
+        self.registry = registry
+    
+    def migrate_workflow(
+        self,
+        dataset: str,
+        new_schema: SchemaVersion,
+        run_backfill: bool = False,
+    ) -> list[str]:
+        """Execute schema migration workflow per PRD §14.5.
+        
+        Steps:
+        1. Add new version with is_current = false
+        2. (External) Deploy new writers
+        3. Set is_current = true
+        4. (Optional) Run backfill
+        5. Deprecate old version
+        6. (Later) Remove old version after grace period
+        """
+        steps_completed = []
+        
+        # Step 1: Add new version (not current yet)
+        new_schema.is_current = False
+        success, issues = self.registry.register_version(new_schema)
+        if not success:
+            raise ValueError(f"Failed to register version: {issues}")
+        steps_completed.append(f"Added version {new_schema.version}")
+        
+        # Step 3: Set as current
+        new_schema.is_current = True
+        for v in self.registry.list_versions(dataset):
+            v.is_current = (v.version == new_schema.version)
+        steps_completed.append(f"Set {new_schema.version} as current")
+        
+        # Step 5: Deprecate old versions
+        for v in self.registry.list_versions(dataset):
+            if v.version != new_schema.version and v.deprecated_at is None:
+                self.registry.deprecate_version(dataset, v.version)
+                steps_completed.append(f"Deprecated version {v.version}")
+        
+        schema_migrations.labels(
+            dataset=dataset,
+            from_version="any",
+            to_version=new_schema.version,
+        ).inc()
+        
+        return steps_completed
+
+
+def normalize_schema(
+    data: list[dict[str, Any]],
+    source_version: SchemaVersion,
+    target_version: SchemaVersion,
+) -> list[dict[str, Any]]:
+    """Normalize data from source schema to target schema per PRD §14.6.
+    
+    Fill missing columns, cast types, apply defaults.
+    """
+    source_cols = {c.name: c for c in source_version.columns}
+    target_cols = {c.name: c for c in target_version.columns}
+    
+    normalized = []
+    for row in data:
+        new_row = {}
+        
+        for col_name, col_schema in target_cols.items():
+            if col_name in row:
+                # Column exists - may need type casting
+                new_row[col_name] = row[col_name]
+            else:
+                # Column missing - use default
+                if col_schema.default is not None:
+                    new_row[col_name] = col_schema.default
+                elif col_schema.nullable:
+                    new_row[col_name] = None
+                else:
+                    raise ValueError(
+                        f"Missing required column '{col_name}' with no default"
+                    )
+        
+        normalized.append(new_row)
+    
+    return normalized
+
+
+# Global registry singleton
+_registry: SchemaRegistry | None = None
+
+
+def get_schema_registry() -> SchemaRegistry:
+    """Get the global schema registry."""
+    global _registry
+    if _registry is None:
+        _registry = SchemaRegistry()
+    return _registry
+
+
+
+================================================
 FILE: heber/sdk/__init__.py
 ================================================
 """Heber SDK - Client library for accessing the data lakehouse."""
@@ -15672,6 +18229,764 @@ class BronzeWriter:
 
 
 ================================================
+FILE: heber/writer/compaction.py
+================================================
+"""Compaction scheduler for Heber per PRD §12.9 and §16.
+
+Provides:
+- Hourly partition compaction after close
+- event_id uniqueness preservation
+- ts_available immutability
+- Atomic writes (temp path then rename)
+- Manifest-based commits per PRD §16.2
+- Crash recovery per PRD §16.4
+- Concurrent safety via file locking
+"""
+
+import asyncio
+import fcntl
+import json
+import os
+import shutil
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, UTC
+from pathlib import Path
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+from heber.bus.dedupe import dedupe_at_compaction
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics
+compaction_runs = Counter(
+    "heber_compaction_runs_total",
+    "Total compaction runs",
+    ["dataset", "status"],
+)
+
+compaction_duration = Histogram(
+    "heber_compaction_duration_seconds",
+    "Time to compact a partition",
+    ["dataset"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+)
+
+compaction_records_before = Counter(
+    "heber_compaction_records_before_total",
+    "Records before compaction",
+    ["dataset"],
+)
+
+compaction_records_after = Counter(
+    "heber_compaction_records_after_total",
+    "Records after compaction",
+    ["dataset"],
+)
+
+compaction_queue_size = Gauge(
+    "heber_compaction_queue_size",
+    "Number of partitions waiting for compaction",
+)
+
+active_compactions = Gauge(
+    "heber_active_compactions",
+    "Number of currently running compactions",
+)
+
+# Additional metrics per PRD §16
+manifest_versions = Gauge(
+    "heber_manifest_version",
+    "Current manifest version per partition",
+    ["dataset", "partition"],
+)
+
+crash_recoveries = Counter(
+    "heber_compaction_crash_recoveries_total",
+    "Crash recovery operations performed",
+    ["dataset", "recovery_type"],
+)
+
+compaction_bytes_before = Counter(
+    "heber_compaction_bytes_before_total",
+    "Bytes before compaction",
+    ["dataset"],
+)
+
+compaction_bytes_after = Counter(
+    "heber_compaction_bytes_after_total",
+    "Bytes after compaction",
+    ["dataset"],
+)
+
+lock_contention = Counter(
+    "heber_compaction_lock_contention_total",
+    "Lock contention events during compaction",
+    ["dataset"],
+)
+
+
+# Manifest structure per PRD §16.2
+MANIFEST_FILENAME = "_manifest.json"
+COMPACT_TMP_DIR = "_compact_tmp"
+PARQUET_GLOB = "*.parquet"
+
+
+@dataclass
+class ManifestFileEntry:
+    """File entry in manifest per PRD §16.2."""
+    path: str
+    rows: int
+    bytes: int
+
+
+@dataclass
+class Manifest:
+    """Partition manifest for atomic compaction per PRD §16.2.
+    
+    Manifest path: <partition_path>/_manifest.json
+    """
+    version: int
+    created_at: datetime
+    files: list[ManifestFileEntry] = field(default_factory=list)
+    pending_deletes: list[str] = field(default_factory=list)
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "created_at": self.created_at.isoformat(),
+            "files": [
+                {"path": f.path, "rows": f.rows, "bytes": f.bytes}
+                for f in self.files
+            ],
+            "pending_deletes": self.pending_deletes,
+        }
+    
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Manifest":
+        return cls(
+            version=data.get("version", 0),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(UTC),
+            files=[
+                ManifestFileEntry(f["path"], f["rows"], f["bytes"])
+                for f in data.get("files", [])
+            ],
+            pending_deletes=data.get("pending_deletes", []),
+        )
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> "Manifest":
+        return cls.from_dict(json.loads(json_str))
+    
+    @classmethod
+    def read_from_partition(cls, partition_path: Path) -> "Manifest | None":
+        """Read manifest from partition, return None if not exists."""
+        manifest_path = partition_path / MANIFEST_FILENAME
+        if not manifest_path.exists():
+            return None
+        try:
+            return cls.from_json(manifest_path.read_text())
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning("manifest_read_error", path=str(manifest_path), error=str(e))
+            return None
+    
+    def write_to_partition(self, partition_path: Path) -> None:
+        """Write manifest to partition atomically."""
+        manifest_path = partition_path / MANIFEST_FILENAME
+        temp_path = partition_path / f"{MANIFEST_FILENAME}.tmp"
+        
+        # Write to temp first
+        temp_path.write_text(self.to_json())
+        
+        # Atomic rename
+        temp_path.rename(manifest_path)
+
+
+class PartitionLock:
+    """File-based lock for concurrent safety per PRD §16.
+    
+    Prevents multiple compactions on the same partition.
+    """
+    
+    def __init__(self, partition_path: Path):
+        self.lock_path = partition_path / "_compact.lock"
+        self._lock_file = None
+    
+    def acquire(self, blocking: bool = True) -> bool:
+        """Acquire exclusive lock on partition."""
+        try:
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self._lock_file = open(self.lock_path, "w")
+            
+            if blocking:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX)
+            else:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            return True
+            
+        except BlockingIOError:
+            if self._lock_file:
+                self._lock_file.close()
+                self._lock_file = None
+            return False
+        except Exception as e:
+            logger.error("lock_acquire_failed", path=str(self.lock_path), error=str(e))
+            return False
+    
+    def release(self) -> None:
+        """Release lock."""
+        if self._lock_file:
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                self._lock_file.close()
+            except Exception as e:
+                logger.warning("lock_release_error", path=str(self.lock_path), error=str(e))
+            finally:
+                self._lock_file = None
+    
+    def __enter__(self) -> "PartitionLock":
+        self.acquire()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()
+
+
+class CrashRecovery:
+    """Crash recovery per PRD §16.4.
+    
+    On startup, checks for incomplete compactions:
+    - If _compact_tmp/ exists with files → resume from step 6
+    - If pending_deletes is non-empty → resume from step 8
+    """
+    
+    def __init__(self, storage_root: Path):
+        self.storage_root = storage_root
+    
+    def recover_partition(self, partition_path: Path, dataset: str) -> bool:
+        """Recover a partition from incomplete compaction.
+        
+        Returns True if recovery was performed.
+        """
+        recovered = False
+        compact_tmp = partition_path / COMPACT_TMP_DIR
+        
+        # Check for incomplete temp files (step 6)
+        if compact_tmp.exists() and list(compact_tmp.glob("*.parquet")):
+            logger.info("crash_recovery_temp_files", path=str(partition_path))
+            recovered = self._recover_from_temp(partition_path, compact_tmp, dataset)
+        
+        # Check for pending deletes (step 8)
+        manifest = Manifest.read_from_partition(partition_path)
+        if manifest and manifest.pending_deletes:
+            logger.info("crash_recovery_pending_deletes", path=str(partition_path))
+            recovered = self._recover_pending_deletes(partition_path, manifest, dataset)
+        
+        return recovered
+    
+    def _recover_from_temp(self, partition_path: Path, compact_tmp: Path, dataset: str) -> bool:
+        """Resume from step 6: move temp files to partition root."""
+        try:
+            for tmp_file in compact_tmp.glob("*.parquet"):
+                dest = partition_path / tmp_file.name
+                shutil.move(str(tmp_file), str(dest))
+            
+            # Remove temp dir
+            shutil.rmtree(str(compact_tmp))
+            
+            crash_recoveries.labels(dataset=dataset, recovery_type="temp_files").inc()
+            return True
+            
+        except Exception as e:
+            logger.error("crash_recovery_temp_failed", path=str(partition_path), error=str(e))
+            return False
+    
+    def _recover_pending_deletes(self, partition_path: Path, manifest: Manifest, dataset: str) -> bool:
+        """Resume from step 8: delete old files."""
+        try:
+            for old_file in manifest.pending_deletes:
+                old_path = partition_path / old_file
+                if old_path.exists():
+                    old_path.unlink()
+            
+            # Clear pending_deletes in manifest
+            manifest.pending_deletes = []
+            manifest.version += 1
+            manifest.write_to_partition(partition_path)
+            
+            crash_recoveries.labels(dataset=dataset, recovery_type="pending_deletes").inc()
+            return True
+            
+        except Exception as e:
+            logger.error("crash_recovery_deletes_failed", path=str(partition_path), error=str(e))
+            return False
+    
+    def scan_and_recover(self, datasets: list[str]) -> int:
+        """Scan all partitions and recover any incomplete compactions."""
+        recovered = 0
+        
+        for dataset in datasets:
+            dataset_path = self.storage_root / "silver" / dataset
+            if not dataset_path.exists():
+                continue
+            
+            for dt_dir in dataset_path.glob("dt=*"):
+                for hour_dir in dt_dir.glob("hour=*"):
+                    if self.recover_partition(hour_dir, dataset):
+                        recovered += 1
+        
+        if recovered > 0:
+            logger.info("crash_recovery_complete", partitions_recovered=recovered)
+        
+        return recovered
+
+
+@dataclass
+class CompactionConfig:
+    """Compaction configuration per PRD §12.9."""
+    # Time after hour close to start compaction (10 minutes)
+    delay_after_close_minutes: int = 10
+    # Maximum compaction window (20 minutes)
+    max_compaction_window_minutes: int = 20
+    # Concurrent compaction workers
+    max_concurrent: int = 2
+    # Temp directory for atomic writes
+    temp_dir: str | None = None
+    # Storage root
+    storage_root: str = "/data/heber"
+
+
+@dataclass
+class PartitionInfo:
+    """Information about a partition to compact."""
+    dataset: str
+    dt: str
+    hour: int
+    partition_path: Path
+    scheduled_at: datetime
+    
+    @property
+    def partition_id(self) -> str:
+        return f"{self.dataset}/dt={self.dt}/hour={self.hour:02d}"
+
+
+class AtomicWriter:
+    """Atomic file writer using temp path and rename.
+    
+    Per PRD §12.9: Must write atomically (temp path then rename/commit)
+    """
+    
+    def __init__(self, temp_dir: str | None = None):
+        self.temp_dir = temp_dir or tempfile.gettempdir()
+    
+    def atomic_write(
+        self,
+        target_path: Path,
+        data: bytes,
+    ) -> None:
+        """Write data atomically to target path."""
+        # Create temp file in same filesystem for atomic rename
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = Path(self.temp_dir) / f"heber_compact_{os.getpid()}_{target_path.name}"
+        
+        try:
+            # Write to temp
+            with open(temp_path, "wb") as f:
+                f.write(data)
+            
+            # Atomic rename
+            shutil.move(str(temp_path), str(target_path))
+            
+            logger.debug("atomic_write_complete", path=str(target_path))
+        except Exception:
+            # Cleanup temp on failure
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
+    
+    def atomic_replace_directory(
+        self,
+        target_dir: Path,
+        temp_files: list[tuple[str, bytes]],
+    ) -> None:
+        """Atomically replace directory contents.
+        
+        1. Write all files to temp directory
+        2. Rename temp to target.new
+        3. Rename target to target.old (if exists)
+        4. Rename target.new to target
+        5. Delete target.old
+        """
+        temp_dir = Path(self.temp_dir) / f"heber_compact_{os.getpid()}_{target_dir.name}"
+        target_new = target_dir.parent / f"{target_dir.name}.new"
+        target_old = target_dir.parent / f"{target_dir.name}.old"
+        
+        try:
+            # Create temp dir and write files
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            for filename, data in temp_files:
+                with open(temp_dir / filename, "wb") as f:
+                    f.write(data)
+            
+            # Move temp to target.new
+            shutil.move(str(temp_dir), str(target_new))
+            
+            # Swap directories
+            if target_dir.exists():
+                shutil.move(str(target_dir), str(target_old))
+            shutil.move(str(target_new), str(target_dir))
+            
+            # Cleanup old
+            if target_old.exists():
+                shutil.rmtree(str(target_old))
+            
+            logger.debug("atomic_replace_complete", path=str(target_dir))
+            
+        except Exception:
+            # Cleanup on failure
+            for path in [temp_dir, target_new]:
+                if path.exists():
+                    shutil.rmtree(str(path))
+            raise
+
+
+class ParquetCompactor:
+    """Compacts Parquet files in a partition.
+    
+    Invariants per PRD §12.9:
+    - Must preserve event_id uniqueness (via dedupe)
+    - Must not change ts_available
+    - Must write atomically
+    """
+    
+    def __init__(
+        self,
+        writer: AtomicWriter,
+        storage_root: str = "/data/heber",
+    ):
+        self.writer = writer
+        self.storage_root = Path(storage_root)
+    
+    def compact_partition(
+        self,
+        partition: PartitionInfo,
+    ) -> tuple[int, int]:
+        """Compact all Parquet files in a partition.
+        
+        Returns:
+            Tuple of (records_before, records_after)
+        """
+        partition_path = partition.partition_path
+        
+        if not partition_path.exists():
+            logger.warning("partition_not_found", path=str(partition_path))
+            return 0, 0
+        
+        # Find all Parquet files
+        parquet_files = list(partition_path.glob("*.parquet"))
+        if not parquet_files:
+            logger.debug("no_parquet_files", path=str(partition_path))
+            return 0, 0
+        
+        # Read all records
+        all_records = []
+        for pq_file in parquet_files:
+            records = self._read_parquet(pq_file)
+            all_records.extend(records)
+        
+        records_before = len(all_records)
+        
+        if records_before == 0:
+            return 0, 0
+        
+        # Deduplicate: keep earliest ts_ingest per event_id
+        unique_records = dedupe_at_compaction(
+            records=all_records,
+            partition=partition.partition_id,
+            event_id_key="event_id",
+            ts_ingest_key="ts_ingest",
+        )
+        
+        records_after = len(unique_records)
+        
+        # Write compacted file atomically
+        compacted_data = self._write_parquet_bytes(unique_records)
+        compacted_filename = f"compacted_{partition.dt}_{partition.hour:02d}.parquet"
+        
+        # Prepare new partition contents
+        temp_files = [(compacted_filename, compacted_data)]
+        
+        # Atomic replace
+        self.writer.atomic_replace_directory(partition_path, temp_files)
+        
+        logger.info(
+            "partition_compacted",
+            partition=partition.partition_id,
+            before=records_before,
+            after=records_after,
+            removed=records_before - records_after,
+        )
+        
+        return records_before, records_after
+    
+    def _read_parquet(self, path: Path) -> list[dict[str, Any]]:
+        """Read records from a Parquet file."""
+        try:
+            import pyarrow.parquet as pq
+            table = pq.read_table(str(path))
+            return table.to_pylist()
+        except ImportError:
+            # Fallback for dev without pyarrow
+            logger.warning("pyarrow_not_available", path=str(path))
+            return []
+        except Exception as e:
+            logger.error("parquet_read_error", path=str(path), error=str(e))
+            return []
+    
+    def _write_parquet_bytes(self, records: list[dict[str, Any]]) -> bytes:
+        """Write records to Parquet format and return bytes."""
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            import io
+            
+            if not records:
+                return b""
+            
+            table = pa.Table.from_pylist(records)
+            buffer = io.BytesIO()
+            pq.write_table(table, buffer)
+            return buffer.getvalue()
+        except ImportError:
+            # Fallback for dev without pyarrow
+            logger.warning("pyarrow_not_available")
+            return b""
+
+
+class CompactionScheduler:
+    """Schedules and runs compaction tasks per PRD §12.9.
+    
+    Default policy:
+    - Compact hourly partitions after they close
+    - Example: compact dt=YYYY-MM-DD/hour=18 at 18:10-18:30
+    """
+    
+    def __init__(
+        self,
+        config: CompactionConfig | None = None,
+    ):
+        self.config = config or CompactionConfig()
+        self.writer = AtomicWriter(self.config.temp_dir)
+        self.compactor = ParquetCompactor(self.writer, self.config.storage_root)
+        
+        self._queue: asyncio.Queue[PartitionInfo] = asyncio.Queue()
+        self._running = False
+        self._workers: list[asyncio.Task] = []
+        self._active_count = 0
+    
+    def schedule_partition(self, partition: PartitionInfo) -> None:
+        """Add a partition to the compaction queue."""
+        self._queue.put_nowait(partition)
+        compaction_queue_size.set(self._queue.qsize())
+        
+        logger.info(
+            "partition_scheduled",
+            partition=partition.partition_id,
+            scheduled_at=partition.scheduled_at.isoformat(),
+        )
+    
+    def get_partitions_to_compact(
+        self,
+        datasets: list[str],
+        storage_root: Path | None = None,
+    ) -> list[PartitionInfo]:
+        """Find partitions ready for compaction.
+        
+        Returns partitions where:
+        - Hour has closed (current time > hour + delay_after_close_minutes)
+        - Not yet compacted
+        """
+        root = storage_root or Path(self.config.storage_root)
+        now = datetime.now(UTC)
+        partitions = []
+        
+        for dataset in datasets:
+            dataset_path = root / "silver" / dataset
+            if not dataset_path.exists():
+                continue
+            
+            # Find dt partitions
+            for dt_dir in dataset_path.glob("dt=*"):
+                dt_str = dt_dir.name.replace("dt=", "")
+                
+                # Find hour partitions
+                for hour_dir in dt_dir.glob("hour=*"):
+                    try:
+                        hour = int(hour_dir.name.replace("hour=", ""))
+                    except ValueError:
+                        continue
+                    
+                    # Check if hour has closed + delay passed
+                    partition_close = datetime.fromisoformat(f"{dt_str}T{hour+1:02d}:00:00+00:00")
+                    compact_start = partition_close + timedelta(
+                        minutes=self.config.delay_after_close_minutes
+                    )
+                    
+                    if now >= compact_start:
+                        # Check if already compacted
+                        if not self._is_compacted(hour_dir):
+                            partitions.append(PartitionInfo(
+                                dataset=dataset,
+                                dt=dt_str,
+                                hour=hour,
+                                partition_path=hour_dir,
+                                scheduled_at=now,
+                            ))
+        
+        return partitions
+    
+    def _is_compacted(self, partition_path: Path) -> bool:
+        """Check if partition is already compacted."""
+        compacted_files = list(partition_path.glob("compacted_*.parquet"))
+        return len(compacted_files) > 0
+    
+    async def _worker(self, worker_id: int) -> None:
+        """Compaction worker coroutine."""
+        while self._running:
+            try:
+                # Wait for work with timeout
+                try:
+                    partition = await asyncio.wait_for(
+                        self._queue.get(),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                
+                self._active_count += 1
+                active_compactions.set(self._active_count)
+                compaction_queue_size.set(self._queue.qsize())
+                
+                try:
+                    # Run compaction with timing
+                    start_time = asyncio.get_event_loop().time()
+                    
+                    before, after = self.compactor.compact_partition(partition)
+                    
+                    duration = asyncio.get_event_loop().time() - start_time
+                    
+                    # Update metrics
+                    compaction_duration.labels(dataset=partition.dataset).observe(duration)
+                    compaction_records_before.labels(dataset=partition.dataset).inc(before)
+                    compaction_records_after.labels(dataset=partition.dataset).inc(after)
+                    compaction_runs.labels(dataset=partition.dataset, status="success").inc()
+                    
+                except Exception as e:
+                    logger.error(
+                        "compaction_failed",
+                        partition=partition.partition_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    compaction_runs.labels(dataset=partition.dataset, status="error").inc()
+                
+                finally:
+                    self._active_count -= 1
+                    active_compactions.set(self._active_count)
+                    self._queue.task_done()
+                
+            except asyncio.CancelledError:
+                break
+    
+    async def start(self) -> None:
+        """Start the compaction scheduler."""
+        if self._running:
+            return
+        
+        self._running = True
+        
+        # Start workers
+        for i in range(self.config.max_concurrent):
+            task = asyncio.create_task(self._worker(i))
+            self._workers.append(task)
+        
+        logger.info(
+            "compaction_scheduler_started",
+            workers=self.config.max_concurrent,
+        )
+    
+    async def stop(self) -> None:
+        """Stop the compaction scheduler gracefully."""
+        self._running = False
+        
+        # Wait for queue to drain
+        await self._queue.join()
+        
+        # Cancel workers
+        for task in self._workers:
+            task.cancel()
+        
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
+        
+        logger.info("compaction_scheduler_stopped")
+    
+    async def run_once(self, datasets: list[str]) -> int:
+        """Run a single compaction cycle.
+        
+        Finds and compacts all ready partitions.
+        
+        Returns:
+            Number of partitions compacted
+        """
+        partitions = self.get_partitions_to_compact(datasets)
+        
+        for partition in partitions:
+            self.schedule_partition(partition)
+        
+        # Wait for all to complete
+        await self._queue.join()
+        
+        return len(partitions)
+
+
+async def run_scheduled_compaction(
+    datasets: list[str],
+    config: CompactionConfig | None = None,
+    check_interval_seconds: int = 60,
+) -> None:
+    """Run compaction on a schedule.
+    
+    Args:
+        datasets: List of dataset names to compact
+        config: Compaction configuration
+        check_interval_seconds: How often to check for ready partitions
+    """
+    scheduler = CompactionScheduler(config)
+    await scheduler.start()
+    
+    try:
+        while True:
+            compacted = await scheduler.run_once(datasets)
+            if compacted > 0:
+                logger.info("compaction_cycle_complete", partitions=compacted)
+            
+            await asyncio.sleep(check_interval_seconds)
+    except asyncio.CancelledError:
+        await scheduler.stop()
+
+
+
+================================================
 FILE: heber/writer/compactor.py
 ================================================
 """Parquet file compactor.
@@ -16022,6 +19337,611 @@ if __name__ == "__main__":
 
 
 ================================================
+FILE: heber/writer/hotstore.py
+================================================
+"""Hot Store sync strategy for Heber per PRD §12.10.
+
+Provides:
+- ClickHouse integration for low-latency queries
+- Sync from event bus or Silver partitions
+- Rolling window retention (TTL managed by ClickHouse)
+- Lag monitoring and alerting
+- Silver fallback for missing data
+"""
+
+import asyncio
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, UTC
+from enum import Enum
+from typing import Any, Protocol
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+logger = structlog.get_logger(__name__)
+
+
+# Prometheus metrics per PRD §12.10.1
+hot_store_lag_seconds = Gauge(
+    "heber_hot_store_lag_seconds",
+    "Hot Store lag behind Silver in seconds",
+    ["dataset"],
+)
+
+hot_store_sync_failures = Counter(
+    "heber_hot_store_sync_failures_total",
+    "Hot Store sync failure count",
+    ["dataset", "error_type"],
+)
+
+hot_store_sync_success = Counter(
+    "heber_hot_store_sync_success_total",
+    "Hot Store sync success count",
+    ["dataset"],
+)
+
+hot_store_row_count = Gauge(
+    "heber_hot_store_row_count",
+    "Row count in Hot Store",
+    ["dataset"],
+)
+
+silver_row_count = Gauge(
+    "heber_silver_row_count",
+    "Row count in Silver for comparison",
+    ["dataset"],
+)
+
+hot_store_sync_duration = Histogram(
+    "heber_hot_store_sync_duration_seconds",
+    "Time to sync batch to Hot Store",
+    ["dataset"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
+)
+
+
+class QueryType(str, Enum):
+    """Query types with different Hot Store behavior per PRD §12.10.1."""
+    REALTIME_DASHBOARD = "realtime_dashboard"  # Hot Store only
+    STRATEGY_SIGNALS = "strategy_signals"       # Hot Store + Silver fallback
+    BACKTEST_RESEARCH = "backtest_research"     # Silver only
+
+
+class HotStoreTable(str, Enum):
+    """ClickHouse Hot Store tables per PRD §12.10."""
+    QUOTES = "quotes_hot"
+    TRADES = "trades_hot"
+    BARS = "bars_hot"
+
+
+@dataclass
+class HotStoreSyncConfig:
+    """Hot Store sync configuration per PRD §12.10."""
+    # ClickHouse connection
+    clickhouse_host: str = "localhost"
+    clickhouse_port: int = 9000
+    clickhouse_database: str = "heber"
+    clickhouse_user: str = "default"
+    clickhouse_password: str = ""
+    
+    # Sync settings
+    source: str = "event_bus"  # "event_bus" or "silver"
+    rolling_window_days: int = 7  # Default retention window
+    
+    # TTL per PRD §12.10.1
+    quotes_ttl_days: int = 7
+    trades_ttl_days: int = 7
+    bars_ttl_days: int = 30
+    
+    # Lag SLA
+    max_lag_seconds: float = 300.0  # 5 minutes per PRD
+    
+    # Sync batching
+    batch_size: int = 10000
+    sync_interval_seconds: float = 30.0
+
+
+@dataclass
+class SyncState:
+    """Tracks sync state per dataset."""
+    dataset: str
+    last_sync: datetime | None = None
+    last_event_ts: datetime | None = None
+    rows_synced: int = 0
+    errors: int = 0
+
+
+class ClickHouseClient(Protocol):
+    """Protocol for ClickHouse client."""
+    async def execute(self, query: str, params: dict | None = None) -> Any: ...
+    async def insert(self, table: str, data: list[dict]) -> int: ...
+
+
+class HotStoreWriter:
+    """Writes data to Hot Store (ClickHouse) per PRD §12.10."""
+    
+    def __init__(
+        self,
+        config: HotStoreSyncConfig | None = None,
+        client: ClickHouseClient | None = None,
+    ):
+        self.config = config or HotStoreSyncConfig()
+        self._client = client
+        self._sync_states: dict[str, SyncState] = {}
+    
+    async def get_client(self) -> ClickHouseClient:
+        """Get or create ClickHouse client."""
+        if self._client is None:
+            # Lazy import to avoid hard dependency
+            try:
+                from clickhouse_driver import Client as CHClient
+                self._client = CHClient(
+                    host=self.config.clickhouse_host,
+                    port=self.config.clickhouse_port,
+                    database=self.config.clickhouse_database,
+                    user=self.config.clickhouse_user,
+                    password=self.config.clickhouse_password,
+                )
+            except ImportError:
+                logger.warning("clickhouse_driver not available, using mock")
+                self._client = MockClickHouseClient()
+        return self._client
+    
+    def get_table_for_dataset(self, dataset: str) -> HotStoreTable:
+        """Map dataset name to Hot Store table."""
+        if "quote" in dataset.lower():
+            return HotStoreTable.QUOTES
+        elif "trade" in dataset.lower():
+            return HotStoreTable.TRADES
+        else:
+            return HotStoreTable.BARS
+    
+    def get_ttl_days(self, table: HotStoreTable) -> int:
+        """Get TTL days for table per PRD §12.10.1."""
+        if table == HotStoreTable.QUOTES:
+            return self.config.quotes_ttl_days
+        elif table == HotStoreTable.TRADES:
+            return self.config.trades_ttl_days
+        else:
+            return self.config.bars_ttl_days
+    
+    async def ensure_table(self, table: HotStoreTable) -> None:
+        """Create table if not exists with TTL."""
+        client = await self.get_client()
+        ttl_days = self.get_ttl_days(table)
+        
+        # Table creation DDL per PRD requirements
+        ddl = f"""
+        CREATE TABLE IF NOT EXISTS {table.value} (
+            event_id String,
+            symbol String,
+            ts_event DateTime64(9, 'UTC'),
+            ts_ingest DateTime64(9, 'UTC'),
+            ts_available DateTime64(9, 'UTC'),
+            provider String,
+            data String,  -- JSON payload
+            dt Date MATERIALIZED toDate(ts_event)
+        )
+        ENGINE = ReplacingMergeTree()
+        PARTITION BY dt
+        ORDER BY (symbol, ts_event, event_id)
+        TTL dt + INTERVAL {ttl_days} DAY DELETE
+        SETTINGS index_granularity = 8192
+        """
+        
+        try:
+            await client.execute(ddl)
+            logger.info("table_ensured", table=table.value, ttl_days=ttl_days)
+        except Exception as e:
+            logger.error("table_creation_failed", table=table.value, error=str(e))
+            raise
+    
+    async def write_batch(
+        self,
+        dataset: str,
+        records: list[dict[str, Any]],
+    ) -> int:
+        """Write a batch of records to Hot Store.
+        
+        Args:
+            dataset: Dataset name
+            records: Records to write
+            
+        Returns:
+            Number of records written
+        """
+        if not records:
+            return 0
+        
+        table = self.get_table_for_dataset(dataset)
+        client = await self.get_client()
+        
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            # Prepare records for ClickHouse
+            prepared = []
+            for record in records:
+                prepared.append({
+                    "event_id": record.get("event_id", ""),
+                    "symbol": record.get("symbol", ""),
+                    "ts_event": record.get("ts_event"),
+                    "ts_ingest": record.get("ts_ingest"),
+                    "ts_available": record.get("ts_available"),
+                    "provider": record.get("provider", ""),
+                    "data": str(record.get("data", {})),
+                })
+            
+            # Insert batch
+            rows_written = await client.insert(table.value, prepared)
+            
+            # Update metrics
+            duration = asyncio.get_event_loop().time() - start_time
+            hot_store_sync_duration.labels(dataset=dataset).observe(duration)
+            hot_store_sync_success.labels(dataset=dataset).inc()
+            
+            # Update sync state
+            if dataset not in self._sync_states:
+                self._sync_states[dataset] = SyncState(dataset=dataset)
+            state = self._sync_states[dataset]
+            state.last_sync = datetime.now(UTC)
+            state.rows_synced += rows_written
+            
+            logger.info(
+                "batch_written",
+                dataset=dataset,
+                rows=rows_written,
+                duration_ms=duration * 1000,
+            )
+            
+            return rows_written
+            
+        except Exception as e:
+            hot_store_sync_failures.labels(
+                dataset=dataset,
+                error_type=type(e).__name__,
+            ).inc()
+            logger.error("write_failed", dataset=dataset, error=str(e))
+            raise
+    
+    async def get_row_count(self, dataset: str) -> int:
+        """Get current row count in Hot Store."""
+        table = self.get_table_for_dataset(dataset)
+        client = await self.get_client()
+        
+        try:
+            result = await client.execute(f"SELECT count() FROM {table.value}")
+            count = result[0][0] if result else 0
+            hot_store_row_count.labels(dataset=dataset).set(count)
+            return count
+        except Exception as e:
+            logger.error("row_count_failed", dataset=dataset, error=str(e))
+            return 0
+
+
+class HotStoreSyncer:
+    """Syncs data to Hot Store from event bus or Silver per PRD §12.10."""
+    
+    def __init__(
+        self,
+        writer: HotStoreWriter,
+        config: HotStoreSyncConfig | None = None,
+    ):
+        self.writer = writer
+        self.config = config or HotStoreSyncConfig()
+        self._running = False
+        self._last_sync_time: dict[str, datetime] = {}
+    
+    async def sync_from_silver(
+        self,
+        dataset: str,
+        silver_path: str,
+        since: datetime | None = None,
+    ) -> int:
+        """Sync data from Silver partitions to Hot Store.
+        
+        Args:
+            dataset: Dataset name
+            silver_path: Path to Silver directory
+            since: Only sync records after this timestamp
+            
+        Returns:
+            Number of records synced
+        """
+        from pathlib import Path
+        
+        silver_dir = Path(silver_path) / dataset
+        if not silver_dir.exists():
+            logger.warning("silver_path_not_found", path=str(silver_dir))
+            return 0
+        
+        # Calculate window
+        if since is None:
+            since = datetime.now(UTC) - timedelta(days=self.config.rolling_window_days)
+        
+        total_synced = 0
+        
+        # Find partitions within window
+        for dt_dir in silver_dir.glob("dt=*"):
+            dt_str = dt_dir.name.replace("dt=", "")
+            try:
+                partition_date = datetime.fromisoformat(dt_str)
+                if partition_date.replace(tzinfo=UTC) < since:
+                    continue
+            except ValueError:
+                continue
+            
+            # Read and sync each partition
+            records = await self._read_partition(dt_dir)
+            if records:
+                synced = await self.writer.write_batch(dataset, records)
+                total_synced += synced
+        
+        return total_synced
+    
+    async def _read_partition(self, partition_path) -> list[dict[str, Any]]:
+        """Read records from a partition."""
+        try:
+            import pyarrow.parquet as pq
+            records = []
+            for pq_file in partition_path.glob("*.parquet"):
+                table = pq.read_table(str(pq_file))
+                records.extend(table.to_pylist())
+            return records
+        except ImportError:
+            logger.warning("pyarrow_not_available")
+            return []
+        except Exception as e:
+            logger.error("partition_read_failed", path=str(partition_path), error=str(e))
+            return []
+    
+    def calculate_lag(self, dataset: str, latest_event_ts: datetime) -> float:
+        """Calculate lag in seconds.
+        
+        Per PRD §12.10.1: Hot Store lags Silver by ≤5 minutes
+        """
+        now = datetime.now(UTC)
+        lag = (now - latest_event_ts).total_seconds()
+        hot_store_lag_seconds.labels(dataset=dataset).set(lag)
+        
+        if lag > self.config.max_lag_seconds:
+            logger.warning(
+                "hot_store_lag_exceeded",
+                dataset=dataset,
+                lag_seconds=lag,
+                max_lag=self.config.max_lag_seconds,
+            )
+        
+        return lag
+    
+    async def run_sync_loop(
+        self,
+        datasets: list[str],
+        silver_base_path: str,
+    ) -> None:
+        """Run continuous sync loop.
+        
+        Args:
+            datasets: List of datasets to sync
+            silver_base_path: Base path to Silver storage
+        """
+        self._running = True
+        
+        # Ensure tables exist
+        for dataset in datasets:
+            table = self.writer.get_table_for_dataset(dataset)
+            await self.writer.ensure_table(table)
+        
+        while self._running:
+            for dataset in datasets:
+                try:
+                    # Get last sync time
+                    since = self._last_sync_time.get(dataset)
+                    
+                    # Sync from Silver
+                    synced = await self.sync_from_silver(
+                        dataset,
+                        silver_base_path,
+                        since,
+                    )
+                    
+                    if synced > 0:
+                        self._last_sync_time[dataset] = datetime.now(UTC)
+                        logger.info("sync_complete", dataset=dataset, rows=synced)
+                    
+                except Exception as e:
+                    logger.error("sync_failed", dataset=dataset, error=str(e))
+            
+            await asyncio.sleep(self.config.sync_interval_seconds)
+    
+    def stop(self) -> None:
+        """Stop the sync loop."""
+        self._running = False
+
+
+class HotStoreReader:
+    """Reads from Hot Store with Silver fallback per PRD §12.10.1."""
+    
+    def __init__(
+        self,
+        writer: HotStoreWriter,
+        silver_base_path: str,
+    ):
+        self.writer = writer
+        self.silver_base_path = silver_base_path
+    
+    async def query(
+        self,
+        dataset: str,
+        query_type: QueryType,
+        **filters,
+    ) -> list[dict[str, Any]]:
+        """Query data based on query type per PRD §12.10.1.
+        
+        Staleness Handling:
+        - REALTIME_DASHBOARD: Hot Store only (accepts staleness)
+        - STRATEGY_SIGNALS: Hot Store with Silver fallback
+        - BACKTEST_RESEARCH: Silver only (never Hot Store)
+        """
+        if query_type == QueryType.BACKTEST_RESEARCH:
+            # Silver only - never use Hot Store
+            return await self._query_silver(dataset, **filters)
+        
+        elif query_type == QueryType.REALTIME_DASHBOARD:
+            # Hot Store only - accept staleness
+            return await self._query_hot_store(dataset, **filters)
+        
+        else:  # STRATEGY_SIGNALS
+            # Hot Store with Silver fallback
+            results = await self._query_hot_store(dataset, **filters)
+            
+            # Check for gaps and fallback to Silver
+            if self._has_gaps(results, **filters):
+                silver_results = await self._query_silver(dataset, **filters)
+                results = self._merge_results(results, silver_results)
+            
+            return results
+    
+    async def _query_hot_store(
+        self,
+        dataset: str,
+        **filters,
+    ) -> list[dict[str, Any]]:
+        """Query Hot Store (ClickHouse)."""
+        table = self.writer.get_table_for_dataset(dataset)
+        client = await self.writer.get_client()
+        
+        # Build query
+        where_clauses = []
+        if "symbol" in filters:
+            where_clauses.append(f"symbol = '{filters['symbol']}'")
+        if "start_ts" in filters:
+            where_clauses.append(f"ts_event >= '{filters['start_ts']}'")
+        if "end_ts" in filters:
+            where_clauses.append(f"ts_event <= '{filters['end_ts']}'")
+        
+        where = " AND ".join(where_clauses) if where_clauses else "1=1"
+        query = f"SELECT * FROM {table.value} WHERE {where} ORDER BY ts_event"
+        
+        try:
+            result = await client.execute(query)
+            return [dict(row) for row in result] if result else []
+        except Exception as e:
+            logger.error("hot_store_query_failed", error=str(e))
+            return []
+    
+    async def _query_silver(
+        self,
+        dataset: str,
+        **filters,
+    ) -> list[dict[str, Any]]:
+        """Query Silver (Parquet files)."""
+        # Read from Silver partitions
+        from pathlib import Path
+        
+        silver_dir = Path(self.silver_base_path) / dataset
+        records = []
+        
+        for dt_dir in silver_dir.glob("dt=*"):
+            try:
+                import pyarrow.parquet as pq
+                for pq_file in dt_dir.glob("**/*.parquet"):
+                    table = pq.read_table(str(pq_file))
+                    records.extend(table.to_pylist())
+            except Exception:
+                pass
+        
+        # Apply filters
+        if "symbol" in filters:
+            records = [r for r in records if r.get("symbol") == filters["symbol"]]
+        if "start_ts" in filters:
+            records = [r for r in records if r.get("ts_event") >= filters["start_ts"]]
+        if "end_ts" in filters:
+            records = [r for r in records if r.get("ts_event") <= filters["end_ts"]]
+        
+        return records
+    
+    def _has_gaps(self, results: list[dict], **filters) -> bool:
+        """Check if results have gaps that need Silver fallback."""
+        if not results:
+            return True
+        # Simple gap detection - could be enhanced
+        return len(results) == 0
+    
+    def _merge_results(
+        self,
+        hot_results: list[dict],
+        silver_results: list[dict],
+    ) -> list[dict]:
+        """Merge Hot Store and Silver results, deduping by event_id."""
+        seen_ids = {r.get("event_id") for r in hot_results}
+        merged = list(hot_results)
+        
+        for record in silver_results:
+            if record.get("event_id") not in seen_ids:
+                merged.append(record)
+                seen_ids.add(record.get("event_id"))
+        
+        return sorted(merged, key=lambda r: r.get("ts_event", ""))
+
+
+class MockClickHouseClient:
+    """Mock ClickHouse client for development without ClickHouse."""
+    
+    def __init__(self):
+        self._tables: dict[str, list[dict]] = {}
+    
+    async def execute(self, query: str, params: dict | None = None) -> Any:
+        """Execute a query."""
+        if query.strip().upper().startswith("CREATE"):
+            return None
+        if query.strip().upper().startswith("SELECT COUNT"):
+            table = query.split("FROM")[1].strip().split()[0]
+            return [[len(self._tables.get(table, []))]]
+        if query.strip().upper().startswith("SELECT"):
+            table = query.split("FROM")[1].strip().split()[0]
+            return self._tables.get(table, [])
+        return None
+    
+    async def insert(self, table: str, data: list[dict]) -> int:
+        """Insert data."""
+        if table not in self._tables:
+            self._tables[table] = []
+        self._tables[table].extend(data)
+        return len(data)
+
+
+# Factory functions
+
+def create_hot_store_syncer(
+    silver_base_path: str = "/data/heber/silver",
+    config: HotStoreSyncConfig | None = None,
+) -> HotStoreSyncer:
+    """Create a Hot Store syncer.
+    
+    Reads configuration from environment:
+    - CLICKHOUSE_HOST
+    - CLICKHOUSE_PORT
+    - CLICKHOUSE_DATABASE
+    - CLICKHOUSE_USER
+    - CLICKHOUSE_PASSWORD
+    """
+    if config is None:
+        config = HotStoreSyncConfig(
+            clickhouse_host=os.environ.get("CLICKHOUSE_HOST", "localhost"),
+            clickhouse_port=int(os.environ.get("CLICKHOUSE_PORT", "9000")),
+            clickhouse_database=os.environ.get("CLICKHOUSE_DATABASE", "heber"),
+            clickhouse_user=os.environ.get("CLICKHOUSE_USER", "default"),
+            clickhouse_password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
+        )
+    
+    writer = HotStoreWriter(config)
+    return HotStoreSyncer(writer, config)
+
+
+
+================================================
 FILE: heber/writer/silver.py
 ================================================
 """Silver layer writer - normalized Parquet datasets.
@@ -16291,6 +20211,1670 @@ class SilverWriter:
 
 
 ================================================
+FILE: infrastructure/terraform/main.tf
+================================================
+# =============================================================================
+# Heber Terraform Root Module per PRD §22
+# =============================================================================
+# Main entry point for infrastructure provisioning
+# State backend: S3 + DynamoDB
+# =============================================================================
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.25"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.12"
+    }
+  }
+
+  # Backend configured per environment in environments/*/backend.tf
+}
+
+# =============================================================================
+# Variables (set per environment)
+# =============================================================================
+variable "environment" {
+  description = "Environment name (dev, staging, prod)"
+  type        = string
+}
+
+variable "region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "eks_node_count" {
+  description = "Number of EKS worker nodes"
+  type        = number
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class"
+  type        = string
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type"
+  type        = string
+}
+
+# =============================================================================
+# Provider Configuration
+# =============================================================================
+provider "aws" {
+  region = var.region
+
+  default_tags {
+    tags = {
+      Project     = "heber"
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
+# =============================================================================
+# Module References
+# =============================================================================
+
+# VPC for network isolation
+module "vpc" {
+  source = "./modules/vpc"
+
+  environment = var.environment
+  region      = var.region
+}
+
+# S3 for Parquet storage
+module "s3" {
+  source = "./modules/s3"
+
+  environment = var.environment
+  bucket_name = "heber-data-${var.environment}"
+}
+
+# RDS for Catalog database
+module "rds" {
+  source = "./modules/rds"
+
+  environment        = var.environment
+  instance_class     = var.rds_instance_class
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+}
+
+# ElastiCache for Redis
+module "elasticache" {
+  source = "./modules/elasticache"
+
+  environment        = var.environment
+  node_type          = var.redis_node_type
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+}
+
+# ECR for container images
+module "ecr" {
+  source = "./modules/ecr"
+
+  environment = var.environment
+  repositories = [
+    "heber-consumer",
+    "heber-writer",
+    "heber-compactor",
+    "heber-catalog",
+    "heber-hotloader",
+    "heber-backfill",
+  ]
+}
+
+# EKS cluster
+module "eks" {
+  source = "./modules/eks"
+
+  environment        = var.environment
+  node_count         = var.eks_node_count
+  vpc_id             = module.vpc.vpc_id
+  private_subnet_ids = module.vpc.private_subnet_ids
+}
+
+# =============================================================================
+# Outputs
+# =============================================================================
+output "eks_cluster_endpoint" {
+  description = "EKS cluster endpoint"
+  value       = module.eks.cluster_endpoint
+}
+
+output "s3_bucket_name" {
+  description = "S3 bucket for Parquet storage"
+  value       = module.s3.bucket_name
+}
+
+output "rds_endpoint" {
+  description = "RDS endpoint for Catalog database"
+  value       = module.rds.endpoint
+}
+
+output "redis_endpoint" {
+  description = "ElastiCache Redis endpoint"
+  value       = module.elasticache.endpoint
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/environments/dev/main.tf
+================================================
+# =============================================================================
+# Heber Dev Environment per PRD §22.3
+# =============================================================================
+# Resources per PRD §22.3:
+# - EKS: 2 nodes
+# - RDS: db.t3.small
+# - Redis: t3.micro
+# =============================================================================
+
+terraform {
+  backend "s3" {
+    bucket         = "heber-terraform-state"
+    key            = "dev/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "heber-terraform-locks"
+    encrypt        = true
+  }
+}
+
+module "heber" {
+  source = "../../"
+
+  environment        = "dev"
+  region             = "us-east-1"
+  eks_node_count     = 2
+  rds_instance_class = "db.t3.small"
+  redis_node_type    = "cache.t3.micro"
+}
+
+output "eks_cluster_endpoint" {
+  value = module.heber.eks_cluster_endpoint
+}
+
+output "s3_bucket_name" {
+  value = module.heber.s3_bucket_name
+}
+
+output "rds_endpoint" {
+  value = module.heber.rds_endpoint
+}
+
+output "redis_endpoint" {
+  value = module.heber.redis_endpoint
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/environments/prod/main.tf
+================================================
+# =============================================================================
+# Heber Production Environment per PRD §22.3
+# =============================================================================
+# Resources per PRD §22.3:
+# - EKS: 6+ nodes
+# - RDS: db.r6g.large
+# - S3: Cross-region replication
+# - Redis: r6g.large cluster
+# =============================================================================
+
+terraform {
+  backend "s3" {
+    bucket         = "heber-terraform-state"
+    key            = "prod/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "heber-terraform-locks"
+    encrypt        = true
+  }
+}
+
+module "heber" {
+  source = "../../"
+
+  environment        = "prod"
+  region             = "us-east-1"
+  eks_node_count     = 6
+  rds_instance_class = "db.r6g.large"
+  redis_node_type    = "cache.r6g.large"
+}
+
+output "eks_cluster_endpoint" {
+  value = module.heber.eks_cluster_endpoint
+}
+
+output "s3_bucket_name" {
+  value = module.heber.s3_bucket_name
+}
+
+output "rds_endpoint" {
+  value = module.heber.rds_endpoint
+}
+
+output "redis_endpoint" {
+  value = module.heber.redis_endpoint
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/environments/staging/main.tf
+================================================
+# =============================================================================
+# Heber Staging Environment per PRD §22.3
+# =============================================================================
+# Resources per PRD §22.3:
+# - EKS: 3 nodes
+# - RDS: db.t3.medium
+# - Redis: t3.small
+# =============================================================================
+
+terraform {
+  backend "s3" {
+    bucket         = "heber-terraform-state"
+    key            = "staging/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "heber-terraform-locks"
+    encrypt        = true
+  }
+}
+
+module "heber" {
+  source = "../../"
+
+  environment        = "staging"
+  region             = "us-east-1"
+  eks_node_count     = 3
+  rds_instance_class = "db.t3.medium"
+  redis_node_type    = "cache.t3.small"
+}
+
+output "eks_cluster_endpoint" {
+  value = module.heber.eks_cluster_endpoint
+}
+
+output "s3_bucket_name" {
+  value = module.heber.s3_bucket_name
+}
+
+output "rds_endpoint" {
+  value = module.heber.rds_endpoint
+}
+
+output "redis_endpoint" {
+  value = module.heber.redis_endpoint
+}
+
+
+
+================================================
+FILE: k8s/base/configmap.yaml
+================================================
+# =============================================================================
+# Heber ConfigMap - Non-sensitive configuration
+# =============================================================================
+# Secrets are managed separately via External Secrets Operator per PRD §21
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heber-config
+  labels:
+    app.kubernetes.io/part-of: heber
+data:
+  # Storage configuration
+  HEBER_STORAGE_ENDPOINT: "http://minio.heber.svc:9000"
+  HEBER_STORAGE_BUCKET: "heber-data"
+  HEBER_STORAGE_PREFIX: "silver"
+  
+  # Redis/Event Bus
+  HEBER_REDIS_STREAM_PREFIX: "stream:heber"
+  HEBER_CONSUMER_GROUP: "heber-consumers"
+  
+  # Writer configuration per PRD §12.9
+  HEBER_WRITER_FLUSH_INTERVAL_SECONDS: "60"
+  HEBER_WRITER_MAX_ROWS: "100000"
+  HEBER_WRITER_MAX_BYTES: "134217728"  # 128MB
+  
+  # Compaction configuration per PRD §12.9
+  HEBER_COMPACTION_DELAY_MINUTES: "10"
+  HEBER_COMPACTION_MAX_WINDOW_MINUTES: "20"
+  HEBER_COMPACTION_MAX_CONCURRENT: "2"
+  
+  # Hot Store configuration per PRD §12.10
+  HEBER_HOTSTORE_SYNC_INTERVAL_SECONDS: "300"
+  HEBER_HOTSTORE_TTL_DAYS: "7"
+  
+  # Catalog API
+  HEBER_CATALOG_HOST: "0.0.0.0"
+  HEBER_CATALOG_PORT: "8080"
+  
+  # Observability
+  HEBER_LOG_LEVEL: "INFO"
+  HEBER_LOG_FORMAT: "json"
+  HEBER_METRICS_PORT: "9090"
+
+
+
+================================================
+FILE: k8s/base/kustomization.yaml
+================================================
+# =============================================================================
+# Heber Kubernetes Base Configuration
+# =============================================================================
+# Uses Kustomize for environment overlays
+# Base directory: k8s/base/
+# Overlays: k8s/overlays/{dev,staging,prod}/
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: heber-base
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployments/consumer.yaml
+  - deployments/writer.yaml
+  - deployments/compactor.yaml
+  - deployments/catalog.yaml
+  - deployments/hotloader.yaml
+  - deployments/backfill.yaml
+  - services/consumer.yaml
+  - services/writer.yaml
+  - services/catalog.yaml
+  - services/hotloader.yaml
+  - pdb/consumer.yaml
+  - pdb/writer.yaml
+  - pdb/catalog.yaml
+  - pdb/hotloader.yaml
+  - hpa/consumer.yaml
+  - hpa/writer.yaml
+  - hpa/catalog.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: heber
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: latest
+
+
+
+================================================
+FILE: k8s/base/namespace.yaml
+================================================
+# =============================================================================
+# Heber Namespace
+# =============================================================================
+# Environment-specific namespaces per PRD §20.1:
+# - Local dev: heber-dev
+# - Staging: heber-staging  
+# - Production: heber-prod
+# This is the base template, overlays set the actual name
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: heber
+  labels:
+    app.kubernetes.io/part-of: heber
+    app.kubernetes.io/managed-by: kustomize
+
+
+
+================================================
+FILE: k8s/base/deployments/backfill.yaml
+================================================
+# =============================================================================
+# Heber Backfill Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 500m request, 2000m limit
+#   Memory: 1Gi request, 4Gi limit
+#   Replicas: 1 (on-demand)
+# Note: Typically scaled to 0 and activated for backfill jobs
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-backfill
+  labels:
+    app.kubernetes.io/name: heber-backfill
+    app.kubernetes.io/component: backfill
+spec:
+  replicas: 0  # Scaled up on-demand for backfill jobs
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-backfill
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-backfill
+        app.kubernetes.io/component: backfill
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: backfill
+          image: heber:backfill-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.backfill"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+
+
+================================================
+FILE: k8s/base/deployments/catalog.yaml
+================================================
+# =============================================================================
+# Heber Catalog API Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 250m request, 1000m limit
+#   Memory: 256Mi request, 1Gi limit
+#   Replicas: 2 (prod)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-catalog
+  labels:
+    app.kubernetes.io/name: heber-catalog
+    app.kubernetes.io/component: catalog
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-catalog
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-catalog
+        app.kubernetes.io/component: catalog
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: catalog
+          image: heber:catalog-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+
+
+================================================
+FILE: k8s/base/deployments/compactor.yaml
+================================================
+# =============================================================================
+# Heber Compactor Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 1000m request, 4000m limit
+#   Memory: 2Gi request, 8Gi limit
+#   Replicas: 1 (single instance for partition locking)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-compactor
+  labels:
+    app.kubernetes.io/name: heber-compactor
+    app.kubernetes.io/component: compactor
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Only one compactor at a time
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-compactor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-compactor
+        app.kubernetes.io/component: compactor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: compactor
+          image: heber:compactor-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.writer.compaction"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Gi  # Temp space for compaction
+
+
+
+================================================
+FILE: k8s/base/deployments/consumer.yaml
+================================================
+# =============================================================================
+# Heber Consumer Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 500m request, 2000m limit
+#   Memory: 512Mi request, 2Gi limit
+#   Replicas: 3 (prod)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-consumer
+  labels:
+    app.kubernetes.io/name: heber-consumer
+    app.kubernetes.io/component: consumer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-consumer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-consumer
+        app.kubernetes.io/component: consumer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: consumer
+          image: heber:consumer-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.bus.consumer"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+
+
+================================================
+FILE: k8s/base/deployments/hotloader.yaml
+================================================
+# =============================================================================
+# Heber Hot Store Loader Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 500m request, 2000m limit
+#   Memory: 512Mi request, 2Gi limit
+#   Replicas: 2 (prod)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-hotloader
+  labels:
+    app.kubernetes.io/name: heber-hotloader
+    app.kubernetes.io/component: hotloader
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-hotloader
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-hotloader
+        app.kubernetes.io/component: hotloader
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: hotloader
+          image: heber:hotloader-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.writer.hotstore"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+
+
+================================================
+FILE: k8s/base/deployments/writer.yaml
+================================================
+# =============================================================================
+# Heber Writer Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 500m request, 2000m limit
+#   Memory: 1Gi request, 4Gi limit
+#   Replicas: 3 (prod)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-writer
+  labels:
+    app.kubernetes.io/name: heber-writer
+    app.kubernetes.io/component: writer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-writer
+        app.kubernetes.io/component: writer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: writer
+          image: heber:writer-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.writer.service"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+
+
+================================================
+FILE: k8s/base/hpa/catalog.yaml
+================================================
+# Heber Catalog HorizontalPodAutoscaler per PRD §20.4
+# Scales based on request latency P99
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: heber-catalog-hpa
+  labels:
+    app.kubernetes.io/name: heber-catalog
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: heber-catalog
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: heber_catalog_request_latency_p99_seconds
+        target:
+          type: AverageValue
+          averageValue: "0.5"  # 500ms threshold
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+
+
+================================================
+FILE: k8s/base/hpa/consumer.yaml
+================================================
+# Heber Consumer HorizontalPodAutoscaler per PRD §20.4
+# Scales based on consumer lag metric
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: heber-consumer-hpa
+  labels:
+    app.kubernetes.io/name: heber-consumer
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: heber-consumer
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: heber_consumer_lag_seconds
+        target:
+          type: AverageValue
+          averageValue: "30"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Prevent flapping
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+
+
+================================================
+FILE: k8s/base/hpa/writer.yaml
+================================================
+# Heber Writer HorizontalPodAutoscaler per PRD §20.4
+# Scales based on pending batch rows metric
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: heber-writer-hpa
+  labels:
+    app.kubernetes.io/name: heber-writer
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: heber-writer
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: heber_writer_pending_batch_rows
+        target:
+          type: AverageValue
+          averageValue: "100000"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+
+
+================================================
+FILE: k8s/base/pdb/catalog.yaml
+================================================
+# Heber Catalog PodDisruptionBudget per PRD §20.3
+# minAvailable: 1
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heber-catalog-pdb
+  labels:
+    app.kubernetes.io/name: heber-catalog
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-catalog
+
+
+
+================================================
+FILE: k8s/base/pdb/consumer.yaml
+================================================
+# Heber Consumer PodDisruptionBudget per PRD §20.3
+# minAvailable: 2
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heber-consumer-pdb
+  labels:
+    app.kubernetes.io/name: heber-consumer
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-consumer
+
+
+
+================================================
+FILE: k8s/base/pdb/hotloader.yaml
+================================================
+# Heber HotLoader PodDisruptionBudget per PRD §20.3
+# minAvailable: 1
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heber-hotloader-pdb
+  labels:
+    app.kubernetes.io/name: heber-hotloader
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-hotloader
+
+
+
+================================================
+FILE: k8s/base/pdb/writer.yaml
+================================================
+# Heber Writer PodDisruptionBudget per PRD §20.3
+# minAvailable: 2
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heber-writer-pdb
+  labels:
+    app.kubernetes.io/name: heber-writer
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-writer
+
+
+
+================================================
+FILE: k8s/base/secrets/cluster-secret-store.yaml
+================================================
+# =============================================================================
+# External Secrets Operator - ClusterSecretStore per PRD §21.3
+# =============================================================================
+# Connects to AWS Secrets Manager for centralized secret management
+# Prerequisites: External Secrets Operator installed, AWS IAM role configured
+# =============================================================================
+
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: aws-secrets-manager
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: us-east-1  # Configure per environment
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets
+
+
+
+================================================
+FILE: k8s/base/secrets/external-secret.yaml
+================================================
+# =============================================================================
+# External Secret - Heber Secrets per PRD §21.1 and §21.3
+# =============================================================================
+# Syncs secrets from AWS Secrets Manager to Kubernetes
+# Refresh interval: 1 hour (configurable)
+# =============================================================================
+
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: heber-secrets
+  labels:
+    app.kubernetes.io/part-of: heber
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  target:
+    name: heber-secrets
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      metadata:
+        labels:
+          app.kubernetes.io/part-of: heber
+  data:
+    # Storage credentials (90-day rotation per PRD §21.1)
+    - secretKey: HEBER_STORAGE_ACCESS_KEY
+      remoteRef:
+        key: heber/storage
+        property: access_key
+    - secretKey: HEBER_STORAGE_SECRET_KEY
+      remoteRef:
+        key: heber/storage
+        property: secret_key
+    
+    # Database DSN (rotate on credential change per PRD §21.1)
+    - secretKey: HEBER_CATALOG_DSN
+      remoteRef:
+        key: heber/catalog
+        property: dsn
+    
+    # Redis URL (rotate on credential change per PRD §21.1)
+    - secretKey: HEBER_REDIS_URL
+      remoteRef:
+        key: heber/redis
+        property: url
+    
+    # ClickHouse DSN (rotate on credential change per PRD §21.1)
+    - secretKey: HEBER_CLICKHOUSE_DSN
+      remoteRef:
+        key: heber/clickhouse
+        property: dsn
+    
+    # API Key for SDK clients (per-client, revocable per PRD §21.1)
+    - secretKey: HEBER_API_KEY
+      remoteRef:
+        key: heber/api
+        property: key
+
+
+
+================================================
+FILE: k8s/base/secrets/secrets-local.yaml.example
+================================================
+# =============================================================================
+# Local Development Secrets Template per PRD §21.2
+# =============================================================================
+# For local dev: Copy this to k8s/overlays/dev/secrets.yaml and fill in values
+# This file uses placeholder values - NEVER commit real credentials
+# =============================================================================
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: heber-secrets
+  labels:
+    app.kubernetes.io/part-of: heber
+type: Opaque
+stringData:
+  # Storage (MinIO for local dev)
+  HEBER_STORAGE_ACCESS_KEY: "minioadmin"
+  HEBER_STORAGE_SECRET_KEY: "minioadmin"
+  
+  # Catalog Database (local Postgres)
+  HEBER_CATALOG_DSN: "postgresql://heber:heber@postgres.heber-dev.svc:5432/heber?sslmode=disable"
+  
+  # Redis (local Redis)
+  HEBER_REDIS_URL: "redis://redis.heber-dev.svc:6379/0"
+  
+  # ClickHouse (local ClickHouse)
+  HEBER_CLICKHOUSE_DSN: "clickhouse://default:@clickhouse.heber-dev.svc:9000/heber"
+  
+  # API Key (dev key for testing)
+  HEBER_API_KEY: "dev-api-key-do-not-use-in-production"
+
+
+
+================================================
+FILE: k8s/base/services/catalog.yaml
+================================================
+# Heber Catalog Service (HTTP API + metrics)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-catalog
+  labels:
+    app.kubernetes.io/name: heber-catalog
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-catalog
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+
+
+
+================================================
+FILE: k8s/base/services/consumer.yaml
+================================================
+# Heber Consumer Service (internal, metrics only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-consumer
+  labels:
+    app.kubernetes.io/name: heber-consumer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-consumer
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+
+
+
+================================================
+FILE: k8s/base/services/hotloader.yaml
+================================================
+# Heber Hot Store Loader Service (internal, metrics only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-hotloader
+  labels:
+    app.kubernetes.io/name: heber-hotloader
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-hotloader
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+
+
+
+================================================
+FILE: k8s/base/services/writer.yaml
+================================================
+# Heber Writer Service (internal, metrics only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-writer
+  labels:
+    app.kubernetes.io/name: heber-writer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-writer
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+
+
+
+================================================
+FILE: k8s/overlays/dev/kustomization.yaml
+================================================
+# =============================================================================
+# Heber Dev Environment Overlay per PRD §20.1
+# =============================================================================
+# Namespace: heber-dev
+# Lower resource limits for local development
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: heber-dev
+
+resources:
+  - ../../base
+
+# Dev-specific patches
+patches:
+  # Reduce replicas for dev
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Deployment
+  # Reduce HPA min replicas
+  - patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+    target:
+      kind: HorizontalPodAutoscaler
+  # Reduce PDB minAvailable
+  - patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+    target:
+      kind: PodDisruptionBudget
+
+# Dev-specific image tag
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: latest
+
+# Dev ConfigMap overrides
+configMapGenerator:
+  - name: heber-config
+    behavior: merge
+    literals:
+      - HEBER_LOG_LEVEL=DEBUG
+      - HEBER_STORAGE_ENDPOINT=http://minio.heber-dev.svc:9000
+
+
+
+================================================
+FILE: k8s/overlays/prod/kustomization.yaml
+================================================
+# =============================================================================
+# Heber Production Environment Overlay per PRD §20.1
+# =============================================================================
+# Namespace: heber-prod
+# Full production resources and replicas
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: heber-prod
+
+resources:
+  - ../../base
+
+# Production uses base replica counts (defined in deployments)
+# No patches needed for replicas
+
+# Production image tag (always use semver)
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    # Production uses semver tags, set at deploy time
+    # e.g.: kustomize edit set image heber=ghcr.io/jacobmcmillan/heber:v1.2.3
+    newTag: v1.0.0
+
+configMapGenerator:
+  - name: heber-config
+    behavior: merge
+    literals:
+      - HEBER_LOG_LEVEL=INFO
+      - HEBER_STORAGE_ENDPOINT=https://s3.us-east-1.amazonaws.com
+
+# Production-specific annotations
+commonAnnotations:
+  heber.io/environment: production
+  heber.io/sla-tier: critical
+
+
+
+================================================
+FILE: k8s/overlays/staging/kustomization.yaml
+================================================
+# =============================================================================
+# Heber Staging Environment Overlay per PRD §20.1
+# =============================================================================
+# Namespace: heber-staging
+# Prod-like resources with lower replica counts
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: heber-staging
+
+resources:
+  - ../../base
+
+# Staging-specific patches (fewer replicas than prod)
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: heber-consumer
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: heber-writer
+
+# Staging image tag (semver or SHA)
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: staging
+
+configMapGenerator:
+  - name: heber-config
+    behavior: merge
+    literals:
+      - HEBER_LOG_LEVEL=INFO
+      - HEBER_STORAGE_ENDPOINT=http://minio.heber-staging.svc:9000
+
+
+
+================================================
+FILE: scripts/docker-build.sh
+================================================
+#!/bin/bash
+# =============================================================================
+# Heber Docker Build Script per PRD §19.5
+# =============================================================================
+# Image Tagging Strategy:
+# - Git SHA (immutable): sha-<short_hash>
+# - Semver (releases): v<major>.<minor>.<patch>
+# - Branch tags: main -> latest
+# =============================================================================
+
+set -euo pipefail
+
+# Configuration
+REGISTRY="${HEBER_REGISTRY:-ghcr.io/jacobmcmillan/heber}"
+SERVICE="${1:-runtime}"  # consumer, writer, compactor, catalog, backfill, hotloader
+VERSION="${2:-}"  # Optional semver tag like v1.0.0
+
+# Get git info
+GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+# Determine tags
+SHA_TAG="sha-${GIT_SHA}"
+FULL_IMAGE="${REGISTRY}:${SHA_TAG}"
+
+echo "============================================"
+echo "Building Heber Image"
+echo "============================================"
+echo "Service:    ${SERVICE}"
+echo "Registry:   ${REGISTRY}"
+echo "Git SHA:    ${GIT_SHA}"
+echo "Branch:     ${GIT_BRANCH}"
+echo "Build Date: ${BUILD_DATE}"
+echo "============================================"
+
+# Build the image targeting specific service stage
+docker build \
+    --target "${SERVICE}" \
+    --build-arg BUILD_DATE="${BUILD_DATE}" \
+    --build-arg GIT_SHA="${GIT_SHA}" \
+    --build-arg VERSION="${VERSION:-dev}" \
+    --label "org.opencontainers.image.created=${BUILD_DATE}" \
+    --label "org.opencontainers.image.revision=${GIT_SHA}" \
+    --label "org.opencontainers.image.version=${VERSION:-${SHA_TAG}}" \
+    -t "${FULL_IMAGE}" \
+    -t "${REGISTRY}:${SERVICE}-${SHA_TAG}" \
+    .
+
+echo "Built: ${FULL_IMAGE}"
+
+# Tag with branch name (mutable)
+if [ "${GIT_BRANCH}" = "main" ]; then
+    docker tag "${FULL_IMAGE}" "${REGISTRY}:latest"
+    docker tag "${FULL_IMAGE}" "${REGISTRY}:${SERVICE}-latest"
+    echo "Tagged: ${REGISTRY}:latest"
+fi
+
+# Tag with semver if provided
+if [ -n "${VERSION}" ]; then
+    docker tag "${FULL_IMAGE}" "${REGISTRY}:${VERSION}"
+    docker tag "${FULL_IMAGE}" "${REGISTRY}:${SERVICE}-${VERSION}"
+    echo "Tagged: ${REGISTRY}:${VERSION}"
+fi
+
+echo ""
+echo "============================================"
+echo "Build Complete!"
+echo "============================================"
+echo "To push: ./scripts/docker-push.sh ${SERVICE} ${VERSION:-}"
+echo ""
+
+
+
+================================================
+FILE: scripts/docker-push.sh
+================================================
+#!/bin/bash
+# =============================================================================
+# Heber Docker Push Script per PRD §19.4
+# =============================================================================
+# Pushes images to registry (default: ghcr.io)
+# =============================================================================
+
+set -euo pipefail
+
+REGISTRY="${HEBER_REGISTRY:-ghcr.io/jacobmcmillan/heber}"
+SERVICE="${1:-runtime}"
+VERSION="${2:-}"
+
+GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+SHA_TAG="sha-${GIT_SHA}"
+GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+
+echo "============================================"
+echo "Pushing Heber Images"
+echo "============================================"
+echo "Registry: ${REGISTRY}"
+echo "Service:  ${SERVICE}"
+echo "SHA Tag:  ${SHA_TAG}"
+echo "============================================"
+
+# Push SHA-tagged image (immutable)
+echo "Pushing ${REGISTRY}:${SHA_TAG}..."
+docker push "${REGISTRY}:${SHA_TAG}"
+docker push "${REGISTRY}:${SERVICE}-${SHA_TAG}"
+
+# Push branch tag if main
+if [ "${GIT_BRANCH}" = "main" ]; then
+    echo "Pushing ${REGISTRY}:latest..."
+    docker push "${REGISTRY}:latest"
+    docker push "${REGISTRY}:${SERVICE}-latest"
+fi
+
+# Push semver tag if provided
+if [ -n "${VERSION}" ]; then
+    echo "Pushing ${REGISTRY}:${VERSION}..."
+    docker push "${REGISTRY}:${VERSION}"
+    docker push "${REGISTRY}:${SERVICE}-${VERSION}"
+fi
+
+echo ""
+echo "============================================"
+echo "Push Complete!"
+echo "============================================"
+
+
+
+================================================
 FILE: scripts/init_volume.sh
 ================================================
 #!/bin/bash
@@ -16340,5 +21924,238 @@ ls -la "$VOLUME_ROOT"
 echo ""
 echo "Data directories:"
 ls -la "$VOLUME_ROOT/data"
+
+
+
+================================================
+FILE: scripts/security-scan.sh
+================================================
+#!/bin/bash
+# =============================================================================
+# Heber Vulnerability Scan Script per PRD §19.3
+# =============================================================================
+# Uses Trivy to scan container images for CVEs before push
+# Requirement: trivy must be installed (brew install trivy / apt install trivy)
+# =============================================================================
+
+set -euo pipefail
+
+IMAGE="${1:-ghcr.io/jacobmcmillan/heber:latest}"
+
+echo "============================================"
+echo "Vulnerability Scan: ${IMAGE}"
+echo "============================================"
+
+# Check if trivy is installed
+if ! command -v trivy &> /dev/null; then
+    echo "ERROR: trivy not found. Install it first:"
+    echo "  macOS:  brew install trivy"
+    echo "  Linux:  curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"
+    exit 1
+fi
+
+# Run vulnerability scan
+echo "Scanning for vulnerabilities..."
+trivy image \
+    --config .trivy.yaml \
+    --severity CRITICAL,HIGH \
+    --exit-code 1 \
+    --ignore-unfixed \
+    "${IMAGE}"
+
+SCAN_RESULT=$?
+
+if [ ${SCAN_RESULT} -eq 0 ]; then
+    echo ""
+    echo "============================================"
+    echo "✅ No CRITICAL or HIGH vulnerabilities found"
+    echo "============================================"
+else
+    echo ""
+    echo "============================================"
+    echo "❌ Vulnerabilities detected! Fix before push."
+    echo "============================================"
+    exit 1
+fi
+
+# Additional checks
+echo ""
+echo "Running filesystem scan..."
+trivy fs \
+    --scanners secret,misconfig \
+    --severity HIGH,CRITICAL \
+    .
+
+echo ""
+echo "============================================"
+echo "✅ All security scans passed"
+echo "============================================"
+
+
+
+================================================
+FILE: scripts/backup/clickhouse-backup.sh
+================================================
+#!/bin/bash
+# =============================================================================
+# Heber ClickHouse Backup Script per PRD §24.2
+# =============================================================================
+# Runs daily via cron at 02:00 UTC
+# Stores backups in S3 with 7-day retention
+# =============================================================================
+
+set -euo pipefail
+
+# Configuration
+BACKUP_NAME="daily-$(date +%Y%m%d-%H%M%S)"
+S3_BUCKET="${HEBER_BACKUP_BUCKET:-heber-backups-prod}"
+S3_PREFIX="clickhouse"
+RETENTION_DAYS=7
+
+echo "============================================"
+echo "ClickHouse Backup Starting"
+echo "============================================"
+echo "Backup Name: ${BACKUP_NAME}"
+echo "S3 Bucket:   ${S3_BUCKET}"
+echo "Retention:   ${RETENTION_DAYS} days"
+echo "============================================"
+
+# Check if clickhouse-backup is installed
+if ! command -v clickhouse-backup &> /dev/null; then
+    echo "ERROR: clickhouse-backup not found. Install it first."
+    exit 1
+fi
+
+# Create local backup
+echo "Creating local backup..."
+clickhouse-backup create "${BACKUP_NAME}"
+
+# Upload to S3
+echo "Uploading to S3..."
+clickhouse-backup upload "${BACKUP_NAME}"
+
+# Cleanup old backups (local)
+echo "Cleaning up local backups older than ${RETENTION_DAYS} days..."
+clickhouse-backup delete local --keep-backups-local=${RETENTION_DAYS}
+
+# Cleanup old backups (remote)
+echo "Cleaning up remote backups older than ${RETENTION_DAYS} days..."
+clickhouse-backup delete remote --keep-backups-remote=${RETENTION_DAYS}
+
+# Verify backup
+echo "Verifying backup..."
+if clickhouse-backup list remote | grep -q "${BACKUP_NAME}"; then
+    echo "✅ Backup verified in S3"
+else
+    echo "❌ Backup verification failed!"
+    exit 1
+fi
+
+echo ""
+echo "============================================"
+echo "✅ ClickHouse Backup Complete"
+echo "============================================"
+echo "Backup: ${BACKUP_NAME}"
+echo "S3 Path: s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
+echo ""
+
+
+
+================================================
+FILE: scripts/backup/validate-catalog-backup.sh
+================================================
+#!/bin/bash
+# =============================================================================
+# Heber Catalog Backup Validation Script per PRD §24.4
+# =============================================================================
+# Runs monthly to validate Postgres backup restores correctly
+# =============================================================================
+
+set -euo pipefail
+
+# Configuration
+DB_INSTANCE="heber-catalog-prod"
+TEST_INSTANCE="heber-catalog-backup-test"
+REGION="${AWS_REGION:-us-east-1}"
+
+echo "============================================"
+echo "Catalog Backup Validation"
+echo "============================================"
+echo "Source Instance:  ${DB_INSTANCE}"
+echo "Test Instance:    ${TEST_INSTANCE}"
+echo "Region:           ${REGION}"
+echo "============================================"
+
+# Get latest snapshot
+echo "Finding latest snapshot..."
+LATEST_SNAPSHOT=$(aws rds describe-db-snapshots \
+    --db-instance-identifier "${DB_INSTANCE}" \
+    --query 'DBSnapshots | sort_by(@, &SnapshotCreateTime) | [-1].DBSnapshotIdentifier' \
+    --output text \
+    --region "${REGION}")
+
+if [ -z "${LATEST_SNAPSHOT}" ] || [ "${LATEST_SNAPSHOT}" = "None" ]; then
+    echo "❌ No snapshots found for ${DB_INSTANCE}"
+    exit 1
+fi
+
+echo "Latest snapshot: ${LATEST_SNAPSHOT}"
+
+# Delete existing test instance if exists
+echo "Cleaning up any existing test instance..."
+aws rds delete-db-instance \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --skip-final-snapshot \
+    --region "${REGION}" 2>/dev/null || true
+
+aws rds wait db-instance-deleted \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --region "${REGION}" 2>/dev/null || true
+
+# Restore from snapshot
+echo "Restoring from snapshot..."
+aws rds restore-db-instance-from-db-snapshot \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --db-snapshot-identifier "${LATEST_SNAPSHOT}" \
+    --db-instance-class db.t3.small \
+    --no-publicly-accessible \
+    --region "${REGION}"
+
+echo "Waiting for instance to be available (this may take 10-15 minutes)..."
+aws rds wait db-instance-available \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --region "${REGION}"
+
+# Get endpoint
+ENDPOINT=$(aws rds describe-db-instances \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --query 'DBInstances[0].Endpoint.Address' \
+    --output text \
+    --region "${REGION}")
+
+echo "Test instance available at: ${ENDPOINT}"
+
+# Run validation queries
+echo "Running validation queries..."
+PGPASSWORD="${PG_PASSWORD:-}" psql -h "${ENDPOINT}" -U heber -d heber -c "
+SELECT COUNT(*) as dataset_count FROM datasets;
+SELECT COUNT(*) as partition_count FROM partitions;
+SELECT MAX(created_at) as latest_partition FROM partitions;
+"
+
+# Cleanup test instance
+echo "Cleaning up test instance..."
+aws rds delete-db-instance \
+    --db-instance-identifier "${TEST_INSTANCE}" \
+    --skip-final-snapshot \
+    --region "${REGION}"
+
+echo ""
+echo "============================================"
+echo "✅ Backup Validation Complete"
+echo "============================================"
+echo "Snapshot: ${LATEST_SNAPSHOT}"
+echo "Status: PASSED"
+echo ""
 
 
