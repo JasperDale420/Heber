@@ -175,6 +175,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ProviderRegistry` and `DatasetCatalog`
   - 17/17 tests passing
 
+- **Additional Dataset Schemas** (Phase 51, PRD §57)
+  - `DailyBar` for daily OHLCV with adjusted close, dividends, splits
+  - `OptionQuote` and `OptionTrade` with Greeks (delta, gamma, theta, vega)
+  - `CongressTrade` and `LobbyingDisclosure` for alternative data
+  - `CompanyInfo`, `IncomeStatement`, `BalanceSheet`, `CashFlow`, `FinancialRatios`
+  - `EconomicIndicator`, `InterestRate`, `TreasuryYield`
+  - `ForexRate`, `CryptoBar`, `CryptoQuote`
+  - 16 schemas total, 14/14 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)

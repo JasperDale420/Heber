@@ -883,40 +883,40 @@
 
 ---
 
-## Phase 51: Additional Datasets (§57)
+## Phase 51: Additional Datasets (§57) ✅
 
 ### 51.1 Market Data
 
 - [x] bars, quotes, trades
-- [ ] bars_daily
+- [x] bars_daily
 
 ### 51.2 Options
 
-- [ ] option_quotes
-- [ ] option_trades
+- [x] option_quotes
+- [x] option_trades
 
 ### 51.3 Alternative
 
-- [ ] congress_trades
-- [ ] lobbying
+- [x] congress_trades
+- [x] lobbying
 
 ### 51.4 Fundamentals
 
-- [ ] company_info
-- [ ] income_statement
-- [ ] balance_sheet
-- [ ] cash_flow
-- [ ] ratios
+- [x] company_info
+- [x] income_statement
+- [x] balance_sheet
+- [x] cash_flow
+- [x] ratios
 
 ### 51.5 Economic
 
-- [ ] gdp, cpi, unemployment
-- [ ] interest_rate, treasury_yield
+- [x] gdp, cpi, unemployment (EconomicIndicator)
+- [x] interest_rate, treasury_yield
 
 ### 51.6 Forex & Crypto
 
-- [ ] forex_rates
-- [ ] crypto_bars, crypto_quotes
+- [x] forex_rates
+- [x] crypto_bars, crypto_quotes
 
 ---
 
