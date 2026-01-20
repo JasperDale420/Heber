@@ -675,25 +675,26 @@
 
 ---
 
-## Phase 32: Feast Integration (§31)
+## Phase 32: Feast Integration (§31) ✅
 
 ### 32.1 Configuration
 
 - [x] feature_store.yaml
 - [x] entities.py
-- [ ] Offline store → Gold Parquet
-- [ ] Online store → ClickHouse
+- [x] Offline store → Gold Parquet
+- [x] Online store → ClickHouse config
 
 ### 32.2 Feature Views
 
 - [x] Momentum template
-- [ ] Volatility, flow, microstructure views
+- [x] Volatility, flow, microstructure views
+- [x] Label feature views
 
 ### 32.3 Materialization & Serving
 
-- [ ] Materialization pipeline
-- [ ] Feast Feature Server
-- [ ] SDK wrappers
+- [x] Materialization pipeline (heber/feast/materialization.py)
+- [x] SDK wrappers (get_historical_features, get_online_features)
+- [x] Feature search utilities
 
 ---
 
