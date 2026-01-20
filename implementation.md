@@ -560,12 +560,13 @@
 
 ---
 
-## Phase 21: Compaction Protocol (§16)
+## Phase 21: Compaction Protocol (§16) ✅
 
 - [x] Basic compactor
-- [ ] Atomicity via manifest
-- [ ] Concurrent safety
-- [ ] Compaction metrics
+- [x] Atomicity via manifest (Manifest, ManifestFileEntry)
+- [x] Concurrent safety (PartitionLock via fcntl)
+- [x] Compaction metrics (bytes, crash recoveries, lock contention)
+- [x] Crash recovery (CrashRecovery per PRD §16.4)
 
 ---
 

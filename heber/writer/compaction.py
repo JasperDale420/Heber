@@ -1,17 +1,22 @@
-"""Compaction scheduler for Heber per PRD §12.9.
+"""Compaction scheduler for Heber per PRD §12.9 and §16.
 
 Provides:
 - Hourly partition compaction after close
 - event_id uniqueness preservation
 - ts_available immutability
 - Atomic writes (temp path then rename)
+- Manifest-based commits per PRD §16.2
+- Crash recovery per PRD §16.4
+- Concurrent safety via file locking
 """
 
 import asyncio
+import fcntl
+import json
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
@@ -59,6 +64,256 @@ active_compactions = Gauge(
     "heber_active_compactions",
     "Number of currently running compactions",
 )
+
+# Additional metrics per PRD §16
+manifest_versions = Gauge(
+    "heber_manifest_version",
+    "Current manifest version per partition",
+    ["dataset", "partition"],
+)
+
+crash_recoveries = Counter(
+    "heber_compaction_crash_recoveries_total",
+    "Crash recovery operations performed",
+    ["dataset", "recovery_type"],
+)
+
+compaction_bytes_before = Counter(
+    "heber_compaction_bytes_before_total",
+    "Bytes before compaction",
+    ["dataset"],
+)
+
+compaction_bytes_after = Counter(
+    "heber_compaction_bytes_after_total",
+    "Bytes after compaction",
+    ["dataset"],
+)
+
+lock_contention = Counter(
+    "heber_compaction_lock_contention_total",
+    "Lock contention events during compaction",
+    ["dataset"],
+)
+
+
+# Manifest structure per PRD §16.2
+MANIFEST_FILENAME = "_manifest.json"
+COMPACT_TMP_DIR = "_compact_tmp"
+PARQUET_GLOB = "*.parquet"
+
+
+@dataclass
+class ManifestFileEntry:
+    """File entry in manifest per PRD §16.2."""
+    path: str
+    rows: int
+    bytes: int
+
+
+@dataclass
+class Manifest:
+    """Partition manifest for atomic compaction per PRD §16.2.
+    
+    Manifest path: <partition_path>/_manifest.json
+    """
+    version: int
+    created_at: datetime
+    files: list[ManifestFileEntry] = field(default_factory=list)
+    pending_deletes: list[str] = field(default_factory=list)
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "created_at": self.created_at.isoformat(),
+            "files": [
+                {"path": f.path, "rows": f.rows, "bytes": f.bytes}
+                for f in self.files
+            ],
+            "pending_deletes": self.pending_deletes,
+        }
+    
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Manifest":
+        return cls(
+            version=data.get("version", 0),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(UTC),
+            files=[
+                ManifestFileEntry(f["path"], f["rows"], f["bytes"])
+                for f in data.get("files", [])
+            ],
+            pending_deletes=data.get("pending_deletes", []),
+        )
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> "Manifest":
+        return cls.from_dict(json.loads(json_str))
+    
+    @classmethod
+    def read_from_partition(cls, partition_path: Path) -> "Manifest | None":
+        """Read manifest from partition, return None if not exists."""
+        manifest_path = partition_path / MANIFEST_FILENAME
+        if not manifest_path.exists():
+            return None
+        try:
+            return cls.from_json(manifest_path.read_text())
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning("manifest_read_error", path=str(manifest_path), error=str(e))
+            return None
+    
+    def write_to_partition(self, partition_path: Path) -> None:
+        """Write manifest to partition atomically."""
+        manifest_path = partition_path / MANIFEST_FILENAME
+        temp_path = partition_path / f"{MANIFEST_FILENAME}.tmp"
+        
+        # Write to temp first
+        temp_path.write_text(self.to_json())
+        
+        # Atomic rename
+        temp_path.rename(manifest_path)
+
+
+class PartitionLock:
+    """File-based lock for concurrent safety per PRD §16.
+    
+    Prevents multiple compactions on the same partition.
+    """
+    
+    def __init__(self, partition_path: Path):
+        self.lock_path = partition_path / "_compact.lock"
+        self._lock_file = None
+    
+    def acquire(self, blocking: bool = True) -> bool:
+        """Acquire exclusive lock on partition."""
+        try:
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self._lock_file = open(self.lock_path, "w")
+            
+            if blocking:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX)
+            else:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            return True
+            
+        except BlockingIOError:
+            if self._lock_file:
+                self._lock_file.close()
+                self._lock_file = None
+            return False
+        except Exception as e:
+            logger.error("lock_acquire_failed", path=str(self.lock_path), error=str(e))
+            return False
+    
+    def release(self) -> None:
+        """Release lock."""
+        if self._lock_file:
+            try:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                self._lock_file.close()
+            except Exception as e:
+                logger.warning("lock_release_error", path=str(self.lock_path), error=str(e))
+            finally:
+                self._lock_file = None
+    
+    def __enter__(self) -> "PartitionLock":
+        self.acquire()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()
+
+
+class CrashRecovery:
+    """Crash recovery per PRD §16.4.
+    
+    On startup, checks for incomplete compactions:
+    - If _compact_tmp/ exists with files → resume from step 6
+    - If pending_deletes is non-empty → resume from step 8
+    """
+    
+    def __init__(self, storage_root: Path):
+        self.storage_root = storage_root
+    
+    def recover_partition(self, partition_path: Path, dataset: str) -> bool:
+        """Recover a partition from incomplete compaction.
+        
+        Returns True if recovery was performed.
+        """
+        recovered = False
+        compact_tmp = partition_path / COMPACT_TMP_DIR
+        
+        # Check for incomplete temp files (step 6)
+        if compact_tmp.exists() and list(compact_tmp.glob("*.parquet")):
+            logger.info("crash_recovery_temp_files", path=str(partition_path))
+            recovered = self._recover_from_temp(partition_path, compact_tmp, dataset)
+        
+        # Check for pending deletes (step 8)
+        manifest = Manifest.read_from_partition(partition_path)
+        if manifest and manifest.pending_deletes:
+            logger.info("crash_recovery_pending_deletes", path=str(partition_path))
+            recovered = self._recover_pending_deletes(partition_path, manifest, dataset)
+        
+        return recovered
+    
+    def _recover_from_temp(self, partition_path: Path, compact_tmp: Path, dataset: str) -> bool:
+        """Resume from step 6: move temp files to partition root."""
+        try:
+            for tmp_file in compact_tmp.glob("*.parquet"):
+                dest = partition_path / tmp_file.name
+                shutil.move(str(tmp_file), str(dest))
+            
+            # Remove temp dir
+            shutil.rmtree(str(compact_tmp))
+            
+            crash_recoveries.labels(dataset=dataset, recovery_type="temp_files").inc()
+            return True
+            
+        except Exception as e:
+            logger.error("crash_recovery_temp_failed", path=str(partition_path), error=str(e))
+            return False
+    
+    def _recover_pending_deletes(self, partition_path: Path, manifest: Manifest, dataset: str) -> bool:
+        """Resume from step 8: delete old files."""
+        try:
+            for old_file in manifest.pending_deletes:
+                old_path = partition_path / old_file
+                if old_path.exists():
+                    old_path.unlink()
+            
+            # Clear pending_deletes in manifest
+            manifest.pending_deletes = []
+            manifest.version += 1
+            manifest.write_to_partition(partition_path)
+            
+            crash_recoveries.labels(dataset=dataset, recovery_type="pending_deletes").inc()
+            return True
+            
+        except Exception as e:
+            logger.error("crash_recovery_deletes_failed", path=str(partition_path), error=str(e))
+            return False
+    
+    def scan_and_recover(self, datasets: list[str]) -> int:
+        """Scan all partitions and recover any incomplete compactions."""
+        recovered = 0
+        
+        for dataset in datasets:
+            dataset_path = self.storage_root / "silver" / dataset
+            if not dataset_path.exists():
+                continue
+            
+            for dt_dir in dataset_path.glob("dt=*"):
+                for hour_dir in dt_dir.glob("hour=*"):
+                    if self.recover_partition(hour_dir, dataset):
+                        recovered += 1
+        
+        if recovered > 0:
+            logger.info("crash_recovery_complete", partitions_recovered=recovered)
+        
+        return recovered
 
 
 @dataclass
