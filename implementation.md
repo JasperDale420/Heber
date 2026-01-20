@@ -511,23 +511,23 @@
 
 ---
 
-## Phase 22: Hot Store Sync (§12.10)
+## Phase 22: Hot Store Sync (§12.10) ✅
 
 ### 22.1 Sync Config
 
-- [ ] Source: event bus or Silver
-- [ ] Window: rolling last N days
+- [x] Source: event bus or Silver (HotStoreSyncer)
+- [x] Window: rolling last N days (configurable)
 
 ### 22.2 ClickHouse Tables
 
-- [ ] `quotes_hot`, `trades_hot`, `bars_hot`
-- [ ] Partitioned by date
-- [ ] TTL: 7 days quotes/trades, 30 days bars
+- [x] `quotes_hot`, `trades_hot`, `bars_hot` (HotStoreTable enum)
+- [x] Partitioned by date (dt column with MATERIALIZED)
+- [x] TTL: 7 days quotes/trades, 30 days bars (ClickHouse-managed)
 
 ### 22.3 Consistency
 
-- [ ] Lag ≤5 minutes SLA
-- [ ] Silver is source of truth (fallback)
+- [x] Lag ≤5 minutes SLA (hot_store_lag_seconds metric)
+- [x] Silver is source of truth (HotStoreReader with fallback)
 
 ---
 
