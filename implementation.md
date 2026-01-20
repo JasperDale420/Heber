@@ -440,26 +440,26 @@
 
 ---
 
-## Phase 18: Event Bus Config (§12.7) *NEW*
+## Phase 18: Event Bus Config (§12.7) ✅
 
 ### 18.1 Stream Topology (Pattern A)
 
-- [ ] `stream:market.bars`
-- [ ] `stream:market.quotes`
-- [ ] `stream:market.trades`
-- [ ] `stream:intel.flow_alerts`
-- [ ] `stream:intel.darkpool_trades`
+- [x] `stream:market.bars`
+- [x] `stream:market.quotes`
+- [x] `stream:market.trades`
+- [x] `stream:intel.flow_alerts`
+- [x] `stream:intel.darkpool_trades`
 
 ### 18.2 Consumer Groups
 
-- [ ] Consumer group per stream
-- [ ] Ack after successful write + Catalog update
-- [ ] Unacked messages replay on restart
+- [x] Consumer group per stream
+- [x] Ack after successful write + Catalog update
+- [x] Unacked messages replay on restart
 
 ### 18.3 Ordering
 
-- [ ] Preserve per-message timestamps as truth
-- [ ] No total order assumption
+- [x] Preserve per-message timestamps as truth
+- [x] No total order assumption
 
 ---
 
