@@ -582,14 +582,15 @@
 
 ---
 
-## Phase 23: Kubernetes (§20)
+## Phase 23: Kubernetes (§20) ✅
 
-- [ ] Deployment manifests
-- [ ] Services
-- [ ] ConfigMaps / Secrets
-- [ ] Resource limits
-- [ ] HPA autoscaling
-- [ ] PodDisruptionBudgets
+- [x] Deployment manifests (consumer, writer, compactor, catalog, hotloader, backfill)
+- [x] Services (consumer, writer, catalog, hotloader)
+- [x] ConfigMaps / Secrets (configmap.yaml, secrets via External Secrets Operator)
+- [x] Resource limits (per PRD §20.2)
+- [x] HPA autoscaling (consumer, writer, catalog with custom metrics)
+- [x] PodDisruptionBudgets (per PRD §20.3)
+- [x] Kustomize overlays (dev/staging/prod namespaces)
 
 ---
 

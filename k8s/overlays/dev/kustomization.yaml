@@ -1,0 +1,52 @@
+# =============================================================================
+# Heber Dev Environment Overlay per PRD §20.1
+# =============================================================================
+# Namespace: heber-dev
+# Lower resource limits for local development
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: heber-dev
+
+resources:
+  - ../../base
+
+# Dev-specific patches
+patches:
+  # Reduce replicas for dev
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Deployment
+  # Reduce HPA min replicas
+  - patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+    target:
+      kind: HorizontalPodAutoscaler
+  # Reduce PDB minAvailable
+  - patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+    target:
+      kind: PodDisruptionBudget
+
+# Dev-specific image tag
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: latest
+
+# Dev ConfigMap overrides
+configMapGenerator:
+  - name: heber-config
+    behavior: merge
+    literals:
+      - HEBER_LOG_LEVEL=DEBUG
+      - HEBER_STORAGE_ENDPOINT=http://minio.heber-dev.svc:9000

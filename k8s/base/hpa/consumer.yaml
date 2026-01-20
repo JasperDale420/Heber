@@ -1,0 +1,36 @@
+# Heber Consumer HorizontalPodAutoscaler per PRD §20.4
+# Scales based on consumer lag metric
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: heber-consumer-hpa
+  labels:
+    app.kubernetes.io/name: heber-consumer
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: heber-consumer
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: heber_consumer_lag_seconds
+        target:
+          type: AverageValue
+          averageValue: "30"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Prevent flapping
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30

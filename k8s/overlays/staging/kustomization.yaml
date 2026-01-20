@@ -1,0 +1,44 @@
+# =============================================================================
+# Heber Staging Environment Overlay per PRD §20.1
+# =============================================================================
+# Namespace: heber-staging
+# Prod-like resources with lower replica counts
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: heber-staging
+
+resources:
+  - ../../base
+
+# Staging-specific patches (fewer replicas than prod)
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: heber-consumer
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: heber-writer
+
+# Staging image tag (semver or SHA)
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: staging
+
+configMapGenerator:
+  - name: heber-config
+    behavior: merge
+    literals:
+      - HEBER_LOG_LEVEL=INFO
+      - HEBER_STORAGE_ENDPOINT=http://minio.heber-staging.svc:9000

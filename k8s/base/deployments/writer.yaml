@@ -1,0 +1,80 @@
+# =============================================================================
+# Heber Writer Deployment per PRD §20.2
+# =============================================================================
+# Resources:
+#   CPU: 500m request, 2000m limit
+#   Memory: 1Gi request, 4Gi limit
+#   Replicas: 3 (prod)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heber-writer
+  labels:
+    app.kubernetes.io/name: heber-writer
+    app.kubernetes.io/component: writer
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: heber-writer
+        app.kubernetes.io/component: writer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: heber
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: writer
+          image: heber:writer-latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "heber.writer.service"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: heber-config
+            - secretRef:
+                name: heber-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

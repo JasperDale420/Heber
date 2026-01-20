@@ -1,0 +1,43 @@
+# =============================================================================
+# Heber Kubernetes Base Configuration
+# =============================================================================
+# Uses Kustomize for environment overlays
+# Base directory: k8s/base/
+# Overlays: k8s/overlays/{dev,staging,prod}/
+# =============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: heber-base
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployments/consumer.yaml
+  - deployments/writer.yaml
+  - deployments/compactor.yaml
+  - deployments/catalog.yaml
+  - deployments/hotloader.yaml
+  - deployments/backfill.yaml
+  - services/consumer.yaml
+  - services/writer.yaml
+  - services/catalog.yaml
+  - services/hotloader.yaml
+  - pdb/consumer.yaml
+  - pdb/writer.yaml
+  - pdb/catalog.yaml
+  - pdb/hotloader.yaml
+  - hpa/consumer.yaml
+  - hpa/writer.yaml
+  - hpa/catalog.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: heber
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: heber
+    newName: ghcr.io/jacobmcmillan/heber
+    newTag: latest

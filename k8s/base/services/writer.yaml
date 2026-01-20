@@ -1,0 +1,15 @@
+# Heber Writer Service (internal, metrics only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-writer
+  labels:
+    app.kubernetes.io/name: heber-writer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-writer
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics

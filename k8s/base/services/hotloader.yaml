@@ -1,0 +1,15 @@
+# Heber Hot Store Loader Service (internal, metrics only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: heber-hotloader
+  labels:
+    app.kubernetes.io/name: heber-hotloader
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: heber-hotloader
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics

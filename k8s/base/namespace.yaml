@@ -1,0 +1,17 @@
+# =============================================================================
+# Heber Namespace
+# =============================================================================
+# Environment-specific namespaces per PRD §20.1:
+# - Local dev: heber-dev
+# - Staging: heber-staging  
+# - Production: heber-prod
+# This is the base template, overlays set the actual name
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: heber
+  labels:
+    app.kubernetes.io/part-of: heber
+    app.kubernetes.io/managed-by: kustomize

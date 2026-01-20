@@ -1,0 +1,13 @@
+# Heber Consumer PodDisruptionBudget per PRD §20.3
+# minAvailable: 2
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: heber-consumer-pdb
+  labels:
+    app.kubernetes.io/name: heber-consumer
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: heber-consumer
