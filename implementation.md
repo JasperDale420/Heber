@@ -502,12 +502,12 @@
 
 ---
 
-## Phase 21: Compaction Schedule (§12.9)
+## Phase 21: Compaction Schedule (§12.9) ✅
 
-- [ ] Compact hourly partitions after close (18:10-18:30 for hour=18)
-- [ ] Preserve event_id uniqueness
-- [ ] Preserve ts_available
-- [ ] Atomic writes (temp → rename)
+- [x] Compact hourly partitions after close (18:10-18:30 for hour=18)
+- [x] Preserve event_id uniqueness (via dedupe_at_compaction)
+- [x] Preserve ts_available (immutable in compaction)
+- [x] Atomic writes (temp → rename via AtomicWriter)
 
 ---
 
