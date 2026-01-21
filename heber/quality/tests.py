@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pandas as pd
+import pytest
 
 from heber.quality.contracts import (
     DataQualityValidator,
@@ -26,7 +27,7 @@ class TestQualityContract:
         restored = QualityContract.from_dict(d)
 
         assert restored.metric == QualityMetric.FILL_RATE
-        assert restored.threshold == 0.95
+        assert restored.threshold == pytest.approx(0.95)
 
 
 class TestFillRateCheck:
@@ -46,9 +47,9 @@ class TestFillRateCheck:
 
         df = pd.DataFrame(rows)
 
-        rate, affected_symbols, affected_dates = validator.check_fill_rate(df, 10)
+        rate, affected_symbols, _ = validator.check_fill_rate(df, 10)
 
-        assert rate == 1.0
+        assert rate == pytest.approx(1.0)
         assert len(affected_symbols) == 0
 
     def test_partial_fill_rate(self):
@@ -86,7 +87,7 @@ class TestNonNullRateCheck:
 
         rate, cols = validator.check_non_null_rate(df, ["open", "close"])
 
-        assert rate == 1.0
+        assert rate == pytest.approx(1.0)
         assert len(cols) == 0
 
     def test_some_nulls(self):
@@ -123,7 +124,7 @@ class TestFreshnessCheck:
 
         lag, is_fresh = validator.check_freshness(df, max_lag_hours=3, current_time=current_time)
 
-        assert lag == 2.0
+        assert lag == pytest.approx(2.0)
         assert is_fresh
 
     def test_stale_data(self):
@@ -159,7 +160,7 @@ class TestGapCheck:
 
         gap, dates = validator.check_gaps(df, max_gap_seconds=7200)  # 2 hour max
 
-        assert gap == 3600  # 1 hour between rows
+        assert gap == pytest.approx(3600)  # 1 hour between rows
         assert len(dates) == 0
 
     def test_has_gap(self):

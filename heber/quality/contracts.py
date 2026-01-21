@@ -252,6 +252,95 @@ class DataQualityValidator:
 
         return max_gap, dates_with_gaps
 
+    def _validate_fill_rate(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        expected_days: int,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate fill rate contract."""
+        rate, symbols, dates = self.check_fill_rate(df, expected_days)
+        metrics["fill_rate"] = rate
+
+        if rate < contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="fill_rate",
+                    metric=QualityMetric.FILL_RATE,
+                    actual=rate,
+                    expected=contract.threshold,
+                    affected_symbols=symbols,
+                    affected_dates=dates,
+                )
+            )
+
+    def _validate_non_null_rate(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate non-null rate contract."""
+        rate, cols = self.check_non_null_rate(df, contract.columns)
+        metrics["non_null_rate"] = rate
+
+        if rate < contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="completeness",
+                    metric=QualityMetric.NON_NULL_RATE,
+                    actual=rate,
+                    expected=contract.threshold,
+                    affected_symbols=cols,
+                )
+            )
+
+    def _validate_freshness(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate freshness contract."""
+        lag, is_fresh = self.check_freshness(df, contract.threshold)
+        metrics["lag_hours"] = lag
+
+        if not is_fresh:
+            violations.append(
+                QualityViolation(
+                    contract="freshness",
+                    metric=QualityMetric.MAX_LAG_HOURS,
+                    actual=lag,
+                    expected=contract.threshold,
+                )
+            )
+
+    def _validate_gaps(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate gap duration contract."""
+        gap, dates = self.check_gaps(df, contract.threshold)
+        metrics["max_gap_seconds"] = gap
+
+        if gap > contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="gap_duration",
+                    metric=QualityMetric.MAX_GAP_SECONDS,
+                    actual=gap,
+                    expected=contract.threshold,
+                    affected_dates=dates,
+                )
+            )
+
     def validate(
         self,
         dataset: str,
@@ -270,8 +359,8 @@ class DataQualityValidator:
         Returns:
             QualityReport with pass/fail status and violations
         """
-        violations = []
-        metrics = {}
+        violations: list[QualityViolation] = []
+        metrics: dict[str, float] = {}
 
         contracts = self.contracts.get(dataset, [])
 
@@ -280,64 +369,13 @@ class DataQualityValidator:
 
         for contract in contracts:
             if contract.metric == QualityMetric.FILL_RATE:
-                rate, symbols, dates = self.check_fill_rate(df, expected_days)
-                metrics["fill_rate"] = rate
-
-                if rate < contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="fill_rate",
-                            metric=QualityMetric.FILL_RATE,
-                            actual=rate,
-                            expected=contract.threshold,
-                            affected_symbols=symbols,
-                            affected_dates=dates,
-                        )
-                    )
-
+                self._validate_fill_rate(contract, df, expected_days, metrics, violations)
             elif contract.metric == QualityMetric.NON_NULL_RATE:
-                rate, cols = self.check_non_null_rate(df, contract.columns)
-                metrics["non_null_rate"] = rate
-
-                if rate < contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="completeness",
-                            metric=QualityMetric.NON_NULL_RATE,
-                            actual=rate,
-                            expected=contract.threshold,
-                            affected_symbols=cols,
-                        )
-                    )
-
+                self._validate_non_null_rate(contract, df, metrics, violations)
             elif contract.metric == QualityMetric.MAX_LAG_HOURS:
-                lag, is_fresh = self.check_freshness(df, contract.threshold)
-                metrics["lag_hours"] = lag
-
-                if not is_fresh:
-                    violations.append(
-                        QualityViolation(
-                            contract="freshness",
-                            metric=QualityMetric.MAX_LAG_HOURS,
-                            actual=lag,
-                            expected=contract.threshold,
-                        )
-                    )
-
+                self._validate_freshness(contract, df, metrics, violations)
             elif contract.metric == QualityMetric.MAX_GAP_SECONDS:
-                gap, dates = self.check_gaps(df, contract.threshold)
-                metrics["max_gap_seconds"] = gap
-
-                if gap > contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="gap_duration",
-                            metric=QualityMetric.MAX_GAP_SECONDS,
-                            actual=gap,
-                            expected=contract.threshold,
-                            affected_dates=dates,
-                        )
-                    )
+                self._validate_gaps(contract, df, metrics, violations)
 
         passed = len(violations) == 0
 
