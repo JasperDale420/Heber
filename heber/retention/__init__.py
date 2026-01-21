@@ -100,10 +100,16 @@ DEFAULT_RETENTION = {
 
 @dataclass
 class RetentionPolicy:
-    """Retention policy for a layer per PRD §15.2."""
+    """Retention policy for a layer per PRD §15.2.
 
-    retention_days: int | None = None  # None = forever
-    retention_versions: int | None = None  # For Gold layer
+    Attributes:
+        retention_days: Days to retain data (None = forever)
+        retention_versions: Number of versions to keep (for Gold layer)
+        action: Lifecycle action to perform when retention expires
+    """
+
+    retention_days: int | None = None
+    retention_versions: int | None = None
     action: LifecycleAction = LifecycleAction.DELETE
 
     def to_dict(self) -> dict[str, Any]:
@@ -446,7 +452,7 @@ class ReaperWorker:
             return await self.delete_partition(partition)
         elif action == LifecycleAction.ARCHIVE:
             # Archive first, then delete
-            archived, bytes_archived = await self.archiver.archive_partition(partition)
+            archived, _ = await self.archiver.archive_partition(partition)
             if archived:
                 return await self.delete_partition(partition)
             return False, 0
