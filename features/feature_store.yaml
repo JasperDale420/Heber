@@ -4,7 +4,7 @@ provider: local
 
 # Registry: where feature metadata is stored
 # In production, this would be the Heber Catalog (Postgres)
-registry: 
+registry:
   registry_type: file
   path: /data/feast/registry.pb
 

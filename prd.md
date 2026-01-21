@@ -3499,12 +3499,12 @@ from heber_sdk import write_label
 write_label(
     dataset="returns_5d",
     df=labels_df,
-    
+
     # Column mappings
     instrument_key_col="instrument_key",
     label_time_col="ts_label",       # Feature cutoff time (T)
     forward_window="5d",             # Label observes T to T+5d
-    
+
     # ts_available = ts_label + forward_window + market_close_delay
     # E.g., for T=2025-01-10, forward_window=5d:
     #   Label becomes available at 2025-01-15 16:05 (after market close)
@@ -3612,7 +3612,7 @@ for train_range, test_range in splits:
         asof_time=train_range.end,
         time_range=train_range
     )
-    
+
     # Read features for testing (asof = end of test)
     test_features = client.read_gold(
         "momentum_features",
@@ -3624,7 +3624,7 @@ for train_range, test_range in splits:
         asof_time=test_range.end,
         time_range=test_range
     )
-    
+
     # Train and evaluate
     model.fit(train_features, train_labels)
     predictions = model.predict(test_features)
@@ -3845,7 +3845,7 @@ from datetime import datetime, timedelta
 def materialize_features():
     """Run hourly to keep online store fresh."""
     store = FeatureStore(repo_path="heber/features/")
-    
+
     # Incremental materialization
     store.materialize_incremental(
         end_date=datetime.now(),
@@ -3972,14 +3972,14 @@ import pandas as pd
 def compute_momentum_features():
     """Daily job to compute momentum features."""
     client = HeberClient()
-    
+
     # Read from Silver (point-in-time correct)
     bars = client.read_silver(
         dataset="bars",
         instrument_type="equity",
         time_range=("2025-01-01", "2025-01-15"),
     )
-    
+
     # Compute features
     features = bars.groupby("instrument_key").apply(
         lambda df: pd.DataFrame({
@@ -3992,7 +3992,7 @@ def compute_momentum_features():
             "volatility_20d": df["close"].pct_change().rolling(20).std(),
         })
     )
-    
+
     # Write to Gold (Feast offline store)
     client.write_gold(
         dataset="momentum_features",
@@ -4010,17 +4010,17 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime
 
 with DAG("heber_momentum_features", schedule_interval="0 18 * * 1-5") as dag:
-    
+
     compute = PythonOperator(
         task_id="compute_momentum",
         python_callable=compute_momentum_features,
     )
-    
+
     materialize = PythonOperator(
         task_id="materialize_to_online",
         python_callable=materialize_features,
     )
-    
+
     compute >> materialize
 ```
 
@@ -4148,7 +4148,7 @@ import numpy as np
 def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute momentum features for each instrument.
-    
+
     Input: Silver bars with columns [instrument_key, bar_start_ts, open, high, low, close, volume]
     Output: Gold features with ts_available set to computation time
     """
@@ -4158,27 +4158,27 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
             "instrument_key": df["instrument_key"],
             "ts_event": df["bar_start_ts"],
             "ts_available": pd.Timestamp.now(tz="UTC"),
-            
+
             # Price momentum (returns over lookback)
             "momentum_1d": close.pct_change(1),
             "momentum_5d": close / close.shift(5) - 1,
             "momentum_10d": close / close.shift(10) - 1,
             "momentum_20d": close / close.shift(20) - 1,
             "momentum_60d": close / close.shift(60) - 1,
-            
+
             # Rate of change
             "roc_5d": (close - close.shift(5)) / close.shift(5) * 100,
             "roc_20d": (close - close.shift(20)) / close.shift(20) * 100,
-            
+
             # RSI (Relative Strength Index)
             "rsi_14": compute_rsi(close, 14),
             "rsi_28": compute_rsi(close, 28),
-            
+
             # MACD
             "macd": close.ewm(span=12).mean() - close.ewm(span=26).mean(),
             "macd_signal": (close.ewm(span=12).mean() - close.ewm(span=26).mean()).ewm(span=9).mean(),
         })
-    
+
     return bars_df.groupby("instrument_key", group_keys=False).apply(calc_features)
 
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
@@ -4204,37 +4204,37 @@ def compute_volatility_features(bars_df: pd.DataFrame) -> pd.DataFrame:
         high = df["high"]
         low = df["low"]
         returns = close.pct_change()
-        
+
         return pd.DataFrame({
             "instrument_key": df["instrument_key"],
             "ts_event": df["bar_start_ts"],
             "ts_available": pd.Timestamp.now(tz="UTC"),
-            
+
             # Realized volatility (annualized)
             "vol_5d": returns.rolling(5).std() * np.sqrt(252),
             "vol_20d": returns.rolling(20).std() * np.sqrt(252),
             "vol_60d": returns.rolling(60).std() * np.sqrt(252),
-            
+
             # Volatility ratio (short/long)
             "vol_ratio_5_20": returns.rolling(5).std() / returns.rolling(20).std(),
             "vol_ratio_20_60": returns.rolling(20).std() / returns.rolling(60).std(),
-            
+
             # Parkinson volatility (uses high/low)
             "parkinson_vol_20d": compute_parkinson_vol(high, low, 20),
-            
+
             # Average True Range (ATR)
             "atr_14": compute_atr(high, low, close, 14),
             "atr_20": compute_atr(high, low, close, 20),
-            
+
             # Bollinger Band width (volatility proxy)
-            "bb_width_20": (close.rolling(20).mean() + 2*close.rolling(20).std() - 
+            "bb_width_20": (close.rolling(20).mean() + 2*close.rolling(20).std() -
                            (close.rolling(20).mean() - 2*close.rolling(20).std())) / close.rolling(20).mean(),
-            
+
             # Z-score of price
             "price_zscore_20d": (close - close.rolling(20).mean()) / close.rolling(20).std(),
             "price_zscore_60d": (close - close.rolling(60).mean()) / close.rolling(60).std(),
         })
-    
+
     return bars_df.groupby("instrument_key", group_keys=False).apply(calc_features)
 
 def compute_parkinson_vol(high: pd.Series, low: pd.Series, window: int) -> pd.Series:
@@ -4275,36 +4275,36 @@ def compute_flow_features(
         right_on=["underlying_key", "bar_start_ts"],
         how="left"
     )
-    
+
     def calc_features(df):
         return pd.DataFrame({
             "instrument_key": f"equity:{df['underlying'].iloc[0]}",
             "ts_event": df["ts_event"],
             "ts_available": pd.Timestamp.now(tz="UTC"),
-            
+
             # Premium aggregates
             "total_premium_24h": df["premium"].rolling(f"{lookback_hours}h").sum(),
             "call_premium_24h": df[df["put_call"] == "C"]["premium"].rolling(f"{lookback_hours}h").sum(),
             "put_premium_24h": df[df["put_call"] == "P"]["premium"].rolling(f"{lookback_hours}h").sum(),
-            
+
             # Call/Put ratio
             "call_put_premium_ratio": (
                 df[df["put_call"] == "C"]["premium"].rolling(f"{lookback_hours}h").sum() /
                 df[df["put_call"] == "P"]["premium"].rolling(f"{lookback_hours}h").sum().replace(0, np.nan)
             ),
-            
+
             # Sweep activity
             "sweep_count_24h": (df["alert_type"] == "SWEEP").rolling(f"{lookback_hours}h").sum(),
             "sweep_premium_24h": df[df["alert_type"] == "SWEEP"]["premium"].rolling(f"{lookback_hours}h").sum(),
-            
+
             # Premium as % of underlying volume (normalized)
             "premium_to_volume_ratio": df["premium"] / (df["close"] * df["volume"]).replace(0, np.nan),
-            
+
             # OTM/ITM breakdown
             "otm_call_premium": df[(df["put_call"] == "C") & (df["strike"] > df["spot_px"])]["premium"].sum(),
             "itm_put_premium": df[(df["put_call"] == "P") & (df["strike"] > df["spot_px"])]["premium"].sum(),
         })
-    
+
     return flow.groupby("underlying", group_keys=False).apply(calc_features)
 ```
 
@@ -4330,26 +4330,26 @@ def compute_microstructure_features(
             "instrument_key": df["instrument_key"],
             "ts_event": df["ts_event"],
             "ts_available": pd.Timestamp.now(tz="UTC"),
-            
+
             # Spread metrics
             "bid_ask_spread": df["ask_px"] - df["bid_px"],
             "spread_bps": (df["ask_px"] - df["bid_px"]) / df["mid_px"] * 10000,
             "spread_avg_5m": ((df["ask_px"] - df["bid_px"]) / df["mid_px"] * 10000).rolling("5min").mean(),
-            
+
             # Depth metrics
             "bid_depth": df["bid_sz"],
             "ask_depth": df["ask_sz"],
             "depth_imbalance": (df["bid_sz"] - df["ask_sz"]) / (df["bid_sz"] + df["ask_sz"]),
-            
+
             # Quote intensity
             "quote_count_1m": df["event_id"].rolling("1min").count(),
             "quote_count_5m": df["event_id"].rolling("5min").count(),
-            
+
             # Price impact proxy
             "mid_px": (df["bid_px"] + df["ask_px"]) / 2,
             "mid_change_1m": ((df["bid_px"] + df["ask_px"]) / 2).diff(periods=60),  # Assuming 1s data
         })
-    
+
     quotes_df["mid_px"] = (quotes_df["bid_px"] + quotes_df["ask_px"]) / 2
     return quotes_df.groupby("instrument_key", group_keys=False).apply(calc_features)
 ```
@@ -4374,36 +4374,36 @@ def compute_relative_features(
     benchmark = bars_df[bars_df["instrument_key"] == benchmark_key][
         ["bar_start_ts", "close"]
     ].rename(columns={"close": "benchmark_close"})
-    
+
     # Merge with all instruments
     merged = bars_df.merge(benchmark, on="bar_start_ts", how="left")
-    
+
     def calc_features(df):
         returns = df["close"].pct_change()
         bench_returns = df["benchmark_close"].pct_change()
-        
+
         return pd.DataFrame({
             "instrument_key": df["instrument_key"],
             "ts_event": df["bar_start_ts"],
             "ts_available": pd.Timestamp.now(tz="UTC"),
-            
+
             # Relative strength
             "rel_strength_20d": (df["close"] / df["close"].shift(20)) / (df["benchmark_close"] / df["benchmark_close"].shift(20)),
-            
+
             # Beta (rolling)
             "beta_60d": returns.rolling(60).cov(bench_returns) / bench_returns.rolling(60).var(),
-            
+
             # Alpha (excess return vs benchmark)
             "alpha_20d": returns.rolling(20).mean() - bench_returns.rolling(20).mean(),
-            
+
             # Correlation to benchmark
             "corr_spy_20d": returns.rolling(20).corr(bench_returns),
             "corr_spy_60d": returns.rolling(60).corr(bench_returns),
-            
+
             # Idiosyncratic volatility
             "idio_vol_20d": (returns - bench_returns).rolling(20).std() * np.sqrt(252),
         })
-    
+
     return merged[merged["instrument_key"] != benchmark_key].groupby(
         "instrument_key", group_keys=False
     ).apply(calc_features)
@@ -4428,15 +4428,15 @@ def compute_return_labels(bars_df: pd.DataFrame, horizons: list = [1, 5, 10, 20]
             "instrument_key": df["instrument_key"],
             "ts_label": df["bar_start_ts"],  # Feature cutoff time
         }
-        
+
         for h in horizons:
             # Forward return (what we're predicting)
             result[f"return_{h}d"] = close.shift(-h) / close - 1
             # ts_available = ts_label + horizon (label only observable after horizon passes)
             result[f"ts_available_{h}d"] = df["bar_start_ts"] + pd.Timedelta(days=h)
-        
+
         return pd.DataFrame(result)
-    
+
     return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels)
 
 def compute_classification_labels(bars_df: pd.DataFrame, threshold: float = 0.02) -> pd.DataFrame:
@@ -4445,15 +4445,15 @@ def compute_classification_labels(bars_df: pd.DataFrame, threshold: float = 0.02
     """
     def calc_labels(df):
         ret_5d = df["close"].shift(-5) / df["close"] - 1
-        
+
         return pd.DataFrame({
             "instrument_key": df["instrument_key"],
             "ts_label": df["bar_start_ts"],
             "ts_available": df["bar_start_ts"] + pd.Timedelta(days=5),
-            
+
             # Binary: up or not
             "label_up_5d": (ret_5d > threshold).astype(int),
-            
+
             # Ternary: up/down/flat
             "label_direction_5d": pd.cut(
                 ret_5d,
@@ -4461,7 +4461,7 @@ def compute_classification_labels(bars_df: pd.DataFrame, threshold: float = 0.02
                 labels=[-1, 0, 1]
             ).astype(int),
         })
-    
+
     return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels)
 ```
 
@@ -4645,12 +4645,12 @@ with mlflow.start_run():
         "train_period": "12M",
         "test_period": "3M"
     })
-    
+
     for train_range, test_range in splits:
         # Heber: data access
         train_data = client.read_gold(...)
         test_data = client.read_gold(...)
-        
+
         # User: training and evaluation
         model.fit(train_data)
         metrics = evaluate(model, test_data)
@@ -4841,8 +4841,8 @@ df = client.read_gold(
 **Ingestion Availability:**
 
 ```promql
-sum(rate(heber_consumer_events_processed_total{status="success"}[30d])) 
-/ 
+sum(rate(heber_consumer_events_processed_total{status="success"}[30d]))
+/
 sum(rate(heber_consumer_events_processed_total[30d]))
 ```
 
@@ -5550,11 +5550,11 @@ services:
 def test_event_ingestion_happy_path():
     # Arrange
     event = create_test_event(symbol="AAPL", ts_event="2025-01-15T10:00:00Z")
-    
+
     # Act
     publish_to_redis(event)
     wait_for_consumer_processing(timeout=30)
-    
+
     # Assert
     df = sdk_client.read_asof(
         dataset="bars",
@@ -5604,14 +5604,14 @@ def test_lk001_no_future_data_returned():
         ts_event="2025-01-15T10:00:00Z",
         ts_available="2025-01-20T10:00:00Z"  # Future
     )
-    
+
     # Act: Query at asof_time before ts_available
     df = sdk_client.read_asof(
         dataset="bars",
         asof_time="2025-01-18T00:00:00Z",  # Before ts_available
         symbols=["TEST"]
     )
-    
+
     # Assert: No rows returned (data not yet "available")
     assert len(df) == 0
 
@@ -5623,10 +5623,10 @@ def test_lk003_backfill_ts_available():
     backfill_event = create_backfill_event(
         ts_event="2020-01-01T10:00:00Z"  # Historical
     )
-    
+
     # Act
     ts_commit = run_backfill(backfill_event)
-    
+
     # Assert
     row = read_raw_from_s3("bars", symbol="TEST", date="2020-01-01")
     assert row["ts_available"] == ts_commit  # Not now(), not ts_event
@@ -5664,11 +5664,11 @@ class TestDataGenerator:
     ) -> pd.DataFrame:
         """Generate realistic bar data for testing."""
         ...
-    
+
     def generate_with_gaps(self, gap_dates: List[str]) -> pd.DataFrame:
         """Generate data with intentional gaps for testing."""
         ...
-    
+
     def generate_with_splits(self, split_events: List[dict]) -> pd.DataFrame:
         """Generate data with stock splits."""
         ...
@@ -6020,22 +6020,22 @@ news_events_schema = pa.schema([
     ("event_id", pa.string()),
     ("ts_event", pa.timestamp("us", tz="UTC")),      # When news was published
     ("ts_available", pa.timestamp("us", tz="UTC")), # When Heber received it
-    
+
     # Content metadata
     ("headline", pa.string()),
     ("summary", pa.string()),                        # First 500 chars
     ("source", pa.string()),                         # Reuters, Bloomberg, etc.
     ("url", pa.string()),
-    
+
     # Structured fields
     ("symbols", pa.list_(pa.string())),              # Mentioned tickers
     ("categories", pa.list_(pa.string())),           # earnings, merger, etc.
-    
+
     # Enrichment
     ("sentiment_score", pa.float32()),               # -1 to +1
     ("sentiment_label", pa.string()),                # positive, negative, neutral
     ("relevance_score", pa.float32()),               # 0 to 1
-    
+
     # Cross-reference
     ("doc_store_id", pa.string()),                   # ID in document store
     ("doc_store_type", pa.string()),                 # elasticsearch, mongodb, s3
@@ -6070,31 +6070,31 @@ filing_events_schema = pa.schema([
     ("ts_filed", pa.timestamp("us", tz="UTC")),      # SEC filing date
     ("ts_accepted", pa.timestamp("us", tz="UTC")),   # SEC acceptance date
     ("ts_available", pa.timestamp("us", tz="UTC")), # When Heber received it
-    
+
     # Company info
     ("cik", pa.string()),
     ("company_name", pa.string()),
     ("symbol", pa.string()),                         # If mapped
-    
+
     # Filing details
     ("form_type", pa.string()),                      # 10-K, 10-Q, 8-K, 13F, etc.
     ("accession_number", pa.string()),
     ("file_number", pa.string()),
-    
+
     # Period
     ("period_of_report", pa.date32()),               # Fiscal period end
     ("fiscal_year", pa.int32()),
     ("fiscal_quarter", pa.int32()),
-    
+
     # Flags
     ("is_amendment", pa.bool_()),
     ("is_annual", pa.bool_()),
     ("is_quarterly", pa.bool_()),
-    
+
     # Extracted structured data (for common filings)
     ("exhibits", pa.list_(pa.string())),
     ("items_reported", pa.list_(pa.string())),       # For 8-K: Item 2.02, etc.
-    
+
     # Cross-reference
     ("doc_store_id", pa.string()),
     ("sec_url", pa.string()),

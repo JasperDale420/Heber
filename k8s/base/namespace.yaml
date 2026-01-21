@@ -3,7 +3,7 @@
 # =============================================================================
 # Environment-specific namespaces per PRD §20.1:
 # - Local dev: heber-dev
-# - Staging: heber-staging  
+# - Staging: heber-staging
 # - Production: heber-prod
 # This is the base template, overlays set the actual name
 # =============================================================================

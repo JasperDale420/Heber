@@ -15,29 +15,29 @@ data:
   HEBER_STORAGE_ENDPOINT: "http://minio.heber.svc:9000"
   HEBER_STORAGE_BUCKET: "heber-data"
   HEBER_STORAGE_PREFIX: "silver"
-  
+
   # Redis/Event Bus
   HEBER_REDIS_STREAM_PREFIX: "stream:heber"
   HEBER_CONSUMER_GROUP: "heber-consumers"
-  
+
   # Writer configuration per PRD §12.9
   HEBER_WRITER_FLUSH_INTERVAL_SECONDS: "60"
   HEBER_WRITER_MAX_ROWS: "100000"
   HEBER_WRITER_MAX_BYTES: "134217728"  # 128MB
-  
+
   # Compaction configuration per PRD §12.9
   HEBER_COMPACTION_DELAY_MINUTES: "10"
   HEBER_COMPACTION_MAX_WINDOW_MINUTES: "20"
   HEBER_COMPACTION_MAX_CONCURRENT: "2"
-  
+
   # Hot Store configuration per PRD §12.10
   HEBER_HOTSTORE_SYNC_INTERVAL_SECONDS: "300"
   HEBER_HOTSTORE_TTL_DAYS: "7"
-  
+
   # Catalog API
   HEBER_CATALOG_HOST: "0.0.0.0"
   HEBER_CATALOG_PORT: "8080"
-  
+
   # Observability
   HEBER_LOG_LEVEL: "INFO"
   HEBER_LOG_FORMAT: "json"

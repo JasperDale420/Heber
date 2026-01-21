@@ -27,7 +27,7 @@ timeout: 15m
 # Output format
 format: table
 
-# Ignore unfixed vulnerabilities 
+# Ignore unfixed vulnerabilities
 ignore-unfixed: true
 
 # Exit code on vulnerabilities found
@@ -37,7 +37,7 @@ exit-code: 1
 db:
   # Update vulnerability database
   skip-update: false
-  
+
 # Ignore specific vulnerabilities (false positives)
 # Add CVEs here if they're accepted risks
 vulnerability:
