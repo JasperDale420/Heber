@@ -1,0 +1,76 @@
+# Soda Core Checks for Silver Quotes Dataset
+
+checks for heber_silver.quotes:
+  # =============================================================================
+  # Data Presence & Freshness
+  # =============================================================================
+
+  - row_count > 0:
+      name: "Table has data"
+
+  - freshness(ts_available) < 30m:
+      name: "Quotes freshness (stricter than bars)"
+      warn: when > 15m
+      fail: when > 30m
+
+  # =============================================================================
+  # Zero-Leakage Constraints
+  # =============================================================================
+
+  - max(ts_available) <= '${CURRENT_TIME}':
+      name: "No future ts_available"
+
+  - failed rows:
+      name: "ts_available >= ts_event"
+      fail condition: ts_available < ts_event
+
+  # =============================================================================
+  # Data Completeness
+  # =============================================================================
+
+  - missing_count(event_id) = 0:
+      name: "event_id required"
+
+  - missing_count(instrument_key) = 0:
+      name: "instrument_key required"
+
+  - missing_count(bid_price) = 0:
+      name: "bid_price required"
+
+  - missing_count(ask_price) = 0:
+      name: "ask_price required"
+
+  - missing_percent(bid_size) < 5%:
+      name: "bid_size fill rate"
+
+  - missing_percent(ask_size) < 5%:
+      name: "ask_size fill rate"
+
+  # =============================================================================
+  # Data Validity
+  # =============================================================================
+
+  - min(bid_price) >= 0:
+      name: "bid_price non-negative"
+
+  - min(ask_price) >= 0:
+      name: "ask_price non-negative"
+
+  # Spread check: ask >= bid
+  - failed rows:
+      name: "ask >= bid (positive spread)"
+      fail condition: ask_price < bid_price
+      warn: when > 1%  # Allow some crossed quotes during volatility
+
+  - min(bid_size) >= 0:
+      name: "bid_size non-negative"
+
+  - min(ask_size) >= 0:
+      name: "ask_size non-negative"
+
+  # =============================================================================
+  # Uniqueness
+  # =============================================================================
+
+  - duplicate_count(event_id) = 0:
+      name: "No duplicate event_ids"
