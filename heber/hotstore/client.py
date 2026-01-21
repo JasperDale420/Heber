@@ -6,7 +6,7 @@ Provides:
 - Metrics for sync lag monitoring
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 
 class HotStoreClient:
     """ClickHouse client for Hot Store queries.
-    
+
     Per PRD §12.10.1, Hot Store supports different query modes:
     - Real-time dashboard: Hot Store only (accepts staleness)
     - Strategy signals: Hot Store with Silver fallback
@@ -29,7 +29,7 @@ class HotStoreClient:
 
     def __init__(self, client: Client | None = None):
         self._client = client
-        
+
     @property
     def client(self) -> Client:
         """Lazy-initialize ClickHouse client."""
@@ -45,10 +45,10 @@ class HotStoreClient:
 
     async def get_latest_quote(self, instrument_key: str) -> dict[str, Any] | None:
         """Get latest quote for an instrument from Hot Store.
-        
+
         Args:
             instrument_key: Canonical instrument key (e.g., equity:AAPL)
-            
+
         Returns:
             Latest quote or None if not found
         """
@@ -61,20 +61,16 @@ class HotStoreClient:
         """
         result = self.client.query(query, parameters={"key": instrument_key})
         if result.result_rows:
-            return dict(zip(result.column_names, result.result_rows[0]))
+            return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
-    async def get_latest_bar(
-        self, 
-        instrument_key: str, 
-        timeframe: str = "1Min"
-    ) -> dict[str, Any] | None:
+    async def get_latest_bar(self, instrument_key: str, timeframe: str = "1Min") -> dict[str, Any] | None:
         """Get latest bar for an instrument from Hot Store.
-        
+
         Args:
             instrument_key: Canonical instrument key
             timeframe: Bar timeframe (1Min, 5Min, 1Hour, etc)
-            
+
         Returns:
             Latest bar or None if not found
         """
@@ -86,12 +82,9 @@ class HotStoreClient:
         ORDER BY bar_start_ts DESC
         LIMIT 1
         """
-        result = self.client.query(
-            query, 
-            parameters={"key": instrument_key, "tf": timeframe}
-        )
+        result = self.client.query(query, parameters={"key": instrument_key, "tf": timeframe})
         if result.result_rows:
-            return dict(zip(result.column_names, result.result_rows[0]))
+            return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
     async def get_quotes_range(
@@ -101,12 +94,12 @@ class HotStoreClient:
         end: datetime,
     ) -> list[dict[str, Any]]:
         """Get quotes for a time range.
-        
+
         Args:
             instrument_key: Canonical instrument key
             start: Start timestamp
             end: End timestamp
-            
+
         Returns:
             List of quote records
         """
@@ -118,14 +111,8 @@ class HotStoreClient:
           AND ts_event <= %(end)s
         ORDER BY ts_event
         """
-        result = self.client.query(
-            query,
-            parameters={"key": instrument_key, "start": start, "end": end}
-        )
-        return [
-            dict(zip(result.column_names, row))
-            for row in result.result_rows
-        ]
+        result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
+        return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
     async def get_trades_range(
         self,
@@ -134,12 +121,12 @@ class HotStoreClient:
         end: datetime,
     ) -> list[dict[str, Any]]:
         """Get trades for a time range.
-        
+
         Args:
             instrument_key: Canonical instrument key
             start: Start timestamp
             end: End timestamp
-            
+
         Returns:
             List of trade records
         """
@@ -151,27 +138,21 @@ class HotStoreClient:
           AND ts_event <= %(end)s
         ORDER BY ts_event
         """
-        result = self.client.query(
-            query,
-            parameters={"key": instrument_key, "start": start, "end": end}
-        )
-        return [
-            dict(zip(result.column_names, row))
-            for row in result.result_rows
-        ]
+        result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
+        return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
     async def get_sync_lag_seconds(self, dataset: str) -> float:
         """Get sync lag between Silver and Hot Store (PRD §12.10.1).
-        
+
         Args:
             dataset: Dataset name (quotes, trades, bars)
-            
+
         Returns:
             Lag in seconds (Hot Store should be ≤300s behind Silver)
         """
         table = f"{dataset}_hot"
         query = f"""
-        SELECT 
+        SELECT
             now() - max(ts_available) as lag_seconds
         FROM {table}
         WHERE ts_event > now() - INTERVAL 1 HOUR
@@ -183,11 +164,11 @@ class HotStoreClient:
 
     async def get_row_count(self, dataset: str, days: int = 7) -> int:
         """Get row count for a dataset in the retention window.
-        
+
         Args:
             dataset: Dataset name (quotes, trades, bars)
             days: Number of days to count
-            
+
         Returns:
             Row count
         """

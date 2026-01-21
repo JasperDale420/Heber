@@ -1,7 +1,6 @@
 """Catalog service business logic."""
 
 from datetime import datetime
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,9 +10,7 @@ from heber.catalog.db import (
     Dataset,
     DatasetVersion,
     FeedMapping,
-    InstrumentProviderMap,
     InstrumentRegistry,
-    Project,
 )
 
 
@@ -26,7 +23,7 @@ class CatalogService:
     # Dataset operations
     async def list_datasets(self, layer: str | None = None) -> list[Dataset]:
         """List all datasets, optionally filtered by layer."""
-        query = select(Dataset).where(Dataset.is_active == True)
+        query = select(Dataset).where(Dataset.is_active)
         if layer:
             query = query.where(Dataset.layer == layer)
         result = await self.session.execute(query)
@@ -34,9 +31,7 @@ class CatalogService:
 
     async def get_dataset(self, name: str) -> Dataset | None:
         """Get dataset by name."""
-        result = await self.session.execute(
-            select(Dataset).where(Dataset.dataset_name == name)
-        )
+        result = await self.session.execute(select(Dataset).where(Dataset.dataset_name == name))
         return result.scalar_one_or_none()
 
     async def get_dataset_versions(self, dataset_name: str) -> list[DatasetVersion]:
@@ -51,9 +46,7 @@ class CatalogService:
     async def get_current_schema(self, dataset_name: str) -> DatasetVersion | None:
         """Get current schema version for a dataset."""
         result = await self.session.execute(
-            select(DatasetVersion)
-            .where(DatasetVersion.dataset_name == dataset_name)
-            .where(DatasetVersion.is_current == True)
+            select(DatasetVersion).where(DatasetVersion.dataset_name == dataset_name).where(DatasetVersion.is_current)
         )
         return result.scalar_one_or_none()
 
@@ -87,17 +80,13 @@ class CatalogService:
     # Instrument operations
     async def get_instrument(self, key: str) -> InstrumentRegistry | None:
         """Get instrument by key."""
-        result = await self.session.execute(
-            select(InstrumentRegistry).where(InstrumentRegistry.instrument_key == key)
-        )
+        result = await self.session.execute(select(InstrumentRegistry).where(InstrumentRegistry.instrument_key == key))
         return result.scalar_one_or_none()
 
     async def lookup_instruments(self, symbols: list[str]) -> list[InstrumentRegistry]:
         """Batch lookup instruments by symbol."""
         result = await self.session.execute(
-            select(InstrumentRegistry).where(
-                InstrumentRegistry.canonical_symbol.in_(symbols)
-            )
+            select(InstrumentRegistry).where(InstrumentRegistry.canonical_symbol.in_(symbols))
         )
         return list(result.scalars().all())
 
@@ -112,9 +101,7 @@ class CatalogService:
         if instrument_type:
             query = query.where(InstrumentRegistry.instrument_type == instrument_type)
         if symbol_prefix:
-            query = query.where(
-                InstrumentRegistry.canonical_symbol.ilike(f"{symbol_prefix}%")
-            )
+            query = query.where(InstrumentRegistry.canonical_symbol.ilike(f"{symbol_prefix}%"))
         query = query.limit(limit)
         result = await self.session.execute(query)
         return list(result.scalars().all())
@@ -149,9 +136,7 @@ class CatalogService:
     async def resolve_feed(self, provider: str, gateway_feed: str) -> str | None:
         """Resolve gateway feed to Silver dataset name."""
         result = await self.session.execute(
-            select(FeedMapping)
-            .where(FeedMapping.provider == provider)
-            .where(FeedMapping.gateway_feed == gateway_feed)
+            select(FeedMapping).where(FeedMapping.provider == provider).where(FeedMapping.gateway_feed == gateway_feed)
         )
         mapping = result.scalar_one_or_none()
         return mapping.silver_dataset_name if mapping else None
@@ -162,9 +147,7 @@ class CatalogService:
         return list(result.scalars().all())
 
     # Coverage operations
-    async def get_coverage(
-        self, dataset_name: str, instrument_key: str | None = None
-    ) -> list[DataCoverage]:
+    async def get_coverage(self, dataset_name: str, instrument_key: str | None = None) -> list[DataCoverage]:
         """Get data coverage for a dataset."""
         query = select(DataCoverage).where(DataCoverage.dataset_name == dataset_name)
         if instrument_key:
@@ -187,7 +170,7 @@ class CatalogService:
             .where(DataCoverage.instrument_key == instrument_key)
         )
         coverage = result.scalar_one_or_none()
-        
+
         if coverage:
             coverage.dt_min = min(coverage.dt_min, dt_min)
             coverage.dt_max = max(coverage.dt_max, dt_max)
@@ -203,7 +186,7 @@ class CatalogService:
                 approx_row_count=approx_row_count,
             )
             self.session.add(coverage)
-        
+
         await self.session.commit()
         await self.session.refresh(coverage)
         return coverage

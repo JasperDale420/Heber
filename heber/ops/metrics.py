@@ -6,8 +6,8 @@ and anti-leakage latency monitoring.
 Naming convention: heber_<service>_<metric_name>{<labels>}
 """
 
-from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
 import structlog
+from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
 
 logger = structlog.get_logger(__name__)
 
@@ -215,6 +215,7 @@ dlq_size = Gauge(
 # Metric Recording Helpers
 # =============================================================================
 
+
 def record_event_received(feed: str, provider: str) -> None:
     """Record an event received from the bus."""
     consumer_events_received_total.labels(feed=feed, provider=provider).inc()
@@ -226,9 +227,7 @@ def record_event_processed(
     status: str = "success",
 ) -> None:
     """Record an event processed (success/error/dropped)."""
-    consumer_events_processed_total.labels(
-        feed=feed, provider=provider, status=status
-    ).inc()
+    consumer_events_processed_total.labels(feed=feed, provider=provider, status=status).inc()
 
 
 def record_batch_processed(feed: str, batch_size: int) -> None:
@@ -311,9 +310,10 @@ def set_hotstore_lag(dataset: str, lag_seconds: float) -> None:
 # Server Setup
 # =============================================================================
 
+
 def start_metrics_server(port: int = METRICS_PORT) -> None:
     """Start the Prometheus metrics HTTP server.
-    
+
     Args:
         port: Port to serve metrics on (default: 9100)
     """
@@ -331,8 +331,10 @@ def set_service_info(
     instance_id: str,
 ) -> None:
     """Set service info label for all metrics."""
-    heber_info.info({
-        "version": version,
-        "service": service,
-        "instance_id": instance_id,
-    })
+    heber_info.info(
+        {
+            "version": version,
+            "service": service,
+            "instance_id": instance_id,
+        }
+    )

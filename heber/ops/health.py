@@ -9,10 +9,10 @@ Provides:
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 
@@ -28,6 +28,7 @@ _startup_complete = False
 
 class HealthStatus(str, Enum):
     """Health check status."""
+
     OK = "ok"
     DEGRADED = "degraded"
     ERROR = "error"
@@ -35,6 +36,7 @@ class HealthStatus(str, Enum):
 
 class ReadinessStatus(str, Enum):
     """Readiness status."""
+
     READY = "ready"
     NOT_READY = "not_ready"
 
@@ -42,11 +44,12 @@ class ReadinessStatus(str, Enum):
 @dataclass
 class HealthCheck:
     """Individual health check result."""
+
     name: str
     status: HealthStatus
     message: str | None = None
     latency_ms: float | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         result = {"status": self.status.value}
         if self.message:
@@ -59,12 +62,13 @@ class HealthCheck:
 @dataclass
 class LivenessResponse:
     """Response for /health endpoint (PRD §12.12.2)."""
+
     status: str = "ok"
     service: str = ""
     instance_id: str = ""
     uptime_seconds: int = 0
     version: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
@@ -78,15 +82,16 @@ class LivenessResponse:
 @dataclass
 class ReadinessResponse:
     """Response for /ready endpoint (PRD §12.12.3)."""
+
     status: ReadinessStatus
     checks: dict[str, HealthCheck] = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "checks": {name: check.to_dict() for name, check in self.checks.items()},
         }
-    
+
     @property
     def is_ready(self) -> bool:
         return self.status == ReadinessStatus.READY
@@ -98,7 +103,7 @@ _dependency_checks: dict[str, Callable[[], HealthCheck]] = {}
 
 def register_dependency_check(name: str, check_fn: Callable[[], HealthCheck]) -> None:
     """Register a dependency health check.
-    
+
     Args:
         name: Dependency name (e.g., "event_bus", "object_storage")
         check_fn: Function that returns HealthCheck
@@ -127,13 +132,14 @@ def get_uptime_seconds() -> int:
 
 # Health check endpoint handlers
 
+
 def check_liveness() -> LivenessResponse:
     """Liveness check (/health) per PRD §12.12.2.
-    
+
     Returns 200 if process is alive. Does NOT check dependencies.
     """
     service, instance_id, version = get_service_info()
-    
+
     return LivenessResponse(
         status="ok",
         service=service,
@@ -145,22 +151,22 @@ def check_liveness() -> LivenessResponse:
 
 def check_readiness() -> ReadinessResponse:
     """Readiness check (/ready) per PRD §12.12.3.
-    
+
     Returns 200 only if all dependencies are healthy.
     """
     checks: dict[str, HealthCheck] = {}
     all_ok = True
-    
+
     for name, check_fn in _dependency_checks.items():
         try:
             start = time.time()
             check = check_fn()
             check.latency_ms = (time.time() - start) * 1000
             checks[name] = check
-            
+
             if check.status != HealthStatus.OK:
                 all_ok = False
-                
+
         except Exception as e:
             checks[name] = HealthCheck(
                 name=name,
@@ -169,15 +175,15 @@ def check_readiness() -> ReadinessResponse:
             )
             all_ok = False
             logger.warning("dependency_check_failed", name=name, error=str(e))
-    
+
     status = ReadinessStatus.READY if all_ok else ReadinessStatus.NOT_READY
-    
+
     return ReadinessResponse(status=status, checks=checks)
 
 
 def check_startup() -> dict[str, Any]:
     """Startup check (/startup) per PRD §12.12.4.
-    
+
     Returns 200 when initialization is complete.
     """
     if _startup_complete:
@@ -205,19 +211,23 @@ def is_startup_complete() -> bool:
 
 # Pre-built dependency checks
 
+
 def create_redis_check(redis_client: Any) -> Callable[[], HealthCheck]:
     """Create a Redis dependency check."""
+
     def check() -> HealthCheck:
         try:
             redis_client.ping()
             return HealthCheck(name="redis", status=HealthStatus.OK)
         except Exception as e:
             return HealthCheck(name="redis", status=HealthStatus.ERROR, message=str(e))
+
     return check
 
 
 def create_postgres_check(engine: Any) -> Callable[[], HealthCheck]:
     """Create a PostgreSQL dependency check."""
+
     def check() -> HealthCheck:
         try:
             with engine.connect() as conn:
@@ -225,24 +235,27 @@ def create_postgres_check(engine: Any) -> Callable[[], HealthCheck]:
             return HealthCheck(name="postgres", status=HealthStatus.OK)
         except Exception as e:
             return HealthCheck(name="postgres", status=HealthStatus.ERROR, message=str(e))
+
     return check
 
 
 def create_s3_check(s3_client: Any, bucket: str) -> Callable[[], HealthCheck]:
     """Create an S3/object storage dependency check."""
+
     def check() -> HealthCheck:
         try:
             s3_client.head_bucket(Bucket=bucket)
             return HealthCheck(name="object_storage", status=HealthStatus.OK)
         except Exception as e:
             return HealthCheck(name="object_storage", status=HealthStatus.ERROR, message=str(e))
+
     return check
 
 
 def create_http_check(url: str, timeout: float = 5.0) -> Callable[[], HealthCheck]:
     """Create an HTTP endpoint dependency check."""
     import httpx
-    
+
     def check() -> HealthCheck:
         try:
             response = httpx.get(url, timeout=timeout)
@@ -255,27 +268,29 @@ def create_http_check(url: str, timeout: float = 5.0) -> Callable[[], HealthChec
             )
         except Exception as e:
             return HealthCheck(name=url, status=HealthStatus.ERROR, message=str(e))
+
     return check
 
 
 # FastAPI integration helpers
 
+
 def create_health_router():
     """Create FastAPI router with health endpoints."""
     from fastapi import APIRouter, Response
-    
+
     router = APIRouter(tags=["Health"])
-    
+
     @router.get("/health")
     async def liveness():
         """Liveness probe - is the process alive?"""
         return check_liveness().to_dict()
-    
+
     @router.get("/livez")
     async def liveness_k8s():
         """Kubernetes-style liveness probe."""
         return check_liveness().to_dict()
-    
+
     @router.get("/ready")
     async def readiness(response: Response):
         """Readiness probe - is the service ready to accept traffic?"""
@@ -283,7 +298,7 @@ def create_health_router():
         if not result.is_ready:
             response.status_code = 503
         return result.to_dict()
-    
+
     @router.get("/readyz")
     async def readiness_k8s(response: Response):
         """Kubernetes-style readiness probe."""
@@ -291,7 +306,7 @@ def create_health_router():
         if not result.is_ready:
             response.status_code = 503
         return result.to_dict()
-    
+
     @router.get("/startup")
     async def startup(response: Response):
         """Startup probe - is initialization complete?"""
@@ -299,5 +314,5 @@ def create_health_router():
         if not result["ready"]:
             response.status_code = 503
         return result
-    
+
     return router

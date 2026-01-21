@@ -11,9 +11,9 @@ Silver is always the source of truth. Hot Store is read-only for queries.
 from heber.hotstore.client import HotStoreClient, get_hotstore_client
 from heber.hotstore.sync import HotStoreSync
 from heber.hotstore.tables import (
+    BARS_HOT_DDL,
     QUOTES_HOT_DDL,
     TRADES_HOT_DDL,
-    BARS_HOT_DDL,
     create_all_tables,
 )
 

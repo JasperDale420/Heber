@@ -5,8 +5,8 @@ Stream definitions per dataset, consumer group mapping.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,29 +17,29 @@ logger = structlog.get_logger(__name__)
 
 class StreamPriority(str, Enum):
     """Stream processing priority."""
-    
+
     CRITICAL = "critical"  # Real-time market data
-    HIGH = "high"          # Options, flow alerts
-    NORMAL = "normal"      # Fundamentals, economic
-    LOW = "low"            # Historical backfill
+    HIGH = "high"  # Options, flow alerts
+    NORMAL = "normal"  # Fundamentals, economic
+    LOW = "low"  # Historical backfill
 
 
 @dataclass
 class StreamConfig:
     """Redis Stream configuration for a dataset."""
-    
+
     name: str
     dataset: str
     priority: StreamPriority
     consumer_group: str
     max_len: int = 100000  # Stream length limit
     ttl_hours: int = 24
-    
+
     @property
     def stream_key(self) -> str:
         """Redis stream key."""
         return f"heber:stream:{self.name}"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -55,13 +55,13 @@ class StreamConfig:
 @dataclass
 class ConsumerGroupConfig:
     """Consumer group configuration."""
-    
+
     name: str
     streams: list[str]
     consumers_per_group: int = 3
     read_batch_size: int = 100
     block_ms: int = 5000
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -140,7 +140,7 @@ DEFAULT_CONSUMER_GROUPS: list[ConsumerGroupConfig] = [
 
 class StreamRegistry:
     """Registry of all event bus streams."""
-    
+
     def __init__(
         self,
         streams: list[StreamConfig] | None = None,
@@ -148,31 +148,31 @@ class StreamRegistry:
     ):
         self.streams = {s.name: s for s in (streams or DEFAULT_STREAMS)}
         self.consumer_groups = {g.name: g for g in (consumer_groups or DEFAULT_CONSUMER_GROUPS)}
-    
+
     def get_stream(self, name: str) -> StreamConfig | None:
         """Get stream config by name."""
         return self.streams.get(name)
-    
+
     def get_consumer_group(self, name: str) -> ConsumerGroupConfig | None:
         """Get consumer group config by name."""
         return self.consumer_groups.get(name)
-    
+
     def list_streams(self) -> list[dict[str, Any]]:
         """List all streams."""
         return [s.to_dict() for s in self.streams.values()]
-    
+
     def list_consumer_groups(self) -> list[dict[str, Any]]:
         """List all consumer groups."""
         return [g.to_dict() for g in self.consumer_groups.values()]
-    
+
     def get_streams_by_priority(self, priority: StreamPriority) -> list[StreamConfig]:
         """Get streams by priority level."""
         return [s for s in self.streams.values() if s.priority == priority]
-    
+
     def get_streams_for_consumer(self, consumer_group: str) -> list[StreamConfig]:
         """Get streams for a consumer group."""
         return [s for s in self.streams.values() if s.consumer_group == consumer_group]
-    
+
     def generate_report(self) -> dict[str, Any]:
         """Generate stream configuration report."""
         by_priority = {
@@ -181,7 +181,7 @@ class StreamRegistry:
             "normal": len(self.get_streams_by_priority(StreamPriority.NORMAL)),
             "low": len(self.get_streams_by_priority(StreamPriority.LOW)),
         }
-        
+
         return {
             "summary": {
                 "total_streams": len(self.streams),

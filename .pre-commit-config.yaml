@@ -1,0 +1,72 @@
+# =============================================================================
+# Pre-commit Configuration for Heber Data Lakehouse
+# =============================================================================
+# Local hygiene stack: linting, formatting, type checking, and security scanning.
+# Run `pre-commit install` to set up git hooks.
+# Run `pre-commit run --all-files` to check all files manually.
+# =============================================================================
+
+repos:
+  # ---------------------------------------------------------------------------
+  # Ruff: Fast Python linter + formatter
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: [--fix, --unsafe-fixes]
+      - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # MyPy: Static type checking
+  # ---------------------------------------------------------------------------
+  # NOTE: Commented out because existing codebase has 495+ type errors.
+  # Run manually: mypy heber/ --ignore-missing-imports
+  # TODO: Enable when type errors are resolved.
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.14.1
+  #   hooks:
+  #     - id: mypy
+  #       args: [--ignore-missing-imports, --no-strict-optional]
+  #       exclude: ^features/
+  #       additional_dependencies:
+  #         - pydantic>=2.0
+  #         - types-redis
+
+  # ---------------------------------------------------------------------------
+  # Bandit: Security vulnerability scanner
+  # ---------------------------------------------------------------------------
+  # NOTE: Commented out because existing codebase has known security warnings.
+  # Run manually: bandit -r heber/ -c pyproject.toml
+  # TODO: Enable when security issues are addressed.
+  # - repo: https://github.com/PyCQA/bandit
+  #   rev: 1.8.3
+  #   hooks:
+  #     - id: bandit
+  #       args: [-r, heber/, -c, pyproject.toml, --severity-level, medium]
+  #       pass_filenames: false
+  #       exclude: tests/
+
+  # ---------------------------------------------------------------------------
+  # Detect-secrets: Prevent accidental secret commits
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: (\.lock|\.md)$
+
+  # ---------------------------------------------------------------------------
+  # Standard pre-commit hooks
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: debug-statements

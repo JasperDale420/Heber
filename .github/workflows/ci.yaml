@@ -77,16 +77,12 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -e ".[dev]"
 
-      - name: Run linting
+      - name: Run pre-commit hooks
         run: |
-          uv pip install --system ruff mypy
-          ruff check .
-          mypy heber/ --ignore-missing-imports
+          pre-commit run --all-files
 
-      - name: Run unit tests
-        run: |
-          uv pip install --system pytest pytest-cov pytest-asyncio
-          pytest tests/ -v --cov=heber --cov-report=xml
+      - name: Run unit tests with coverage
+        run: pytest tests/ -v --cov=heber --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

@@ -6,7 +6,7 @@ Environment configurations for local, CI, staging, and production.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 class EnvironmentType(str, Enum):
     """Test environment types (PRD §52.1)."""
-    
+
     LOCAL = "local"
     CI = "ci"
     STAGING = "staging"
@@ -27,12 +27,12 @@ class EnvironmentType(str, Enum):
 @dataclass
 class EnvironmentConfig:
     """Environment configuration (PRD §52.1)."""
-    
+
     env_type: EnvironmentType
     purpose: str
     data_source: str
     isolation: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "env_type": self.env_type.value,
@@ -74,10 +74,10 @@ DEFAULT_ENVIRONMENTS: list[EnvironmentConfig] = [
 @dataclass
 class StagingConfig:
     """Staging environment configuration (PRD §52.4)."""
-    
+
     component: str
     config: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "component": self.component,
@@ -98,12 +98,12 @@ DEFAULT_STAGING_CONFIG: list[StagingConfig] = [
 @dataclass
 class DockerComposeService:
     """Docker Compose service definition."""
-    
+
     name: str
     image: str
     ports: list[str] = field(default_factory=list)
     environment: dict[str, str] = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -142,7 +142,7 @@ DEFAULT_LOCAL_SERVICES: list[DockerComposeService] = [
 
 class EnvironmentManager:
     """Manage test environments."""
-    
+
     def __init__(
         self,
         environments: list[EnvironmentConfig] | None = None,
@@ -152,43 +152,43 @@ class EnvironmentManager:
         self.environments = {e.env_type: e for e in (environments or DEFAULT_ENVIRONMENTS)}
         self.staging_config = staging_config or DEFAULT_STAGING_CONFIG
         self.local_services = local_services or DEFAULT_LOCAL_SERVICES
-    
+
     def get_environment(self, env_type: EnvironmentType) -> EnvironmentConfig | None:
         """Get environment configuration."""
         return self.environments.get(env_type)
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all environments."""
         return [e.to_dict() for e in self.environments.values()]
-    
+
     def get_local_services(self) -> list[dict[str, Any]]:
         """Get local Docker Compose services."""
         return [s.to_dict() for s in self.local_services]
-    
+
     def get_staging_config(self) -> list[dict[str, Any]]:
         """Get staging environment configuration."""
         return [s.to_dict() for s in self.staging_config]
-    
+
     def generate_docker_compose(self) -> str:
         """Generate Docker Compose YAML for local testing."""
         lines = ["version: '3.8'", "services:"]
-        
+
         for service in self.local_services:
             lines.append(f"  {service.name}:")
             lines.append(f"    image: {service.image}")
-            
+
             if service.ports:
                 lines.append("    ports:")
                 for port in service.ports:
-                    lines.append(f"      - \"{port}\"")
-            
+                    lines.append(f'      - "{port}"')
+
             if service.environment:
                 lines.append("    environment:")
                 for key, value in service.environment.items():
                     lines.append(f"      {key}: {value}")
-        
+
         return "\n".join(lines)
-    
+
     def generate_report(self) -> dict[str, Any]:
         """Generate environment report."""
         return {

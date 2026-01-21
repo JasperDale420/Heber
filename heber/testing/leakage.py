@@ -6,9 +6,9 @@ Tests to validate the zero-leakage invariant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 class LeakageTestResult(str, Enum):
     """Leakage test result status."""
-    
+
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -26,17 +26,17 @@ class LeakageTestResult(str, Enum):
 @dataclass
 class LeakageTestCase:
     """A single leakage test case (PRD §49.2).
-    
+
     Each test validates a specific aspect of zero-leakage.
     """
-    
+
     test_id: str
     name: str
     description: str
     scenario: str
     expected_result: str
     severity: str = "critical"  # All leakage tests are critical
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "test_id": self.test_id,
@@ -51,14 +51,14 @@ class LeakageTestCase:
 @dataclass
 class LeakageTestRun:
     """Result of a leakage test run."""
-    
+
     test_id: str
     result: LeakageTestResult
     actual_value: Any = None
     expected_value: Any = None
     error_message: str = ""
     run_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "test_id": self.test_id,
@@ -126,19 +126,19 @@ DEFAULT_LEAKAGE_TESTS: list[LeakageTestCase] = [
 
 class LeakageValidator:
     """Validate zero-leakage invariant."""
-    
+
     def __init__(self, test_cases: list[LeakageTestCase] | None = None):
         self.test_cases = {tc.test_id: tc for tc in (test_cases or DEFAULT_LEAKAGE_TESTS)}
         self.results: list[LeakageTestRun] = []
-    
+
     def get_test_case(self, test_id: str) -> LeakageTestCase | None:
         """Get test case by ID."""
         return self.test_cases.get(test_id)
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all test cases."""
         return [tc.to_dict() for tc in self.test_cases.values()]
-    
+
     def validate_no_future_data(
         self,
         query_result: list[dict[str, Any]],
@@ -146,12 +146,12 @@ class LeakageValidator:
         ts_available_field: str = "ts_available",
     ) -> LeakageTestRun:
         """LK-001: Validate no future data is returned.
-        
+
         Args:
             query_result: Query results to validate
             asof_time: The asof_time used in the query
             ts_available_field: Field name for ts_available
-            
+
         Returns:
             Test run result
         """
@@ -162,14 +162,16 @@ class LeakageValidator:
                 # Parse if string
                 if isinstance(ts_available, str):
                     ts_available = datetime.fromisoformat(ts_available.replace("Z", "+00:00"))
-                
+
                 if ts_available > asof_time:
-                    violations.append({
-                        "row": row,
-                        "ts_available": ts_available.isoformat(),
-                        "asof_time": asof_time.isoformat(),
-                    })
-        
+                    violations.append(
+                        {
+                            "row": row,
+                            "ts_available": ts_available.isoformat(),
+                            "asof_time": asof_time.isoformat(),
+                        }
+                    )
+
         if violations:
             result = LeakageTestRun(
                 test_id="LK-001",
@@ -185,18 +187,18 @@ class LeakageValidator:
                 actual_value=0,
                 expected_value=0,
             )
-        
+
         self.results.append(result)
-        
+
         if result.result == LeakageTestResult.FAILED:
             logger.error(
                 "LEAKAGE VIOLATION: Future data returned",
                 test_id="LK-001",
                 violations=len(violations),
             )
-        
+
         return result
-    
+
     def validate_backfill_ts_available(
         self,
         ts_available: datetime,
@@ -204,17 +206,17 @@ class LeakageValidator:
         tolerance_seconds: int = 5,
     ) -> LeakageTestRun:
         """LK-003: Validate backfill ts_available equals ts_commit.
-        
+
         Args:
             ts_available: The ts_available of backfill data
             ts_commit: The ts_commit (write time)
             tolerance_seconds: Allowed difference in seconds
-            
+
         Returns:
             Test run result
         """
         diff = abs((ts_available - ts_commit).total_seconds())
-        
+
         if diff > tolerance_seconds:
             result = LeakageTestRun(
                 test_id="LK-003",
@@ -230,10 +232,10 @@ class LeakageValidator:
                 actual_value=diff,
                 expected_value=f"≤{tolerance_seconds}s",
             )
-        
+
         self.results.append(result)
         return result
-    
+
     def validate_gold_lineage(
         self,
         feature_ts_event: datetime,
@@ -241,14 +243,14 @@ class LeakageValidator:
         label_ts_event: datetime,
     ) -> LeakageTestRun:
         """LK-004: Validate Gold feature lineage.
-        
+
         Feature data must have been available before label time.
-        
+
         Args:
             feature_ts_event: When the feature was computed
             input_ts_available: When input data became available
             label_ts_event: Event time of the label
-            
+
         Returns:
             Test run result
         """
@@ -266,16 +268,16 @@ class LeakageValidator:
                 test_id="LK-004",
                 result=LeakageTestResult.PASSED,
             )
-        
+
         self.results.append(result)
         return result
-    
+
     def generate_report(self) -> dict[str, Any]:
         """Generate leakage validation report."""
         passed = sum(1 for r in self.results if r.result == LeakageTestResult.PASSED)
         failed = sum(1 for r in self.results if r.result == LeakageTestResult.FAILED)
         skipped = sum(1 for r in self.results if r.result == LeakageTestResult.SKIPPED)
-        
+
         return {
             "summary": {
                 "total": len(self.results),
@@ -288,7 +290,7 @@ class LeakageValidator:
             "results": [r.to_dict() for r in self.results],
             "generated_at": datetime.now(UTC).isoformat(),
         }
-    
+
     def clear_results(self) -> None:
         """Clear previous results."""
         self.results = []

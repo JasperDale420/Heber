@@ -5,8 +5,8 @@ Provider capabilities, dataset catalog, and data boundaries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 class ProviderPriority(int, Enum):
     """Provider priority level."""
-    
+
     PRIMARY = 1
     SECONDARY = 2
     TERTIARY = 3
@@ -25,7 +25,7 @@ class ProviderPriority(int, Enum):
 
 class StorageBoundary(str, Enum):
     """Storage boundary (PRD §56)."""
-    
+
     HEBER = "heber"  # Structured data (Silver layer)
     DOCUMENT_STORE = "document_store"  # Unstructured data
 
@@ -33,13 +33,13 @@ class StorageBoundary(str, Enum):
 @dataclass
 class DataProvider:
     """Data provider definition (PRD §55.1)."""
-    
+
     name: str
     capabilities: list[str]
     priority: ProviderPriority
     streaming: bool
     notes: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -103,12 +103,12 @@ DEFAULT_PROVIDERS: list[DataProvider] = [
 @dataclass
 class DataTypeSpec:
     """Data type specification (PRD §55.2)."""
-    
+
     name: str
     storage: StorageBoundary
     format: str
     query_pattern: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -135,13 +135,13 @@ DEFAULT_DATA_TYPES: list[DataTypeSpec] = [
 @dataclass
 class DatasetSpec:
     """Dataset specification (PRD §57)."""
-    
+
     name: str
     category: str
     description: str
     providers: list[str]
     implemented: bool = False
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -191,25 +191,25 @@ DEFAULT_DATASETS: list[DatasetSpec] = [
 
 class ProviderRegistry:
     """Registry of data providers."""
-    
+
     def __init__(
         self,
         providers: list[DataProvider] | None = None,
     ):
         self.providers = {p.name: p for p in (providers or DEFAULT_PROVIDERS)}
-    
+
     def get(self, name: str) -> DataProvider | None:
         """Get provider by name."""
         return self.providers.get(name)
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all providers."""
         return [p.to_dict() for p in self.providers.values()]
-    
+
     def get_by_capability(self, capability: str) -> list[DataProvider]:
         """Get providers that support a capability."""
         return [p for p in self.providers.values() if capability in p.capabilities]
-    
+
     def get_primary(self) -> list[DataProvider]:
         """Get primary providers."""
         return [p for p in self.providers.values() if p.priority == ProviderPriority.PRIMARY]
@@ -217,7 +217,7 @@ class ProviderRegistry:
 
 class DatasetCatalog:
     """Catalog of available datasets."""
-    
+
     def __init__(
         self,
         datasets: list[DatasetSpec] | None = None,
@@ -225,43 +225,43 @@ class DatasetCatalog:
     ):
         self.datasets = {d.name: d for d in (datasets or DEFAULT_DATASETS)}
         self.data_types = {d.name: d for d in (data_types or DEFAULT_DATA_TYPES)}
-    
+
     def get(self, name: str) -> DatasetSpec | None:
         """Get dataset by name."""
         return self.datasets.get(name)
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all datasets."""
         return [d.to_dict() for d in self.datasets.values()]
-    
+
     def list_by_category(self, category: str) -> list[DatasetSpec]:
         """List datasets by category."""
         return [d for d in self.datasets.values() if d.category == category]
-    
+
     def list_implemented(self) -> list[DatasetSpec]:
         """List implemented datasets."""
         return [d for d in self.datasets.values() if d.implemented]
-    
+
     def list_pending(self) -> list[DatasetSpec]:
         """List pending datasets."""
         return [d for d in self.datasets.values() if not d.implemented]
-    
+
     def get_storage_boundary(self, data_type: str) -> StorageBoundary | None:
         """Get storage boundary for a data type."""
         spec = self.data_types.get(data_type)
         return spec.storage if spec else None
-    
+
     def generate_report(self) -> dict[str, Any]:
         """Generate dataset catalog report."""
         implemented = self.list_implemented()
         pending = self.list_pending()
-        
+
         by_category: dict[str, list[str]] = {}
         for d in self.datasets.values():
             if d.category not in by_category:
                 by_category[d.category] = []
             by_category[d.category].append(d.name)
-        
+
         return {
             "summary": {
                 "total_datasets": len(self.datasets),
@@ -272,7 +272,9 @@ class DatasetCatalog:
             "by_category": by_category,
             "storage_boundaries": {
                 "heber": [d.name for d in self.data_types.values() if d.storage == StorageBoundary.HEBER],
-                "document_store": [d.name for d in self.data_types.values() if d.storage == StorageBoundary.DOCUMENT_STORE],
+                "document_store": [
+                    d.name for d in self.data_types.values() if d.storage == StorageBoundary.DOCUMENT_STORE
+                ],
             },
             "generated_at": datetime.now(UTC).isoformat(),
         }

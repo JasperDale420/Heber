@@ -13,10 +13,10 @@ import json
 import os
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
 from enum import Enum
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
@@ -27,15 +27,16 @@ logger = structlog.get_logger(__name__)
 # Stream topology per PRD §12.7.2 (Pattern A)
 class StreamName(str, Enum):
     """Canonical stream names per PRD §12.7.2."""
+
     # Market data streams
     MARKET_BARS = "stream:market.bars"
     MARKET_QUOTES = "stream:market.quotes"
     MARKET_TRADES = "stream:market.trades"
-    
+
     # Intel streams
     INTEL_FLOW_ALERTS = "stream:intel.flow_alerts"
     INTEL_DARKPOOL = "stream:intel.darkpool_trades"
-    
+
     # System streams
     DLQ = "stream:heber.dlq"
 
@@ -86,19 +87,22 @@ message_processing_duration = Histogram(
 @dataclass
 class Message:
     """Event bus message."""
+
     id: str
     stream: str
     data: dict[str, Any]
     timestamp: float = field(default_factory=time.time)
-    
+
     def to_json(self) -> str:
-        return json.dumps({
-            "id": self.id,
-            "stream": self.stream,
-            "data": self.data,
-            "timestamp": self.timestamp,
-        })
-    
+        return json.dumps(
+            {
+                "id": self.id,
+                "stream": self.stream,
+                "data": self.data,
+                "timestamp": self.timestamp,
+            }
+        )
+
     @classmethod
     def from_json(cls, raw: str) -> "Message":
         parsed = json.loads(raw)
@@ -113,6 +117,7 @@ class Message:
 @dataclass
 class ConsumerConfig:
     """Consumer group configuration per PRD §12.7.3."""
+
     group_name: str
     consumer_name: str
     stream: StreamName
@@ -123,26 +128,26 @@ class ConsumerConfig:
 
 class EventBus(ABC):
     """Abstract event bus interface.
-    
+
     Heber hides the bus behind this interface so we can upgrade
     to NATS/Kafka later without rewriting writers (PRD §12.7.1).
     """
-    
+
     @abstractmethod
     async def connect(self) -> None:
         """Connect to the event bus."""
         pass
-    
+
     @abstractmethod
     async def disconnect(self) -> None:
         """Disconnect from the event bus."""
         pass
-    
+
     @abstractmethod
     async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
         """Create a stream if it doesn't exist."""
         pass
-    
+
     @abstractmethod
     async def create_consumer_group(
         self,
@@ -152,33 +157,33 @@ class EventBus(ABC):
     ) -> None:
         """Create a consumer group for a stream."""
         pass
-    
+
     @abstractmethod
     async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
         """Publish a message to a stream. Returns message ID."""
         pass
-    
+
     @abstractmethod
     async def consume(
         self,
         config: ConsumerConfig,
     ) -> AsyncIterator[list[Message]]:
         """Consume messages from a stream as a consumer group member.
-        
+
         Yields batches of messages. Each message must be explicitly acked.
         """
         pass
-    
+
     @abstractmethod
     async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
         """Acknowledge successful processing of a message.
-        
+
         Per PRD §12.7.3: Ack only after:
         - successful write to object storage
         - successful Catalog update
         """
         pass
-    
+
     @abstractmethod
     async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
         """Get count of pending (unacked) messages for a consumer group."""
@@ -187,10 +192,10 @@ class EventBus(ABC):
 
 class RedisEventBus(EventBus):
     """Redis Streams implementation per PRD §12.7.1.
-    
+
     Default recommendation for MVP (Slice 1-3).
     """
-    
+
     def __init__(
         self,
         host: str = "localhost",
@@ -203,12 +208,12 @@ class RedisEventBus(EventBus):
         self.db = db
         self.password = password
         self._redis: Any = None  # redis.asyncio.Redis
-    
+
     async def connect(self) -> None:
         """Connect to Redis."""
         try:
             import redis.asyncio as aioredis
-            
+
             self._redis = aioredis.Redis(
                 host=self.host,
                 port=self.port,
@@ -224,19 +229,19 @@ class RedisEventBus(EventBus):
             )
         except ImportError:
             raise ImportError("redis package required: pip install redis")
-    
+
     async def disconnect(self) -> None:
         """Disconnect from Redis."""
         if self._redis:
             await self._redis.close()
             logger.info("redis_disconnected")
-    
+
     async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
         """Create a stream using XGROUP CREATE with MKSTREAM."""
         # Stream is created implicitly when first message is added
         # or when a consumer group is created with MKSTREAM
         logger.debug("stream_ready", stream=stream.value)
-    
+
     async def create_consumer_group(
         self,
         stream: StreamName,
@@ -262,27 +267,27 @@ class RedisEventBus(EventBus):
                 logger.debug("consumer_group_exists", stream=stream.value, group=group_name)
             else:
                 raise
-    
+
     async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
         """Publish message using XADD."""
         # Serialize nested data as JSON
         flat_data = {}
         for key, value in data.items():
-            if isinstance(value, (dict, list)):
+            if isinstance(value, dict | list):
                 flat_data[key] = json.dumps(value)
             else:
                 flat_data[key] = str(value) if value is not None else ""
-        
+
         message_id = await self._redis.xadd(stream.value, flat_data)
         messages_published.labels(stream=stream.value).inc()
-        
+
         logger.debug(
             "message_published",
             stream=stream.value,
             message_id=message_id,
         )
         return message_id
-    
+
     async def consume(
         self,
         config: ConsumerConfig,
@@ -298,7 +303,7 @@ class RedisEventBus(EventBus):
                     count=config.batch_size,
                     block=config.block_ms,
                 )
-                
+
                 if results:
                     messages = []
                     for stream_name, stream_messages in results:
@@ -310,7 +315,7 @@ class RedisEventBus(EventBus):
                                     parsed_data[key] = json.loads(value)
                                 except (json.JSONDecodeError, TypeError):
                                     parsed_data[key] = value
-                            
+
                             message = Message(
                                 id=msg_id,
                                 stream=stream_name,
@@ -318,19 +323,19 @@ class RedisEventBus(EventBus):
                             )
                             messages.append(message)
                             messages_received.labels(stream=stream_name).inc()
-                    
+
                     if messages:
                         yield messages
-                
+
                 # Also check for pending messages that need claiming
                 await self._claim_idle_messages(config)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("consume_error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)
-    
+
     async def _claim_idle_messages(self, config: ConsumerConfig) -> list[Message]:
         """Claim idle messages from other consumers (on restart/crash)."""
         try:
@@ -342,7 +347,7 @@ class RedisEventBus(EventBus):
                 max="+",
                 count=config.batch_size,
             )
-            
+
             claimed_messages = []
             for entry in pending:
                 # Claim if idle for too long
@@ -367,17 +372,17 @@ class RedisEventBus(EventBus):
                                 stream=config.stream.value,
                                 message_id=msg_id,
                             )
-            
+
             return claimed_messages
         except Exception as e:
             logger.debug("claim_error", error=str(e))
             return []
-    
+
     async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
         """Ack message using XACK."""
         await self._redis.xack(stream.value, group_name, message_id)
         messages_acked.labels(stream=stream.value).inc()
-    
+
     async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
         """Get pending count using XPENDING."""
         try:
@@ -391,27 +396,27 @@ class RedisEventBus(EventBus):
 
 class InMemoryEventBus(EventBus):
     """In-memory event bus for testing."""
-    
+
     def __init__(self):
         self._streams: dict[str, list[Message]] = {}
         self._groups: dict[str, dict[str, set[str]]] = {}  # stream -> group -> acked_ids
         self._consumers: dict[str, int] = {}  # group -> offset
         self._lock = asyncio.Lock()
         self._message_counter = 0
-    
+
     async def connect(self) -> None:
         logger.info("in_memory_bus_connected")
-    
+
     async def disconnect(self) -> None:
         self._streams.clear()
         self._groups.clear()
         logger.info("in_memory_bus_disconnected")
-    
+
     async def create_stream(self, stream: StreamName, max_len: int | None = None) -> None:
         async with self._lock:
             if stream.value not in self._streams:
                 self._streams[stream.value] = []
-    
+
     async def create_consumer_group(
         self,
         stream: StreamName,
@@ -424,15 +429,15 @@ class InMemoryEventBus(EventBus):
             if group_name not in self._groups[stream.value]:
                 self._groups[stream.value][group_name] = set()
                 self._consumers[group_name] = 0
-    
+
     async def publish(self, stream: StreamName, data: dict[str, Any]) -> str:
         async with self._lock:
             self._message_counter += 1
             msg_id = f"{int(time.time() * 1000)}-{self._message_counter}"
-            
+
             if stream.value not in self._streams:
                 self._streams[stream.value] = []
-            
+
             message = Message(
                 id=msg_id,
                 stream=stream.value,
@@ -441,7 +446,7 @@ class InMemoryEventBus(EventBus):
             self._streams[stream.value].append(message)
             messages_published.labels(stream=stream.value).inc()
             return msg_id
-    
+
     async def consume(
         self,
         config: ConsumerConfig,
@@ -452,32 +457,32 @@ class InMemoryEventBus(EventBus):
                     stream_msgs = self._streams.get(config.stream.value, [])
                     acked = self._groups.get(config.stream.value, {}).get(config.group_name, set())
                     offset = self._consumers.get(config.group_name, 0)
-                    
+
                     # Get unacked messages
                     batch = []
-                    for i, msg in enumerate(stream_msgs[offset:], start=offset):
+                    for _i, msg in enumerate(stream_msgs[offset:], start=offset):
                         if msg.id not in acked and len(batch) < config.batch_size:
                             batch.append(msg)
                             messages_received.labels(stream=msg.stream).inc()
-                    
+
                     if batch:
                         self._consumers[config.group_name] = offset + len(batch)
-                
+
                 if batch:
                     yield batch
                 else:
                     await asyncio.sleep(0.1)
-                    
+
             except asyncio.CancelledError:
                 break
-    
+
     async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
         async with self._lock:
             if stream.value in self._groups:
                 if group_name in self._groups[stream.value]:
                     self._groups[stream.value][group_name].add(message_id)
                     messages_acked.labels(stream=stream.value).inc()
-    
+
     async def get_pending_count(self, stream: StreamName, group_name: str) -> int:
         async with self._lock:
             stream_msgs = self._streams.get(stream.value, [])
@@ -487,7 +492,7 @@ class InMemoryEventBus(EventBus):
 
 def create_event_bus(bus_type: str = "redis", **kwargs) -> EventBus:
     """Factory function to create event bus.
-    
+
     Args:
         bus_type: "redis" or "memory"
         **kwargs: Bus-specific configuration
@@ -510,8 +515,8 @@ async def setup_streams(bus: EventBus) -> None:
     for stream in CANONICAL_STREAMS:
         await bus.create_stream(stream)
         await bus.create_consumer_group(stream, "heber-consumers")
-    
+
     # Create DLQ stream
     await bus.create_stream(StreamName.DLQ)
-    
+
     logger.info("streams_initialized", count=len(CANONICAL_STREAMS) + 1)

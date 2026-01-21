@@ -4,12 +4,11 @@ Syncs data from event bus or Silver to Hot Store (ClickHouse).
 Maintains ≤5 minute lag SLA under normal operation.
 """
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
-from heber.config import settings
 from heber.hotstore.client import HotStoreClient, get_hotstore_client
 
 logger = structlog.get_logger(__name__)
@@ -23,7 +22,7 @@ _metrics = {
 
 class HotStoreSync:
     """Syncs data from event bus to Hot Store.
-    
+
     Per PRD §12.10:
     - Source: event bus (preferred) or recently written Silver partitions
     - Window: rolling last N days per dataset
@@ -36,19 +35,11 @@ class HotStoreSync:
 
     async def sync_quote(self, event: dict[str, Any]) -> None:
         """Sync a quote event to Hot Store.
-        
+
         Args:
             event: EventEnvelope dict containing quote data
         """
         try:
-            insert_query = """
-            INSERT INTO quotes_hot (
-                event_id, provider, feed, instrument_type, instrument_key, symbol,
-                ts_event, ts_ingest, ts_available, source, schema_version,
-                bid_px, bid_sz, ask_px, ask_sz, bid_exchange, ask_exchange
-            ) VALUES
-            """
-            
             payload = event.get("payload", {})
             values = (
                 event["event_id"],
@@ -69,10 +60,10 @@ class HotStoreSync:
                 payload.get("bid_exchange"),
                 payload.get("ask_exchange"),
             )
-            
+
             self.client.client.insert("quotes_hot", [values])
             _metrics["rows_synced_total"] += 1
-            
+
         except Exception as e:
             _metrics["sync_failures_total"] += 1
             logger.error("hot_store_sync_failed", dataset="quotes", error=str(e))
@@ -80,7 +71,7 @@ class HotStoreSync:
 
     async def sync_trade(self, event: dict[str, Any]) -> None:
         """Sync a trade event to Hot Store.
-        
+
         Args:
             event: EventEnvelope dict containing trade data
         """
@@ -104,10 +95,10 @@ class HotStoreSync:
                 payload.get("exchange"),
                 payload.get("tape"),
             )
-            
+
             self.client.client.insert("trades_hot", [values])
             _metrics["rows_synced_total"] += 1
-            
+
         except Exception as e:
             _metrics["sync_failures_total"] += 1
             logger.error("hot_store_sync_failed", dataset="trades", error=str(e))
@@ -115,7 +106,7 @@ class HotStoreSync:
 
     async def sync_bar(self, event: dict[str, Any]) -> None:
         """Sync a bar event to Hot Store.
-        
+
         Args:
             event: EventEnvelope dict containing bar data
         """
@@ -143,10 +134,10 @@ class HotStoreSync:
                 payload.get("trade_count"),
                 payload.get("vwap"),
             )
-            
+
             self.client.client.insert("bars_hot", [values])
             _metrics["rows_synced_total"] += 1
-            
+
         except Exception as e:
             _metrics["sync_failures_total"] += 1
             logger.error("hot_store_sync_failed", dataset="bars", error=str(e))
@@ -154,12 +145,12 @@ class HotStoreSync:
 
     async def sync_event(self, event: dict[str, Any]) -> None:
         """Route an event to the appropriate sync method.
-        
+
         Args:
             event: EventEnvelope dict
         """
         feed = event.get("feed", "")
-        
+
         if feed == "quotes":
             await self.sync_quote(event)
         elif feed == "trades":
@@ -172,7 +163,7 @@ class HotStoreSync:
 
     async def get_metrics(self) -> dict[str, Any]:
         """Get sync metrics per PRD §12.10.1.
-        
+
         Returns:
             Dict with lag, row counts, and failure stats
         """

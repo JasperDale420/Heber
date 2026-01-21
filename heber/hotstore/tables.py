@@ -2,7 +2,7 @@
 
 Tables:
 - quotes_hot: Last 7 days of quote data
-- trades_hot: Last 7 days of trade data  
+- trades_hot: Last 7 days of trade data
 - bars_hot: Last 30 days of bar data
 
 Retention is managed by ClickHouse TTL, not Heber.
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS quotes_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
-    
+
     -- Quote-specific
     bid_px Float64,
     bid_sz Float64,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS quotes_hot (
     ask_sz Float64,
     bid_exchange Nullable(String),
     ask_exchange Nullable(String),
-    
+
     -- Partitioning
     dt Date MATERIALIZED toDate(ts_event)
 )
@@ -57,14 +57,14 @@ CREATE TABLE IF NOT EXISTS trades_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
-    
+
     -- Trade-specific
     price Float64,
     size Float64,
     trade_id Nullable(String),
     exchange Nullable(String),
     tape Nullable(String),
-    
+
     -- Partitioning
     dt Date MATERIALIZED toDate(ts_event)
 )
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS bars_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
-    
+
     -- Bar-specific
     timeframe LowCardinality(String),
     bar_start_ts DateTime64(6, 'UTC'),
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS bars_hot (
     volume Float64,
     trade_count Nullable(Int64),
     vwap Nullable(Float64),
-    
+
     -- Partitioning
     dt Date MATERIALIZED toDate(bar_start_ts)
 )
@@ -148,7 +148,7 @@ GROUP BY instrument_key, timeframe;
 
 async def create_all_tables(client) -> None:
     """Create all Hot Store tables and views.
-    
+
     Args:
         client: ClickHouse client (clickhouse-connect or similar)
     """
@@ -159,6 +159,6 @@ async def create_all_tables(client) -> None:
         LATEST_QUOTES_VIEW_DDL,
         LATEST_BARS_VIEW_DDL,
     ]
-    
+
     for stmt in statements:
         await client.execute(stmt)

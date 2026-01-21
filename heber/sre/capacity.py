@@ -5,8 +5,8 @@ Resource metrics, scaling triggers, and capacity forecasting.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 class ResourceType(str, Enum):
     """Resource types for capacity planning."""
-    
+
     CPU = "cpu"
     MEMORY = "memory"
     STORAGE = "storage"
@@ -27,7 +27,7 @@ class ResourceType(str, Enum):
 
 class ScalingAction(str, Enum):
     """Scaling actions."""
-    
+
     SCALE_UP = "scale_up"
     SCALE_OUT = "scale_out"
     NO_ACTION = "no_action"
@@ -37,12 +37,12 @@ class ScalingAction(str, Enum):
 @dataclass
 class BaselineMetric:
     """Baseline capacity metric (PRD §42.1)."""
-    
+
     name: str
     value: float
     unit: str
     source: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -55,13 +55,13 @@ class BaselineMetric:
 @dataclass
 class ScalingTrigger:
     """Scaling trigger threshold (PRD §42.2)."""
-    
+
     metric: str
     threshold: float
     unit: str
     sustained_minutes: int
     action: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "metric": self.metric,
@@ -70,7 +70,7 @@ class ScalingTrigger:
             "sustained_minutes": self.sustained_minutes,
             "action": self.action,
         }
-    
+
     def is_triggered(self, current_value: float) -> bool:
         """Check if current value exceeds threshold."""
         return current_value > self.threshold
@@ -79,13 +79,13 @@ class ScalingTrigger:
 @dataclass
 class CapacityForecast:
     """Capacity forecast entry (PRD §42.3)."""
-    
+
     quarter: str
     events_per_day: int
     storage_tb: float
     compute_nodes: int
     growth_percent: float = 0.0
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "quarter": self.quarter,
@@ -100,13 +100,13 @@ class CapacityForecast:
 @dataclass
 class BottleneckAnalysis:
     """Component bottleneck analysis (PRD §42.4)."""
-    
+
     component: str
     cpu_bound: str  # "Low", "Medium", "High", "Very High"
     memory_bound: str
     io_bound: str
     notes: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "component": self.component,
@@ -120,13 +120,13 @@ class BottleneckAnalysis:
 @dataclass
 class CostProjection:
     """Cost projection for capacity change (PRD §42.5)."""
-    
+
     scenario: str
     base_cost_monthly: float
     projected_cost_monthly: float
     delta: float
     delta_percent: float
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "scenario": self.scenario,
@@ -177,7 +177,7 @@ DEFAULT_BOTTLENECKS: list[BottleneckAnalysis] = [
 
 class CapacityPlanner:
     """Capacity planning and forecasting."""
-    
+
     def __init__(
         self,
         baselines: list[BaselineMetric] | None = None,
@@ -189,20 +189,20 @@ class CapacityPlanner:
         self.triggers = {t.metric: t for t in (triggers or DEFAULT_TRIGGERS)}
         self.forecasts = forecasts or DEFAULT_FORECASTS
         self.bottlenecks = {b.component: b for b in (bottlenecks or DEFAULT_BOTTLENECKS)}
-    
+
     def get_baseline(self, name: str) -> BaselineMetric | None:
         """Get baseline metric by name."""
         return self.baselines.get(name)
-    
+
     def check_triggers(
         self,
         current_metrics: dict[str, float],
     ) -> list[tuple[str, ScalingTrigger]]:
         """Check which scaling triggers are activated.
-        
+
         Args:
             current_metrics: Dict of metric_name -> current_value
-            
+
         Returns:
             List of (metric_name, trigger) for triggered thresholds
         """
@@ -212,7 +212,7 @@ class CapacityPlanner:
             if trigger and trigger.is_triggered(value):
                 triggered.append((metric_name, trigger))
         return triggered
-    
+
     def get_scaling_recommendations(
         self,
         current_metrics: dict[str, float],
@@ -230,14 +230,14 @@ class CapacityPlanner:
             }
             for metric_name, trigger in triggered
         ]
-    
+
     def project_cost(
         self,
         volume_multiplier: float,
         base_cost: float = 1575.0,
     ) -> CostProjection:
         """Project cost for volume increase.
-        
+
         Based on PRD §42.5 cost scaling model.
         """
         # Cost components at 3x volume:
@@ -246,12 +246,12 @@ class CapacityPlanner:
         # RDS: 200 -> 400 (+200)
         # ClickHouse: 330 -> 660 (+330)
         # Total +$1150 at 3x
-        
+
         # Linear approximation: ~$383/x increase above 1x
         cost_per_multiplier = 383
         additional_cost = (volume_multiplier - 1) * cost_per_multiplier
         projected = base_cost + additional_cost
-        
+
         return CostProjection(
             scenario=f"{volume_multiplier}x volume",
             base_cost_monthly=base_cost,
@@ -259,11 +259,11 @@ class CapacityPlanner:
             delta=additional_cost,
             delta_percent=(additional_cost / base_cost) * 100,
         )
-    
+
     def get_bottleneck(self, component: str) -> BottleneckAnalysis | None:
         """Get bottleneck analysis for a component."""
         return self.bottlenecks.get(component)
-    
+
     def generate_report(self) -> dict[str, Any]:
         """Generate comprehensive capacity report."""
         return {

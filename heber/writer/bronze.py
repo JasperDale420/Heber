@@ -10,7 +10,6 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import structlog
 
@@ -38,7 +37,7 @@ class BronzeWriter:
         """Get file path for a partition."""
         base = settings.bronze_path / partition_key
         base.mkdir(parents=True, exist_ok=True)
-        
+
         # Use timestamp-based filename for uniqueness
         ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
         return base / f"events-{ts}.jsonl.gz"
@@ -46,7 +45,7 @@ class BronzeWriter:
     async def write(self, envelope: EventEnvelope) -> None:
         """Buffer an event for writing."""
         partition_key = self._get_partition_key(envelope)
-        
+
         # Store the full envelope (including raw if present)
         event_dict = envelope.model_dump(mode="json")
         self.buffers[partition_key].append(event_dict)
@@ -59,8 +58,7 @@ class BronzeWriter:
 
         for partition_key, events in list(self.buffers.items()):
             should_flush = (
-                len(events) >= settings.bronze_max_batch_size
-                or elapsed >= settings.bronze_flush_interval_seconds
+                len(events) >= settings.bronze_max_batch_size or elapsed >= settings.bronze_flush_interval_seconds
             )
             if should_flush and events:
                 await self._flush_partition(partition_key, events)
@@ -78,7 +76,7 @@ class BronzeWriter:
     async def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
         """Write events to a partition file."""
         file_path = self._get_file_path(partition_key)
-        
+
         try:
             # Write as gzipped JSONL
             with gzip.open(file_path, "wt", encoding="utf-8") as f:

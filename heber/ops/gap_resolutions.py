@@ -6,7 +6,7 @@ Documentation of resolved design decisions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class DecisionRecord:
     """Record of a design decision."""
-    
+
     id: str
     category: str
     question: str
@@ -25,7 +25,7 @@ class DecisionRecord:
     rationale: str
     alternatives_considered: list[str] = field(default_factory=list)
     resolved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -189,7 +189,7 @@ DATA_SOURCE_DECISIONS: list[DecisionRecord] = [
 
 class GapResolutionRegistry:
     """Registry of all gap resolution decisions."""
-    
+
     def __init__(self):
         self.decisions: dict[str, list[DecisionRecord]] = {
             "data_model": DATA_MODEL_DECISIONS,
@@ -199,11 +199,11 @@ class GapResolutionRegistry:
             "testing": TESTING_DECISIONS,
             "data_sources": DATA_SOURCE_DECISIONS,
         }
-    
+
     def get_by_category(self, category: str) -> list[DecisionRecord]:
         """Get decisions by category."""
         return self.decisions.get(category, [])
-    
+
     def get_by_id(self, decision_id: str) -> DecisionRecord | None:
         """Get decision by ID."""
         for decisions in self.decisions.values():
@@ -211,18 +211,15 @@ class GapResolutionRegistry:
                 if d.id == decision_id:
                     return d
         return None
-    
+
     def list_all(self) -> dict[str, list[dict[str, Any]]]:
         """List all decisions by category."""
-        return {
-            category: [d.to_dict() for d in decisions]
-            for category, decisions in self.decisions.items()
-        }
-    
+        return {category: [d.to_dict() for d in decisions] for category, decisions in self.decisions.items()}
+
     def generate_report(self) -> dict[str, Any]:
         """Generate gap resolution report."""
         total = sum(len(d) for d in self.decisions.values())
-        
+
         return {
             "summary": {
                 "total_decisions": total,

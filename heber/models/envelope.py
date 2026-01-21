@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 class Lineage(BaseModel):
     """Lineage metadata for tracing event origin.
-    
+
     Data-Gateway sends lineage as a dict, so we keep it flexible.
     """
 
@@ -37,14 +37,14 @@ INSTRUMENT_KEY_PATTERNS = {
 
 def validate_instrument_key(instrument_key: str, instrument_type: str) -> bool:
     """Validate instrument_key format per PRD §6.2.
-    
+
     Args:
         instrument_key: The instrument key to validate
         instrument_type: One of equity, crypto, forex, option
-        
+
     Returns:
         True if valid, False otherwise
-        
+
     Examples:
         >>> validate_instrument_key("equity:AAPL", "equity")
         True
@@ -61,10 +61,10 @@ def validate_instrument_key(instrument_key: str, instrument_type: str) -> bool:
 
 class EventEnvelope(BaseModel):
     """Universal event envelope from Data Gateway.
-    
+
     This model is COMPATIBLE with Data-Gateway's EventEnvelope (gateway/core/envelope.py).
     Fields match Data-Gateway's structure, with Heber-specific extensions marked.
-    
+
     See PRD Section 6.1 for full specification.
     """
 
@@ -78,7 +78,7 @@ class EventEnvelope(BaseModel):
     symbol: str = Field(..., description="Human-readable symbol")
     ts_event: datetime = Field(..., description="Event time from provider")
     ts_ingest: datetime = Field(..., description="Gateway receive/process time")
-    
+
     # === Fields from Data-Gateway (optional with defaults) ===
     schema_version: str = Field(default="v1", description="Envelope schema version")
     lineage: dict[str, Any] = Field(default_factory=dict, description="Sequence numbers, stream IDs")
@@ -93,14 +93,12 @@ class EventEnvelope(BaseModel):
     raw: dict[str, Any] | None = Field(
         default=None, description="Original provider message (for Bronze fidelity, PRD §6.7)"
     )
-    processing_delay_ms: int = Field(
-        default=0, description="Processing delay for ts_effective calculation (PRD §6.4)"
-    )
+    processing_delay_ms: int = Field(default=0, description="Processing delay for ts_effective calculation (PRD §6.4)")
 
     @property
     def ts_effective(self) -> datetime | None:
         """Calculate ts_effective = ts_available + processing_delay_ms (PRD §6.4).
-        
+
         Returns the time at which this record can be realistically used,
         accounting for processing delays.
         """
@@ -115,5 +113,3 @@ class EventEnvelope(BaseModel):
     def is_valid_instrument_key(self) -> bool:
         """Check if instrument_key matches expected format per PRD §6.2."""
         return validate_instrument_key(self.instrument_key, self.instrument_type)
-
-

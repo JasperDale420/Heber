@@ -5,7 +5,7 @@ Structured runbook definitions for incident response.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -16,7 +16,7 @@ logger = structlog.get_logger(__name__)
 
 class IncidentSeverity(str, Enum):
     """Incident severity levels (PRD §40.3)."""
-    
+
     P1_CRITICAL = "P1"  # Data loss risk or total outage
     P2_HIGH = "P2"  # Significant degradation
     P3_MEDIUM = "P3"  # Partial impact
@@ -26,11 +26,11 @@ class IncidentSeverity(str, Enum):
 @dataclass
 class TriageStep:
     """A single triage step in a runbook."""
-    
+
     step_number: int
     command: str
     description: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "step": self.step_number,
@@ -42,10 +42,10 @@ class TriageStep:
 @dataclass
 class ResolutionAction:
     """Resolution action for a specific cause."""
-    
+
     cause: str
     fix: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {"cause": self.cause, "fix": self.fix}
 
@@ -53,10 +53,10 @@ class ResolutionAction:
 @dataclass
 class Runbook:
     """Incident runbook definition (PRD §39).
-    
+
     Provides structured response procedures for common incidents.
     """
-    
+
     title: str
     alert_name: str
     severity: IncidentSeverity
@@ -66,7 +66,7 @@ class Runbook:
     resolutions: list[ResolutionAction]
     escalation_threshold: str = "15 minutes"
     fallback: str | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "title": self.title,
@@ -79,7 +79,7 @@ class Runbook:
             "escalation_threshold": self.escalation_threshold,
             "fallback": self.fallback,
         }
-    
+
     def to_markdown(self) -> str:
         """Generate markdown-formatted runbook."""
         lines = [
@@ -93,31 +93,33 @@ class Runbook:
         ]
         for symptom in self.symptoms:
             lines.append(f"- {symptom}")
-        
+
         lines.extend(["", "## Triage", ""])
         for step in self.triage_steps:
             lines.append(f"{step.step_number}. {step.description}")
             if step.command:
-                lines.append(f"   ```bash")
+                lines.append("   ```bash")
                 lines.append(f"   {step.command}")
-                lines.append(f"   ```")
-        
+                lines.append("   ```")
+
         lines.extend(["", "## Common Causes", ""])
         for cause in self.common_causes:
             lines.append(f"- {cause}")
-        
+
         lines.extend(["", "## Resolution", "", "| Cause | Fix |", "|-------|-----|"])
         for res in self.resolutions:
             lines.append(f"| {res.cause} | {res.fix} |")
-        
-        lines.extend([
-            "",
-            f"**Escalation:** If unresolved in {self.escalation_threshold} → page secondary on-call",
-        ])
-        
+
+        lines.extend(
+            [
+                "",
+                f"**Escalation:** If unresolved in {self.escalation_threshold} → page secondary on-call",
+            ]
+        )
+
         if self.fallback:
             lines.extend(["", f"**Fallback:** {self.fallback}"])
-        
+
         return "\n".join(lines)
 
 
@@ -289,25 +291,25 @@ DEFAULT_RUNBOOKS: dict[str, Runbook] = {
 
 class RunbookRegistry:
     """Registry of available runbooks."""
-    
+
     def __init__(self, runbooks: dict[str, Runbook] | None = None):
         self.runbooks = runbooks or DEFAULT_RUNBOOKS
-    
+
     def get(self, key: str) -> Runbook | None:
         """Get runbook by key."""
         return self.runbooks.get(key)
-    
+
     def get_by_alert(self, alert_name: str) -> Runbook | None:
         """Get runbook by alert name."""
         for runbook in self.runbooks.values():
             if runbook.alert_name == alert_name:
                 return runbook
         return None
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all runbooks."""
         return [{"key": k, **rb.to_dict()} for k, rb in self.runbooks.items()]
-    
+
     def export_all_markdown(self) -> str:
         """Export all runbooks as markdown."""
         parts = []

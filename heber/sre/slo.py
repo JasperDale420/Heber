@@ -6,7 +6,7 @@ Service Level Objectives, Indicators, and Burn Rate management.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -17,14 +17,14 @@ logger = structlog.get_logger(__name__)
 
 class SLOWindow(str, Enum):
     """SLO measurement windows."""
-    
+
     WINDOW_1H = "1h"
     WINDOW_6H = "6h"
     WINDOW_1D = "1d"
     WINDOW_3D = "3d"
     WINDOW_7D = "7d"
     WINDOW_30D = "30d"
-    
+
     def to_timedelta(self) -> timedelta:
         mapping = {
             "1h": timedelta(hours=1),
@@ -39,7 +39,7 @@ class SLOWindow(str, Enum):
 
 class AlertSeverity(str, Enum):
     """Alert severity levels."""
-    
+
     CRITICAL = "critical"
     WARNING = "warning"
     INFO = "info"
@@ -48,17 +48,17 @@ class AlertSeverity(str, Enum):
 @dataclass
 class SLI:
     """Service Level Indicator (PRD §37.1).
-    
+
     Attributes:
         name: Indicator name (e.g., "ingestion_availability")
         metric_query: PromQL-style query for the metric
         description: Human-readable description
     """
-    
+
     name: str
     metric_query: str
     description: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -70,29 +70,29 @@ class SLI:
 @dataclass
 class SLO:
     """Service Level Objective (PRD §37.1).
-    
+
     Attributes:
         name: SLO name (e.g., "Ingestion Availability")
         sli: The indicator being measured
         target: Target percentage (e.g., 0.999 for 99.9%)
         window: Measurement window
     """
-    
+
     name: str
     sli: SLI
     target: float  # 0.999 = 99.9%
     window: SLOWindow
-    
+
     @property
     def target_percentage(self) -> float:
         """Return target as percentage."""
         return self.target * 100
-    
+
     @property
     def error_budget_ratio(self) -> float:
         """Return allowed error ratio (1 - target)."""
         return 1 - self.target
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -107,16 +107,16 @@ class SLO:
 @dataclass
 class BurnRateAlert:
     """Burn rate alert configuration (PRD §37.4).
-    
+
     Burn rate = actual error rate / allowed error rate
     14x burn rate means consuming 14 hours of budget per hour.
     """
-    
+
     burn_rate: float  # e.g., 14 for 14x
     window: SLOWindow
     severity: AlertSeverity
     action: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "burn_rate": f"{self.burn_rate}x",
@@ -124,7 +124,7 @@ class BurnRateAlert:
             "severity": self.severity.value,
             "action": self.action,
         }
-    
+
     def to_prometheus_rule(self, slo: SLO) -> dict[str, Any]:
         """Generate Prometheus alerting rule."""
         threshold = self.burn_rate * slo.error_budget_ratio
@@ -143,14 +143,14 @@ class BurnRateAlert:
 @dataclass
 class SLOStatus:
     """Current status of an SLO."""
-    
+
     slo: SLO
     current_value: float  # Current SLI value (0-1)
     budget_remaining: float  # Remaining error budget (0-1)
     burn_rate: float  # Current burn rate (1x = normal)
     is_healthy: bool
     measured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "slo_name": self.slo.name,
@@ -167,7 +167,10 @@ class SLOStatus:
 DEFAULT_SLIS: dict[str, SLI] = {
     "ingestion_availability": SLI(
         name="ingestion_availability",
-        metric_query='sum(rate(heber_consumer_events_processed_total{status="success"}[30d])) / sum(rate(heber_consumer_events_processed_total[30d]))',
+        metric_query=(
+            'sum(rate(heber_consumer_events_processed_total{status="success"}[30d])) '
+            "/ sum(rate(heber_consumer_events_processed_total[30d]))"
+        ),
         description="Ratio of successfully processed events to total events",
     ),
     "write_success_rate": SLI(
@@ -254,7 +257,7 @@ DEFAULT_BURN_RATE_ALERTS: list[BurnRateAlert] = [
 
 class SLOManager:
     """Manage SLOs and calculate status."""
-    
+
     def __init__(
         self,
         slos: list[SLO] | None = None,
@@ -262,15 +265,15 @@ class SLOManager:
     ):
         self.slos = {slo.name: slo for slo in (slos or DEFAULT_SLOS)}
         self.burn_rate_alerts = burn_rate_alerts or DEFAULT_BURN_RATE_ALERTS
-    
+
     def get_slo(self, name: str) -> SLO | None:
         """Get SLO by name."""
         return self.slos.get(name)
-    
+
     def list_slos(self) -> list[dict[str, Any]]:
         """List all SLOs."""
         return [slo.to_dict() for slo in self.slos.values()]
-    
+
     def calculate_status(
         self,
         slo_name: str,
@@ -280,33 +283,33 @@ class SLOManager:
         window_hours: float = 720,  # 30 days
     ) -> SLOStatus:
         """Calculate SLO status from current metrics.
-        
+
         Args:
             slo_name: Name of the SLO
             current_value: Current SLI value (0-1)
             error_count: Number of errors in window
             total_count: Total requests in window
             window_hours: Window size in hours
-            
+
         Returns:
             SLOStatus with calculated metrics
         """
         slo = self.slos.get(slo_name)
         if not slo:
             raise ValueError(f"SLO not found: {slo_name}")
-        
+
         # Calculate error budget
         allowed_errors = total_count * slo.error_budget_ratio
         budget_consumed = error_count / allowed_errors if allowed_errors > 0 else 1.0
         budget_remaining = max(0, 1 - budget_consumed)
-        
+
         # Calculate burn rate (errors per hour vs budget per hour)
         actual_error_rate = error_count / total_count if total_count > 0 else 0
         burn_rate = actual_error_rate / slo.error_budget_ratio if slo.error_budget_ratio > 0 else 0
-        
+
         # Determine health
         is_healthy = budget_remaining > 0.25 and current_value >= slo.target
-        
+
         return SLOStatus(
             slo=slo,
             current_value=current_value,
@@ -314,7 +317,7 @@ class SLOManager:
             burn_rate=burn_rate,
             is_healthy=is_healthy,
         )
-    
+
     def generate_prometheus_rules(self) -> list[dict[str, Any]]:
         """Generate Prometheus alerting rules for all SLOs."""
         rules = []

@@ -21,117 +21,127 @@ logger = structlog.get_logger(__name__)
 
 # Dataset-specific schemas (per PRD Section 8.7)
 SILVER_SCHEMAS = {
-    "bars": pa.schema([
-        ("event_id", pa.string()),
-        ("provider", pa.string()),
-        ("feed", pa.string()),
-        ("instrument_type", pa.string()),
-        ("instrument_key", pa.string()),
-        ("symbol", pa.string()),
-        ("ts_event", pa.timestamp("us", tz="UTC")),
-        ("ts_ingest", pa.timestamp("us", tz="UTC")),
-        ("ts_available", pa.timestamp("us", tz="UTC")),
-        ("source", pa.string()),
-        ("schema_version", pa.string()),
-        ("quality_flags", pa.list_(pa.string())),
-        # Bars-specific
-        ("timeframe", pa.string()),
-        ("bar_start_ts", pa.timestamp("us", tz="UTC")),
-        ("open", pa.float64()),
-        ("high", pa.float64()),
-        ("low", pa.float64()),
-        ("close", pa.float64()),
-        ("volume", pa.float64()),
-        ("trade_count", pa.int64()),
-        ("vwap", pa.float64()),
-    ]),
-    "quotes": pa.schema([
-        ("event_id", pa.string()),
-        ("provider", pa.string()),
-        ("feed", pa.string()),
-        ("instrument_type", pa.string()),
-        ("instrument_key", pa.string()),
-        ("symbol", pa.string()),
-        ("ts_event", pa.timestamp("us", tz="UTC")),
-        ("ts_ingest", pa.timestamp("us", tz="UTC")),
-        ("ts_available", pa.timestamp("us", tz="UTC")),
-        ("source", pa.string()),
-        ("schema_version", pa.string()),
-        ("quality_flags", pa.list_(pa.string())),
-        # Quotes-specific
-        ("bid_px", pa.float64()),
-        ("bid_sz", pa.float64()),
-        ("ask_px", pa.float64()),
-        ("ask_sz", pa.float64()),
-        ("bid_exchange", pa.string()),
-        ("ask_exchange", pa.string()),
-    ]),
-    "trades": pa.schema([
-        ("event_id", pa.string()),
-        ("provider", pa.string()),
-        ("feed", pa.string()),
-        ("instrument_type", pa.string()),
-        ("instrument_key", pa.string()),
-        ("symbol", pa.string()),
-        ("ts_event", pa.timestamp("us", tz="UTC")),
-        ("ts_ingest", pa.timestamp("us", tz="UTC")),
-        ("ts_available", pa.timestamp("us", tz="UTC")),
-        ("source", pa.string()),
-        ("schema_version", pa.string()),
-        ("quality_flags", pa.list_(pa.string())),
-        # Trades-specific
-        ("trade_id", pa.string()),
-        ("price", pa.float64()),
-        ("size", pa.float64()),
-        ("exchange", pa.string()),
-        ("tape", pa.string()),
-    ]),
-    "flow_alerts": pa.schema([
-        ("event_id", pa.string()),
-        ("provider", pa.string()),
-        ("feed", pa.string()),
-        ("instrument_type", pa.string()),
-        ("instrument_key", pa.string()),
-        ("symbol", pa.string()),
-        ("ts_event", pa.timestamp("us", tz="UTC")),
-        ("ts_ingest", pa.timestamp("us", tz="UTC")),
-        ("ts_available", pa.timestamp("us", tz="UTC")),
-        ("source", pa.string()),
-        ("schema_version", pa.string()),
-        ("quality_flags", pa.list_(pa.string())),
-        # Flow-specific
-        ("underlying", pa.string()),
-        ("occ_symbol", pa.string()),
-        ("expiry", pa.date32()),
-        ("strike", pa.float64()),
-        ("put_call", pa.string()),
-        ("premium", pa.float64()),
-        ("volume", pa.float64()),
-        ("open_interest", pa.float64()),
-        ("spot_px", pa.float64()),
-        ("contract_px", pa.float64()),
-        ("alert_type", pa.string()),
-        ("side", pa.string()),
-        ("aggressor", pa.string()),
-    ]),
+    "bars": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Bars-specific
+            ("timeframe", pa.string()),
+            ("bar_start_ts", pa.timestamp("us", tz="UTC")),
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("volume", pa.float64()),
+            ("trade_count", pa.int64()),
+            ("vwap", pa.float64()),
+        ]
+    ),
+    "quotes": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Quotes-specific
+            ("bid_px", pa.float64()),
+            ("bid_sz", pa.float64()),
+            ("ask_px", pa.float64()),
+            ("ask_sz", pa.float64()),
+            ("bid_exchange", pa.string()),
+            ("ask_exchange", pa.string()),
+        ]
+    ),
+    "trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Trades-specific
+            ("trade_id", pa.string()),
+            ("price", pa.float64()),
+            ("size", pa.float64()),
+            ("exchange", pa.string()),
+            ("tape", pa.string()),
+        ]
+    ),
+    "flow_alerts": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Flow-specific
+            ("underlying", pa.string()),
+            ("occ_symbol", pa.string()),
+            ("expiry", pa.date32()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("premium", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("spot_px", pa.float64()),
+            ("contract_px", pa.float64()),
+            ("alert_type", pa.string()),
+            ("side", pa.string()),
+            ("aggressor", pa.string()),
+        ]
+    ),
 }
 
 # Default schema for unknown feeds
-DEFAULT_SCHEMA = pa.schema([
-    ("event_id", pa.string()),
-    ("provider", pa.string()),
-    ("feed", pa.string()),
-    ("instrument_type", pa.string()),
-    ("instrument_key", pa.string()),
-    ("symbol", pa.string()),
-    ("ts_event", pa.timestamp("us", tz="UTC")),
-    ("ts_ingest", pa.timestamp("us", tz="UTC")),
-    ("ts_available", pa.timestamp("us", tz="UTC")),
-    ("source", pa.string()),
-    ("schema_version", pa.string()),
-    ("quality_flags", pa.list_(pa.string())),
-    ("payload_json", pa.string()),  # Store payload as JSON string
-])
+DEFAULT_SCHEMA = pa.schema(
+    [
+        ("event_id", pa.string()),
+        ("provider", pa.string()),
+        ("feed", pa.string()),
+        ("instrument_type", pa.string()),
+        ("instrument_key", pa.string()),
+        ("symbol", pa.string()),
+        ("ts_event", pa.timestamp("us", tz="UTC")),
+        ("ts_ingest", pa.timestamp("us", tz="UTC")),
+        ("ts_available", pa.timestamp("us", tz="UTC")),
+        ("source", pa.string()),
+        ("schema_version", pa.string()),
+        ("quality_flags", pa.list_(pa.string())),
+        ("payload_json", pa.string()),  # Store payload as JSON string
+    ]
+)
 
 
 class SilverWriter:
@@ -144,12 +154,12 @@ class SilverWriter:
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
         dt = envelope.ts_event.strftime("%Y-%m-%d")
-        
+
         # High-volume feeds use hour partitioning
         if envelope.feed in ("quotes", "trades"):
             hour = envelope.ts_event.strftime("%H")
             return f"feed={envelope.feed}/instrument_type={envelope.instrument_type}/dt={dt}/hour={hour}"
-        
+
         return f"feed={envelope.feed}/instrument_type={envelope.instrument_type}/dt={dt}"
 
     def _get_schema(self, feed: str) -> pa.Schema:
@@ -184,6 +194,7 @@ class SilverWriter:
         else:
             # Store payload as JSON for unknown feeds
             import json
+
             row["payload_json"] = json.dumps(payload, default=str)
 
         return row
@@ -192,7 +203,7 @@ class SilverWriter:
         """Get file path for a partition."""
         base = settings.silver_path / partition_key
         base.mkdir(parents=True, exist_ok=True)
-        
+
         ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
         return base / f"part-{ts}.parquet"
 
@@ -209,8 +220,7 @@ class SilverWriter:
 
         for partition_key, rows in list(self.buffers.items()):
             should_flush = (
-                len(rows) >= settings.silver_max_rows_per_file
-                or elapsed >= settings.bronze_flush_interval_seconds
+                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.bronze_flush_interval_seconds
             )
             if should_flush and rows:
                 await self._flush_partition(partition_key, rows)

@@ -5,8 +5,7 @@ Unit test utilities and mocking strategies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -17,11 +16,11 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class UnitTestSpec:
     """Unit test specification (PRD §46.1)."""
-    
+
     module: str
     test_areas: list[str]
     description: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "module": self.module,
@@ -66,11 +65,11 @@ DEFAULT_UNIT_TEST_SPECS: list[UnitTestSpec] = [
 @dataclass
 class MockStrategy:
     """Mock strategy for a dependency (PRD §46.2)."""
-    
+
     dependency: str
     mock_library: str
     notes: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "dependency": self.dependency,
@@ -90,7 +89,7 @@ DEFAULT_MOCK_STRATEGIES: list[MockStrategy] = [
 
 class UnitTestFramework:
     """Unit test framework utilities."""
-    
+
     def __init__(
         self,
         specs: list[UnitTestSpec] | None = None,
@@ -98,11 +97,11 @@ class UnitTestFramework:
     ):
         self.specs = specs or DEFAULT_UNIT_TEST_SPECS
         self.mock_strategies = {m.dependency: m for m in (mock_strategies or DEFAULT_MOCK_STRATEGIES)}
-    
+
     def get_mock_strategy(self, dependency: str) -> MockStrategy | None:
         """Get mock strategy for a dependency."""
         return self.mock_strategies.get(dependency)
-    
+
     def list_all_specs(self) -> list[dict[str, Any]]:
         """List all unit test specs."""
         return [s.to_dict() for s in self.specs]
@@ -111,11 +110,11 @@ class UnitTestFramework:
 @dataclass
 class IntegrationTestSpec:
     """Integration test specification (PRD §47.1)."""
-    
+
     suite_name: str
     components: list[str]
     description: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "suite_name": self.suite_name,
@@ -155,17 +154,17 @@ DEFAULT_INTEGRATION_TEST_SPECS: list[IntegrationTestSpec] = [
 
 class IntegrationTestHarness:
     """Integration test harness."""
-    
+
     def __init__(
         self,
         specs: list[IntegrationTestSpec] | None = None,
     ):
         self.specs = {s.suite_name: s for s in (specs or DEFAULT_INTEGRATION_TEST_SPECS)}
-    
+
     def get_spec(self, suite_name: str) -> IntegrationTestSpec | None:
         """Get integration test spec by suite name."""
         return self.specs.get(suite_name)
-    
+
     def list_all_specs(self) -> list[dict[str, Any]]:
         """List all integration test specs."""
         return [s.to_dict() for s in self.specs.values()]
@@ -174,11 +173,11 @@ class IntegrationTestHarness:
 @dataclass
 class E2ETestCase:
     """E2E test case definition (PRD §48.1)."""
-    
+
     flow: str
     scenario: str
     success_criteria: str
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "flow": self.flow,
@@ -229,17 +228,17 @@ DEFAULT_E2E_TEST_CASES: list[E2ETestCase] = [
 
 class E2ETestSuite:
     """E2E test suite."""
-    
+
     def __init__(
         self,
         test_cases: list[E2ETestCase] | None = None,
     ):
         self.test_cases = test_cases or DEFAULT_E2E_TEST_CASES
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all E2E test cases."""
         return [tc.to_dict() for tc in self.test_cases]
-    
+
     def get_schedule(self) -> dict[str, list[str]]:
         """Get E2E test schedule from PRD §48.3."""
         return {

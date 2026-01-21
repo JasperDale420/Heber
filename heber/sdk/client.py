@@ -5,7 +5,7 @@ Provides safe, point-in-time correct access to Silver and Gold datasets.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -16,11 +16,10 @@ from heber.config import settings
 from heber.gold.versioning import (
     GoldVersion,
     VersionManifest,
-    CompatibilityResult,
-    resolve_version,
     check_compatibility,
-    list_available_versions,
     get_manifest_path,
+    list_available_versions,
+    resolve_version,
 )
 
 logger = structlog.get_logger(__name__)
@@ -28,17 +27,17 @@ logger = structlog.get_logger(__name__)
 
 class HeberClient:
     """Client for reading and writing Heber datasets.
-    
+
     Example:
         client = HeberClient()
-        
+
         # Read Silver data (point-in-time correct)
         bars = client.read_asof(
             dataset="bars",
             asof_time=datetime(2025, 1, 15),
             instrument_keys=["equity:AAPL"],
         )
-        
+
         # Write Gold features
         client.write_gold(
             dataset="momentum_features",
@@ -55,7 +54,7 @@ class HeberClient:
         api_key: str | None = None,
     ):
         """Initialize HeberClient.
-        
+
         Args:
             catalog_url: URL of the Catalog API. Defaults to settings.
             data_root: Root path for data. Defaults to settings.
@@ -124,12 +123,12 @@ class HeberClient:
         schema_version: str = "latest",
     ) -> dict:
         """Discover dataset paths, schema, and partitions (PRD §11.6).
-        
+
         Args:
             dataset_name: Name of dataset (e.g., "bars", "quotes")
             layer: Storage layer (bronze, silver, gold)
             schema_version: Schema version or "latest"
-            
+
         Returns:
             dict with keys:
               - paths: list of partition paths
@@ -138,20 +137,20 @@ class HeberClient:
         """
         # Get dataset metadata
         dataset = self.get_dataset(dataset_name)
-        
+
         # Get schema version
         response = self.http_client.get(f"/datasets/{dataset_name}/versions")
         response.raise_for_status()
         versions = response.json()["data"]
-        
+
         if schema_version == "latest":
             schema = next((v for v in versions if v.get("is_current")), versions[0] if versions else None)
         else:
             schema = next((v for v in versions if v.get("schema_version") == schema_version), None)
-        
+
         # Build base path
         base_path = self.data_root / layer / f"feed={dataset_name}"
-        
+
         # Discover partitions
         partitions = []
         if base_path.exists():
@@ -162,7 +161,7 @@ class HeberClient:
                         key, value = part.split("=", 1)
                         partition_parts[key] = value
                 partitions.append(partition_parts)
-        
+
         return {
             "dataset": dataset,
             "layer": layer,
@@ -183,11 +182,11 @@ class HeberClient:
         suffix: str = "_right",
     ) -> pd.DataFrame:
         """Point-in-time correct as-of join (PRD §10.4, §11.6).
-        
+
         Joins left to the most recent prior row from right where:
         - ts_event_right <= left_time
         - ts_available_right <= left_time
-        
+
         Args:
             left: Left DataFrame (driving table)
             right: Right DataFrame (lookup table)
@@ -197,22 +196,22 @@ class HeberClient:
             right_available: Availability column in right
             tolerance: Max time difference (e.g., "1h", "30m")
             suffix: Suffix for right columns
-            
+
         Returns:
             Joined DataFrame with anti-leakage guarantee
         """
         if on_keys is None:
             on_keys = ["instrument_key"]
-        
+
         # Create a safe join time for right table
         # This is the max of ts_event and ts_available
         right = right.copy()
         right["_safe_time"] = right[[right_time, right_available]].max(axis=1)
-        
+
         # Sort both tables
         left = left.sort_values(left_time)
         right = right.sort_values("_safe_time")
-        
+
         # Perform pandas merge_asof
         result = pd.merge_asof(
             left,
@@ -224,20 +223,20 @@ class HeberClient:
             direction="backward",
             suffixes=("", suffix),
         )
-        
+
         # Drop helper column
         if "_safe_time" + suffix in result.columns:
             result = result.drop(columns=["_safe_time" + suffix])
         elif "_safe_time" in result.columns:
             result = result.drop(columns=["_safe_time"])
-        
+
         logger.debug(
             "asof_join complete",
             left_rows=len(left),
             right_rows=len(right),
             result_rows=len(result),
         )
-        
+
         return result
 
     # Silver layer reads
@@ -250,19 +249,19 @@ class HeberClient:
         columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read from Silver layer.
-        
+
         Args:
             dataset: Dataset name (e.g., "bars", "quotes", "trades")
             time_range: (start, end) datetime range
             instrument_keys: Filter to specific instruments
             instrument_type: Filter by instrument type
             columns: Columns to read (None for all)
-            
+
         Returns:
             DataFrame with Silver data
         """
         silver_path = self.data_root / "silver" / f"feed={dataset}"
-        
+
         if not silver_path.exists():
             return pd.DataFrame()
 
@@ -305,17 +304,17 @@ class HeberClient:
         columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read Silver data with point-in-time correctness.
-        
+
         Only returns rows where ts_available <= asof_time.
         This is the primary read method for training and backtesting.
-        
+
         Args:
             dataset: Dataset name
             asof_time: Point-in-time cutoff (only data available by this time)
             instrument_keys: Filter to specific instruments
             time_range: (start, end) for ts_event range
             columns: Columns to read
-            
+
         Returns:
             DataFrame with point-in-time correct data
         """
@@ -356,7 +355,7 @@ class HeberClient:
         asof_time: datetime | str | None = None,
     ) -> pd.DataFrame:
         """Read from Gold layer (features/labels).
-        
+
         Args:
             dataset: Dataset name (e.g., "momentum_features")
             project: Filter by project
@@ -364,12 +363,12 @@ class HeberClient:
             time_range: (start, end) datetime range
             instrument_keys: Filter to specific instruments
             asof_time: Point-in-time cutoff (optional)
-            
+
         Returns:
             DataFrame with Gold data
         """
         gold_path = self.data_root / "gold" / f"dataset={dataset}"
-        
+
         if project:
             gold_path = gold_path / f"project={project}"
         if version:
@@ -421,14 +420,14 @@ class HeberClient:
         metadata: dict[str, Any] | None = None,
     ) -> Path:
         """Write features/labels to Gold layer.
-        
+
         Args:
             dataset: Dataset name
             df: DataFrame to write (must include instrument_key, ts_event, ts_available)
             project: Project name
             version: Version string
             metadata: Additional metadata to log
-            
+
         Returns:
             Path to written file
         """
@@ -484,10 +483,10 @@ class HeberClient:
 
     def list_gold_versions(self, dataset: str) -> list[str]:
         """List all available versions for a Gold dataset (PRD §28.2).
-        
+
         Args:
             dataset: Dataset name
-            
+
         Returns:
             List of version strings, newest first (e.g., ["v3.5.0", "v3.2.1", "v1.0.0"])
         """
@@ -502,53 +501,47 @@ class HeberClient:
         to_version: str,
     ) -> dict:
         """Check compatibility between two Gold versions (PRD §28.3).
-        
+
         Args:
             dataset: Dataset name
             from_version: Source version (e.g., "v3.2.1")
             to_version: Target version (e.g., "v3.5.0")
-            
+
         Returns:
             Dict with keys: compatible, breaking, changes
         """
         gold_root = self.data_root / "gold"
-        
-        from_manifest_path = get_manifest_path(
-            gold_root, dataset, GoldVersion.parse(from_version)
-        )
-        to_manifest_path = get_manifest_path(
-            gold_root, dataset, GoldVersion.parse(to_version)
-        )
-        
+
+        from_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(from_version))
+        to_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(to_version))
+
         if not from_manifest_path.exists():
             raise ValueError(f"Version {from_version} not found for {dataset}")
         if not to_manifest_path.exists():
             raise ValueError(f"Version {to_version} not found for {dataset}")
-        
+
         from_manifest = VersionManifest.load(from_manifest_path)
         to_manifest = VersionManifest.load(to_manifest_path)
-        
+
         result = check_compatibility(from_manifest, to_manifest)
         return result.to_dict()
 
     def get_version_lineage(self, dataset: str, version: str) -> dict:
         """Get lineage metadata for a Gold version (PRD §28.4).
-        
+
         Args:
             dataset: Dataset name
             version: Version string
-            
+
         Returns:
             Lineage dict with upstream_deps, code_commit, config_hash
         """
         gold_root = self.data_root / "gold"
-        manifest_path = get_manifest_path(
-            gold_root, dataset, GoldVersion.parse(version)
-        )
-        
+        manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(version))
+
         if not manifest_path.exists():
             raise ValueError(f"Version {version} not found for {dataset}")
-        
+
         manifest = VersionManifest.load(manifest_path)
         return {
             "version": str(manifest.version),
@@ -566,29 +559,29 @@ class HeberClient:
         instrument_keys: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read Gold data with semantic version resolution (PRD §28.2).
-        
+
         Supports:
         - Exact version: version="v3.2.1"
         - Wildcard: version="v3.*" (latest v3.x)
         - Latest: version=None
-        
+
         Args:
             dataset: Dataset name
             version: Version string or wildcard pattern
             asof_time: Point-in-time cutoff
             time_range: (start, end) datetime range
             instrument_keys: Filter to specific instruments
-            
+
         Returns:
             DataFrame with Gold data
         """
         gold_root = self.data_root / "gold"
         available = list_available_versions(gold_root, dataset)
-        
+
         if not available:
             logger.warning("No versions found for Gold dataset", dataset=dataset)
             return pd.DataFrame()
-        
+
         resolved = resolve_version(available, version)
         if resolved is None:
             logger.warning(
@@ -597,14 +590,14 @@ class HeberClient:
                 pattern=version,
             )
             return pd.DataFrame()
-        
+
         logger.info(
             "Resolved Gold version",
             dataset=dataset,
             pattern=version,
             resolved=str(resolved),
         )
-        
+
         return self.read_gold(
             dataset=dataset,
             version=str(resolved),

@@ -8,8 +8,7 @@ Provides:
 """
 
 import os
-import sys
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -52,7 +51,7 @@ def configure_logging(
     json_output: bool = True,
 ) -> None:
     """Configure structured logging per PRD §12.3 and §12.5.5.
-    
+
     Args:
         service_name: Override service name
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
@@ -60,7 +59,7 @@ def configure_logging(
     """
     if service_name:
         os.environ["SERVICE_NAME"] = service_name
-    
+
     # Shared processors
     shared_processors = [
         structlog.stdlib.add_log_level,
@@ -69,18 +68,14 @@ def configure_logging(
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
-    
+
     if json_output:
         # Production: JSON output per PRD §12.5.5
-        processors = shared_processors + [
-            structlog.processors.JSONRenderer()
-        ]
+        processors = shared_processors + [structlog.processors.JSONRenderer()]
     else:
         # Development: Console-friendly output
-        processors = shared_processors + [
-            structlog.dev.ConsoleRenderer()
-        ]
-    
+        processors = shared_processors + [structlog.dev.ConsoleRenderer()]
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -96,6 +91,7 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
 
 
 # Log event helpers for common operations (PRD §12.3)
+
 
 def log_event_received(
     logger: structlog.stdlib.BoundLogger,

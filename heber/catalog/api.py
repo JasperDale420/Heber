@@ -328,6 +328,7 @@ async def get_dataset_version(
 
 class DatasetCreateRequest(BaseModel):
     """Request to create a new dataset."""
+
     dataset_name: str
     layer: str
     owner: str = "shared"
@@ -362,6 +363,7 @@ async def create_dataset(
 
 class InstrumentUpsertRequest(BaseModel):
     """Request to upsert an instrument."""
+
     instrument_key: str
     instrument_type: str
     canonical_symbol: str
@@ -398,6 +400,7 @@ async def upsert_instrument(
 # Backfill endpoints (PRD §11.7.3)
 class BackfillRequest(BaseModel):
     """Request to create a backfill job."""
+
     provider: str
     feed: str
     instrument_keys: list[str]
@@ -414,6 +417,7 @@ _backfill_jobs: dict = {}
 async def create_backfill(request: BackfillRequest):
     """Create a new backfill job."""
     from uuid import uuid4
+
     job_id = str(uuid4())
     _backfill_jobs[job_id] = {
         "id": job_id,
@@ -475,6 +479,7 @@ ERROR_CODES = {
 async def http_exception_handler(request, exc: HTTPException):
     """Convert HTTP exceptions to PRD-compliant error format."""
     from fastapi.responses import JSONResponse
+
     code = ERROR_CODES.get(exc.status_code, "UNKNOWN_ERROR")
     return JSONResponse(
         status_code=exc.status_code,
@@ -490,13 +495,13 @@ async def http_exception_handler(request, exc: HTTPException):
 
 # Rate limiting (PRD §11.7.6)
 # Note: Production should use Redis-backed rate limiter
-from collections import defaultdict
 import time
+from collections import defaultdict
 
 _rate_limit_store: dict = defaultdict(list)
 RATE_LIMITS = {
-    "read": 1000,   # 1000 req/min
-    "write": 100,   # 100 req/min
+    "read": 1000,  # 1000 req/min
+    "write": 100,  # 100 req/min
 }
 
 
@@ -504,14 +509,14 @@ async def check_rate_limit(api_key: str, endpoint_type: str = "read"):
     """Simple in-memory rate limiter (use Redis in production)."""
     now = time.time()
     window = 60  # 1 minute
-    
+
     key = f"{api_key}:{endpoint_type}"
     _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < window]
-    
+
     limit = RATE_LIMITS.get(endpoint_type, 1000)
     if len(_rate_limit_store[key]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    
+
     _rate_limit_store[key].append(now)
 
 
@@ -523,17 +528,16 @@ async def verify_api_key(authorization: str | None = Header(None)):
     """Simple API key verification (MVP)."""
     if settings.environment == "dev":
         return "dev-user"
-    
+
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
-    
+
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid Authorization format")
-    
+
     token = authorization[7:]
     # In production, validate against a key store
     if not token or len(token) < 10:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
-    return token
 
+    return token

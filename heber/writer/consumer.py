@@ -55,7 +55,7 @@ class EventConsumer:
 
     async def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
-        
+
         Returns True if successful, False otherwise.
         """
         try:
@@ -63,7 +63,7 @@ class EventConsumer:
             payload_str = event_data.get(b"payload") or event_data.get("payload")
             if isinstance(payload_str, bytes):
                 payload_str = payload_str.decode("utf-8")
-            
+
             event_dict = json.loads(payload_str)
             envelope = EventEnvelope.model_validate(event_dict)
 
@@ -120,10 +120,10 @@ class EventConsumer:
                 if not messages:
                     continue
 
-                for stream_name, stream_messages in messages:
+                for _stream_name, stream_messages in messages:
                     for message_id, message_data in stream_messages:
                         success = await self.process_event(message_data)
-                        
+
                         if success:
                             # Acknowledge message
                             await self.redis.xack(

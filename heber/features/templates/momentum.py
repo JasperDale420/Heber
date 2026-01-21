@@ -6,17 +6,17 @@ Dependencies: Silver bars dataset
 
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     """Compute Relative Strength Index (RSI).
-    
+
     Args:
         prices: Price series
         period: RSI lookback period
-        
+
     Returns:
         RSI values (0-100)
     """
@@ -29,41 +29,40 @@ def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
 
 def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
     """Compute momentum features for each instrument.
-    
+
     Input: Silver bars with columns [instrument_key, bar_start_ts, open, high, low, close, volume]
     Output: Gold features with ts_available set to computation time
-    
+
     Args:
         bars_df: DataFrame with OHLCV bar data
-        
+
     Returns:
         DataFrame with momentum features
     """
+
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
-        return pd.DataFrame({
-            "instrument_key": df["instrument_key"],
-            "ts_event": df["bar_start_ts"],
-            "ts_available": pd.Timestamp.now(tz="UTC"),
-            
-            # Price momentum (returns over lookback)
-            "momentum_1d": close.pct_change(1),
-            "momentum_5d": close / close.shift(5) - 1,
-            "momentum_10d": close / close.shift(10) - 1,
-            "momentum_20d": close / close.shift(20) - 1,
-            "momentum_60d": close / close.shift(60) - 1,
-            
-            # Rate of change
-            "roc_5d": (close - close.shift(5)) / close.shift(5) * 100,
-            "roc_20d": (close - close.shift(20)) / close.shift(20) * 100,
-            
-            # RSI (Relative Strength Index)
-            "rsi_14": compute_rsi(close, 14),
-            "rsi_28": compute_rsi(close, 28),
-            
-            # MACD
-            "macd": close.ewm(span=12).mean() - close.ewm(span=26).mean(),
-            "macd_signal": (close.ewm(span=12).mean() - close.ewm(span=26).mean()).ewm(span=9).mean(),
-        })
-    
+        return pd.DataFrame(
+            {
+                "instrument_key": df["instrument_key"],
+                "ts_event": df["bar_start_ts"],
+                "ts_available": pd.Timestamp.now(tz="UTC"),
+                # Price momentum (returns over lookback)
+                "momentum_1d": close.pct_change(1),
+                "momentum_5d": close / close.shift(5) - 1,
+                "momentum_10d": close / close.shift(10) - 1,
+                "momentum_20d": close / close.shift(20) - 1,
+                "momentum_60d": close / close.shift(60) - 1,
+                # Rate of change
+                "roc_5d": (close - close.shift(5)) / close.shift(5) * 100,
+                "roc_20d": (close - close.shift(20)) / close.shift(20) * 100,
+                # RSI (Relative Strength Index)
+                "rsi_14": compute_rsi(close, 14),
+                "rsi_28": compute_rsi(close, 28),
+                # MACD
+                "macd": close.ewm(span=12).mean() - close.ewm(span=26).mean(),
+                "macd_signal": (close.ewm(span=12).mean() - close.ewm(span=26).mean()).ewm(span=9).mean(),
+            }
+        )
+
     return bars_df.groupby("instrument_key", group_keys=False).apply(calc_features)

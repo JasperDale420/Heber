@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Code Quality Pipeline
+
+- **Pre-commit Hooks** (`.pre-commit-config.yaml`)
+  - Ruff linter with auto-fix and formatting
+  - Detect-secrets for secret leak prevention
+  - Standard hooks: trailing whitespace, end-of-file, yaml, merge conflicts, debug statements
+  - MyPy and Bandit documented for manual CI runs (deferred due to existing issues)
+
+- **Security Scanning** (`pyproject.toml`)
+  - Bandit configuration with test exclusions
+  - Detect-secrets baseline generation
+
+- **Dependency Management** (`.github/dependabot.yml`)
+  - Weekly Python dependency updates
+  - Weekly GitHub Actions updates
+  - Weekly Docker dependency updates
+
+- **SonarQube Integration** (`sonar-project.properties`)
+  - Project configuration with Python 3.11 target
+  - Coverage report integration
+  - Source/test path configuration
+
+- **Development Documentation** (`README.md`)
+  - Prerequisites and setup instructions
+  - Code quality tools usage guide
+  - CI/CD pipeline overview
+
+- **Test Infrastructure** (`tests/`)
+  - Created tests directory with placeholder test
+  - pytest configuration in pyproject.toml
+
 #### Part VII: ML/Research Features (PRD §28-35)
 
 - **Gold Dataset Versioning** (Phase 30, PRD §28)

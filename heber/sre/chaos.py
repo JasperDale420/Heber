@@ -6,7 +6,7 @@ Fault injection experiments and resilience testing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 
 class ExperimentFrequency(str, Enum):
     """Chaos experiment frequency (PRD §41.3)."""
-    
+
     WEEKLY = "weekly"
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
@@ -26,7 +26,7 @@ class ExperimentFrequency(str, Enum):
 
 class ExperimentScope(str, Enum):
     """Scope of chaos experiment."""
-    
+
     SINGLE_POD = "single_pod"
     MULTI_POD = "multi_pod"
     NETWORK = "network"
@@ -36,14 +36,14 @@ class ExperimentScope(str, Enum):
 
 class Environment(str, Enum):
     """Target environment for chaos."""
-    
+
     STAGING = "staging"
     PRODUCTION = "production"
 
 
 class ExperimentStatus(str, Enum):
     """Status of a chaos experiment run."""
-    
+
     PENDING = "pending"
     RUNNING = "running"
     PASSED = "passed"
@@ -54,11 +54,11 @@ class ExperimentStatus(str, Enum):
 @dataclass
 class SuccessCriterion:
     """A success criterion for a chaos experiment."""
-    
+
     description: str
     passed: bool | None = None
     notes: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "description": self.description,
@@ -70,10 +70,10 @@ class SuccessCriterion:
 @dataclass
 class ChaosExperiment:
     """Chaos experiment definition (PRD §41.2).
-    
+
     Defines a fault injection experiment with hypothesis and expected outcome.
     """
-    
+
     name: str
     target: str
     hypothesis: str
@@ -83,7 +83,7 @@ class ChaosExperiment:
     frequency: ExperimentFrequency = ExperimentFrequency.WEEKLY
     scope: ExperimentScope = ExperimentScope.SINGLE_POD
     environment: Environment = Environment.STAGING
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -96,7 +96,7 @@ class ChaosExperiment:
             "scope": self.scope.value,
             "environment": self.environment.value,
         }
-    
+
     def to_markdown(self) -> str:
         """Generate markdown runbook for experiment."""
         lines = [
@@ -109,10 +109,10 @@ class ChaosExperiment:
             "### Procedure",
             "",
         ]
-        
+
         for i, step in enumerate(self.procedure, 1):
             lines.append(f"{i}. {step}")
-        
+
         lines.extend(["", "### Success Criteria", ""])
         for criterion in self.success_criteria:
             checkbox = "[ ]"
@@ -121,36 +121,38 @@ class ChaosExperiment:
             elif criterion.passed is False:
                 checkbox = "[-]"
             lines.append(f"- {checkbox} {criterion.description}")
-        
-        lines.extend([
-            "",
-            "### Results",
-            "",
-            f"- **Date:** ____",
-            f"- **Outcome:** PASS / FAIL",
-            f"- **Notes:** ____",
-        ])
-        
+
+        lines.extend(
+            [
+                "",
+                "### Results",
+                "",
+                "- **Date:** ____",
+                "- **Outcome:** PASS / FAIL",
+                "- **Notes:** ____",
+            ]
+        )
+
         return "\n".join(lines)
 
 
 @dataclass
 class ExperimentRun:
     """Record of a chaos experiment run."""
-    
+
     experiment_name: str
     started_at: datetime
     ended_at: datetime | None = None
     status: ExperimentStatus = ExperimentStatus.PENDING
     results: dict[str, bool] = field(default_factory=dict)
     notes: str = ""
-    
+
     @property
     def duration_seconds(self) -> float | None:
         if self.ended_at:
             return (self.ended_at - self.started_at).total_seconds()
         return None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "experiment_name": self.experiment_name,
@@ -168,7 +170,9 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
     ChaosExperiment(
         name="Kill Consumer Pod",
         target="heber-consumer",
-        hypothesis="When a consumer pod is killed, the consumer group rebalances and resumes processing without message loss",
+        hypothesis=(
+            "When a consumer pod is killed, the consumer group rebalances and resumes processing without message loss"
+        ),
         expected_outcome="Rebalance in <30s, no message loss",
         procedure=[
             "Establish baseline metrics (lag, throughput)",
@@ -301,51 +305,51 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
 
 class ChaosRegistry:
     """Registry and scheduler for chaos experiments."""
-    
+
     def __init__(self, experiments: list[ChaosExperiment] | None = None):
         self.experiments = {e.name: e for e in (experiments or DEFAULT_EXPERIMENTS)}
         self.runs: list[ExperimentRun] = []
-    
+
     def get(self, name: str) -> ChaosExperiment | None:
         """Get experiment by name."""
         return self.experiments.get(name)
-    
+
     def list_by_frequency(self, frequency: ExperimentFrequency) -> list[ChaosExperiment]:
         """List experiments by frequency."""
         return [e for e in self.experiments.values() if e.frequency == frequency]
-    
+
     def list_all(self) -> list[dict[str, Any]]:
         """List all experiments."""
         return [e.to_dict() for e in self.experiments.values()]
-    
+
     def get_schedule(self) -> dict[str, list[str]]:
         """Get experiment schedule by frequency."""
         schedule = {f.value: [] for f in ExperimentFrequency}
         for exp in self.experiments.values():
             schedule[exp.frequency.value].append(exp.name)
         return schedule
-    
+
     def start_run(self, experiment_name: str) -> ExperimentRun | None:
         """Start a new experiment run."""
         experiment = self.get(experiment_name)
         if not experiment:
             return None
-        
+
         run = ExperimentRun(
             experiment_name=experiment_name,
             started_at=datetime.now(UTC),
             status=ExperimentStatus.RUNNING,
         )
         self.runs.append(run)
-        
+
         logger.info(
             "Chaos experiment started",
             experiment=experiment_name,
             target=experiment.target,
         )
-        
+
         return run
-    
+
     def complete_run(
         self,
         run: ExperimentRun,
@@ -356,18 +360,18 @@ class ChaosRegistry:
         run.ended_at = datetime.now(UTC)
         run.results = results
         run.notes = notes
-        
+
         # Determine pass/fail
         all_passed = all(results.values()) if results else False
         run.status = ExperimentStatus.PASSED if all_passed else ExperimentStatus.FAILED
-        
+
         logger.info(
             "Chaos experiment completed",
             experiment=run.experiment_name,
             status=run.status.value,
             duration_seconds=run.duration_seconds,
         )
-    
+
     def export_all_markdown(self) -> str:
         """Export all experiment runbooks as markdown."""
         parts = ["# Chaos Engineering Runbooks", ""]

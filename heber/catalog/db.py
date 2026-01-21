@@ -4,11 +4,9 @@ See PRD Section 11.2 for table specifications.
 """
 
 from datetime import datetime
-from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     Column,
     Date,
@@ -21,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -48,9 +46,7 @@ class Dataset(Base):
     retention_policy: dict = Column(JSONB, nullable=True)
     is_active: bool = Column(Boolean, default=True, nullable=False)
     created_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at: datetime = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
     versions = relationship("DatasetVersion", back_populates="dataset", lazy="dynamic")
@@ -62,9 +58,7 @@ class DatasetVersion(Base):
     __tablename__ = "dataset_versions"
 
     dataset_version_id: str = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    dataset_name: str = Column(
-        String(255), ForeignKey("datasets.dataset_name"), nullable=False, index=True
-    )
+    dataset_name: str = Column(String(255), ForeignKey("datasets.dataset_name"), nullable=False, index=True)
     schema_version: str = Column(String(50), nullable=False)
     schema_json: dict = Column(JSONB, nullable=False)
     writer_min_version: str = Column(String(50), nullable=True)
@@ -75,9 +69,7 @@ class DatasetVersion(Base):
     # Relationships
     dataset = relationship("Dataset", back_populates="versions")
 
-    __table_args__ = (
-        UniqueConstraint("dataset_name", "schema_version", name="uq_dataset_schema_version"),
-    )
+    __table_args__ = (UniqueConstraint("dataset_name", "schema_version", name="uq_dataset_schema_version"),)
 
 
 class FeedMapping(Base):
@@ -91,9 +83,7 @@ class FeedMapping(Base):
     silver_dataset_name: str = Column(String(255), nullable=False)
     notes: str = Column(Text, nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("provider", "gateway_feed", name="uq_provider_feed"),
-    )
+    __table_args__ = (UniqueConstraint("provider", "gateway_feed", name="uq_provider_feed"),)
 
 
 class InstrumentRegistry(Base):
@@ -112,14 +102,10 @@ class InstrumentRegistry(Base):
     multiplier: int = Column(Integer, nullable=True, default=100)
     currency: str = Column(String(10), nullable=True, default="USD")
     created_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at: datetime = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    provider_mappings = relationship(
-        "InstrumentProviderMap", back_populates="instrument", lazy="dynamic"
-    )
+    provider_mappings = relationship("InstrumentProviderMap", back_populates="instrument", lazy="dynamic")
 
 
 class InstrumentProviderMap(Base):
@@ -139,9 +125,7 @@ class InstrumentProviderMap(Base):
     # Relationships
     instrument = relationship("InstrumentRegistry", back_populates="provider_mappings")
 
-    __table_args__ = (
-        UniqueConstraint("provider", "provider_symbol", name="uq_provider_symbol"),
-    )
+    __table_args__ = (UniqueConstraint("provider", "provider_symbol", name="uq_provider_symbol"),)
 
 
 class DataCoverage(Base):
@@ -157,9 +141,7 @@ class DataCoverage(Base):
     last_updated_ts: datetime = Column(DateTime(timezone=True), server_default=func.now())
     approx_row_count: int = Column(Integer, nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("dataset_name", "instrument_key", name="uq_dataset_instrument"),
-    )
+    __table_args__ = (UniqueConstraint("dataset_name", "instrument_key", name="uq_dataset_instrument"),)
 
 
 class Project(Base):

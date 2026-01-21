@@ -6,10 +6,10 @@ Dataset schemas beyond core market data.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, date, UTC
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
 from enum import Enum
+from typing import Any
 
 import structlog
 
@@ -20,10 +20,11 @@ logger = structlog.get_logger(__name__)
 # Market Data (§57.1)
 # =============================================================================
 
+
 @dataclass
 class DailyBar:
     """Daily OHLCV bar schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -37,7 +38,7 @@ class DailyBar:
     adjusted_close: Decimal | None = None
     dividend: Decimal | None = None
     split_factor: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -60,9 +61,10 @@ class DailyBar:
 # Options (§57.2)
 # =============================================================================
 
+
 class OptionType(str, Enum):
     """Option type."""
-    
+
     CALL = "call"
     PUT = "put"
 
@@ -70,7 +72,7 @@ class OptionType(str, Enum):
 @dataclass
 class OptionQuote:
     """Option quote schema."""
-    
+
     event_id: str
     underlying_symbol: str
     option_symbol: str
@@ -91,7 +93,7 @@ class OptionQuote:
     gamma: Decimal | None = None
     theta: Decimal | None = None
     vega: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -120,7 +122,7 @@ class OptionQuote:
 @dataclass
 class OptionTrade:
     """Option trade schema."""
-    
+
     event_id: str
     underlying_symbol: str
     option_symbol: str
@@ -133,7 +135,7 @@ class OptionTrade:
     size: int
     exchange: str = ""
     conditions: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -155,9 +157,10 @@ class OptionTrade:
 # Alternative Data (§57.3)
 # =============================================================================
 
+
 class TransactionType(str, Enum):
     """Transaction type for trades."""
-    
+
     BUY = "buy"
     SELL = "sell"
     EXCHANGE = "exchange"
@@ -166,7 +169,7 @@ class TransactionType(str, Enum):
 @dataclass
 class CongressTrade:
     """Congress trading disclosure schema."""
-    
+
     event_id: str
     ts_event: datetime
     ts_available: datetime
@@ -181,7 +184,7 @@ class CongressTrade:
     disclosure_date: date
     trade_date: date | None = None
     asset_type: str = "stock"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -204,7 +207,7 @@ class CongressTrade:
 @dataclass
 class LobbyingDisclosure:
     """Lobbying disclosure schema."""
-    
+
     event_id: str
     ts_event: datetime
     ts_available: datetime
@@ -216,7 +219,7 @@ class LobbyingDisclosure:
     issues: list[str] = field(default_factory=list)
     lobbyists: list[str] = field(default_factory=list)
     related_symbols: list[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -237,10 +240,11 @@ class LobbyingDisclosure:
 # Fundamentals (§57.4)
 # =============================================================================
 
+
 @dataclass
 class CompanyInfo:
     """Company information schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -255,7 +259,7 @@ class CompanyInfo:
     cik: str = ""
     cusip: str = ""
     isin: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -278,7 +282,7 @@ class CompanyInfo:
 @dataclass
 class IncomeStatement:
     """Income statement schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -291,7 +295,7 @@ class IncomeStatement:
     net_income: Decimal | None = None
     eps: Decimal | None = None
     eps_diluted: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -312,7 +316,7 @@ class IncomeStatement:
 @dataclass
 class BalanceSheet:
     """Balance sheet schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -324,7 +328,7 @@ class BalanceSheet:
     cash: Decimal | None = None
     short_term_debt: Decimal | None = None
     long_term_debt: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -344,7 +348,7 @@ class BalanceSheet:
 @dataclass
 class CashFlow:
     """Cash flow statement schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -355,7 +359,7 @@ class CashFlow:
     financing_cash_flow: Decimal | None = None
     free_cash_flow: Decimal | None = None
     capital_expenditures: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -374,7 +378,7 @@ class CashFlow:
 @dataclass
 class FinancialRatios:
     """Financial ratios schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -388,7 +392,7 @@ class FinancialRatios:
     quick_ratio: Decimal | None = None
     roe: Decimal | None = None
     roa: Decimal | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -411,10 +415,11 @@ class FinancialRatios:
 # Economic (§57.5)
 # =============================================================================
 
+
 @dataclass
 class EconomicIndicator:
     """Economic indicator schema."""
-    
+
     event_id: str
     indicator: str  # gdp, cpi, unemployment, etc.
     ts_event: datetime
@@ -424,7 +429,7 @@ class EconomicIndicator:
     country: str = "US"
     unit: str = ""
     frequency: str = ""  # monthly, quarterly, annual
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -442,7 +447,7 @@ class EconomicIndicator:
 @dataclass
 class InterestRate:
     """Interest rate schema."""
-    
+
     event_id: str
     rate_type: str  # fed_funds, prime, libor
     ts_event: datetime
@@ -450,7 +455,7 @@ class InterestRate:
     date: date
     rate: Decimal
     country: str = "US"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -466,7 +471,7 @@ class InterestRate:
 @dataclass
 class TreasuryYield:
     """Treasury yield schema."""
-    
+
     event_id: str
     maturity: str  # 1m, 3m, 6m, 1y, 2y, 5y, 10y, 30y
     ts_event: datetime
@@ -474,7 +479,7 @@ class TreasuryYield:
     date: date
     yield_value: Decimal
     country: str = "US"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -491,10 +496,11 @@ class TreasuryYield:
 # Forex & Crypto (§57.6)
 # =============================================================================
 
+
 @dataclass
 class ForexRate:
     """Forex exchange rate schema."""
-    
+
     event_id: str
     base_currency: str
     quote_currency: str
@@ -503,11 +509,11 @@ class ForexRate:
     rate: Decimal
     bid: Decimal | None = None
     ask: Decimal | None = None
-    
+
     @property
     def pair(self) -> str:
         return f"{self.base_currency}/{self.quote_currency}"
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -525,7 +531,7 @@ class ForexRate:
 @dataclass
 class CryptoBar:
     """Cryptocurrency OHLCV bar schema."""
-    
+
     event_id: str
     symbol: str  # BTC/USD, ETH/USD
     ts_event: datetime
@@ -536,7 +542,7 @@ class CryptoBar:
     close: Decimal
     volume: Decimal
     exchange: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
@@ -555,7 +561,7 @@ class CryptoBar:
 @dataclass
 class CryptoQuote:
     """Cryptocurrency quote schema."""
-    
+
     event_id: str
     symbol: str
     ts_event: datetime
@@ -565,7 +571,7 @@ class CryptoQuote:
     bid_size: Decimal
     ask_size: Decimal
     exchange: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,

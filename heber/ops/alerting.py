@@ -9,6 +9,7 @@ from enum import Enum
 
 class Severity(str, Enum):
     """Alert severity levels."""
+
     WARNING = "warning"
     CRITICAL = "critical"
 
@@ -16,13 +17,14 @@ class Severity(str, Enum):
 @dataclass
 class AlertRule:
     """Prometheus alerting rule definition."""
+
     name: str
     expr: str
     for_duration: str
     severity: Severity
     summary: str
     description: str
-    
+
     def to_yaml_dict(self) -> dict:
         """Convert to Prometheus rules YAML format."""
         return {
@@ -73,7 +75,7 @@ ALERTING_RULES = [
     ),
     AlertRule(
         name="HeberAvailabilityLagSpike",
-        expr='histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 30',
+        expr="histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 30",
         for_duration="5m",
         severity=Severity.WARNING,
         summary="Availability lag p99 is elevated",
@@ -109,7 +111,7 @@ ALERTING_RULES = [
 def generate_prometheus_rules_yaml() -> str:
     """Generate Prometheus alerting rules YAML file content."""
     import yaml
-    
+
     rules_file = {
         "groups": [
             {
@@ -170,22 +172,22 @@ DASHBOARDS = {
         "panels": [
             {
                 "title": "Ingest Lag (p50/p95/p99)",
-                "query": 'histogram_quantile(0.XX, rate(heber_ingest_lag_seconds_bucket[5m]))',
+                "query": "histogram_quantile(0.XX, rate(heber_ingest_lag_seconds_bucket[5m]))",
                 "type": "heatmap",
             },
             {
                 "title": "Availability Lag (p50/p95/p99)",
-                "query": 'histogram_quantile(0.XX, rate(heber_availability_lag_seconds_bucket[5m]))',
+                "query": "histogram_quantile(0.XX, rate(heber_availability_lag_seconds_bucket[5m]))",
                 "type": "heatmap",
             },
             {
                 "title": "Write Duration (p50/p95/p99)",
-                "query": 'histogram_quantile(0.XX, rate(heber_writer_flush_duration_seconds_bucket[5m]))',
+                "query": "histogram_quantile(0.XX, rate(heber_writer_flush_duration_seconds_bucket[5m]))",
                 "type": "heatmap",
             },
             {
                 "title": "API Response Time (p50/p95/p99)",
-                "query": 'histogram_quantile(0.XX, rate(heber_catalog_request_duration_seconds_bucket[5m]))',
+                "query": "histogram_quantile(0.XX, rate(heber_catalog_request_duration_seconds_bucket[5m]))",
                 "type": "heatmap",
             },
         ],

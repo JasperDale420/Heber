@@ -6,7 +6,7 @@ Runs periodically to prevent "small file problem."
 
 import asyncio
 import signal
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -28,20 +28,20 @@ class Compactor:
 
     async def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
-        
+
         Returns number of files merged.
         """
         parquet_files = sorted(partition_path.glob("*.parquet"))
-        
+
         if len(parquet_files) <= 1:
             return 0
 
         # Check total size
         total_size = sum(f.stat().st_size for f in parquet_files)
-        
+
         # Only compact if we have multiple small files
         small_files = [f for f in parquet_files if f.stat().st_size < TARGET_FILE_SIZE]
-        
+
         if len(small_files) <= 1:
             return 0
 
@@ -61,12 +61,13 @@ class Compactor:
 
             # Concatenate
             import pyarrow as pa
+
             merged_table = pa.concat_tables(tables)
 
             # Write merged file
             ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}.parquet"
-            
+
             pq.write_table(
                 merged_table,
                 merged_path,
@@ -100,7 +101,7 @@ class Compactor:
     async def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
         layer_path = settings.data_root / layer
-        
+
         if not layer_path.exists():
             return {"partitions_scanned": 0, "files_merged": 0}
 
@@ -124,7 +125,7 @@ class Compactor:
     async def run(self, interval_minutes: int = 60):
         """Run compactor on a schedule."""
         self.running = True
-        
+
         logger.info("Starting compactor", interval_minutes=interval_minutes)
 
         while self.running:

@@ -7,11 +7,12 @@ Provides:
 - Degraded mode metrics and indicators
 """
 
-import time
 import threading
-from dataclasses import dataclass, field
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 from prometheus_client import Gauge
@@ -29,29 +30,33 @@ degraded_mode = Gauge(
 
 class DependencyType(str, Enum):
     """Dependency classification per PRD §12.13.1."""
-    HARD = "hard"   # Service cannot function without it
-    SOFT = "soft"   # Service can continue with reduced functionality
+
+    HARD = "hard"  # Service cannot function without it
+    SOFT = "soft"  # Service can continue with reduced functionality
 
 
 class CircuitState(str, Enum):
     """Circuit breaker states per PRD §12.13.3."""
-    CLOSED = "closed"       # Normal operation
-    OPEN = "open"           # Bypass dependency, use degraded path
-    HALF_OPEN = "half_open" # Testing if dependency recovered
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Bypass dependency, use degraded path
+    HALF_OPEN = "half_open"  # Testing if dependency recovered
 
 
 @dataclass
 class CircuitBreakerSettings:
     """Circuit breaker configuration per PRD §12.13.3."""
-    failure_threshold: int = 5      # Consecutive failures to open
-    open_duration_seconds: int = 30 # How long circuit stays open
-    half_open_probes: int = 3       # Probes allowed in half-open
-    success_threshold: int = 2      # Successes to close from half-open
+
+    failure_threshold: int = 5  # Consecutive failures to open
+    open_duration_seconds: int = 30  # How long circuit stays open
+    half_open_probes: int = 3  # Probes allowed in half-open
+    success_threshold: int = 2  # Successes to close from half-open
 
 
 @dataclass
 class DependencyInfo:
     """Metadata about a dependency."""
+
     name: str
     dep_type: DependencyType
     degraded_behavior: str
@@ -63,10 +68,10 @@ DEFAULT_SETTINGS = CircuitBreakerSettings()
 
 class CircuitBreaker:
     """Circuit breaker implementation per PRD §12.13.3.
-    
+
     Usage:
         breaker = CircuitBreaker("catalog")
-        
+
         if breaker.allow_request():
             try:
                 result = call_catalog()
@@ -79,7 +84,7 @@ class CircuitBreaker:
             # Degraded path
             return cached_value
     """
-    
+
     def __init__(
         self,
         name: str,
@@ -87,17 +92,17 @@ class CircuitBreaker:
     ):
         self.name = name
         self.settings = settings or DEFAULT_SETTINGS
-        
+
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._success_count = 0
         self._half_open_calls = 0
         self._last_failure_time = 0.0
         self._lock = threading.Lock()
-        
+
         # Initialize metric
         degraded_mode.labels(dependency=name).set(0)
-    
+
     @property
     def state(self) -> CircuitState:
         """Current circuit state (may transition on access)."""
@@ -108,38 +113,38 @@ class CircuitBreaker:
                 if elapsed >= self.settings.open_duration_seconds:
                     self._transition_to(CircuitState.HALF_OPEN)
             return self._state
-    
+
     @property
     def is_open(self) -> bool:
         """Check if circuit is open (requests should be bypassed)."""
         return self.state == CircuitState.OPEN
-    
+
     @property
     def is_closed(self) -> bool:
         """Check if circuit is closed (normal operation)."""
         return self.state == CircuitState.CLOSED
-    
+
     def allow_request(self) -> bool:
         """Check if a request should be allowed through.
-        
+
         Returns True if the request should proceed to the dependency.
         Returns False if the circuit is open (use degraded path).
         """
         state = self.state
-        
+
         if state == CircuitState.CLOSED:
             return True
-        
+
         if state == CircuitState.OPEN:
             return False
-        
+
         # Half-open: allow limited probes
         with self._lock:
             if self._half_open_calls < self.settings.half_open_probes:
                 self._half_open_calls += 1
                 return True
             return False
-    
+
     def record_success(self) -> None:
         """Record a successful call to the dependency."""
         with self._lock:
@@ -150,25 +155,24 @@ class CircuitBreaker:
             elif self._state == CircuitState.CLOSED:
                 # Reset failure count on success
                 self._failure_count = 0
-    
+
     def record_failure(self) -> None:
         """Record a failed call to the dependency."""
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.time()
-            
+
             if self._state == CircuitState.HALF_OPEN:
                 # Any failure in half-open reopens circuit
                 self._transition_to(CircuitState.OPEN)
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.settings.failure_threshold:
                     self._transition_to(CircuitState.OPEN)
-    
+
     def _transition_to(self, new_state: CircuitState) -> None:
         """Transition to a new state (must hold lock)."""
-        old_state = self._state
         self._state = new_state
-        
+
         # Reset counters on transition
         if new_state == CircuitState.CLOSED:
             self._failure_count = 0
@@ -198,18 +202,18 @@ class CircuitBreaker:
                 dependency=self.name,
                 message=f"Testing if {self.name} recovered",
             )
-    
+
     def force_open(self) -> None:
         """Manually force the circuit open."""
         with self._lock:
             self._last_failure_time = time.time()
             self._transition_to(CircuitState.OPEN)
-    
+
     def force_close(self) -> None:
         """Manually force the circuit closed."""
         with self._lock:
             self._transition_to(CircuitState.CLOSED)
-    
+
     def reset(self) -> None:
         """Reset the circuit to initial state."""
         self.force_close()
@@ -307,11 +311,11 @@ def get_circuit_breaker(
     settings: CircuitBreakerSettings | None = None,
 ) -> CircuitBreaker:
     """Get or create a circuit breaker for a dependency.
-    
+
     Args:
         name: Dependency name (e.g., "catalog", "object_storage")
         settings: Optional custom settings
-        
+
     Returns:
         CircuitBreaker instance
     """
@@ -347,14 +351,11 @@ def is_soft_dependency(service: str, dependency: str) -> bool:
 
 def get_degraded_header() -> dict[str, str] | None:
     """Get X-Heber-Degraded header if any circuits are open.
-    
+
     Returns header dict for FastAPI response, or None if all normal.
     """
-    degraded_deps = [
-        name for name, cb in get_all_circuit_breakers().items()
-        if cb.is_open
-    ]
-    
+    degraded_deps = [name for name, cb in get_all_circuit_breakers().items() if cb.is_open]
+
     if degraded_deps:
         return {"X-Heber-Degraded": ",".join(degraded_deps)}
     return None
@@ -367,35 +368,36 @@ def with_circuit_breaker(
     settings: CircuitBreakerSettings | None = None,
 ):
     """Decorator to wrap a function with circuit breaker protection.
-    
+
     Args:
         dependency_name: Name of the dependency being called
         fallback: Optional fallback function when circuit is open
         settings: Optional custom circuit breaker settings
     """
+
     def decorator(fn: Callable) -> Callable:
         def wrapper(*args, **kwargs):
             cb = get_circuit_breaker(dependency_name, settings)
-            
+
             if not cb.allow_request():
                 if fallback:
                     return fallback()
-                raise CircuitOpenError(
-                    f"Circuit open for {dependency_name}: service degraded"
-                )
-            
+                raise CircuitOpenError(f"Circuit open for {dependency_name}: service degraded")
+
             try:
                 result = fn(*args, **kwargs)
                 cb.record_success()
                 return result
-            except Exception as e:
+            except Exception:
                 cb.record_failure()
                 raise
-        
+
         return wrapper
+
     return decorator
 
 
 class CircuitOpenError(Exception):
     """Raised when circuit is open and no fallback provided."""
+
     pass

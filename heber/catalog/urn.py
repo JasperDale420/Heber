@@ -23,41 +23,42 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class DatasetURN:
     """Parsed dataset URN (PRD §11.4).
-    
+
     Format: heber://{layer}/{dataset}@{version}
-    
+
     Examples:
         - heber://silver/bars@v1
         - heber://gold/kairos/features@v1
     """
+
     layer: str  # bronze, silver, gold
     dataset: str  # bars, quotes, etc.
     version: str = "v1"
     project: str | None = None  # For gold datasets
-    
+
     @classmethod
     def parse(cls, urn: str) -> "DatasetURN":
         """Parse a URN string into components.
-        
+
         Args:
             urn: URN string like "heber://silver/bars@v1"
-            
+
         Returns:
             DatasetURN instance
-            
+
         Raises:
             ValueError: If URN format is invalid
         """
         pattern = r"^heber://(\w+)/(.+?)(?:@(\w+))?$"
         match = re.match(pattern, urn)
-        
+
         if not match:
             raise ValueError(f"Invalid URN format: {urn}")
-        
+
         layer = match.group(1)
         dataset_part = match.group(2)
         version = match.group(3) or "v1"
-        
+
         # Check for gold project prefix (e.g., "kairos/features")
         project = None
         dataset = dataset_part
@@ -65,9 +66,9 @@ class DatasetURN:
             parts = dataset_part.split("/", 1)
             project = parts[0]
             dataset = parts[1]
-        
+
         return cls(layer=layer, dataset=dataset, version=version, project=project)
-    
+
     def __str__(self) -> str:
         """Convert to URN string."""
         if self.project:
@@ -86,11 +87,11 @@ PATH_TEMPLATES = {
 
 def get_path_template(layer: str, feed: str | None = None) -> str:
     """Get the path template for a layer/feed combination.
-    
+
     Args:
         layer: bronze, silver, gold
         feed: Feed name (used to determine if hourly partitioning)
-        
+
     Returns:
         Path template string
     """
@@ -108,7 +109,7 @@ def resolve_path(
     base_path: str | Path | None = None,
 ) -> Path:
     """Resolve a URN to an actual file system path.
-    
+
     Args:
         urn: Dataset URN (string or parsed)
         dt: Date partition value
@@ -116,24 +117,24 @@ def resolve_path(
         instrument_type: Instrument type for silver partitioning
         provider: Provider for bronze partitioning
         base_path: Base storage path (defaults to settings.storage_base_path)
-        
+
     Returns:
         Resolved Path object
     """
     if isinstance(urn, str):
         urn = DatasetURN.parse(urn)
-    
+
     if base_path is None:
         base_path = Path(settings.storage_base_path)
     else:
         base_path = Path(base_path)
-    
+
     template = get_path_template(urn.layer, urn.dataset)
-    
+
     # Build partition values
     dt_str = dt.isoformat() if dt else "*"
     hour_str = f"{hour:02d}" if hour is not None else "*"
-    
+
     path_str = template.format(
         layer=urn.layer,
         feed=urn.dataset,
@@ -145,7 +146,7 @@ def resolve_path(
         project=urn.project or "shared",
         version=urn.version,
     )
-    
+
     return base_path / path_str
 
 
@@ -154,31 +155,32 @@ def list_partitions(
     base_path: str | Path | None = None,
 ) -> list[dict[str, str]]:
     """List available partitions for a dataset (PRD §11.5 Pattern A).
-    
+
     Args:
         urn: Dataset URN
         base_path: Base storage path
-        
+
     Returns:
         List of partition dictionaries with keys like {dt, hour, instrument_type}
     """
     if isinstance(urn, str):
         urn = DatasetURN.parse(urn)
-    
+
     path = resolve_path(urn, base_path=base_path)
-    
+
     # Find all matching partitions
     # This is a simplified implementation - real version would glob the fs
     partitions = []
-    
+
     # For now, return empty list as placeholder
     # In production, this would scan the filesystem
     logger.debug("list_partitions", urn=str(urn), path=str(path))
-    
+
     return partitions
 
 
 # Discovery pattern helpers (PRD §11.5)
+
 
 def discover_by_instrument(
     instrument_key: str,
@@ -186,7 +188,7 @@ def discover_by_instrument(
     dt_end: date | None = None,
 ) -> list[dict]:
     """Pattern A: Query by instrument + time range.
-    
+
     Returns list of datasets/partitions containing data for this instrument.
     """
     # This would query data_coverage table
@@ -199,7 +201,7 @@ def discover_by_symbol(
     dt_end: date | None = None,
 ) -> list[dict]:
     """Pattern B: Query by symbol + date range.
-    
+
     First resolves symbol to instrument_key, then queries coverage.
     """
     # This would:
@@ -210,7 +212,7 @@ def discover_by_symbol(
 
 def trace_by_request(request_id: str) -> dict:
     """Pattern C: Trace by request_id.
-    
+
     Returns the request metadata and any data it produced.
     """
     # This would query requests table

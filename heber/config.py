@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
     bronze_max_batch_size: int = Field(default=10000, description="Max events per Bronze file")
-    
+
     # Silver file sizing targets (PRD §7.5)
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
     silver_max_rows_per_file: int = Field(default=1_000_000, description="Max rows per file (250k-2M)")
