@@ -41,6 +41,9 @@ dependencies = [
     # Data Quality (Phase 3: Soda Core)
     "soda-core-duckdb>=3.0",
 
+    # Schema Registry (Phase 4: Karapace)
+    "python-schema-registry-client>=2.6",
+
     # Observability
     "structlog>=24.0",
     "prometheus-client>=0.19",
