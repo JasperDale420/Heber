@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir uv
 
 # Copy only dependency files first (better layer caching)
 COPY pyproject.toml README.md ./
+COPY heber/ ./heber/
 
 # Install dependencies to a separate directory
 RUN uv pip install --target=/build/deps -e .
