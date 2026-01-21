@@ -44,8 +44,7 @@ dependencies = [
     # Schema Registry (Phase 4: Karapace)
     "python-schema-registry-client>=2.6",
 
-    # Data Catalog (Phase 5: OpenMetadata)
-    "openmetadata-ingestion>=1.4",
+    # Note: OpenMetadata moved to [catalog] optional deps due to SQLAlchemy version conflict
 
     # Observability
     "structlog>=24.0",
@@ -66,6 +65,12 @@ dev = [
     "bandit>=1.7",
     "detect-secrets>=1.5",
     "pre-commit>=4.0",
+]
+
+# OpenMetadata requires SQLAlchemy <2.0, which conflicts with our core deps
+# Install separately: pip install heber[catalog]
+catalog = [
+    "openmetadata-ingestion>=1.4",
 ]
 
 [build-system]
