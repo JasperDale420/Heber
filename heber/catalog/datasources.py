@@ -14,6 +14,15 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Provider name constants
+PROVIDER_ALPACA = "Alpaca"
+PROVIDER_UNUSUAL_WHALES = "Unusual Whales"
+PROVIDER_FINNHUB = "Finnhub"
+PROVIDER_ALPHA_VANTAGE = "Alpha Vantage"
+PROVIDER_YFINANCE = "yFinance"
+PROVIDER_NEWS_API = "News API"
+PROVIDER_SEC_EDGAR = "SEC Edgar"
+
 
 class ProviderPriority(int, Enum):
     """Provider priority level."""
@@ -53,46 +62,46 @@ class DataProvider:
 # Default providers from PRD §55.1
 DEFAULT_PROVIDERS: list[DataProvider] = [
     DataProvider(
-        name="Alpaca",
+        name=PROVIDER_ALPACA,
         capabilities=["bars", "quotes", "trades", "options", "crypto", "news"],
         priority=ProviderPriority.PRIMARY,
         streaming=True,
         notes="Primary market data provider",
     ),
     DataProvider(
-        name="Unusual Whales",
+        name=PROVIDER_UNUSUAL_WHALES,
         capabilities=["flow_alerts", "darkpool_trades", "congress", "lobbying"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
         notes="Alternative data provider",
     ),
     DataProvider(
-        name="Finnhub",
+        name=PROVIDER_FINNHUB,
         capabilities=["bars", "quotes", "news", "sentiment"],
         priority=ProviderPriority.SECONDARY,
         streaming=True,
     ),
     DataProvider(
-        name="Alpha Vantage",
+        name=PROVIDER_ALPHA_VANTAGE,
         capabilities=["forex", "crypto", "economic_indicators"],
         priority=ProviderPriority.TERTIARY,
         streaming=False,
     ),
     DataProvider(
-        name="yFinance",
+        name=PROVIDER_YFINANCE,
         capabilities=["historical_bars"],
         priority=ProviderPriority.SECONDARY,
         streaming=False,
         notes="Fallback for historical data",
     ),
     DataProvider(
-        name="News API",
+        name=PROVIDER_NEWS_API,
         capabilities=["news_articles", "headlines"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
     ),
     DataProvider(
-        name="SEC Edgar",
+        name=PROVIDER_SEC_EDGAR,
         capabilities=["10-K", "10-Q", "8-K", "13F", "company_info"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
@@ -155,37 +164,37 @@ class DatasetSpec:
 # Dataset catalog from PRD §57
 DEFAULT_DATASETS: list[DatasetSpec] = [
     # Market Data
-    DatasetSpec("bars", "market_data", "OHLCV minute bars", ["Alpaca", "Finnhub"], True),
-    DatasetSpec("quotes", "market_data", "Level 1 quotes", ["Alpaca"], True),
-    DatasetSpec("trades", "market_data", "Individual trades", ["Alpaca"], True),
-    DatasetSpec("bars_daily", "market_data", "Daily OHLCV bars", ["Alpaca", "yFinance"], False),
+    DatasetSpec("bars", "market_data", "OHLCV minute bars", [PROVIDER_ALPACA, PROVIDER_FINNHUB], True),
+    DatasetSpec("quotes", "market_data", "Level 1 quotes", [PROVIDER_ALPACA], True),
+    DatasetSpec("trades", "market_data", "Individual trades", [PROVIDER_ALPACA], True),
+    DatasetSpec("bars_daily", "market_data", "Daily OHLCV bars", [PROVIDER_ALPACA, PROVIDER_YFINANCE], False),
     # Options
-    DatasetSpec("option_quotes", "options", "Option chain quotes", ["Alpaca"], False),
-    DatasetSpec("option_trades", "options", "Option trades", ["Alpaca"], False),
+    DatasetSpec("option_quotes", "options", "Option chain quotes", [PROVIDER_ALPACA], False),
+    DatasetSpec("option_trades", "options", "Option trades", [PROVIDER_ALPACA], False),
     # Alternative
-    DatasetSpec("congress_trades", "alternative", "Congress trading activity", ["Unusual Whales"], False),
-    DatasetSpec("lobbying", "alternative", "Lobbying disclosures", ["Unusual Whales"], False),
-    DatasetSpec("flow_alerts", "alternative", "Options flow alerts", ["Unusual Whales"], False),
-    DatasetSpec("darkpool_trades", "alternative", "Dark pool transactions", ["Unusual Whales"], False),
+    DatasetSpec("congress_trades", "alternative", "Congress trading activity", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("lobbying", "alternative", "Lobbying disclosures", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("flow_alerts", "alternative", "Options flow alerts", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("darkpool_trades", "alternative", "Dark pool transactions", [PROVIDER_UNUSUAL_WHALES], False),
     # Fundamentals
-    DatasetSpec("company_info", "fundamentals", "Company metadata", ["SEC Edgar"], False),
-    DatasetSpec("income_statement", "fundamentals", "Income statements", ["Alpha Vantage"], False),
-    DatasetSpec("balance_sheet", "fundamentals", "Balance sheets", ["Alpha Vantage"], False),
-    DatasetSpec("cash_flow", "fundamentals", "Cash flow statements", ["Alpha Vantage"], False),
-    DatasetSpec("ratios", "fundamentals", "Financial ratios", ["Alpha Vantage"], False),
+    DatasetSpec("company_info", "fundamentals", "Company metadata", [PROVIDER_SEC_EDGAR], False),
+    DatasetSpec("income_statement", "fundamentals", "Income statements", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("balance_sheet", "fundamentals", "Balance sheets", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("cash_flow", "fundamentals", "Cash flow statements", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("ratios", "fundamentals", "Financial ratios", [PROVIDER_ALPHA_VANTAGE], False),
     # Economic
-    DatasetSpec("gdp", "economic", "Gross Domestic Product", ["Alpha Vantage"], False),
-    DatasetSpec("cpi", "economic", "Consumer Price Index", ["Alpha Vantage"], False),
-    DatasetSpec("unemployment", "economic", "Unemployment rate", ["Alpha Vantage"], False),
-    DatasetSpec("interest_rate", "economic", "Fed funds rate", ["Alpha Vantage"], False),
-    DatasetSpec("treasury_yield", "economic", "Treasury yields", ["Alpha Vantage"], False),
+    DatasetSpec("gdp", "economic", "Gross Domestic Product", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("cpi", "economic", "Consumer Price Index", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("unemployment", "economic", "Unemployment rate", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("interest_rate", "economic", "Fed funds rate", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("treasury_yield", "economic", "Treasury yields", [PROVIDER_ALPHA_VANTAGE], False),
     # Forex & Crypto
-    DatasetSpec("forex_rates", "forex_crypto", "Currency exchange rates", ["Alpha Vantage"], False),
-    DatasetSpec("crypto_bars", "forex_crypto", "Cryptocurrency OHLCV", ["Alpaca"], False),
-    DatasetSpec("crypto_quotes", "forex_crypto", "Cryptocurrency quotes", ["Alpaca"], False),
+    DatasetSpec("forex_rates", "forex_crypto", "Currency exchange rates", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("crypto_bars", "forex_crypto", "Cryptocurrency OHLCV", [PROVIDER_ALPACA], False),
+    DatasetSpec("crypto_quotes", "forex_crypto", "Cryptocurrency quotes", [PROVIDER_ALPACA], False),
     # News
-    DatasetSpec("news_articles", "news", "News article metadata", ["News API", "Alpaca"], False),
-    DatasetSpec("news_sentiment", "news", "Sentiment scores", ["Finnhub"], False),
+    DatasetSpec("news_articles", "news", "News article metadata", [PROVIDER_NEWS_API, PROVIDER_ALPACA], False),
+    DatasetSpec("news_sentiment", "news", "Sentiment scores", [PROVIDER_FINNHUB], False),
 ]
 
 
