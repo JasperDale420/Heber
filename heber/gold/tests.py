@@ -1,261 +1,98 @@
-"""Tests for Gold Versioning (PRD §28)."""
+"""Tests for Gold Versioning using lakeFS (PRD §28).
 
-import tempfile
-from datetime import UTC, datetime
-from pathlib import Path
+These tests verify the lakeFS-based versioning system that replaces
+the legacy GoldVersion/VersionManifest implementation.
+"""
+
+from unittest.mock import patch
 
 import pytest
 
-from heber.gold.versioning import (
-    GoldVersion,
-    UpstreamDependency,
-    VersionLineage,
-    VersionManifest,
-    check_compatibility,
-    resolve_version,
+from heber.versioning import (
+    GoldCommit,
+    GoldTag,
+    LakeFSConfig,
+    LakeFSVersionManager,
 )
 
 
-class TestGoldVersion:
-    """Test GoldVersion parsing and comparison."""
+class TestLakeFSConfig:
+    """Test lakeFS configuration loading."""
 
-    def test_parse_with_v_prefix(self):
-        v = GoldVersion.parse("v3.2.1")
-        assert v.major == 3
-        assert v.minor == 2
-        assert v.patch == 1
+    def test_from_env_defaults(self):
+        """Test default configuration values."""
+        with patch.dict("os.environ", {}, clear=True):
+            config = LakeFSConfig()
+            assert config.endpoint == "http://localhost:8000"
+            assert config.default_repo == "heber-gold"
 
-    def test_parse_without_v_prefix(self):
-        v = GoldVersion.parse("1.0.0")
-        assert v.major == 1
-        assert v.minor == 0
-        assert v.patch == 0
-
-    def test_parse_invalid_raises(self):
-        with pytest.raises(ValueError):
-            GoldVersion.parse("invalid")
-
-    def test_str_representation(self):
-        v = GoldVersion(major=3, minor=2, patch=1)
-        assert str(v) == "v3.2.1"
-
-    def test_comparison(self):
-        v1 = GoldVersion.parse("v1.0.0")
-        v2 = GoldVersion.parse("v2.0.0")
-        v3 = GoldVersion.parse("v2.1.0")
-
-        assert v1 < v2
-        assert v2 < v3
-        assert v1 <= GoldVersion.parse("v1.0.0")  # Test <= with equivalent version
-        assert v1 == GoldVersion.parse("v1.0.0")
-
-    def test_wildcard_major(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.*")
-        assert not v.matches_wildcard("v2.*")
-
-    def test_wildcard_minor(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.5.*")
-        assert not v.matches_wildcard("v3.4.*")
-
-    def test_exact_match(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.5.2")
-        assert not v.matches_wildcard("v3.5.1")
+    def test_from_env_custom(self):
+        """Test loading configuration from environment."""
+        env = {
+            "LAKEFS_ENDPOINT": "http://lakefs.example.com",
+            "LAKEFS_ACCESS_KEY": "test-key",
+            "LAKEFS_SECRET_KEY": "test-secret",  # pragma: allowlist secret
+            "LAKEFS_DEFAULT_REPO": "custom-repo",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            config = LakeFSConfig.from_env()
+            assert config.endpoint == "http://lakefs.example.com"
+            assert config.access_key == "test-key"
+            assert config.default_repo == "custom-repo"
 
 
-class TestVersionLineage:
-    """Test VersionLineage serialization."""
+class TestGoldCommit:
+    """Test GoldCommit dataclass."""
 
-    def test_to_dict(self):
-        lineage = VersionLineage(
-            upstream_deps=[
-                UpstreamDependency(dataset="bars", layer="silver", version="v1.4"),
-            ],
-            code_commit="abc123",
-            config_hash="def456",
+    def test_commit_fields(self):
+        from datetime import UTC, datetime
+
+        commit = GoldCommit(
+            commit_id="abc123",
+            message="Add momentum features",
+            committer="ml-pipeline",
+            creation_date=datetime.now(UTC),
+            metadata={"run_id": "123"},
+            parents=["def456"],
         )
-
-        d = lineage.to_dict()
-        assert d["code_commit"] == "abc123"
-        assert len(d["upstream_deps"]) == 1
-        assert d["upstream_deps"][0]["dataset"] == "bars"
-
-    def test_from_dict_roundtrip(self):
-        lineage = VersionLineage(
-            upstream_deps=[
-                UpstreamDependency(dataset="bars", layer="silver", version="v1.4"),
-            ],
-            code_commit="abc123",
-        )
-
-        restored = VersionLineage.from_dict(lineage.to_dict())
-        assert restored.code_commit == lineage.code_commit
-        assert len(restored.upstream_deps) == 1
+        assert commit.commit_id == "abc123"
+        assert commit.message == "Add momentum features"
+        assert len(commit.parents) == 1
 
 
-class TestResolveVersion:
-    """Test version resolution with wildcards."""
+class TestGoldTag:
+    """Test GoldTag dataclass."""
 
-    def test_resolve_latest(self):
-        versions = [
-            GoldVersion.parse("v1.0.0"),
-            GoldVersion.parse("v2.0.0"),
-            GoldVersion.parse("v3.2.1"),
-        ]
-
-        result = resolve_version(versions, None)
-        assert result == GoldVersion.parse("v3.2.1")
-
-    def test_resolve_major_wildcard(self):
-        versions = [
-            GoldVersion.parse("v2.0.0"),
-            GoldVersion.parse("v3.2.1"),
-            GoldVersion.parse("v3.5.0"),
-        ]
-
-        result = resolve_version(versions, "v3.*")
-        assert result == GoldVersion.parse("v3.5.0")
-
-    def test_resolve_minor_wildcard(self):
-        versions = [
-            GoldVersion.parse("v3.2.0"),
-            GoldVersion.parse("v3.2.5"),
-            GoldVersion.parse("v3.5.0"),
-        ]
-
-        result = resolve_version(versions, "v3.2.*")
-        assert result == GoldVersion.parse("v3.2.5")
-
-    def test_resolve_exact(self):
-        versions = [
-            GoldVersion.parse("v3.2.0"),
-            GoldVersion.parse("v3.2.1"),
-        ]
-
-        result = resolve_version(versions, "v3.2.0")
-        assert result == GoldVersion.parse("v3.2.0")
-
-    def test_resolve_no_match(self):
-        versions = [GoldVersion.parse("v1.0.0")]
-
-        result = resolve_version(versions, "v3.*")
-        assert result is None
-
-    def test_resolve_empty_list(self):
-        result = resolve_version([], "v1.0.0")
-        assert result is None
+    def test_tag_fields(self):
+        tag = GoldTag(name="momentum_features/v1.0.0", commit_id="abc123")
+        assert tag.name == "momentum_features/v1.0.0"
+        assert tag.commit_id == "abc123"
 
 
-class TestVersionManifest:
-    """Test VersionManifest persistence and immutability."""
+class TestLakeFSVersionManager:
+    """Test LakeFSVersionManager operations (mocked)."""
 
-    def test_save_and_load(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest = VersionManifest(
-                version=GoldVersion.parse("v1.0.0"),
-                created_at=datetime.now(UTC),
-                created_by="test_user",
-                lineage=VersionLineage(code_commit="abc123"),
-                schema_columns=["ts_event", "momentum_5d"],
-                row_count=1000,
+    @pytest.fixture
+    def mock_manager(self):
+        """Create manager with mocked lakeFS client."""
+        manager = LakeFSVersionManager(
+            config=LakeFSConfig(
+                endpoint="http://localhost:8000",
+                access_key="test",
+                secret_key="test",  # pragma: allowlist secret
             )
-
-            path = Path(tmpdir) / "_manifest.json"
-            manifest.save(path)
-
-            loaded = VersionManifest.load(path)
-            assert loaded.version == manifest.version
-            assert loaded.created_by == "test_user"
-            assert loaded.schema_columns == ["ts_event", "momentum_5d"]
-
-    def test_immutability_prevents_overwrite(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest = VersionManifest(
-                version=GoldVersion.parse("v1.0.0"),
-                created_at=datetime.now(UTC),
-                created_by="test_user",
-                lineage=VersionLineage(),
-                immutable=True,
-            )
-
-            path = Path(tmpdir) / "_manifest.json"
-            manifest.save(path)
-
-            with pytest.raises(ValueError, match="immutable"):
-                manifest.save(path)
-
-
-class TestCheckCompatibility:
-    """Test version compatibility checking (PRD §28.3)."""
-
-    def test_compatible_added_column(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.2.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d"],
         )
+        return manager
 
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.3.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d", "momentum_20d"],
-        )
+    def test_checkout_returns_lakefs_uri(self, mock_manager):
+        """Test checkout returns proper lakeFS URI."""
+        uri = mock_manager.checkout("v1.0.0")
+        assert uri == "lakefs://heber-gold/v1.0.0/"
 
-        result = check_compatibility(from_manifest, to_manifest)
-
-        assert result.compatible is True
-        assert result.breaking is False
-        assert len(result.changes) == 1
-        assert result.changes[0].change_type == "added_column"
-
-    def test_breaking_removed_column(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.2.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d", "old_feature"],
-        )
-
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v4.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d"],
-        )
-
-        result = check_compatibility(from_manifest, to_manifest)
-
-        assert result.compatible is False
-        assert result.breaking is True
-        assert any(c.change_type == "removed_column" for c in result.changes)
-
-    def test_major_version_change_incompatible(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v2.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event"],
-        )
-
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event"],
-        )
-
-        result = check_compatibility(from_manifest, to_manifest)
-        assert result.compatible is False
+    def test_checkout_custom_repo(self, mock_manager):
+        """Test checkout with custom repository."""
+        uri = mock_manager.checkout("main", repo="custom-repo")
+        assert uri == "lakefs://custom-repo/main/"
 
 
 def run_all_gold_versioning_tests() -> dict[str, bool]:
@@ -267,11 +104,10 @@ def run_all_gold_versioning_tests() -> dict[str, bool]:
     results = {}
 
     test_classes = [
-        TestGoldVersion,
-        TestVersionLineage,
-        TestResolveVersion,
-        TestVersionManifest,
-        TestCheckCompatibility,
+        TestLakeFSConfig,
+        TestGoldCommit,
+        TestGoldTag,
+        TestLakeFSVersionManager,
     ]
 
     for test_class in test_classes:
@@ -279,7 +115,12 @@ def run_all_gold_versioning_tests() -> dict[str, bool]:
         for method_name in dir(instance):
             if method_name.startswith("test_"):
                 try:
-                    getattr(instance, method_name)()
+                    method = getattr(instance, method_name)
+                    # Handle pytest fixtures
+                    if "mock_manager" in method.__code__.co_varnames:
+                        method(instance.mock_manager())
+                    else:
+                        method()
                     results[f"{test_class.__name__}.{method_name}"] = True
                 except Exception as e:
                     results[f"{test_class.__name__}.{method_name}"] = False

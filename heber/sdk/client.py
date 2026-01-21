@@ -13,13 +13,8 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
-from heber.gold.versioning import (
-    GoldVersion,
-    VersionManifest,
-    check_compatibility,
-    get_manifest_path,
-    list_available_versions,
-    resolve_version,
+from heber.versioning import (
+    get_version_manager,
 )
 
 logger = structlog.get_logger(__name__)
@@ -484,15 +479,31 @@ class HeberClient:
     def list_gold_versions(self, dataset: str) -> list[str]:
         """List all available versions for a Gold dataset (PRD §28.2).
 
+        Uses lakeFS tags to track semantic versions.
+
         Args:
             dataset: Dataset name
 
         Returns:
             List of version strings, newest first (e.g., ["v3.5.0", "v3.2.1", "v1.0.0"])
         """
-        gold_root = self.data_root / "gold"
-        versions = list_available_versions(gold_root, dataset)
-        return [str(v) for v in versions]
+        manager = get_version_manager()
+        try:
+            tags = manager.list_tags()
+            # Filter tags for this dataset (format: dataset/v1.0.0)
+            dataset_prefix = f"{dataset}/"
+            versions = [tag.name.replace(dataset_prefix, "") for tag in tags if tag.name.startswith(dataset_prefix)]
+            # Sort by semver (newest first)
+            versions.sort(key=lambda v: [int(x) for x in v.lstrip("v").split(".")], reverse=True)
+            return versions
+        except Exception as e:
+            logger.warning("lakefs_list_versions_failed", dataset=dataset, error=str(e))
+            # Fallback to filesystem-based discovery
+            gold_path = self.data_root / "gold" / f"dataset={dataset}"
+            if not gold_path.exists():
+                return []
+            versions = [d.name.replace("version=", "") for d in gold_path.glob("project=*/version=*") if d.is_dir()]
+            return sorted(set(versions), reverse=True)
 
     def check_version_compatibility(
         self,
@@ -502,6 +513,8 @@ class HeberClient:
     ) -> dict:
         """Check compatibility between two Gold versions (PRD §28.3).
 
+        Uses lakeFS diff to compare commits.
+
         Args:
             dataset: Dataset name
             from_version: Source version (e.g., "v3.2.1")
@@ -510,45 +523,64 @@ class HeberClient:
         Returns:
             Dict with keys: compatible, breaking, changes
         """
-        gold_root = self.data_root / "gold"
+        manager = get_version_manager()
+        from_tag = f"{dataset}/{from_version}"
+        to_tag = f"{dataset}/{to_version}"
 
-        from_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(from_version))
-        to_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(to_version))
+        try:
+            changes = manager.diff(from_tag, to_tag)
 
-        if not from_manifest_path.exists():
-            raise ValueError(f"Version {from_version} not found for {dataset}")
-        if not to_manifest_path.exists():
-            raise ValueError(f"Version {to_version} not found for {dataset}")
+            # Analyze changes for breaking vs non-breaking
+            breaking_changes = []
+            non_breaking_changes = []
 
-        from_manifest = VersionManifest.load(from_manifest_path)
-        to_manifest = VersionManifest.load(to_manifest_path)
+            for change in changes:
+                if change["type"] == "removed":
+                    breaking_changes.append(change["path"])
+                else:
+                    non_breaking_changes.append(change["path"])
 
-        result = check_compatibility(from_manifest, to_manifest)
-        return result.to_dict()
+            return {
+                "compatible": len(breaking_changes) == 0,
+                "breaking": breaking_changes,
+                "changes": non_breaking_changes,
+                "from_version": from_version,
+                "to_version": to_version,
+            }
+        except Exception as e:
+            logger.error("lakefs_diff_failed", error=str(e))
+            raise ValueError(f"Cannot compare versions: {e}")
 
     def get_version_lineage(self, dataset: str, version: str) -> dict:
         """Get lineage metadata for a Gold version (PRD §28.4).
+
+        Uses lakeFS commit metadata for lineage tracking.
 
         Args:
             dataset: Dataset name
             version: Version string
 
         Returns:
-            Lineage dict with upstream_deps, code_commit, config_hash
+            Lineage dict with commit info and metadata
         """
-        gold_root = self.data_root / "gold"
-        manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(version))
+        manager = get_version_manager()
+        tag_name = f"{dataset}/{version}"
 
-        if not manifest_path.exists():
-            raise ValueError(f"Version {version} not found for {dataset}")
+        try:
+            commit = manager.get_commit(tag_name)
 
-        manifest = VersionManifest.load(manifest_path)
-        return {
-            "version": str(manifest.version),
-            "created_at": manifest.created_at.isoformat(),
-            "created_by": manifest.created_by,
-            **manifest.lineage.to_dict(),
-        }
+            return {
+                "version": version,
+                "commit_id": commit.commit_id,
+                "created_at": commit.creation_date.isoformat(),
+                "created_by": commit.committer,
+                "message": commit.message,
+                "parents": commit.parents,
+                "metadata": commit.metadata,
+            }
+        except Exception as e:
+            logger.error("lakefs_get_commit_failed", error=str(e))
+            raise ValueError(f"Version {version} not found for {dataset}: {e}")
 
     def read_gold_versioned(
         self,
@@ -575,14 +607,23 @@ class HeberClient:
         Returns:
             DataFrame with Gold data
         """
-        gold_root = self.data_root / "gold"
-        available = list_available_versions(gold_root, dataset)
+        available = self.list_gold_versions(dataset)
 
         if not available:
             logger.warning("No versions found for Gold dataset", dataset=dataset)
             return pd.DataFrame()
 
-        resolved = resolve_version(available, version)
+        # Resolve version pattern
+        if version is None:
+            resolved = available[0]  # Latest
+        elif "*" in version:
+            # Wildcard: v3.* matches v3.x.x
+            prefix = version.replace("*", "")
+            matching = [v for v in available if v.startswith(prefix)]
+            resolved = matching[0] if matching else None
+        else:
+            resolved = version if version in available else None
+
         if resolved is None:
             logger.warning(
                 "Version pattern matched no versions",
@@ -595,12 +636,12 @@ class HeberClient:
             "Resolved Gold version",
             dataset=dataset,
             pattern=version,
-            resolved=str(resolved),
+            resolved=resolved,
         )
 
         return self.read_gold(
             dataset=dataset,
-            version=str(resolved),
+            version=resolved,
             asof_time=asof_time,
             time_range=time_range,
             instrument_keys=instrument_keys,

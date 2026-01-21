@@ -1,6 +1,6 @@
 # Heber Codebase
 
-*Generated: 2026-01-21T00:41:52*
+*Generated: 2026-01-21T13:46:24*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Heber
 Files analyzed: 170
 
-Estimated tokens: 273.2k
+Estimated tokens: 273.3k
 
 ---
 
@@ -753,8 +753,8 @@ services:
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/minio/data:/data
     ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # Console
+      - "19000:9000" # S3 API
+      - "19001:9001" # Console
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -789,20 +789,27 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Karapace - Schema Registry (Phase 4)
-  karapace-registry:
-    image: ghcr.io/aiven/karapace:latest
-    container_name: heber-karapace
+  # Apicurio Registry - Schema Registry (Phase 4)
+  # Note: Karapace requires Kafka; Apicurio supports PostgreSQL standalone mode
+  apicurio-registry:
+    image: apicurio/apicurio-registry-sql:2.5.11.Final
+    container_name: heber-apicurio
     environment:
-      KARAPACE_ADVERTISED_HOSTNAME: karapace-registry
-      KARAPACE_PORT: 8081
-      KARAPACE_HOST: 0.0.0.0
-      KARAPACE_BOOTSTRAP_URI: "" # Standalone mode (no Kafka)
-      KARAPACE_REGISTRY_HOST: karapace-registry
-      KARAPACE_REGISTRY_PORT: 8081
-      KARAPACE_LOG_LEVEL: INFO
+      REGISTRY_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heber_apicurio
+      REGISTRY_DATASOURCE_USERNAME: heber
+      REGISTRY_DATASOURCE_PASSWORD: heber_dev_password # pragma: allowlist secret
+      QUARKUS_HTTP_PORT: 8081
+      QUARKUS_LOG_LEVEL: INFO
     ports:
-      - "8081:8081" # Schema Registry API
+      - "18081:8081" # Schema Registry API (Confluent-compatible at /api/ccompat/v7)
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8081/health/ready" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   # OpenMetadata - Data Catalog (Phase 5)
@@ -877,7 +884,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\"" ]
       interval: 30s
       timeout: 10s
       retries: 3
