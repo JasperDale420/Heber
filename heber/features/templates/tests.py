@@ -21,15 +21,16 @@ class TestMomentumFeatures:
     def test_compute_momentum_features(self):
         from heber.features.templates.momentum import compute_momentum_features
 
+        rng = np.random.default_rng(42)
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
                 "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
-                "open": np.random.randn(100).cumsum() + 100,
-                "high": np.random.randn(100).cumsum() + 101,
-                "low": np.random.randn(100).cumsum() + 99,
-                "close": np.random.randn(100).cumsum() + 100,
-                "volume": np.random.randint(1000, 10000, 100),
+                "open": rng.standard_normal(100).cumsum() + 100,
+                "high": rng.standard_normal(100).cumsum() + 101,
+                "low": rng.standard_normal(100).cumsum() + 99,
+                "close": rng.standard_normal(100).cumsum() + 100,
+                "volume": rng.integers(1000, 10000, 100),
             }
         )
 
@@ -60,15 +61,16 @@ class TestVolatilityFeatures:
     def test_compute_volatility_features(self):
         from heber.features.templates.volatility import compute_volatility_features
 
+        rng = np.random.default_rng(42)
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
                 "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
-                "open": np.random.randn(100).cumsum() + 100,
-                "high": np.random.randn(100).cumsum() + 101,
-                "low": np.random.randn(100).cumsum() + 99,
-                "close": np.random.randn(100).cumsum() + 100,
-                "volume": np.random.randint(1000, 10000, 100),
+                "open": rng.standard_normal(100).cumsum() + 100,
+                "high": rng.standard_normal(100).cumsum() + 101,
+                "low": rng.standard_normal(100).cumsum() + 99,
+                "close": rng.standard_normal(100).cumsum() + 100,
+                "volume": rng.integers(1000, 10000, 100),
             }
         )
 
@@ -85,6 +87,7 @@ class TestCrossAssetFeatures:
     def test_compute_relative_features(self):
         from heber.features.templates.cross_asset import compute_relative_features
 
+        rng = np.random.default_rng(42)
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
 
         bars = pd.concat(
@@ -93,14 +96,14 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:AAPL"] * 100,
                         "bar_start_ts": dates,
-                        "close": np.random.randn(100).cumsum() + 150,
+                        "close": rng.standard_normal(100).cumsum() + 150,
                     }
                 ),
                 pd.DataFrame(
                     {
                         "instrument_key": ["equity:SPY"] * 100,
                         "bar_start_ts": dates,
-                        "close": np.random.randn(100).cumsum() + 500,
+                        "close": rng.standard_normal(100).cumsum() + 500,
                     }
                 ),
             ]

@@ -12,7 +12,7 @@ import pandas as pd
 
 def compute_microstructure_features(
     quotes_df: pd.DataFrame,
-    trades_df: pd.DataFrame | None = None,
+    _trades_df: pd.DataFrame | None = None,  # Reserved for trade-based metrics
 ) -> pd.DataFrame:
     """Compute market microstructure features.
 
@@ -20,7 +20,7 @@ def compute_microstructure_features(
 
     Args:
         quotes_df: Quote data with [instrument_key, ts_event, bid_px, ask_px, bid_sz, ask_sz]
-        trades_df: Optional trade data for additional metrics
+        _trades_df: Reserved for trade-based metrics (not yet implemented)
 
     Returns:
         DataFrame with microstructure features

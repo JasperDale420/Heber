@@ -12,14 +12,14 @@ import pandas as pd
 
 def compute_flow_features(
     flow_df: pd.DataFrame,
-    bars_df: pd.DataFrame | None = None,
+    _bars_df: pd.DataFrame | None = None,  # Reserved for price normalization
     lookback_hours: int = 24,
 ) -> pd.DataFrame:
     """Compute flow-based features aggregated per underlying per timestamp.
 
     Args:
         flow_df: Options flow data with columns [underlying, ts_event, premium, put_call, alert_type, ...]
-        bars_df: Optional underlying bars for normalization
+        _bars_df: Reserved for underlying bars normalization (not yet implemented)
         lookback_hours: Lookback window in hours
 
     Returns:
