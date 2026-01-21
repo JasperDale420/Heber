@@ -850,10 +850,10 @@
 
 ### 49.3 Edge Case Library
 
-- [ ] Clock skew scenarios
-- [ ] Missing timestamps
-- [ ] Schema mismatches
-- [ ] Late-arriving data
+- [x] Clock skew scenarios
+- [x] Missing timestamps
+- [x] Schema mismatches
+- [x] Late-arriving data
 
 ---
 
