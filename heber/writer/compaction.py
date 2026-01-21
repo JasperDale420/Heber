@@ -243,7 +243,7 @@ class CrashRecovery:
         compact_tmp = partition_path / COMPACT_TMP_DIR
 
         # Check for incomplete temp files (step 6)
-        if compact_tmp.exists() and list(compact_tmp.glob("*.parquet")):
+        if compact_tmp.exists() and list(compact_tmp.glob(PARQUET_GLOB)):
             logger.info("crash_recovery_temp_files", path=str(partition_path))
             recovered = self._recover_from_temp(partition_path, compact_tmp, dataset)
 
@@ -258,7 +258,7 @@ class CrashRecovery:
     def _recover_from_temp(self, partition_path: Path, compact_tmp: Path, dataset: str) -> bool:
         """Resume from step 6: move temp files to partition root."""
         try:
-            for tmp_file in compact_tmp.glob("*.parquet"):
+            for tmp_file in compact_tmp.glob(PARQUET_GLOB):
                 dest = partition_path / tmp_file.name
                 shutil.move(str(tmp_file), str(dest))
 
@@ -456,7 +456,7 @@ class ParquetCompactor:
             return 0, 0
 
         # Find all Parquet files
-        parquet_files = list(partition_path.glob("*.parquet"))
+        parquet_files = list(partition_path.glob(PARQUET_GLOB))
         if not parquet_files:
             logger.debug("no_parquet_files", path=str(partition_path))
             return 0, 0
