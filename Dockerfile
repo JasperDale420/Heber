@@ -21,7 +21,7 @@ WORKDIR /build
 RUN pip install --no-cache-dir uv
 
 # Copy only dependency files first (better layer caching)
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
 
 # Install dependencies to a separate directory
 RUN uv pip install --target=/build/deps -e .
@@ -81,7 +81,7 @@ FROM runtime AS consumer
 CMD ["python", "-m", "heber.bus.consumer"]
 
 # -----------------------------------------------------------------------------
-# Stage 4 (optional): Writer service  
+# Stage 4 (optional): Writer service
 # -----------------------------------------------------------------------------
 FROM runtime AS writer
 CMD ["python", "-m", "heber.writer.service"]
