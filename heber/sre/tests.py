@@ -55,7 +55,7 @@ class TestSLO:
             window=SLOWindow.WINDOW_30D,
         )
 
-        assert slo.target_percentage == 99.9
+        assert slo.target_percentage == pytest.approx(99.9)
 
     def test_error_budget_ratio(self):
         slo = SLO(
@@ -209,7 +209,7 @@ class TestErrorBudgetManager:
             period_end=datetime.now(UTC),
         )
 
-        allowed, reason = manager.can_deploy(budget, DeployRisk.HIGH_RISK)
+        allowed, _reason = manager.can_deploy(budget, DeployRisk.HIGH_RISK)
 
         assert allowed
 
@@ -242,7 +242,7 @@ class TestErrorBudgetManager:
             period_end=datetime.now(UTC),
         )
 
-        allowed, reason = manager.can_deploy(budget, DeployRisk.STANDARD)
+        allowed, _reason = manager.can_deploy(budget, DeployRisk.STANDARD)
 
         assert not allowed
 

@@ -280,7 +280,7 @@ class SLOManager:
         current_value: float,
         error_count: int,
         total_count: int,
-        window_hours: float = 720,  # 30 days
+        _window_hours: float = 720,  # 30 days - reserved for future granular calculations
     ) -> SLOStatus:
         """Calculate SLO status from current metrics.
 

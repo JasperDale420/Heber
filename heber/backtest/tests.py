@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from heber.backtest.integration import (
     BacktestDataLoader,
@@ -89,7 +90,7 @@ class TestBacktestResult:
             loaded = BacktestResult.load(path)
 
             assert loaded.experiment_id == "test_123"
-            assert loaded.metrics["sharpe"] == 1.5
+            assert loaded.metrics["sharpe"] == pytest.approx(1.5)
             assert len(loaded.fold_results) == 1
 
 
@@ -170,7 +171,7 @@ class TestExperimentTracker:
 
             assert result.experiment_id == exp_id
             assert len(result.fold_results) == 3
-            assert result.metrics["sharpe"] == 1.3
+            assert result.metrics["sharpe"] == pytest.approx(1.3)
 
     def test_list_and_load_experiments(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -189,7 +190,7 @@ class TestExperimentTracker:
             assert len(experiments) == 1
 
             loaded = tracker.load_experiment(experiments[0])
-            assert loaded.metrics["sharpe"] == 1.0
+            assert loaded.metrics["sharpe"] == pytest.approx(1.0)
 
 
 class TestReproducibilityChecklist:
