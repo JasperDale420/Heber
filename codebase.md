@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-20T20:40:24*
+*Generated: 2026-01-20T23:41:31*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 161
+Files analyzed: 162
 
-Estimated tokens: 255.6k
+Estimated tokens: 258.7k
 
 ---
 
@@ -145,6 +145,8 @@ Directory structure:
     │   │   ├── tests.py
     │   │   ├── tests_chaos.py
     │   │   └── tests_runbooks.py
+    │   ├── storage/
+    │   │   └── iceberg_catalog.py
     │   ├── testing/
     │   │   ├── __init__.py
     │   │   ├── ci_gates.py
@@ -8167,6 +8169,12 @@ dependencies = [
     # Feature Store
     "feast>=0.38",
 
+    # Table Format (Phase 1: Iceberg)
+    "pyiceberg[s3,pyarrow]>=0.7",
+
+    # Data Quality (Phase 3: Soda Core)
+    "soda-core-duckdb>=3.0",
+
     # Observability
     "structlog>=24.0",
     "prometheus-client>=0.19",
@@ -10604,6 +10612,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from heber.backtest.integration import (
     BacktestDataLoader,
@@ -10687,7 +10696,7 @@ class TestBacktestResult:
             loaded = BacktestResult.load(path)
 
             assert loaded.experiment_id == "test_123"
-            assert loaded.metrics["sharpe"] == 1.5
+            assert loaded.metrics["sharpe"] == pytest.approx(1.5)
             assert len(loaded.fold_results) == 1
 
 
@@ -10710,7 +10719,7 @@ class TestBacktestDataLoader:
             label_dataset="returns_5d",
         )
 
-        features, labels = loader.load_train_data(
+        features, _ = loader.load_train_data(
             train_start="2024-01-01",
             train_end="2024-06-01",
         )
@@ -10734,7 +10743,7 @@ class TestBacktestDataLoader:
             label_dataset=None,
         )
 
-        features, labels = loader.load_train_data(
+        _, labels = loader.load_train_data(
             train_start="2024-01-01",
             train_end="2024-06-01",
         )
@@ -10768,7 +10777,7 @@ class TestExperimentTracker:
 
             assert result.experiment_id == exp_id
             assert len(result.fold_results) == 3
-            assert result.metrics["sharpe"] == 1.3
+            assert result.metrics["sharpe"] == pytest.approx(1.3)
 
     def test_list_and_load_experiments(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -10787,7 +10796,7 @@ class TestExperimentTracker:
             assert len(experiments) == 1
 
             loaded = tracker.load_experiment(experiments[0])
-            assert loaded.metrics["sharpe"] == 1.0
+            assert loaded.metrics["sharpe"] == pytest.approx(1.0)
 
 
 class TestReproducibilityChecklist:
@@ -13422,6 +13431,15 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Provider name constants
+PROVIDER_ALPACA = "Alpaca"
+PROVIDER_UNUSUAL_WHALES = "Unusual Whales"
+PROVIDER_FINNHUB = "Finnhub"
+PROVIDER_ALPHA_VANTAGE = "Alpha Vantage"
+PROVIDER_YFINANCE = "yFinance"
+PROVIDER_NEWS_API = "News API"
+PROVIDER_SEC_EDGAR = "SEC Edgar"
+
 
 class ProviderPriority(int, Enum):
     """Provider priority level."""
@@ -13461,46 +13479,46 @@ class DataProvider:
 # Default providers from PRD §55.1
 DEFAULT_PROVIDERS: list[DataProvider] = [
     DataProvider(
-        name="Alpaca",
+        name=PROVIDER_ALPACA,
         capabilities=["bars", "quotes", "trades", "options", "crypto", "news"],
         priority=ProviderPriority.PRIMARY,
         streaming=True,
         notes="Primary market data provider",
     ),
     DataProvider(
-        name="Unusual Whales",
+        name=PROVIDER_UNUSUAL_WHALES,
         capabilities=["flow_alerts", "darkpool_trades", "congress", "lobbying"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
         notes="Alternative data provider",
     ),
     DataProvider(
-        name="Finnhub",
+        name=PROVIDER_FINNHUB,
         capabilities=["bars", "quotes", "news", "sentiment"],
         priority=ProviderPriority.SECONDARY,
         streaming=True,
     ),
     DataProvider(
-        name="Alpha Vantage",
+        name=PROVIDER_ALPHA_VANTAGE,
         capabilities=["forex", "crypto", "economic_indicators"],
         priority=ProviderPriority.TERTIARY,
         streaming=False,
     ),
     DataProvider(
-        name="yFinance",
+        name=PROVIDER_YFINANCE,
         capabilities=["historical_bars"],
         priority=ProviderPriority.SECONDARY,
         streaming=False,
         notes="Fallback for historical data",
     ),
     DataProvider(
-        name="News API",
+        name=PROVIDER_NEWS_API,
         capabilities=["news_articles", "headlines"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
     ),
     DataProvider(
-        name="SEC Edgar",
+        name=PROVIDER_SEC_EDGAR,
         capabilities=["10-K", "10-Q", "8-K", "13F", "company_info"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
@@ -13563,37 +13581,37 @@ class DatasetSpec:
 # Dataset catalog from PRD §57
 DEFAULT_DATASETS: list[DatasetSpec] = [
     # Market Data
-    DatasetSpec("bars", "market_data", "OHLCV minute bars", ["Alpaca", "Finnhub"], True),
-    DatasetSpec("quotes", "market_data", "Level 1 quotes", ["Alpaca"], True),
-    DatasetSpec("trades", "market_data", "Individual trades", ["Alpaca"], True),
-    DatasetSpec("bars_daily", "market_data", "Daily OHLCV bars", ["Alpaca", "yFinance"], False),
+    DatasetSpec("bars", "market_data", "OHLCV minute bars", [PROVIDER_ALPACA, PROVIDER_FINNHUB], True),
+    DatasetSpec("quotes", "market_data", "Level 1 quotes", [PROVIDER_ALPACA], True),
+    DatasetSpec("trades", "market_data", "Individual trades", [PROVIDER_ALPACA], True),
+    DatasetSpec("bars_daily", "market_data", "Daily OHLCV bars", [PROVIDER_ALPACA, PROVIDER_YFINANCE], False),
     # Options
-    DatasetSpec("option_quotes", "options", "Option chain quotes", ["Alpaca"], False),
-    DatasetSpec("option_trades", "options", "Option trades", ["Alpaca"], False),
+    DatasetSpec("option_quotes", "options", "Option chain quotes", [PROVIDER_ALPACA], False),
+    DatasetSpec("option_trades", "options", "Option trades", [PROVIDER_ALPACA], False),
     # Alternative
-    DatasetSpec("congress_trades", "alternative", "Congress trading activity", ["Unusual Whales"], False),
-    DatasetSpec("lobbying", "alternative", "Lobbying disclosures", ["Unusual Whales"], False),
-    DatasetSpec("flow_alerts", "alternative", "Options flow alerts", ["Unusual Whales"], False),
-    DatasetSpec("darkpool_trades", "alternative", "Dark pool transactions", ["Unusual Whales"], False),
+    DatasetSpec("congress_trades", "alternative", "Congress trading activity", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("lobbying", "alternative", "Lobbying disclosures", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("flow_alerts", "alternative", "Options flow alerts", [PROVIDER_UNUSUAL_WHALES], False),
+    DatasetSpec("darkpool_trades", "alternative", "Dark pool transactions", [PROVIDER_UNUSUAL_WHALES], False),
     # Fundamentals
-    DatasetSpec("company_info", "fundamentals", "Company metadata", ["SEC Edgar"], False),
-    DatasetSpec("income_statement", "fundamentals", "Income statements", ["Alpha Vantage"], False),
-    DatasetSpec("balance_sheet", "fundamentals", "Balance sheets", ["Alpha Vantage"], False),
-    DatasetSpec("cash_flow", "fundamentals", "Cash flow statements", ["Alpha Vantage"], False),
-    DatasetSpec("ratios", "fundamentals", "Financial ratios", ["Alpha Vantage"], False),
+    DatasetSpec("company_info", "fundamentals", "Company metadata", [PROVIDER_SEC_EDGAR], False),
+    DatasetSpec("income_statement", "fundamentals", "Income statements", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("balance_sheet", "fundamentals", "Balance sheets", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("cash_flow", "fundamentals", "Cash flow statements", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("ratios", "fundamentals", "Financial ratios", [PROVIDER_ALPHA_VANTAGE], False),
     # Economic
-    DatasetSpec("gdp", "economic", "Gross Domestic Product", ["Alpha Vantage"], False),
-    DatasetSpec("cpi", "economic", "Consumer Price Index", ["Alpha Vantage"], False),
-    DatasetSpec("unemployment", "economic", "Unemployment rate", ["Alpha Vantage"], False),
-    DatasetSpec("interest_rate", "economic", "Fed funds rate", ["Alpha Vantage"], False),
-    DatasetSpec("treasury_yield", "economic", "Treasury yields", ["Alpha Vantage"], False),
+    DatasetSpec("gdp", "economic", "Gross Domestic Product", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("cpi", "economic", "Consumer Price Index", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("unemployment", "economic", "Unemployment rate", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("interest_rate", "economic", "Fed funds rate", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("treasury_yield", "economic", "Treasury yields", [PROVIDER_ALPHA_VANTAGE], False),
     # Forex & Crypto
-    DatasetSpec("forex_rates", "forex_crypto", "Currency exchange rates", ["Alpha Vantage"], False),
-    DatasetSpec("crypto_bars", "forex_crypto", "Cryptocurrency OHLCV", ["Alpaca"], False),
-    DatasetSpec("crypto_quotes", "forex_crypto", "Cryptocurrency quotes", ["Alpaca"], False),
+    DatasetSpec("forex_rates", "forex_crypto", "Currency exchange rates", [PROVIDER_ALPHA_VANTAGE], False),
+    DatasetSpec("crypto_bars", "forex_crypto", "Cryptocurrency OHLCV", [PROVIDER_ALPACA], False),
+    DatasetSpec("crypto_quotes", "forex_crypto", "Cryptocurrency quotes", [PROVIDER_ALPACA], False),
     # News
-    DatasetSpec("news_articles", "news", "News article metadata", ["News API", "Alpaca"], False),
-    DatasetSpec("news_sentiment", "news", "Sentiment scores", ["Finnhub"], False),
+    DatasetSpec("news_articles", "news", "News article metadata", [PROVIDER_NEWS_API, PROVIDER_ALPACA], False),
+    DatasetSpec("news_sentiment", "news", "Sentiment scores", [PROVIDER_FINNHUB], False),
 ]
 
 
@@ -14262,7 +14280,7 @@ class TestAccessControlManager:
         manager = AccessControlManager()
         manager.create_project("proj-001", "Test")
 
-        raw_token, token = manager.create_token("proj-001", "Short-lived Token", expires_in_days=30)
+        _raw_token, token = manager.create_token("proj-001", "Short-lived Token", expires_in_days=30)
 
         assert token.expires_at is not None
         assert token.is_valid()
@@ -14786,9 +14804,12 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Default path to Feast feature repository
+DEFAULT_REPO_PATH = "features/"
+
 
 def materialize_features(
-    repo_path: str | Path = "features/",
+    repo_path: str | Path = DEFAULT_REPO_PATH,
     feature_views: list[str] | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
@@ -14928,7 +14949,7 @@ def get_online_features(
     return online_response.to_dict()
 
 
-def list_feature_views(repo_path: str | Path = "features/") -> list[dict]:
+def list_feature_views(repo_path: str | Path = DEFAULT_REPO_PATH) -> list[dict]:
     """List all registered feature views.
 
     Returns:
@@ -14958,7 +14979,7 @@ def list_feature_views(repo_path: str | Path = "features/") -> list[dict]:
 
 
 def search_features(
-    repo_path: str | Path = "features/",
+    repo_path: str | Path = DEFAULT_REPO_PATH,
     tags: list[str] | None = None,
     owner: str | None = None,
     category: str | None = None,
@@ -14984,9 +15005,8 @@ def search_features(
             continue
         if category and view_tags.get("category") != category:
             continue
-        if tags:
-            if not any(t in view_tags for t in tags):
-                continue
+        if tags and not any(t in view_tags for t in tags):
+            continue
 
         for feature in view.get("features", []):
             results.append(
@@ -15343,14 +15363,14 @@ import pandas as pd
 
 def compute_flow_features(
     flow_df: pd.DataFrame,
-    bars_df: pd.DataFrame | None = None,
+    _bars_df: pd.DataFrame | None = None,  # Reserved for price normalization
     lookback_hours: int = 24,
 ) -> pd.DataFrame:
     """Compute flow-based features aggregated per underlying per timestamp.
 
     Args:
         flow_df: Options flow data with columns [underlying, ts_event, premium, put_call, alert_type, ...]
-        bars_df: Optional underlying bars for normalization
+        _bars_df: Reserved for underlying bars normalization (not yet implemented)
         lookback_hours: Lookback window in hours
 
     Returns:
@@ -15510,7 +15530,7 @@ import pandas as pd
 
 def compute_microstructure_features(
     quotes_df: pd.DataFrame,
-    trades_df: pd.DataFrame | None = None,
+    _trades_df: pd.DataFrame | None = None,  # Reserved for trade-based metrics
 ) -> pd.DataFrame:
     """Compute market microstructure features.
 
@@ -15518,7 +15538,7 @@ def compute_microstructure_features(
 
     Args:
         quotes_df: Quote data with [instrument_key, ts_event, bid_px, ask_px, bid_sz, ask_sz]
-        trades_df: Optional trade data for additional metrics
+        _trades_df: Reserved for trade-based metrics (not yet implemented)
 
     Returns:
         DataFrame with microstructure features
@@ -15651,15 +15671,16 @@ class TestMomentumFeatures:
     def test_compute_momentum_features(self):
         from heber.features.templates.momentum import compute_momentum_features
 
+        rng = np.random.default_rng(42)
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
                 "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
-                "open": np.random.randn(100).cumsum() + 100,
-                "high": np.random.randn(100).cumsum() + 101,
-                "low": np.random.randn(100).cumsum() + 99,
-                "close": np.random.randn(100).cumsum() + 100,
-                "volume": np.random.randint(1000, 10000, 100),
+                "open": rng.standard_normal(100).cumsum() + 100,
+                "high": rng.standard_normal(100).cumsum() + 101,
+                "low": rng.standard_normal(100).cumsum() + 99,
+                "close": rng.standard_normal(100).cumsum() + 100,
+                "volume": rng.integers(1000, 10000, 100),
             }
         )
 
@@ -15690,15 +15711,16 @@ class TestVolatilityFeatures:
     def test_compute_volatility_features(self):
         from heber.features.templates.volatility import compute_volatility_features
 
+        rng = np.random.default_rng(42)
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
                 "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
-                "open": np.random.randn(100).cumsum() + 100,
-                "high": np.random.randn(100).cumsum() + 101,
-                "low": np.random.randn(100).cumsum() + 99,
-                "close": np.random.randn(100).cumsum() + 100,
-                "volume": np.random.randint(1000, 10000, 100),
+                "open": rng.standard_normal(100).cumsum() + 100,
+                "high": rng.standard_normal(100).cumsum() + 101,
+                "low": rng.standard_normal(100).cumsum() + 99,
+                "close": rng.standard_normal(100).cumsum() + 100,
+                "volume": rng.integers(1000, 10000, 100),
             }
         )
 
@@ -15715,6 +15737,7 @@ class TestCrossAssetFeatures:
     def test_compute_relative_features(self):
         from heber.features.templates.cross_asset import compute_relative_features
 
+        rng = np.random.default_rng(42)
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
 
         bars = pd.concat(
@@ -15723,14 +15746,14 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:AAPL"] * 100,
                         "bar_start_ts": dates,
-                        "close": np.random.randn(100).cumsum() + 150,
+                        "close": rng.standard_normal(100).cumsum() + 150,
                     }
                 ),
                 pd.DataFrame(
                     {
                         "instrument_key": ["equity:SPY"] * 100,
                         "bar_start_ts": dates,
-                        "close": np.random.randn(100).cumsum() + 500,
+                        "close": rng.standard_normal(100).cumsum() + 500,
                     }
                 ),
             ]
@@ -16959,7 +16982,7 @@ class TestWriteAndReadLabel:
             result = read_label(gold_root, "returns_5d", asof_time)
 
             assert len(result) == 1
-            assert result.iloc[0]["label"] == 0.02
+            assert result.iloc[0]["label"] == pytest.approx(0.02)
 
     def test_read_label_filters_by_instrument(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -17057,6 +17080,11 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Constants
+LABEL_TYPE_DIR = "type=label"
+DEFAULT_VERSION = "v1.0.0"
+DATA_PARQUET = "data.parquet"
+
 
 def parse_duration(duration_str: str) -> timedelta:
     """Parse duration string like '5d', '1h', '30m', '0s' into timedelta.
@@ -17139,7 +17167,7 @@ class LabelDataset:
 
     name: str
     metadata: LabelMetadata
-    version: str = "v1.0.0"
+    version: str = DEFAULT_VERSION
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     created_by: str = "system"
 
@@ -17156,7 +17184,7 @@ class LabelDataset:
     def from_dict(cls, data: dict[str, Any]) -> LabelDataset:
         return cls(
             name=data["name"],
-            version=data.get("version", "v1.0.0"),
+            version=data.get("version", DEFAULT_VERSION),
             created_at=datetime.fromisoformat(data["created_at"]),
             created_by=data.get("created_by", "system"),
             metadata=LabelMetadata.from_dict(data.get("metadata", {})),
@@ -17164,7 +17192,7 @@ class LabelDataset:
 
     def save(self, gold_root: Path) -> Path:
         """Save metadata to gold layer."""
-        metadata_path = gold_root / f"dataset={self.name}" / "type=label" / "_metadata.json"
+        metadata_path = gold_root / f"dataset={self.name}" / LABEL_TYPE_DIR / "_metadata.json"
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(metadata_path, "w") as f:
@@ -17176,7 +17204,7 @@ class LabelDataset:
     @classmethod
     def load(cls, gold_root: Path, name: str) -> LabelDataset:
         """Load metadata from gold layer."""
-        metadata_path = gold_root / f"dataset={name}" / "type=label" / "_metadata.json"
+        metadata_path = gold_root / f"dataset={name}" / LABEL_TYPE_DIR / "_metadata.json"
         with open(metadata_path) as f:
             data = json.load(f)
         return cls.from_dict(data)
@@ -17225,7 +17253,7 @@ def write_label(
     instrument_key_col: str = "instrument_key",
     label_time_col: str = "ts_label",
     label_value_col: str = "label",
-    version: str = "v1.0.0",
+    version: str = DEFAULT_VERSION,
     created_by: str = "system",
 ) -> Path:
     """Write labels to Gold layer with proper availability tracking (PRD §29.3).
@@ -17272,10 +17300,10 @@ def write_label(
     )
     label_dataset.save(gold_root)
 
-    output_path = gold_root / f"dataset={dataset}" / "type=label" / f"version={version}"
+    output_path = gold_root / f"dataset={dataset}" / LABEL_TYPE_DIR / f"version={version}"
     output_path.mkdir(parents=True, exist_ok=True)
 
-    parquet_path = output_path / "data.parquet"
+    parquet_path = output_path / DATA_PARQUET
     df.to_parquet(parquet_path, compression="snappy")
 
     logger.info(
@@ -17311,21 +17339,21 @@ def read_label(
     Returns:
         DataFrame with labels available at asof_time
     """
-    dataset_path = gold_root / f"dataset={dataset}" / "type=label"
+    dataset_path = gold_root / f"dataset={dataset}" / LABEL_TYPE_DIR
 
     if not dataset_path.exists():
         logger.warning("Label dataset not found", dataset=dataset)
         return pd.DataFrame()
 
     if version:
-        data_path = dataset_path / f"version={version}" / "data.parquet"
+        data_path = dataset_path / f"version={version}" / DATA_PARQUET
     else:
         versions = [d for d in dataset_path.iterdir() if d.is_dir() and d.name.startswith("version=")]
         if not versions:
             logger.warning("No versions found for label dataset", dataset=dataset)
             return pd.DataFrame()
         latest = sorted(versions, key=lambda d: d.name, reverse=True)[0]
-        data_path = latest / "data.parquet"
+        data_path = latest / DATA_PARQUET
 
     if not data_path.exists():
         logger.warning("Label data file not found", path=str(data_path))
@@ -17420,7 +17448,7 @@ class TestDateRange:
             start=datetime(2024, 1, 1),
             end=datetime(2024, 6, 1),
         )
-        start, end = dr
+        start, _end = dr
         assert start == datetime(2024, 1, 1)
 
 
@@ -17551,7 +17579,7 @@ class TestPurgeWindow:
 
     def test_purge_equals_forward_window(self):
         result = purge_window(
-            train_end=datetime(2024, 1, 1),
+            datetime(2024, 1, 1),  # train_end (reserved for future use)
             forward_window="5d",
         )
         assert result == timedelta(days=5)
@@ -17868,7 +17896,7 @@ def expanding_window_splits(
 
 
 def purge_window(
-    train_end: datetime,
+    _train_end: datetime,  # Reserved for future purge calculations
     forward_window: str,
 ) -> timedelta:
     """Calculate purge window for label leakage prevention.
@@ -17877,7 +17905,7 @@ def purge_window(
     observations near the train/test boundary.
 
     Args:
-        train_end: End of training period
+        _train_end: End of training period (reserved for future use)
         forward_window: Label's forward window (e.g., "5d")
 
     Returns:
@@ -17964,7 +17992,7 @@ class TestGoldVersion:
 
         assert v1 < v2
         assert v2 < v3
-        assert v1 <= v1
+        assert v1 <= GoldVersion.parse("v1.0.0")  # Test <= with equivalent version
         assert v1 == GoldVersion.parse("v1.0.0")
 
     def test_wildcard_major(self):
@@ -20664,6 +20692,14 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Category constants
+CATEGORY_DATA_MODEL = "Data Model"
+CATEGORY_INFRASTRUCTURE = "Infrastructure"
+CATEGORY_ML_QUANT = "ML/Quant"
+CATEGORY_RELIABILITY = "Reliability"
+CATEGORY_TESTING = "Testing"
+CATEGORY_DATA_SOURCES = "Data Sources"
+
 
 @dataclass
 class DecisionRecord:
@@ -20693,7 +20729,7 @@ class DecisionRecord:
 DATA_MODEL_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="DM-001",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="How to partition Silver data?",
         decision="Partition by date (dt) and symbol for market data",
         rationale="Optimizes for common query pattern (symbol + date range)",
@@ -20701,14 +20737,14 @@ DATA_MODEL_DECISIONS: list[DecisionRecord] = [
     ),
     DecisionRecord(
         id="DM-002",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="ts_available vs ts_event?",
         decision="Use ts_available for all point-in-time queries",
         rationale="Prevents look-ahead bias in backtesting",
     ),
     DecisionRecord(
         id="DM-003",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="Schema evolution strategy?",
         decision="Semver for schemas (v<major>.<minor>), backward compatible by default",
         rationale="Allows schema changes without breaking existing consumers",
@@ -20718,14 +20754,14 @@ DATA_MODEL_DECISIONS: list[DecisionRecord] = [
 INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="INF-001",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Cold storage tier?",
         decision="S3 Glacier for data older than 1 year",
         rationale="Cost optimization while maintaining data availability",
     ),
     DecisionRecord(
         id="INF-002",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Hot store technology?",
         decision="ClickHouse for real-time queries",
         rationale="Columnar storage optimized for analytical queries",
@@ -20733,7 +20769,7 @@ INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
     ),
     DecisionRecord(
         id="INF-003",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Event bus technology?",
         decision="Redis Streams",
         rationale="Simple, fast, good consumer group support",
@@ -20744,21 +20780,21 @@ INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
 ML_QUANT_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="ML-001",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Feature versioning strategy?",
         decision="GoldVersion with lineage tracking",
         rationale="Enables reproducibility and feature governance",
     ),
     DecisionRecord(
         id="ML-002",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Train/test split approach?",
         decision="Walk-forward with embargo period",
         rationale="Prevents data leakage in time-series data",
     ),
     DecisionRecord(
         id="ML-003",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Label semantic?",
         decision="Forward-looking with explicit ts_available at label computation time",
         rationale="Ensures labels represent future returns not available at train time",
@@ -20768,21 +20804,21 @@ ML_QUANT_DECISIONS: list[DecisionRecord] = [
 RELIABILITY_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="REL-001",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="SLO targets for ingestion?",
         decision="99.9% availability, 10K events/sec throughput",
         rationale="Balances reliability with infrastructure cost",
     ),
     DecisionRecord(
         id="REL-002",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="Error budget policy?",
         decision="Freeze deploys when budget < 10%",
         rationale="Protects users from reliability degradation",
     ),
     DecisionRecord(
         id="REL-003",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="Circuit breaker thresholds?",
         decision="Open after 5 failures in 30s, half-open after 60s",
         rationale="Fast failure detection with reasonable recovery time",
@@ -20792,21 +20828,21 @@ RELIABILITY_DECISIONS: list[DecisionRecord] = [
 TESTING_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="TEST-001",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Test pyramid distribution?",
         decision="70% unit, 25% integration, 5% E2E",
         rationale="Fast feedback with comprehensive coverage",
     ),
     DecisionRecord(
         id="TEST-002",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Leakage test policy?",
         decision="0% tolerance, all leakage tests must pass",
         rationale="Zero-leakage is a critical invariant",
     ),
     DecisionRecord(
         id="TEST-003",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Flaky test handling?",
         decision="Quarantine at >5% flake rate, fix within 3 days",
         rationale="Maintains CI reliability while allowing investigation",
@@ -20816,21 +20852,21 @@ TESTING_DECISIONS: list[DecisionRecord] = [
 DATA_SOURCE_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="DS-001",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Structured vs unstructured boundary?",
         decision="Heber for structured (Parquet), Document Store for text",
         rationale="Optimizes each storage for its primary use case",
     ),
     DecisionRecord(
         id="DS-002",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Cross-reference mechanism?",
         decision="doc_store_id in Heber metadata pointing to Document Store",
         rationale="Single source of truth for metadata with external text storage",
     ),
     DecisionRecord(
         id="DS-003",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Provider priority?",
         decision="Alpaca (1), Unusual Whales (1), Finnhub (2), Alpha Vantage (3)",
         rationale="Based on data quality, reliability, and coverage",
@@ -23638,6 +23674,95 @@ class DataQualityValidator:
 
         return max_gap, dates_with_gaps
 
+    def _validate_fill_rate(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        expected_days: int,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate fill rate contract."""
+        rate, symbols, dates = self.check_fill_rate(df, expected_days)
+        metrics["fill_rate"] = rate
+
+        if rate < contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="fill_rate",
+                    metric=QualityMetric.FILL_RATE,
+                    actual=rate,
+                    expected=contract.threshold,
+                    affected_symbols=symbols,
+                    affected_dates=dates,
+                )
+            )
+
+    def _validate_non_null_rate(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate non-null rate contract."""
+        rate, cols = self.check_non_null_rate(df, contract.columns)
+        metrics["non_null_rate"] = rate
+
+        if rate < contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="completeness",
+                    metric=QualityMetric.NON_NULL_RATE,
+                    actual=rate,
+                    expected=contract.threshold,
+                    affected_symbols=cols,
+                )
+            )
+
+    def _validate_freshness(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate freshness contract."""
+        lag, is_fresh = self.check_freshness(df, contract.threshold)
+        metrics["lag_hours"] = lag
+
+        if not is_fresh:
+            violations.append(
+                QualityViolation(
+                    contract="freshness",
+                    metric=QualityMetric.MAX_LAG_HOURS,
+                    actual=lag,
+                    expected=contract.threshold,
+                )
+            )
+
+    def _validate_gaps(
+        self,
+        contract: QualityContract,
+        df: pd.DataFrame,
+        metrics: dict[str, float],
+        violations: list[QualityViolation],
+    ) -> None:
+        """Validate gap duration contract."""
+        gap, dates = self.check_gaps(df, contract.threshold)
+        metrics["max_gap_seconds"] = gap
+
+        if gap > contract.threshold:
+            violations.append(
+                QualityViolation(
+                    contract="gap_duration",
+                    metric=QualityMetric.MAX_GAP_SECONDS,
+                    actual=gap,
+                    expected=contract.threshold,
+                    affected_dates=dates,
+                )
+            )
+
     def validate(
         self,
         dataset: str,
@@ -23656,8 +23781,8 @@ class DataQualityValidator:
         Returns:
             QualityReport with pass/fail status and violations
         """
-        violations = []
-        metrics = {}
+        violations: list[QualityViolation] = []
+        metrics: dict[str, float] = {}
 
         contracts = self.contracts.get(dataset, [])
 
@@ -23666,64 +23791,13 @@ class DataQualityValidator:
 
         for contract in contracts:
             if contract.metric == QualityMetric.FILL_RATE:
-                rate, symbols, dates = self.check_fill_rate(df, expected_days)
-                metrics["fill_rate"] = rate
-
-                if rate < contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="fill_rate",
-                            metric=QualityMetric.FILL_RATE,
-                            actual=rate,
-                            expected=contract.threshold,
-                            affected_symbols=symbols,
-                            affected_dates=dates,
-                        )
-                    )
-
+                self._validate_fill_rate(contract, df, expected_days, metrics, violations)
             elif contract.metric == QualityMetric.NON_NULL_RATE:
-                rate, cols = self.check_non_null_rate(df, contract.columns)
-                metrics["non_null_rate"] = rate
-
-                if rate < contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="completeness",
-                            metric=QualityMetric.NON_NULL_RATE,
-                            actual=rate,
-                            expected=contract.threshold,
-                            affected_symbols=cols,
-                        )
-                    )
-
+                self._validate_non_null_rate(contract, df, metrics, violations)
             elif contract.metric == QualityMetric.MAX_LAG_HOURS:
-                lag, is_fresh = self.check_freshness(df, contract.threshold)
-                metrics["lag_hours"] = lag
-
-                if not is_fresh:
-                    violations.append(
-                        QualityViolation(
-                            contract="freshness",
-                            metric=QualityMetric.MAX_LAG_HOURS,
-                            actual=lag,
-                            expected=contract.threshold,
-                        )
-                    )
-
+                self._validate_freshness(contract, df, metrics, violations)
             elif contract.metric == QualityMetric.MAX_GAP_SECONDS:
-                gap, dates = self.check_gaps(df, contract.threshold)
-                metrics["max_gap_seconds"] = gap
-
-                if gap > contract.threshold:
-                    violations.append(
-                        QualityViolation(
-                            contract="gap_duration",
-                            metric=QualityMetric.MAX_GAP_SECONDS,
-                            actual=gap,
-                            expected=contract.threshold,
-                            affected_dates=dates,
-                        )
-                    )
+                self._validate_gaps(contract, df, metrics, violations)
 
         passed = len(violations) == 0
 
@@ -23801,6 +23875,7 @@ FILE: heber/quality/tests.py
 from datetime import UTC, datetime
 
 import pandas as pd
+import pytest
 
 from heber.quality.contracts import (
     DataQualityValidator,
@@ -23824,7 +23899,7 @@ class TestQualityContract:
         restored = QualityContract.from_dict(d)
 
         assert restored.metric == QualityMetric.FILL_RATE
-        assert restored.threshold == 0.95
+        assert restored.threshold == pytest.approx(0.95)
 
 
 class TestFillRateCheck:
@@ -23844,9 +23919,9 @@ class TestFillRateCheck:
 
         df = pd.DataFrame(rows)
 
-        rate, affected_symbols, affected_dates = validator.check_fill_rate(df, 10)
+        rate, affected_symbols, _ = validator.check_fill_rate(df, 10)
 
-        assert rate == 1.0
+        assert rate == pytest.approx(1.0)
         assert len(affected_symbols) == 0
 
     def test_partial_fill_rate(self):
@@ -23884,7 +23959,7 @@ class TestNonNullRateCheck:
 
         rate, cols = validator.check_non_null_rate(df, ["open", "close"])
 
-        assert rate == 1.0
+        assert rate == pytest.approx(1.0)
         assert len(cols) == 0
 
     def test_some_nulls(self):
@@ -23921,7 +23996,7 @@ class TestFreshnessCheck:
 
         lag, is_fresh = validator.check_freshness(df, max_lag_hours=3, current_time=current_time)
 
-        assert lag == 2.0
+        assert lag == pytest.approx(2.0)
         assert is_fresh
 
     def test_stale_data(self):
@@ -23957,7 +24032,7 @@ class TestGapCheck:
 
         gap, dates = validator.check_gaps(df, max_gap_seconds=7200)  # 2 hour max
 
-        assert gap == 3600  # 1 hour between rows
+        assert gap == pytest.approx(3600)  # 1 hour between rows
         assert len(dates) == 0
 
     def test_has_gap(self):
@@ -24190,10 +24265,16 @@ DEFAULT_RETENTION = {
 
 @dataclass
 class RetentionPolicy:
-    """Retention policy for a layer per PRD §15.2."""
+    """Retention policy for a layer per PRD §15.2.
 
-    retention_days: int | None = None  # None = forever
-    retention_versions: int | None = None  # For Gold layer
+    Attributes:
+        retention_days: Days to retain data (None = forever)
+        retention_versions: Number of versions to keep (for Gold layer)
+        action: Lifecycle action to perform when retention expires
+    """
+
+    retention_days: int | None = None
+    retention_versions: int | None = None
     action: LifecycleAction = LifecycleAction.DELETE
 
     def to_dict(self) -> dict[str, Any]:
@@ -24536,7 +24617,7 @@ class ReaperWorker:
             return await self.delete_partition(partition)
         elif action == LifecycleAction.ARCHIVE:
             # Archive first, then delete
-            archived, bytes_archived = await self.archiver.archive_partition(partition)
+            archived, _ = await self.archiver.archive_partition(partition)
             if archived:
                 return await self.delete_partition(partition)
             return False, 0
@@ -26695,6 +26776,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Procedure step constants
+STEP_ESTABLISH_BASELINE = "Establish baseline metrics"
+
 
 class ExperimentFrequency(str, Enum):
     """Chaos experiment frequency (PRD §41.3)."""
@@ -26874,7 +26958,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When a writer pod is killed, in-flight batch goes to DLQ and new pod starts cleanly",
         expected_outcome="In-flight batch to DLQ, restart clean",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "kubectl delete pod -l app=heber-writer --wait=false",
             "Observe for 2 minutes",
             "Check DLQ for in-flight events",
@@ -26892,7 +26976,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When S3 is throttled, writers apply backpressure without crashing",
         expected_outcome="Backpressure, writes queue, no crash",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Apply network throttle: tc qdisc add dev eth0 root tbf rate 1mbit burst 32kbit latency 400ms",
             "Observe for 5 minutes",
             "Remove throttle",
@@ -26912,7 +26996,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When Catalog is blocked, system operates in degraded mode using cached metadata",
         expected_outcome="Degraded mode, cache-only, no crash",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Block Catalog ingress: kubectl scale deployment heber-catalog --replicas=0",
             "Observe for 5 minutes",
             "Verify SDK uses cached metadata",
@@ -26930,7 +27014,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When a malformed event is injected, it goes to DLQ without affecting other events",
         expected_outcome="Event to DLQ, others unaffected",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Inject malformed JSON to event bus",
             "Observe for 1 minute",
             "Verify bad event in DLQ",
@@ -26948,7 +27032,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When ClickHouse is unreachable, SDK falls back to Silver layer",
         expected_outcome="Hot Store fails, Silver fallback works",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Block ClickHouse network: kubectl exec -it clickhouse-0 -- iptables -A INPUT -j DROP",
             "Query via SDK",
             "Verify fallback to Silver",
@@ -26968,7 +27052,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="Under CPU stress, services slow down gracefully without OOM",
         expected_outcome="Graceful slowdown, no OOM",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Inject CPU stress: kubectl exec -it <pod> -- stress --cpu 4",
             "Observe for 3 minutes",
             "Remove stress",
@@ -28308,7 +28392,7 @@ class SLOManager:
         current_value: float,
         error_count: int,
         total_count: int,
-        window_hours: float = 720,  # 30 days
+        _window_hours: float = 720,  # 30 days - reserved for future granular calculations
     ) -> SLOStatus:
         """Calculate SLO status from current metrics.
 
@@ -28416,7 +28500,7 @@ class TestSLO:
             window=SLOWindow.WINDOW_30D,
         )
 
-        assert slo.target_percentage == 99.9
+        assert slo.target_percentage == pytest.approx(99.9)
 
     def test_error_budget_ratio(self):
         slo = SLO(
@@ -28570,7 +28654,7 @@ class TestErrorBudgetManager:
             period_end=datetime.now(UTC),
         )
 
-        allowed, reason = manager.can_deploy(budget, DeployRisk.HIGH_RISK)
+        allowed, _reason = manager.can_deploy(budget, DeployRisk.HIGH_RISK)
 
         assert allowed
 
@@ -28603,7 +28687,7 @@ class TestErrorBudgetManager:
             period_end=datetime.now(UTC),
         )
 
-        allowed, reason = manager.can_deploy(budget, DeployRisk.STANDARD)
+        allowed, _reason = manager.can_deploy(budget, DeployRisk.STANDARD)
 
         assert not allowed
 
@@ -29226,6 +29310,291 @@ def run_all_runbook_tests() -> dict[str, bool]:
 
 if __name__ == "__main__":
     run_all_runbook_tests()
+
+
+
+================================================
+FILE: heber/storage/iceberg_catalog.py
+================================================
+"""Apache Iceberg Catalog Configuration for Heber.
+
+This module provides the Iceberg catalog setup for the Silver/Gold layers,
+replacing custom Parquet management with Iceberg's ACID transactions,
+schema evolution, and time-travel capabilities.
+
+Phase 1 of OSS Migration Roadmap.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+from typing import Any
+
+import structlog
+from pyiceberg.catalog import Catalog, load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.table import Table
+from pyiceberg.types import (
+    DoubleType,
+    LongType,
+    NestedField,
+    StringType,
+    TimestampType,
+    TimestamptzType,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+class IcebergCatalogType(str, Enum):
+    """Supported Iceberg catalog backends."""
+
+    SQL = "sql"  # PostgreSQL-based (recommended for production)
+    REST = "rest"  # REST catalog (e.g., Tabular, AWS Glue)
+    SQLITE = "sqlite"  # Local development
+    IN_MEMORY = "in-memory"  # Testing only
+
+
+@dataclass
+class IcebergConfig:
+    """Iceberg catalog configuration.
+
+    Environment Variables:
+        ICEBERG_CATALOG_TYPE: Catalog backend type (default: sql)
+        ICEBERG_CATALOG_URI: Database connection string
+        ICEBERG_WAREHOUSE: S3/local path for data files
+        ICEBERG_S3_ENDPOINT: S3-compatible endpoint (for MinIO)
+        ICEBERG_S3_ACCESS_KEY: S3 access key
+        ICEBERG_S3_SECRET_KEY: S3 secret key
+    """
+
+    catalog_type: IcebergCatalogType = IcebergCatalogType.SQL
+    catalog_uri: str = "postgresql://heber:heber@localhost:5432/heber_iceberg"
+    warehouse: str = "s3://heber-lakehouse/warehouse"
+    s3_endpoint: str | None = None  # For MinIO: http://localhost:9000
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+
+    @classmethod
+    def from_env(cls) -> IcebergConfig:
+        """Load configuration from environment variables."""
+        return cls(
+            catalog_type=IcebergCatalogType(
+                os.getenv("ICEBERG_CATALOG_TYPE", "sql")
+            ),
+            catalog_uri=os.getenv(
+                "ICEBERG_CATALOG_URI",
+                "postgresql://heber:heber@localhost:5432/heber_iceberg",
+            ),
+            warehouse=os.getenv(
+                "ICEBERG_WAREHOUSE", "s3://heber-lakehouse/warehouse"
+            ),
+            s3_endpoint=os.getenv("ICEBERG_S3_ENDPOINT"),
+            s3_access_key=os.getenv("ICEBERG_S3_ACCESS_KEY"),
+            s3_secret_key=os.getenv("ICEBERG_S3_SECRET_KEY"),
+        )
+
+
+@lru_cache(maxsize=1)
+def get_iceberg_catalog(config: IcebergConfig | None = None) -> Catalog:
+    """Get or create the Iceberg catalog singleton.
+
+    Args:
+        config: Optional configuration. If None, loads from environment.
+
+    Returns:
+        Configured Iceberg Catalog instance.
+    """
+    if config is None:
+        config = IcebergConfig.from_env()
+
+    catalog_properties: dict[str, Any] = {
+        "type": config.catalog_type.value,
+        "warehouse": config.warehouse,
+    }
+
+    # Add catalog-specific properties
+    if config.catalog_type == IcebergCatalogType.SQL:
+        catalog_properties["uri"] = config.catalog_uri
+
+    # Add S3 properties if configured (for MinIO or custom S3)
+    if config.s3_endpoint:
+        catalog_properties["s3.endpoint"] = config.s3_endpoint
+    if config.s3_access_key:
+        catalog_properties["s3.access-key-id"] = config.s3_access_key
+    if config.s3_secret_key:
+        catalog_properties["s3.secret-access-key"] = config.s3_secret_key
+
+    logger.info(
+        "initializing_iceberg_catalog",
+        catalog_type=config.catalog_type.value,
+        warehouse=config.warehouse,
+    )
+
+    return load_catalog("heber", **catalog_properties)
+
+
+# =============================================================================
+# Silver Table Schemas (Iceberg format)
+# =============================================================================
+
+# Base columns present in all Silver tables
+SILVER_BASE_FIELDS = [
+    NestedField(1, "event_id", StringType(), required=True),
+    NestedField(2, "instrument_key", StringType(), required=True),
+    NestedField(3, "instrument_type", StringType(), required=True),
+    NestedField(4, "provider", StringType(), required=True),
+    NestedField(5, "feed", StringType(), required=True),
+    NestedField(6, "ts_event", TimestamptzType(), required=True),
+    NestedField(7, "ts_ingest", TimestamptzType(), required=True),
+    NestedField(8, "ts_available", TimestamptzType(), required=True),
+    NestedField(9, "processing_delay_ms", LongType(), required=False),
+    NestedField(10, "source", StringType(), required=False),
+    NestedField(11, "quality_flags", StringType(), required=False),
+]
+
+
+def get_silver_bars_schema() -> Schema:
+    """Iceberg schema for Silver bars table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "bar_start_ts", TimestamptzType(), required=True),
+        NestedField(21, "bar_end_ts", TimestamptzType(), required=True),
+        NestedField(22, "bar_duration_seconds", LongType(), required=True),
+        NestedField(23, "open", DoubleType(), required=True),
+        NestedField(24, "high", DoubleType(), required=True),
+        NestedField(25, "low", DoubleType(), required=True),
+        NestedField(26, "close", DoubleType(), required=True),
+        NestedField(27, "volume", LongType(), required=True),
+        NestedField(28, "vwap", DoubleType(), required=False),
+        NestedField(29, "trade_count", LongType(), required=False),
+    )
+
+
+def get_silver_quotes_schema() -> Schema:
+    """Iceberg schema for Silver quotes table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "bid_price", DoubleType(), required=True),
+        NestedField(21, "bid_size", LongType(), required=True),
+        NestedField(22, "ask_price", DoubleType(), required=True),
+        NestedField(23, "ask_size", LongType(), required=True),
+        NestedField(24, "exchange", StringType(), required=False),
+        NestedField(25, "conditions", StringType(), required=False),
+    )
+
+
+def get_silver_trades_schema() -> Schema:
+    """Iceberg schema for Silver trades table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "price", DoubleType(), required=True),
+        NestedField(21, "size", LongType(), required=True),
+        NestedField(22, "exchange", StringType(), required=False),
+        NestedField(23, "conditions", StringType(), required=False),
+        NestedField(24, "tape", StringType(), required=False),
+        NestedField(25, "trade_id", StringType(), required=False),
+    )
+
+
+def get_silver_flow_alerts_schema() -> Schema:
+    """Iceberg schema for Silver flow_alerts table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "alert_type", StringType(), required=True),
+        NestedField(21, "sentiment", StringType(), required=True),
+        NestedField(22, "premium", DoubleType(), required=True),
+        NestedField(23, "volume", LongType(), required=True),
+        NestedField(24, "open_interest", LongType(), required=False),
+        NestedField(25, "strike", DoubleType(), required=False),
+        NestedField(26, "expiry", TimestampType(), required=False),
+        NestedField(27, "option_type", StringType(), required=False),
+    )
+
+
+# Schema registry for table creation
+SILVER_SCHEMAS: dict[str, Schema] = {
+    "bars": get_silver_bars_schema(),
+    "quotes": get_silver_quotes_schema(),
+    "trades": get_silver_trades_schema(),
+    "flow_alerts": get_silver_flow_alerts_schema(),
+}
+
+
+# =============================================================================
+# Table Management
+# =============================================================================
+
+
+def create_silver_table(
+    catalog: Catalog,
+    table_name: str,
+    namespace: str = "silver",
+) -> Table:
+    """Create a Silver table in Iceberg if it doesn't exist.
+
+    Args:
+        catalog: Iceberg catalog instance
+        table_name: Name of the table (e.g., "bars", "quotes")
+        namespace: Iceberg namespace (default: "silver")
+
+    Returns:
+        The created or existing Table
+    """
+    full_name = f"{namespace}.{table_name}"
+
+    # Check if table exists
+    try:
+        return catalog.load_table(full_name)
+    except Exception:
+        pass  # Table doesn't exist, create it
+
+    # Get schema
+    if table_name not in SILVER_SCHEMAS:
+        raise ValueError(f"Unknown Silver table: {table_name}")
+
+    schema = SILVER_SCHEMAS[table_name]
+
+    logger.info("creating_iceberg_table", table=full_name)
+
+    # Create namespace if needed
+    try:
+        catalog.create_namespace(namespace)
+    except Exception:
+        pass  # Namespace already exists
+
+    # Create table with partitioning by date
+    return catalog.create_table(
+        identifier=full_name,
+        schema=schema,
+        partition_spec=[
+            # Partition by day extracted from ts_event
+            ("day", "ts_event"),
+        ],
+    )
+
+
+def initialize_silver_tables(catalog: Catalog | None = None) -> dict[str, Table]:
+    """Initialize all Silver tables.
+
+    Args:
+        catalog: Optional catalog instance. If None, uses default.
+
+    Returns:
+        Dictionary of table_name -> Table
+    """
+    if catalog is None:
+        catalog = get_iceberg_catalog()
+
+    tables = {}
+    for table_name in SILVER_SCHEMAS:
+        tables[table_name] = create_silver_table(catalog, table_name)
+        logger.info("silver_table_ready", table=table_name)
+
+    return tables
 
 
 
@@ -30669,7 +31038,7 @@ class LeakageValidator:
 
     def validate_gold_lineage(
         self,
-        feature_ts_event: datetime,
+        _feature_ts_event: datetime,  # Reserved for future use in lineage tracking
         input_ts_available: datetime,
         label_ts_event: datetime,
     ) -> LeakageTestRun:
@@ -31346,7 +31715,7 @@ class TestCIGateEnforcer:
     def test_check_coverage(self):
         enforcer = CIGateEnforcer()
 
-        passed, msg = enforcer.check_coverage("heber-sdk", 92, 88)
+        passed, _msg = enforcer.check_coverage("heber-sdk", 92, 88)
 
         assert passed
 
@@ -31384,14 +31753,14 @@ class TestPerformanceTester:
     def test_check_slo_pass(self):
         tester = PerformanceTester()
 
-        passed, msg = tester.check_slo("Ingestion Throughput", 12000)
+        passed, _msg = tester.check_slo("Ingestion Throughput", 12000)
 
         assert passed
 
     def test_check_slo_fail(self):
         tester = PerformanceTester()
 
-        passed, msg = tester.check_slo("Ingestion Throughput", 5000)
+        passed, _msg = tester.check_slo("Ingestion Throughput", 5000)
 
         assert not passed
 
@@ -31644,13 +32013,13 @@ class UniverseManager:
     def get_universe(
         self,
         asof_date: date | str,
-        filter_criteria: dict[str, Any] | None = None,
+        _filter_criteria: dict[str, Any] | None = None,
     ) -> list[str]:
         """Get universe as it existed on a specific date (PRD §35.3).
 
         Args:
             asof_date: Point-in-time date for universe snapshot
-            filter_criteria: Optional filter (asset_class, exchange, etc.)
+            _filter_criteria: Optional filter (asset_class, exchange, etc.) - Reserved for future use
 
         Returns:
             List of instrument keys that were active on asof_date
@@ -31756,9 +32125,8 @@ class UniverseManager:
 
         delisted = []
         for inst in self.instruments.values():
-            if inst.delist_date:
-                if start_date <= inst.delist_date <= end_date:
-                    delisted.append(inst)
+            if inst.delist_date and start_date <= inst.delist_date <= end_date:
+                delisted.append(inst)
 
         return delisted
 
@@ -32465,7 +32833,7 @@ class CrashRecovery:
         compact_tmp = partition_path / COMPACT_TMP_DIR
 
         # Check for incomplete temp files (step 6)
-        if compact_tmp.exists() and list(compact_tmp.glob("*.parquet")):
+        if compact_tmp.exists() and list(compact_tmp.glob(PARQUET_GLOB)):
             logger.info("crash_recovery_temp_files", path=str(partition_path))
             recovered = self._recover_from_temp(partition_path, compact_tmp, dataset)
 
@@ -32480,7 +32848,7 @@ class CrashRecovery:
     def _recover_from_temp(self, partition_path: Path, compact_tmp: Path, dataset: str) -> bool:
         """Resume from step 6: move temp files to partition root."""
         try:
-            for tmp_file in compact_tmp.glob("*.parquet"):
+            for tmp_file in compact_tmp.glob(PARQUET_GLOB):
                 dest = partition_path / tmp_file.name
                 shutil.move(str(tmp_file), str(dest))
 
@@ -32678,7 +33046,7 @@ class ParquetCompactor:
             return 0, 0
 
         # Find all Parquet files
-        parquet_files = list(partition_path.glob("*.parquet"))
+        parquet_files = list(partition_path.glob(PARQUET_GLOB))
         if not parquet_files:
             logger.debug("no_parquet_files", path=str(partition_path))
             return 0, 0
