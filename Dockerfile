@@ -59,7 +59,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Security: Create non-root user per PRD §19.3
-RUN useradd --no-create-home --uid 65534 --gid 0 heber \
+RUN useradd --no-create-home --uid 10000 --gid 0 heber \
     && chown -R heber:0 /app
 
 # Switch to non-root user
