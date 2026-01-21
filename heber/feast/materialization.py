@@ -13,9 +13,12 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Default path to Feast feature repository
+DEFAULT_REPO_PATH = "features/"
+
 
 def materialize_features(
-    repo_path: str | Path = "features/",
+    repo_path: str | Path = DEFAULT_REPO_PATH,
     feature_views: list[str] | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
@@ -155,7 +158,7 @@ def get_online_features(
     return online_response.to_dict()
 
 
-def list_feature_views(repo_path: str | Path = "features/") -> list[dict]:
+def list_feature_views(repo_path: str | Path = DEFAULT_REPO_PATH) -> list[dict]:
     """List all registered feature views.
 
     Returns:
@@ -185,7 +188,7 @@ def list_feature_views(repo_path: str | Path = "features/") -> list[dict]:
 
 
 def search_features(
-    repo_path: str | Path = "features/",
+    repo_path: str | Path = DEFAULT_REPO_PATH,
     tags: list[str] | None = None,
     owner: str | None = None,
     category: str | None = None,
@@ -211,9 +214,8 @@ def search_features(
             continue
         if category and view_tags.get("category") != category:
             continue
-        if tags:
-            if not any(t in view_tags for t in tags):
-                continue
+        if tags and not any(t in view_tags for t in tags):
+            continue
 
         for feature in view.get("features", []):
             results.append(

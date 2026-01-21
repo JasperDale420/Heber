@@ -65,7 +65,7 @@ class TestDateRange:
             start=datetime(2024, 1, 1),
             end=datetime(2024, 6, 1),
         )
-        start, end = dr
+        start, _end = dr
         assert start == datetime(2024, 1, 1)
 
 
@@ -196,7 +196,7 @@ class TestPurgeWindow:
 
     def test_purge_equals_forward_window(self):
         result = purge_window(
-            train_end=datetime(2024, 1, 1),
+            datetime(2024, 1, 1),  # train_end (reserved for future use)
             forward_window="5d",
         )
         assert result == timedelta(days=5)

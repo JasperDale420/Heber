@@ -235,7 +235,7 @@ def expanding_window_splits(
 
 
 def purge_window(
-    train_end: datetime,
+    _train_end: datetime,  # Reserved for future purge calculations
     forward_window: str,
 ) -> timedelta:
     """Calculate purge window for label leakage prevention.
@@ -244,7 +244,7 @@ def purge_window(
     observations near the train/test boundary.
 
     Args:
-        train_end: End of training period
+        _train_end: End of training period (reserved for future use)
         forward_window: Label's forward window (e.g., "5d")
 
     Returns:
