@@ -53,6 +53,123 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # =============================================================================
+  # OSS Infrastructure (Phase 1-5 Migration)
+  # =============================================================================
+
+  # MinIO - S3-compatible object storage for Iceberg and lakeFS
+  minio:
+    image: minio/minio:latest
+    container_name: heber-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/minio/data:/data
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # lakeFS - Git for data (Phase 2)
+  lakefs:
+    image: treeverse/lakefs:latest
+    container_name: heber-lakefs
+    environment:
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_SECRET_KEY:-some-random-secret-key-min-32-chars}
+      LAKEFS_DATABASE_TYPE: postgres
+      LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING: postgresql://heber:heber_dev_password@postgres:5432/heber_lakefs?sslmode=disable # pragma: allowlist secret
+      LAKEFS_BLOCKSTORE_TYPE: s3
+      LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
+      LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "8000:8000" # lakeFS API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/healthcheck" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Karapace - Schema Registry (Phase 4)
+  karapace-registry:
+    image: ghcr.io/aiven/karapace:latest
+    container_name: heber-karapace
+    environment:
+      KARAPACE_ADVERTISED_HOSTNAME: karapace-registry
+      KARAPACE_PORT: 8081
+      KARAPACE_HOST: 0.0.0.0
+      KARAPACE_BOOTSTRAP_URI: "" # Standalone mode (no Kafka)
+      KARAPACE_REGISTRY_HOST: karapace-registry
+      KARAPACE_REGISTRY_PORT: 8081
+      KARAPACE_LOG_LEVEL: INFO
+    ports:
+      - "8081:8081" # Schema Registry API
+    restart: unless-stopped
+
+  # OpenMetadata - Data Catalog (Phase 5)
+  openmetadata:
+    image: openmetadata/server:1.4.0
+    container_name: heber-openmetadata
+    environment:
+      OPENMETADATA_CLUSTER_NAME: heber
+      SERVER_HOST_API_URL: http://localhost:8585/api
+      SERVER_ADMIN_PORT: 8586
+      PIPELINE_SERVICE_CLIENT_ENABLED: "false"
+      # Database
+      DB_DRIVER_CLASS: org.postgresql.Driver
+      DB_SCHEME: postgresql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: heber
+      DB_USER_PASSWORD: heber_dev_password # pragma: allowlist secret
+      OM_DATABASE: heber_openmetadata
+      # Elasticsearch (embedded for dev)
+      SEARCH_TYPE: elasticsearch
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: 9200
+    ports:
+      - "8585:8585" # OpenMetadata UI
+      - "8586:8586" # Admin API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Elasticsearch for OpenMetadata search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: heber-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/elasticsearch/data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # Heber Services
   heber-catalog:
     build:
