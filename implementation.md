@@ -10,21 +10,21 @@
 | Domain | PRD Sections | Status |
 |--------|--------------|--------|
 | **Core** | §1-6 | ✅ Done |
-| **Storage** | §7 | ⏳ Partial |
-| **Datasets** | §8-9 | ⏳ Partial |
-| **Zero-Leakage** | §10 | ⏳ Partial |
-| **Catalog & SDK** | §11 | ⏳ Partial |
+| **Storage** | §7 | ✅ Done |
+| **Datasets** | §8-9 | ✅ Done |
+| **Zero-Leakage** | §10 | ✅ Done |
+| **Catalog & SDK** | §11 | ✅ Done |
 | **Operational** | §12 | ✅ Done |
-| **Backfill** | §13 | ⬜ |
-| **Schema Evolution** | §14 | ⬜ |
-| **Retention** | §15 | ⬜ |
-| **Compaction** | §16 | ⏳ Partial |
+| **Backfill** | §13 | ✅ Done |
+| **Schema Evolution** | §14 | ✅ Done |
+| **Retention** | §15 | ✅ Done |
+| **Compaction** | §16 | ✅ Done |
 | **Configuration** | §18 | ✅ Done |
-| **Infrastructure** | §19-27 | ⬜ |
-| **ML/Research** | §28-36 | ⬜ |
-| **Reliability** | §37-44 | ⬜ |
-| **Testing** | §45-54 | ⬜ |
-| **Data Sources** | §55-62 | ⬜ |
+| **Infrastructure** | §19-27 | ✅ Done |
+| **ML/Research** | §28-36 | ✅ Done |
+| **Reliability** | §37-44 | ✅ Done |
+| **Testing** | §45-54 | ✅ Done |
+| **Data Sources** | §55-62 | ✅ Done |
 
 ---
 
