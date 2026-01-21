@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-20T23:41:31*
+*Generated: 2026-01-21T00:41:52*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 162
+Files analyzed: 170
 
-Estimated tokens: 258.7k
+Estimated tokens: 273.2k
 
 ---
 
@@ -65,6 +65,7 @@ Directory structure:
     │   │   ├── api.py
     │   │   ├── datasources.py
     │   │   ├── db.py
+    │   │   ├── openmetadata_client.py
     │   │   ├── service.py
     │   │   ├── tests_access_control.py
     │   │   ├── tests_datasources.py
@@ -123,11 +124,13 @@ Directory structure:
     │   ├── quality/
     │   │   ├── __init__.py
     │   │   ├── contracts.py
+    │   │   ├── soda_scanner.py
     │   │   └── tests.py
     │   ├── retention/
     │   │   └── __init__.py
     │   ├── schema/
-    │   │   └── __init__.py
+    │   │   ├── __init__.py
+    │   │   └── registry_client.py
     │   ├── schemas/
     │   │   ├── additional.py
     │   │   └── tests_additional.py
@@ -146,7 +149,9 @@ Directory structure:
     │   │   ├── tests_chaos.py
     │   │   └── tests_runbooks.py
     │   ├── storage/
-    │   │   └── iceberg_catalog.py
+    │   │   ├── __init__.py
+    │   │   ├── iceberg_catalog.py
+    │   │   └── iceberg_writer.py
     │   ├── testing/
     │   │   ├── __init__.py
     │   │   ├── ci_gates.py
@@ -161,6 +166,8 @@ Directory structure:
     │   │   ├── __init__.py
     │   │   ├── survivor_bias.py
     │   │   └── tests.py
+    │   ├── versioning/
+    │   │   └── __init__.py
     │   └── writer/
     │       ├── __init__.py
     │       ├── bronze.py
@@ -224,6 +231,10 @@ Directory structure:
     │   └── backup/
     │       ├── clickhouse-backup.sh
     │       └── validate-catalog-backup.sh
+    ├── soda/
+    │   └── checks/
+    │       ├── bars.yaml
+    │       └── quotes.yaml
     └── tests/
         ├── __init__.py
         └── test_placeholder.py
@@ -722,6 +733,123 @@ services:
         hard: 262144
     healthcheck:
       test: [ "CMD", "clickhouse-client", "--query", "SELECT 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # =============================================================================
+  # OSS Infrastructure (Phase 1-5 Migration)
+  # =============================================================================
+
+  # MinIO - S3-compatible object storage for Iceberg and lakeFS
+  minio:
+    image: minio/minio:latest
+    container_name: heber-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/minio/data:/data
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Console
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # lakeFS - Git for data (Phase 2)
+  lakefs:
+    image: treeverse/lakefs:latest
+    container_name: heber-lakefs
+    environment:
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_SECRET_KEY:-some-random-secret-key-min-32-chars}
+      LAKEFS_DATABASE_TYPE: postgres
+      LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING: postgresql://heber:heber_dev_password@postgres:5432/heber_lakefs?sslmode=disable # pragma: allowlist secret
+      LAKEFS_BLOCKSTORE_TYPE: s3
+      LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
+      LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "8000:8000" # lakeFS API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/healthcheck" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Karapace - Schema Registry (Phase 4)
+  karapace-registry:
+    image: ghcr.io/aiven/karapace:latest
+    container_name: heber-karapace
+    environment:
+      KARAPACE_ADVERTISED_HOSTNAME: karapace-registry
+      KARAPACE_PORT: 8081
+      KARAPACE_HOST: 0.0.0.0
+      KARAPACE_BOOTSTRAP_URI: "" # Standalone mode (no Kafka)
+      KARAPACE_REGISTRY_HOST: karapace-registry
+      KARAPACE_REGISTRY_PORT: 8081
+      KARAPACE_LOG_LEVEL: INFO
+    ports:
+      - "8081:8081" # Schema Registry API
+    restart: unless-stopped
+
+  # OpenMetadata - Data Catalog (Phase 5)
+  openmetadata:
+    image: openmetadata/server:1.4.0
+    container_name: heber-openmetadata
+    environment:
+      OPENMETADATA_CLUSTER_NAME: heber
+      SERVER_HOST_API_URL: http://localhost:8585/api
+      SERVER_ADMIN_PORT: 8586
+      PIPELINE_SERVICE_CLIENT_ENABLED: "false"
+      # Database
+      DB_DRIVER_CLASS: org.postgresql.Driver
+      DB_SCHEME: postgresql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: heber
+      DB_USER_PASSWORD: heber_dev_password # pragma: allowlist secret
+      OM_DATABASE: heber_openmetadata
+      # Elasticsearch (embedded for dev)
+      SEARCH_TYPE: elasticsearch
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: 9200
+    ports:
+      - "8585:8585" # OpenMetadata UI
+      - "8586:8586" # Admin API
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Elasticsearch for OpenMetadata search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: heber-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/elasticsearch/data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -8172,8 +8300,16 @@ dependencies = [
     # Table Format (Phase 1: Iceberg)
     "pyiceberg[s3,pyarrow]>=0.7",
 
+    # Data Versioning (Phase 2: lakeFS)
+    "lakefs>=0.7",
+
     # Data Quality (Phase 3: Soda Core)
     "soda-core-duckdb>=3.0",
+
+    # Schema Registry (Phase 4: Karapace)
+    "python-schema-registry-client>=2.6",
+
+    # Note: OpenMetadata moved to [catalog] optional deps due to SQLAlchemy version conflict
 
     # Observability
     "structlog>=24.0",
@@ -8194,6 +8330,12 @@ dev = [
     "bandit>=1.7",
     "detect-secrets>=1.5",
     "pre-commit>=4.0",
+]
+
+# OpenMetadata requires SQLAlchemy <2.0, which conflicts with our core deps
+# Install separately: pip install heber[catalog]
+catalog = [
+    "openmetadata-ingestion>=1.4",
 ]
 
 [build-system]
@@ -8287,6 +8429,39 @@ HEBER_API_PORT=8080
 
 # Feature Store (Feast)
 FEAST_REPO_PATH=/app/features
+
+# =============================================================================
+# OSS Infrastructure (Phase 1-5 Migration)
+# =============================================================================
+
+# MinIO (S3-compatible storage for Iceberg)
+MINIO_ROOT_USER=minioadmin
+MINIO_ROOT_PASSWORD=minioadmin
+
+# Iceberg (Phase 1 - Storage)
+ICEBERG_CATALOG_TYPE=sql
+ICEBERG_CATALOG_URI=postgresql://heber:heber_dev_password@localhost:5433/heber_iceberg
+ICEBERG_WAREHOUSE=s3://heber-lakehouse/warehouse
+ICEBERG_S3_ENDPOINT=http://localhost:9000
+ICEBERG_S3_ACCESS_KEY=minioadmin
+ICEBERG_S3_SECRET_KEY=minioadmin
+
+# lakeFS (Phase 2 - Versioning)
+LAKEFS_ENDPOINT=http://localhost:8000
+LAKEFS_ACCESS_KEY=your-lakefs-access-key
+LAKEFS_SECRET_KEY=your-lakefs-secret-key
+LAKEFS_DEFAULT_REPO=heber-gold
+
+# Soda Core (Phase 3 - Quality)
+SODA_CHECKS_DIR=soda/checks
+HEBER_SILVER_PATH=/Volumes/heber/silver
+
+# Schema Registry (Phase 4 - Karapace)
+SCHEMA_REGISTRY_URL=http://localhost:8081
+
+# OpenMetadata (Phase 5 - Catalog)
+OPENMETADATA_HOST=http://localhost:8585
+OPENMETADATA_API_KEY=your-openmetadata-jwt-token
 
 
 
@@ -13903,6 +14078,463 @@ class Subscription(Base):
         # Index for audit queries (PRD §11.3)
         # CREATE INDEX idx_subscriptions_project ON subscriptions(project_name, provider, feed)
     )
+
+
+
+================================================
+FILE: heber/catalog/openmetadata_client.py
+================================================
+"""OpenMetadata Catalog Client.
+
+This module provides integration with OpenMetadata for data discovery,
+lineage tracking, and governance, replacing the custom catalog implementation.
+
+Phase 5 of OSS Migration Roadmap.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+from functools import lru_cache
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Histogram
+
+logger = structlog.get_logger(__name__)
+
+# Metrics
+catalog_operations = Counter(
+    "heber_catalog_operations_total",
+    "OpenMetadata catalog operations",
+    ["operation", "status"],
+)
+
+catalog_operation_duration = Histogram(
+    "heber_catalog_operation_duration_seconds",
+    "Time for catalog operations",
+    ["operation"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10],
+)
+
+
+class DataLayer(str, Enum):
+    """Data layer in Medallion architecture."""
+
+    BRONZE = "bronze"
+    SILVER = "silver"
+    GOLD = "gold"
+
+
+class TableType(str, Enum):
+    """Table type classification."""
+
+    REGULAR = "Regular"
+    VIEW = "View"
+    MATERIALIZED_VIEW = "MaterializedView"
+    ICEBERG = "Iceberg"
+    EXTERNAL = "External"
+
+
+@dataclass
+class OpenMetadataConfig:
+    """OpenMetadata connection configuration.
+
+    Environment Variables:
+        OPENMETADATA_HOST: Server URL (default: http://localhost:8585)
+        OPENMETADATA_API_KEY: JWT token or API key
+    """
+
+    host: str = "http://localhost:8585"
+    api_key: str = ""
+
+    @classmethod
+    def from_env(cls) -> OpenMetadataConfig:
+        """Load from environment."""
+        return cls(
+            host=os.getenv("OPENMETADATA_HOST", "http://localhost:8585"),
+            api_key=os.getenv("OPENMETADATA_API_KEY", ""),
+        )
+
+
+@dataclass
+class TableMetadata:
+    """Metadata for a table in the catalog."""
+
+    name: str
+    layer: DataLayer
+    description: str = ""
+    schema_version: str = "v1"
+    owner: str = ""
+    tags: list[str] = field(default_factory=list)
+    custom_properties: dict[str, str] = field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    # Zero-leakage specific
+    zero_leakage_enabled: bool = True
+    freshness_sla_hours: int = 1
+
+
+@dataclass
+class ColumnMetadata:
+    """Metadata for a table column."""
+
+    name: str
+    data_type: str
+    description: str = ""
+    is_nullable: bool = True
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LineageEdge:
+    """Represents a lineage relationship between tables."""
+
+    upstream_table: str
+    downstream_table: str
+    column_mapping: dict[str, str] = field(default_factory=dict)
+    transformation: str | None = None
+
+
+class OpenMetadataCatalog:
+    """Client for OpenMetadata data catalog.
+
+    This replaces the custom heber/catalog module with OpenMetadata integration.
+
+    Example:
+        catalog = OpenMetadataCatalog()
+
+        # Register a table
+        catalog.register_table(
+            TableMetadata(
+                name="bars",
+                layer=DataLayer.SILVER,
+                description="OHLCV market bars",
+            )
+        )
+
+        # Add lineage
+        catalog.add_lineage(
+            LineageEdge(
+                upstream_table="silver.bars",
+                downstream_table="gold.momentum_features",
+            )
+        )
+    """
+
+    def __init__(self, config: OpenMetadataConfig | None = None) -> None:
+        """Initialize the catalog client.
+
+        Args:
+            config: Optional configuration. If None, loads from environment.
+        """
+        if config is None:
+            config = OpenMetadataConfig.from_env()
+
+        self.config = config
+        self._client: Any = None
+        self._initialized = False
+
+    def _get_client(self) -> Any:
+        """Lazily initialize the OpenMetadata client."""
+        if self._client is None:
+            try:
+                from metadata.generated.schema.entity.services.connections.metadata.openMetadataConnection import (
+                    AuthProvider,
+                    OpenMetadataConnection,
+                )
+                from metadata.generated.schema.security.client.openMetadataJWTClientConfig import (
+                    OpenMetadataJWTClientConfig,
+                )
+                from metadata.ingestion.ometa.ometa_api import OpenMetadata
+
+                config = OpenMetadataConnection(
+                    hostPort=self.config.host,
+                    authProvider=AuthProvider.openmetadata,
+                    securityConfig=OpenMetadataJWTClientConfig(
+                        jwtToken=self.config.api_key,
+                    ),
+                )
+                self._client = OpenMetadata(config)
+                logger.info("openmetadata_client_initialized", host=self.config.host)
+
+            except ImportError:
+                logger.warning(
+                    "openmetadata_import_failed",
+                    msg="OpenMetadata SDK not installed, using mock client",
+                )
+                self._client = MockOpenMetadataClient()
+
+        return self._client
+
+    def register_table(
+        self,
+        table: TableMetadata,
+        columns: list[ColumnMetadata] | None = None,
+    ) -> str:
+        """Register or update a table in the catalog.
+
+        Args:
+            table: Table metadata
+            columns: Optional column metadata
+
+        Returns:
+            Table FQN (fully qualified name)
+        """
+        start_time = datetime.now(UTC)
+        client = self._get_client()
+
+        try:
+            fqn = f"heber.{table.layer.value}.{table.name}"
+
+            # Use OpenMetadata API to create/update table
+            if hasattr(client, "create_or_update_table"):
+                client.create_or_update_table(
+                    name=table.name,
+                    database_schema=f"heber.{table.layer.value}",
+                    description=table.description,
+                    tags=table.tags,
+                    custom_properties={
+                        **table.custom_properties,
+                        "zero_leakage_enabled": str(table.zero_leakage_enabled),
+                        "freshness_sla_hours": str(table.freshness_sla_hours),
+                        "schema_version": table.schema_version,
+                    },
+                )
+            else:
+                # Mock or fallback implementation
+                logger.info(
+                    "table_registered_mock",
+                    fqn=fqn,
+                    layer=table.layer.value,
+                )
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            catalog_operations.labels(operation="register_table", status="success").inc()
+            catalog_operation_duration.labels(operation="register_table").observe(duration)
+
+            logger.info("table_registered", fqn=fqn, layer=table.layer.value)
+            return fqn
+
+        except Exception as e:
+            catalog_operations.labels(operation="register_table", status="error").inc()
+            logger.error("table_registration_failed", error=str(e))
+            raise
+
+    def get_table(self, fqn: str) -> TableMetadata | None:
+        """Get table metadata by FQN.
+
+        Args:
+            fqn: Fully qualified name (e.g., "heber.silver.bars")
+
+        Returns:
+            TableMetadata or None if not found
+        """
+        client = self._get_client()
+
+        try:
+            if hasattr(client, "get_table_by_name"):
+                table = client.get_table_by_name(fqn)
+                if table:
+                    parts = fqn.split(".")
+                    layer = DataLayer(parts[1]) if len(parts) > 1 else DataLayer.SILVER
+
+                    return TableMetadata(
+                        name=table.name,
+                        layer=layer,
+                        description=table.description or "",
+                        owner=str(table.owner) if table.owner else "",
+                        tags=[tag.tagFQN for tag in (table.tags or [])],
+                        custom_properties=dict(table.extension or {}),
+                    )
+            return None
+
+        except Exception as e:
+            logger.warning("table_get_failed", fqn=fqn, error=str(e))
+            return None
+
+    def list_tables(
+        self,
+        layer: DataLayer | None = None,
+        limit: int = 100,
+    ) -> list[str]:
+        """List tables in the catalog.
+
+        Args:
+            layer: Optional filter by layer
+            limit: Maximum results
+
+        Returns:
+            List of table FQNs
+        """
+        client = self._get_client()
+
+        try:
+            if hasattr(client, "list_tables"):
+                schema_filter = f"heber.{layer.value}" if layer else None
+                tables = client.list_tables(database_schema=schema_filter, limit=limit)
+                return [t.fullyQualifiedName for t in tables]
+
+            # Fallback for mock
+            return []
+
+        except Exception as e:
+            logger.warning("table_list_failed", error=str(e))
+            return []
+
+    def add_lineage(self, edge: LineageEdge) -> None:
+        """Add a lineage relationship between tables.
+
+        Args:
+            edge: Lineage edge definition
+        """
+        client = self._get_client()
+
+        try:
+            if hasattr(client, "add_lineage"):
+                client.add_lineage(
+                    from_entity=edge.upstream_table,
+                    to_entity=edge.downstream_table,
+                    lineage_details={
+                        "column_mapping": edge.column_mapping,
+                        "transformation": edge.transformation,
+                    },
+                )
+            else:
+                logger.info(
+                    "lineage_added_mock",
+                    upstream=edge.upstream_table,
+                    downstream=edge.downstream_table,
+                )
+
+            catalog_operations.labels(operation="add_lineage", status="success").inc()
+            logger.info(
+                "lineage_added",
+                upstream=edge.upstream_table,
+                downstream=edge.downstream_table,
+            )
+
+        except Exception as e:
+            catalog_operations.labels(operation="add_lineage", status="error").inc()
+            logger.error("lineage_add_failed", error=str(e))
+            raise
+
+    def get_lineage(self, table_fqn: str, direction: str = "both") -> list[LineageEdge]:
+        """Get lineage for a table.
+
+        Args:
+            table_fqn: Table FQN
+            direction: "upstream", "downstream", or "both"
+
+        Returns:
+            List of lineage edges
+        """
+        client = self._get_client()
+        edges: list[LineageEdge] = []
+
+        try:
+            if hasattr(client, "get_lineage"):
+                lineage = client.get_lineage(table_fqn, direction=direction)
+                for edge in lineage.edges or []:
+                    edges.append(
+                        LineageEdge(
+                            upstream_table=edge.fromEntity,
+                            downstream_table=edge.toEntity,
+                        )
+                    )
+
+            return edges
+
+        except Exception as e:
+            logger.warning("lineage_get_failed", fqn=table_fqn, error=str(e))
+            return []
+
+    def search(
+        self,
+        query: str,
+        layer: DataLayer | None = None,
+        limit: int = 20,
+    ) -> list[TableMetadata]:
+        """Search for tables by name or description.
+
+        Args:
+            query: Search query
+            layer: Optional filter by layer
+            limit: Maximum results
+
+        Returns:
+            List of matching tables
+        """
+        client = self._get_client()
+        results: list[TableMetadata] = []
+
+        try:
+            if hasattr(client, "search"):
+                search_results = client.search(
+                    entity_type="table",
+                    query=query,
+                    limit=limit,
+                )
+                for hit in search_results:
+                    parts = hit.fullyQualifiedName.split(".")
+                    table_layer = DataLayer(parts[1]) if len(parts) > 1 else DataLayer.SILVER
+
+                    if layer is None or table_layer == layer:
+                        results.append(
+                            TableMetadata(
+                                name=hit.name,
+                                layer=table_layer,
+                                description=hit.description or "",
+                            )
+                        )
+
+            return results
+
+        except Exception as e:
+            logger.warning("search_failed", query=query, error=str(e))
+            return []
+
+
+class MockOpenMetadataClient:
+    """Mock client for local development without OpenMetadata server."""
+
+    def __init__(self) -> None:
+        self._tables: dict[str, dict[str, Any]] = {}
+        self._lineage: list[dict[str, Any]] = []
+
+    def create_or_update_table(self, **kwargs: Any) -> None:
+        """Mock table creation."""
+        name = kwargs.get("name", "")
+        schema = kwargs.get("database_schema", "")
+        self._tables[f"{schema}.{name}"] = kwargs
+
+    def get_table_by_name(self, fqn: str) -> Any:
+        """Mock table retrieval."""
+        return self._tables.get(fqn)
+
+    def list_tables(self, **kwargs: Any) -> list[Any]:
+        """Mock table listing."""
+        return []
+
+    def add_lineage(self, **kwargs: Any) -> None:
+        """Mock lineage addition."""
+        self._lineage.append(kwargs)
+
+
+# Singleton
+_catalog: OpenMetadataCatalog | None = None
+
+
+@lru_cache(maxsize=1)
+def get_catalog() -> OpenMetadataCatalog:
+    """Get the singleton catalog instance."""
+    global _catalog
+    if _catalog is None:
+        _catalog = OpenMetadataCatalog()
+    return _catalog
 
 
 
@@ -23868,6 +24500,274 @@ def create_default_validator() -> DataQualityValidator:
 
 
 ================================================
+FILE: heber/quality/soda_scanner.py
+================================================
+"""Soda Core Data Quality Integration.
+
+This module provides data quality validation using Soda Core,
+replacing custom quality contracts with SodaCL YAML configurations.
+
+Phase 3 of OSS Migration Roadmap.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
+
+logger = structlog.get_logger(__name__)
+
+# Metrics
+quality_scans = Counter(
+    "heber_quality_scans_total",
+    "Total Soda quality scans",
+    ["dataset", "status"],
+)
+
+quality_checks_passed = Gauge(
+    "heber_quality_checks_passed",
+    "Number of checks passed in last scan",
+    ["dataset"],
+)
+
+quality_checks_failed = Gauge(
+    "heber_quality_checks_failed",
+    "Number of checks failed in last scan",
+    ["dataset"],
+)
+
+quality_scan_duration = Histogram(
+    "heber_quality_scan_duration_seconds",
+    "Time to run Soda scan",
+    ["dataset"],
+    buckets=[1, 5, 10, 30, 60, 120],
+)
+
+
+@dataclass
+class SodaConfig:
+    """Soda Core configuration.
+
+    Environment Variables:
+        SODA_CHECKS_DIR: Directory containing check YAML files
+        HEBER_SILVER_PATH: Path to Silver Parquet files (for DuckDB)
+    """
+
+    checks_dir: Path = Path("soda/checks")
+    silver_path: Path = Path("/Volumes/heber/silver")
+
+    @classmethod
+    def from_env(cls) -> SodaConfig:
+        """Load configuration from environment."""
+        return cls(
+            checks_dir=Path(os.getenv("SODA_CHECKS_DIR", "soda/checks")),
+            silver_path=Path(os.getenv("HEBER_SILVER_PATH", "/Volumes/heber/silver")),
+        )
+
+
+@dataclass
+class ScanResult:
+    """Results from a Soda scan."""
+
+    dataset: str
+    passed: int
+    warned: int
+    failed: int
+    errors: int
+    duration_seconds: float
+    timestamp: datetime
+    details: list[dict[str, Any]]
+
+    @property
+    def success(self) -> bool:
+        """Check if scan passed (no failures or errors)."""
+        return self.failed == 0 and self.errors == 0
+
+
+class SodaQualityScanner:
+    """Data quality scanner using Soda Core.
+
+    This replaces custom DataQualityValidator with Soda's SodaCL checks.
+
+    Example:
+        scanner = SodaQualityScanner()
+
+        # Run checks for a dataset
+        result = scanner.scan("bars")
+
+        if not result.success:
+            logger.error("Quality check failed", failures=result.failed)
+    """
+
+    def __init__(self, config: SodaConfig | None = None) -> None:
+        """Initialize the scanner.
+
+        Args:
+            config: Optional configuration. If None, loads from environment.
+        """
+        if config is None:
+            config = SodaConfig.from_env()
+
+        self.config = config
+        self._soda_scan: Any = None
+
+    def _get_check_file(self, dataset: str) -> Path:
+        """Get the check file path for a dataset."""
+        return self.config.checks_dir / f"{dataset}.yaml"
+
+    def scan(
+        self,
+        dataset: str,
+        variables: dict[str, str] | None = None,
+    ) -> ScanResult:
+        """Run Soda checks for a dataset.
+
+        Args:
+            dataset: Dataset name (e.g., "bars", "quotes")
+            variables: Optional variables to pass to checks
+
+        Returns:
+            ScanResult with check outcomes
+        """
+        from soda.scan import Scan
+
+        start_time = datetime.now(UTC)
+
+        # Create scan
+        scan = Scan()
+        scan.set_scan_definition_name(f"heber_{dataset}")
+        scan.set_data_source_name("heber_silver")
+
+        # Add DuckDB data source configuration inline
+        scan.add_configuration_yaml_str(f"""
+data_source heber_silver:
+  type: duckdb
+  path: ":memory:"
+  files:
+    - "{self.config.silver_path / dataset / "**/*.parquet"}"
+""")
+
+        # Add check file
+        check_file = self._get_check_file(dataset)
+        if check_file.exists():
+            scan.add_sodacl_yaml_file(str(check_file))
+        else:
+            logger.warning("check_file_not_found", dataset=dataset, path=str(check_file))
+
+        # Add variables
+        if variables:
+            for key, value in variables.items():
+                scan.add_variables({key: value})
+
+        # Add current time for freshness checks
+        scan.add_variables({"CURRENT_TIME": datetime.now(UTC).isoformat()})
+
+        try:
+            # Execute scan
+            scan.execute()
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+
+            # Parse results
+            check_results = scan.get_checks_fail() + scan.get_checks_warn() + scan.get_checks_pass()
+
+            result = ScanResult(
+                dataset=dataset,
+                passed=len(scan.get_checks_pass()),
+                warned=len(scan.get_checks_warn()),
+                failed=len(scan.get_checks_fail()),
+                errors=scan.has_error_logs(),
+                duration_seconds=duration,
+                timestamp=datetime.now(UTC),
+                details=[
+                    {
+                        "name": check.name,
+                        "outcome": check.outcome.name if check.outcome else "unknown",
+                    }
+                    for check in check_results
+                ],
+            )
+
+            # Update metrics
+            status = "success" if result.success else "failure"
+            quality_scans.labels(dataset=dataset, status=status).inc()
+            quality_checks_passed.labels(dataset=dataset).set(result.passed)
+            quality_checks_failed.labels(dataset=dataset).set(result.failed)
+            quality_scan_duration.labels(dataset=dataset).observe(duration)
+
+            logger.info(
+                "soda_scan_completed",
+                dataset=dataset,
+                passed=result.passed,
+                warned=result.warned,
+                failed=result.failed,
+                duration_ms=int(duration * 1000),
+            )
+
+            return result
+
+        except Exception as e:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            quality_scans.labels(dataset=dataset, status="error").inc()
+            logger.error("soda_scan_failed", dataset=dataset, error=str(e))
+
+            return ScanResult(
+                dataset=dataset,
+                passed=0,
+                warned=0,
+                failed=0,
+                errors=1,
+                duration_seconds=duration,
+                timestamp=datetime.now(UTC),
+                details=[{"error": str(e)}],
+            )
+
+    def scan_all(
+        self,
+        datasets: list[str] | None = None,
+    ) -> dict[str, ScanResult]:
+        """Run scans for multiple datasets.
+
+        Args:
+            datasets: List of dataset names. If None, scans all with check files.
+
+        Returns:
+            Dictionary of dataset -> ScanResult
+        """
+        if datasets is None:
+            # Discover datasets from check files
+            if self.config.checks_dir.exists():
+                datasets = [f.stem for f in self.config.checks_dir.glob("*.yaml")]
+            else:
+                datasets = []
+
+        results = {}
+        for dataset in datasets:
+            results[dataset] = self.scan(dataset)
+
+        return results
+
+
+# Singleton
+_scanner: SodaQualityScanner | None = None
+
+
+def get_quality_scanner() -> SodaQualityScanner:
+    """Get the singleton quality scanner instance."""
+    global _scanner
+    if _scanner is None:
+        _scanner = SodaQualityScanner()
+    return _scanner
+
+
+
+================================================
 FILE: heber/quality/tests.py
 ================================================
 """Tests for Data Quality Contracts (PRD §33)."""
@@ -24763,6 +25663,415 @@ def get_default_retention(layer: DataLayer) -> RetentionPolicy:
 FILE: heber/schema/__init__.py
 ================================================
 [Binary file]
+
+
+================================================
+FILE: heber/schema/registry_client.py
+================================================
+"""Schema Registry Client for Karapace.
+
+This module provides schema registry integration using Karapace-compatible API,
+replacing custom schema versioning with centralized schema management.
+
+Phase 4 of OSS Migration Roadmap.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+from typing import Any
+
+import structlog
+from prometheus_client import Counter
+
+logger = structlog.get_logger(__name__)
+
+# Metrics
+schema_operations = Counter(
+    "heber_schema_operations_total",
+    "Schema registry operations",
+    ["operation", "subject", "status"],
+)
+
+
+class CompatibilityLevel(str, Enum):
+    """Schema compatibility levels for evolution."""
+
+    BACKWARD = "BACKWARD"  # New schema can read old data
+    BACKWARD_TRANSITIVE = "BACKWARD_TRANSITIVE"  # All previous versions
+    FORWARD = "FORWARD"  # Old schema can read new data
+    FORWARD_TRANSITIVE = "FORWARD_TRANSITIVE"  # All previous versions
+    FULL = "FULL"  # Both backward and forward
+    FULL_TRANSITIVE = "FULL_TRANSITIVE"  # All previous versions
+    NONE = "NONE"  # No compatibility checking
+
+
+class SchemaType(str, Enum):
+    """Supported schema types."""
+
+    AVRO = "AVRO"
+    JSON = "JSON"
+    PROTOBUF = "PROTOBUF"
+
+
+@dataclass
+class SchemaRegistryConfig:
+    """Schema registry connection configuration.
+
+    Environment Variables:
+        SCHEMA_REGISTRY_URL: Registry endpoint (default: http://localhost:8081)
+        SCHEMA_REGISTRY_USER: Optional username
+        SCHEMA_REGISTRY_PASSWORD: Optional password
+    """
+
+    url: str = "http://localhost:8081"
+    username: str | None = None
+    password: str | None = None
+
+    @classmethod
+    def from_env(cls) -> SchemaRegistryConfig:
+        """Load from environment."""
+        return cls(
+            url=os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081"),
+            username=os.getenv("SCHEMA_REGISTRY_USER"),
+            password=os.getenv("SCHEMA_REGISTRY_PASSWORD"),
+        )
+
+
+@dataclass
+class RegisteredSchema:
+    """A schema registered in the registry."""
+
+    subject: str
+    schema_id: int
+    version: int
+    schema_type: SchemaType
+    schema: dict[str, Any]
+
+
+class SchemaRegistryClient:
+    """Client for Karapace/Confluent-compatible schema registry.
+
+    This replaces custom SchemaRegistry with centralized management.
+
+    Example:
+        client = SchemaRegistryClient()
+
+        # Register a schema
+        schema_id = client.register_schema(
+            "silver-bars-value",
+            bars_avro_schema,
+            schema_type=SchemaType.AVRO,
+        )
+
+        # Check compatibility before deploy
+        is_compatible = client.check_compatibility(
+            "silver-bars-value",
+            new_schema,
+        )
+    """
+
+    def __init__(self, config: SchemaRegistryConfig | None = None) -> None:
+        """Initialize the client.
+
+        Args:
+            config: Optional configuration. If None, loads from environment.
+        """
+        if config is None:
+            config = SchemaRegistryConfig.from_env()
+
+        self.config = config
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        """Lazily initialize the schema registry client."""
+        if self._client is None:
+            from schema_registry.client import SchemaRegistryClient as SRClient
+
+            extra_headers = None
+            if self.config.username and self.config.password:
+                import base64
+
+                credentials = f"{self.config.username}:{self.config.password}"
+                encoded = base64.b64encode(credentials.encode()).decode()
+                extra_headers = {"Authorization": f"Basic {encoded}"}
+
+            self._client = SRClient(
+                url=self.config.url,
+                extra_headers=extra_headers,
+            )
+            logger.info("schema_registry_client_initialized", url=self.config.url)
+
+        return self._client
+
+    def register_schema(
+        self,
+        subject: str,
+        schema: dict[str, Any] | str,
+        schema_type: SchemaType = SchemaType.AVRO,
+    ) -> int:
+        """Register a schema for a subject.
+
+        Args:
+            subject: Subject name (e.g., "silver-bars-value")
+            schema: Schema definition (dict or JSON string)
+            schema_type: Schema format
+
+        Returns:
+            Schema ID
+        """
+        client = self._get_client()
+
+        if isinstance(schema, dict):
+            schema_str = json.dumps(schema)
+        else:
+            schema_str = schema
+
+        try:
+            if schema_type == SchemaType.AVRO:
+                from schema_registry.serializers import AvroSchema
+
+                avro_schema = AvroSchema(schema_str)
+                schema_id = client.register(subject, avro_schema)
+            elif schema_type == SchemaType.JSON:
+                from schema_registry.serializers import JsonSchema
+
+                json_schema = JsonSchema(schema_str)
+                schema_id = client.register(subject, json_schema)
+            else:
+                raise ValueError(f"Unsupported schema type: {schema_type}")
+
+            schema_operations.labels(
+                operation="register",
+                subject=subject,
+                status="success",
+            ).inc()
+
+            logger.info(
+                "schema_registered",
+                subject=subject,
+                schema_id=schema_id,
+                schema_type=schema_type.value,
+            )
+
+            return schema_id
+
+        except Exception as e:
+            schema_operations.labels(
+                operation="register",
+                subject=subject,
+                status="error",
+            ).inc()
+            logger.error("schema_register_failed", subject=subject, error=str(e))
+            raise
+
+    def get_schema(self, subject: str, version: str = "latest") -> RegisteredSchema:
+        """Get a schema by subject and version.
+
+        Args:
+            subject: Subject name
+            version: Version number or "latest"
+
+        Returns:
+            RegisteredSchema with full details
+        """
+        client = self._get_client()
+        result = client.get_schema(subject, version)
+
+        return RegisteredSchema(
+            subject=subject,
+            schema_id=result.schema_id,
+            version=int(version) if version != "latest" else result.version,
+            schema_type=SchemaType(result.schema_type) if result.schema_type else SchemaType.AVRO,
+            schema=json.loads(result.schema.raw_schema) if hasattr(result.schema, "raw_schema") else result.schema,
+        )
+
+    def get_schema_by_id(self, schema_id: int) -> dict[str, Any]:
+        """Get a schema by its global ID.
+
+        Args:
+            schema_id: Global schema ID
+
+        Returns:
+            Schema definition
+        """
+        client = self._get_client()
+        result = client.get_by_id(schema_id)
+        return json.loads(result.raw_schema) if hasattr(result, "raw_schema") else result
+
+    def list_subjects(self) -> list[str]:
+        """List all registered subjects.
+
+        Returns:
+            List of subject names
+        """
+        client = self._get_client()
+        return client.get_subjects()
+
+    def list_versions(self, subject: str) -> list[int]:
+        """List all versions for a subject.
+
+        Args:
+            subject: Subject name
+
+        Returns:
+            List of version numbers
+        """
+        client = self._get_client()
+        return client.get_versions(subject)
+
+    def check_compatibility(
+        self,
+        subject: str,
+        schema: dict[str, Any] | str,
+        schema_type: SchemaType = SchemaType.AVRO,
+    ) -> bool:
+        """Check if a schema is compatible with the latest version.
+
+        Args:
+            subject: Subject name
+            schema: New schema to check
+            schema_type: Schema format
+
+        Returns:
+            True if compatible
+        """
+        client = self._get_client()
+
+        if isinstance(schema, dict):
+            schema_str = json.dumps(schema)
+        else:
+            schema_str = schema
+
+        try:
+            if schema_type == SchemaType.AVRO:
+                from schema_registry.serializers import AvroSchema
+
+                avro_schema = AvroSchema(schema_str)
+                return client.test_compatibility(subject, avro_schema)
+            elif schema_type == SchemaType.JSON:
+                from schema_registry.serializers import JsonSchema
+
+                json_schema = JsonSchema(schema_str)
+                return client.test_compatibility(subject, json_schema)
+            else:
+                raise ValueError(f"Unsupported schema type: {schema_type}")
+
+        except Exception as e:
+            logger.warning(
+                "compatibility_check_failed",
+                subject=subject,
+                error=str(e),
+            )
+            return False
+
+    def set_compatibility(
+        self,
+        subject: str,
+        level: CompatibilityLevel,
+    ) -> None:
+        """Set compatibility level for a subject.
+
+        Args:
+            subject: Subject name
+            level: Compatibility level
+        """
+        client = self._get_client()
+        client.update_compatibility(level.value, subject)
+        logger.info(
+            "compatibility_updated",
+            subject=subject,
+            level=level.value,
+        )
+
+    def delete_subject(self, subject: str) -> list[int]:
+        """Delete a subject and all its versions.
+
+        Args:
+            subject: Subject name
+
+        Returns:
+            List of deleted version numbers
+        """
+        client = self._get_client()
+        return client.delete_subject(subject)
+
+
+# Singleton
+_client: SchemaRegistryClient | None = None
+
+
+@lru_cache(maxsize=1)
+def get_schema_registry() -> SchemaRegistryClient:
+    """Get the singleton schema registry client."""
+    global _client
+    if _client is None:
+        _client = SchemaRegistryClient()
+    return _client
+
+
+# =============================================================================
+# Pre-defined Schemas for Silver Tables
+# =============================================================================
+
+SILVER_BARS_AVRO_SCHEMA = {
+    "type": "record",
+    "name": "SilverBar",
+    "namespace": "io.heber.silver",
+    "fields": [
+        {"name": "event_id", "type": "string"},
+        {"name": "instrument_key", "type": "string"},
+        {"name": "instrument_type", "type": "string"},
+        {"name": "provider", "type": "string"},
+        {"name": "feed", "type": "string"},
+        {"name": "ts_event", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "ts_ingest", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "ts_available", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "processing_delay_ms", "type": ["null", "long"], "default": None},
+        {"name": "source", "type": ["null", "string"], "default": None},
+        {"name": "quality_flags", "type": ["null", "string"], "default": None},
+        {"name": "bar_start_ts", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "bar_end_ts", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "bar_duration_seconds", "type": "long"},
+        {"name": "open", "type": "double"},
+        {"name": "high", "type": "double"},
+        {"name": "low", "type": "double"},
+        {"name": "close", "type": "double"},
+        {"name": "volume", "type": "long"},
+        {"name": "vwap", "type": ["null", "double"], "default": None},
+        {"name": "trade_count", "type": ["null", "long"], "default": None},
+    ],
+}
+
+SILVER_QUOTES_AVRO_SCHEMA = {
+    "type": "record",
+    "name": "SilverQuote",
+    "namespace": "io.heber.silver",
+    "fields": [
+        {"name": "event_id", "type": "string"},
+        {"name": "instrument_key", "type": "string"},
+        {"name": "instrument_type", "type": "string"},
+        {"name": "provider", "type": "string"},
+        {"name": "feed", "type": "string"},
+        {"name": "ts_event", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "ts_ingest", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "ts_available", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+        {"name": "processing_delay_ms", "type": ["null", "long"], "default": None},
+        {"name": "source", "type": ["null", "string"], "default": None},
+        {"name": "quality_flags", "type": ["null", "string"], "default": None},
+        {"name": "bid_price", "type": "double"},
+        {"name": "bid_size", "type": "long"},
+        {"name": "ask_price", "type": "double"},
+        {"name": "ask_size", "type": "long"},
+        {"name": "exchange", "type": ["null", "string"], "default": None},
+        {"name": "conditions", "type": ["null", "string"], "default": None},
+    ],
+}
+
 
 
 ================================================
@@ -29314,6 +30623,55 @@ if __name__ == "__main__":
 
 
 ================================================
+FILE: heber/storage/__init__.py
+================================================
+"""Heber Storage Module.
+
+This module provides the storage layer abstractions, including:
+- Apache Iceberg table management (Phase 1 OSS Migration)
+- Bronze JSONL writers
+- Silver Parquet/Iceberg writers
+"""
+
+from heber.storage.iceberg_catalog import (
+    SILVER_SCHEMAS,
+    IcebergCatalogType,
+    IcebergConfig,
+    create_silver_table,
+    get_iceberg_catalog,
+    get_silver_bars_schema,
+    get_silver_flow_alerts_schema,
+    get_silver_quotes_schema,
+    get_silver_trades_schema,
+    initialize_silver_tables,
+)
+from heber.storage.iceberg_writer import (
+    IcebergSilverWriter,
+    get_iceberg_writer,
+)
+
+__all__ = [
+    # Iceberg catalog
+    "IcebergConfig",
+    "IcebergCatalogType",
+    "get_iceberg_catalog",
+    # Table schemas
+    "SILVER_SCHEMAS",
+    "get_silver_bars_schema",
+    "get_silver_quotes_schema",
+    "get_silver_trades_schema",
+    "get_silver_flow_alerts_schema",
+    # Table management
+    "create_silver_table",
+    "initialize_silver_tables",
+    # Writer
+    "IcebergSilverWriter",
+    "get_iceberg_writer",
+]
+
+
+
+================================================
 FILE: heber/storage/iceberg_catalog.py
 ================================================
 """Apache Iceberg Catalog Configuration for Heber.
@@ -29372,7 +30730,7 @@ class IcebergConfig:
     """
 
     catalog_type: IcebergCatalogType = IcebergCatalogType.SQL
-    catalog_uri: str = "postgresql://heber:heber@localhost:5432/heber_iceberg"
+    catalog_uri: str = "postgresql://heber:heber@localhost:5432/heber_iceberg"  # pragma: allowlist secret
     warehouse: str = "s3://heber-lakehouse/warehouse"
     s3_endpoint: str | None = None  # For MinIO: http://localhost:9000
     s3_access_key: str | None = None
@@ -29382,16 +30740,12 @@ class IcebergConfig:
     def from_env(cls) -> IcebergConfig:
         """Load configuration from environment variables."""
         return cls(
-            catalog_type=IcebergCatalogType(
-                os.getenv("ICEBERG_CATALOG_TYPE", "sql")
-            ),
+            catalog_type=IcebergCatalogType(os.getenv("ICEBERG_CATALOG_TYPE", "sql")),
             catalog_uri=os.getenv(
                 "ICEBERG_CATALOG_URI",
-                "postgresql://heber:heber@localhost:5432/heber_iceberg",
+                "postgresql://heber:heber@localhost:5432/heber_iceberg",  # pragma: allowlist secret
             ),
-            warehouse=os.getenv(
-                "ICEBERG_WAREHOUSE", "s3://heber-lakehouse/warehouse"
-            ),
+            warehouse=os.getenv("ICEBERG_WAREHOUSE", "s3://heber-lakehouse/warehouse"),
             s3_endpoint=os.getenv("ICEBERG_S3_ENDPOINT"),
             s3_access_key=os.getenv("ICEBERG_S3_ACCESS_KEY"),
             s3_secret_key=os.getenv("ICEBERG_S3_SECRET_KEY"),
@@ -29595,6 +30949,272 @@ def initialize_silver_tables(catalog: Catalog | None = None) -> dict[str, Table]
         logger.info("silver_table_ready", table=table_name)
 
     return tables
+
+
+
+================================================
+FILE: heber/storage/iceberg_writer.py
+================================================
+"""Iceberg-based Silver Writer.
+
+This module provides the Iceberg implementation of the Silver writer,
+replacing custom Parquet management with Iceberg's ACID transactions.
+
+Key benefits over custom Parquet:
+- Automatic compaction (no manual compaction scheduler)
+- Schema evolution without rewriting data
+- Time-travel queries via snapshot IDs
+- ACID transactions (no partial writes)
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import pandas as pd
+import pyarrow as pa
+import structlog
+from prometheus_client import Counter, Histogram
+
+from heber.storage.iceberg_catalog import (
+    SILVER_SCHEMAS,
+    get_iceberg_catalog,
+    initialize_silver_tables,
+)
+
+if TYPE_CHECKING:
+    from pyiceberg.table import Table
+
+logger = structlog.get_logger(__name__)
+
+# Metrics
+iceberg_writes = Counter(
+    "heber_iceberg_writes_total",
+    "Total Iceberg write operations",
+    ["table", "status"],
+)
+
+iceberg_rows_written = Counter(
+    "heber_iceberg_rows_written_total",
+    "Total rows written to Iceberg",
+    ["table"],
+)
+
+iceberg_write_duration = Histogram(
+    "heber_iceberg_write_duration_seconds",
+    "Time to write batch to Iceberg",
+    ["table"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 30],
+)
+
+
+class IcebergSilverWriter:
+    """Writer for Silver layer using Apache Iceberg.
+
+    This replaces the custom Parquet writer with Iceberg's managed storage.
+
+    Example:
+        writer = IcebergSilverWriter()
+        await writer.write_batch("bars", df)
+    """
+
+    def __init__(self) -> None:
+        """Initialize the Iceberg writer."""
+        self._catalog = get_iceberg_catalog()
+        self._tables: dict[str, Table] = {}
+        self._initialized = False
+
+    def _ensure_initialized(self) -> None:
+        """Lazily initialize tables on first write."""
+        if not self._initialized:
+            self._tables = initialize_silver_tables(self._catalog)
+            self._initialized = True
+
+    def _get_table(self, table_name: str) -> Table:
+        """Get or load an Iceberg table.
+
+        Args:
+            table_name: Name of the Silver table
+
+        Returns:
+            The Iceberg Table instance
+
+        Raises:
+            ValueError: If table name is not recognized
+        """
+        self._ensure_initialized()
+
+        if table_name not in self._tables:
+            if table_name not in SILVER_SCHEMAS:
+                raise ValueError(f"Unknown Silver table: {table_name}")
+            # Try to load from catalog
+            full_name = f"silver.{table_name}"
+            self._tables[table_name] = self._catalog.load_table(full_name)
+
+        return self._tables[table_name]
+
+    def write_batch(
+        self,
+        table_name: str,
+        df: pd.DataFrame,
+    ) -> int:
+        """Write a batch of records to a Silver table.
+
+        Args:
+            table_name: Name of the Silver table (e.g., "bars", "quotes")
+            df: DataFrame with records to write
+
+        Returns:
+            Number of rows written
+
+        Raises:
+            ValueError: If table name is not recognized
+        """
+        if df.empty:
+            logger.debug("skipping_empty_batch", table=table_name)
+            return 0
+
+        start_time = datetime.now(UTC)
+
+        try:
+            table = self._get_table(table_name)
+
+            # Convert pandas to PyArrow
+            arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+
+            # Append to Iceberg table (ACID transaction)
+            table.append(arrow_table)
+
+            rows_written = len(df)
+
+            # Update metrics
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            iceberg_writes.labels(table=table_name, status="success").inc()
+            iceberg_rows_written.labels(table=table_name).inc(rows_written)
+            iceberg_write_duration.labels(table=table_name).observe(duration)
+
+            logger.info(
+                "iceberg_batch_written",
+                table=table_name,
+                rows=rows_written,
+                duration_ms=int(duration * 1000),
+            )
+
+            return rows_written
+
+        except Exception as e:
+            iceberg_writes.labels(table=table_name, status="error").inc()
+            logger.error(
+                "iceberg_write_failed",
+                table=table_name,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
+
+    def read_asof(
+        self,
+        table_name: str,
+        asof_time: datetime,
+        filters: dict[str, str] | None = None,
+    ) -> pd.DataFrame:
+        """Read data as of a specific time (zero-leakage query).
+
+        This uses Iceberg's time-travel to find the snapshot that was
+        current at asof_time, then filters for ts_available <= asof_time.
+
+        Args:
+            table_name: Name of the Silver table
+            asof_time: Point-in-time for the query
+            filters: Optional additional filters (e.g., {"instrument_key": "equity:AAPL"})
+
+        Returns:
+            DataFrame with records available as of the given time
+        """
+        table = self._get_table(table_name)
+
+        # Build filter expression
+        # ts_available <= asof_time is the zero-leakage constraint
+        filter_expr = f"ts_available <= timestamp '{asof_time.isoformat()}'"
+
+        if filters:
+            for key, value in filters.items():
+                filter_expr += f" AND {key} = '{value}'"
+
+        # Read with filter pushdown
+        scan = table.scan(row_filter=filter_expr)
+        arrow_table = scan.to_arrow()
+
+        return arrow_table.to_pandas()
+
+    def read_snapshot(
+        self,
+        table_name: str,
+        snapshot_id: int,
+    ) -> pd.DataFrame:
+        """Read data from a specific Iceberg snapshot.
+
+        This enables exact reproducibility for ML experiments.
+
+        Args:
+            table_name: Name of the Silver table
+            snapshot_id: Iceberg snapshot ID
+
+        Returns:
+            DataFrame with records from that snapshot
+        """
+        table = self._get_table(table_name)
+        scan = table.scan(snapshot_id=snapshot_id)
+        arrow_table = scan.to_arrow()
+
+        return arrow_table.to_pandas()
+
+    def get_current_snapshot_id(self, table_name: str) -> int | None:
+        """Get the current snapshot ID for a table.
+
+        Useful for recording which snapshot was used for training.
+
+        Args:
+            table_name: Name of the Silver table
+
+        Returns:
+            Current snapshot ID, or None if table has no data
+        """
+        table = self._get_table(table_name)
+        current = table.current_snapshot()
+        return current.snapshot_id if current else None
+
+    def list_snapshots(self, table_name: str) -> list[dict]:
+        """List all snapshots for a table (time-travel history).
+
+        Args:
+            table_name: Name of the Silver table
+
+        Returns:
+            List of snapshot metadata dicts
+        """
+        table = self._get_table(table_name)
+        return [
+            {
+                "snapshot_id": s.snapshot_id,
+                "timestamp_ms": s.timestamp_ms,
+                "manifest_list": s.manifest_list,
+            }
+            for s in table.snapshots()
+        ]
+
+
+# Singleton instance for convenience
+_writer: IcebergSilverWriter | None = None
+
+
+def get_iceberg_writer() -> IcebergSilverWriter:
+    """Get the singleton Iceberg writer instance."""
+    global _writer
+    if _writer is None:
+        _writer = IcebergSilverWriter()
+    return _writer
 
 
 
@@ -32470,6 +34090,445 @@ def run_all_survivor_bias_tests() -> dict[str, bool]:
 
 if __name__ == "__main__":
     run_all_survivor_bias_tests()
+
+
+
+================================================
+FILE: heber/versioning/__init__.py
+================================================
+"""lakeFS Client for Data Versioning.
+
+This module provides Git-like versioning for Gold datasets using lakeFS,
+replacing custom GoldVersion management with branches, commits, and tags.
+
+Phase 2 of OSS Migration Roadmap.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from functools import lru_cache
+from typing import Any
+
+import structlog
+from prometheus_client import Counter, Histogram
+
+logger = structlog.get_logger(__name__)
+
+# Metrics
+lakefs_operations = Counter(
+    "heber_lakefs_operations_total",
+    "Total lakeFS operations",
+    ["operation", "repository", "status"],
+)
+
+lakefs_operation_duration = Histogram(
+    "heber_lakefs_operation_duration_seconds",
+    "Time for lakeFS operations",
+    ["operation"],
+    buckets=[0.1, 0.5, 1, 2, 5, 10],
+)
+
+
+@dataclass
+class LakeFSConfig:
+    """lakeFS connection configuration.
+
+    Environment Variables:
+        LAKEFS_ENDPOINT: lakeFS server URL (default: http://localhost:8000)
+        LAKEFS_ACCESS_KEY: Access key ID
+        LAKEFS_SECRET_KEY: Secret access key
+        LAKEFS_DEFAULT_REPO: Default repository name
+    """
+
+    endpoint: str = "http://localhost:8000"
+    access_key: str = ""
+    secret_key: str = ""
+    default_repo: str = "heber-gold"
+
+    @classmethod
+    def from_env(cls) -> LakeFSConfig:
+        """Load configuration from environment variables."""
+        return cls(
+            endpoint=os.getenv("LAKEFS_ENDPOINT", "http://localhost:8000"),
+            access_key=os.getenv("LAKEFS_ACCESS_KEY", ""),
+            secret_key=os.getenv("LAKEFS_SECRET_KEY", ""),
+            default_repo=os.getenv("LAKEFS_DEFAULT_REPO", "heber-gold"),
+        )
+
+
+@dataclass
+class GoldCommit:
+    """Represents a Gold dataset commit in lakeFS.
+
+    This replaces the custom GoldVersion/VersionManifest with lakeFS commits.
+    """
+
+    commit_id: str
+    message: str
+    committer: str
+    creation_date: datetime
+    metadata: dict[str, str] = field(default_factory=dict)
+    parents: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GoldTag:
+    """Represents a version tag (e.g., v1.0.0) in lakeFS.
+
+    Tags provide semantic versioning on top of commits.
+    """
+
+    name: str  # e.g., "v1.0.0"
+    commit_id: str
+
+
+class LakeFSVersionManager:
+    """Manages Gold dataset versioning using lakeFS.
+
+    This replaces custom GoldVersion tracking with Git-like operations:
+    - Branches for development/experiments
+    - Commits for atomic snapshots
+    - Tags for semantic versions (v1.0.0, v1.1.0)
+
+    Example:
+        manager = LakeFSVersionManager()
+
+        # Create experiment branch
+        manager.create_branch("experiment-new-features", from_branch="main")
+
+        # Upload data and commit
+        manager.upload_dataframe("features/momentum.parquet", df, branch="experiment-new-features")
+        commit = manager.commit("experiment-new-features", "Add momentum features v2")
+
+        # Tag as version
+        manager.create_tag("v1.2.0", commit.commit_id)
+    """
+
+    def __init__(self, config: LakeFSConfig | None = None) -> None:
+        """Initialize the lakeFS version manager.
+
+        Args:
+            config: Optional configuration. If None, loads from environment.
+        """
+        if config is None:
+            config = LakeFSConfig.from_env()
+
+        self.config = config
+        self._client: Any = None
+        self._repo: Any = None
+
+    def _get_client(self) -> Any:
+        """Lazily initialize the lakeFS client."""
+        if self._client is None:
+            import lakefs
+
+            self._client = lakefs.Client(
+                host=self.config.endpoint,
+                username=self.config.access_key,
+                password=self.config.secret_key,
+            )
+            logger.info(
+                "lakefs_client_initialized",
+                endpoint=self.config.endpoint,
+            )
+        return self._client
+
+    def _get_repo(self, repo_name: str | None = None) -> Any:
+        """Get or create a lakeFS repository."""
+        import lakefs
+
+        client = self._get_client()
+        repo_name = repo_name or self.config.default_repo
+
+        try:
+            return lakefs.Repository(repo_name, client=client)
+        except Exception:
+            # Repository doesn't exist, create it
+            logger.info("creating_lakefs_repository", repo=repo_name)
+            return lakefs.Repository(repo_name, client=client).create(
+                storage_namespace=f"s3://heber-lakehouse/{repo_name}",
+                default_branch="main",
+            )
+
+    def list_branches(self, repo: str | None = None) -> list[str]:
+        """List all branches in the repository.
+
+        Args:
+            repo: Repository name. Uses default if not specified.
+
+        Returns:
+            List of branch names
+        """
+        repository = self._get_repo(repo)
+        return [b.id for b in repository.branches()]
+
+    def create_branch(
+        self,
+        branch_name: str,
+        from_branch: str = "main",
+        repo: str | None = None,
+    ) -> None:
+        """Create a new branch from an existing branch.
+
+        Args:
+            branch_name: Name for the new branch
+            from_branch: Source branch (default: main)
+            repo: Repository name
+        """
+        start_time = datetime.now(UTC)
+        repository = self._get_repo(repo)
+
+        try:
+            source = repository.branch(from_branch)
+            source.branch(branch_name)
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="create_branch",
+                repository=repo or self.config.default_repo,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="create_branch").observe(duration)
+
+            logger.info(
+                "lakefs_branch_created",
+                branch=branch_name,
+                from_branch=from_branch,
+            )
+        except Exception as e:
+            lakefs_operations.labels(
+                operation="create_branch",
+                repository=repo or self.config.default_repo,
+                status="error",
+            ).inc()
+            logger.error("lakefs_branch_create_failed", error=str(e))
+            raise
+
+    def commit(
+        self,
+        branch: str,
+        message: str,
+        metadata: dict[str, str] | None = None,
+        repo: str | None = None,
+    ) -> GoldCommit:
+        """Create a commit on a branch.
+
+        Args:
+            branch: Branch name to commit to
+            message: Commit message
+            metadata: Optional metadata (e.g., {"author": "ml-pipeline", "run_id": "123"})
+            repo: Repository name
+
+        Returns:
+            GoldCommit with commit details
+        """
+        start_time = datetime.now(UTC)
+        repository = self._get_repo(repo)
+        branch_ref = repository.branch(branch)
+
+        try:
+            commit_ref = branch_ref.commit(
+                message=message,
+                metadata=metadata or {},
+            )
+            commit = commit_ref.get_commit()
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="commit",
+                repository=repo or self.config.default_repo,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="commit").observe(duration)
+
+            logger.info(
+                "lakefs_commit_created",
+                branch=branch,
+                commit_id=commit.id,
+                message=message,
+            )
+
+            return GoldCommit(
+                commit_id=commit.id,
+                message=commit.message,
+                committer=commit.committer,
+                creation_date=datetime.fromtimestamp(commit.creation_date, tz=UTC),
+                metadata=dict(commit.metadata) if commit.metadata else {},
+                parents=list(commit.parents) if commit.parents else [],
+            )
+        except Exception as e:
+            lakefs_operations.labels(
+                operation="commit",
+                repository=repo or self.config.default_repo,
+                status="error",
+            ).inc()
+            logger.error("lakefs_commit_failed", error=str(e))
+            raise
+
+    def create_tag(
+        self,
+        tag_name: str,
+        commit_id: str,
+        repo: str | None = None,
+    ) -> GoldTag:
+        """Create a semantic version tag pointing to a commit.
+
+        Args:
+            tag_name: Tag name (e.g., "v1.0.0")
+            commit_id: Commit ID to tag
+            repo: Repository name
+
+        Returns:
+            GoldTag with tag details
+        """
+        repository = self._get_repo(repo)
+
+        try:
+            repository.tag(tag_name).create(commit_id)
+
+            logger.info(
+                "lakefs_tag_created",
+                tag=tag_name,
+                commit_id=commit_id,
+            )
+
+            return GoldTag(name=tag_name, commit_id=commit_id)
+        except Exception as e:
+            logger.error("lakefs_tag_create_failed", error=str(e))
+            raise
+
+    def list_tags(self, repo: str | None = None) -> list[GoldTag]:
+        """List all tags in the repository.
+
+        Args:
+            repo: Repository name
+
+        Returns:
+            List of GoldTag objects
+        """
+        repository = self._get_repo(repo)
+        return [GoldTag(name=t.id, commit_id=t.commit_id) for t in repository.tags()]
+
+    def get_commit(
+        self,
+        ref: str,
+        repo: str | None = None,
+    ) -> GoldCommit:
+        """Get commit details by reference (branch, tag, or commit ID).
+
+        Args:
+            ref: Reference (branch name, tag name, or commit ID)
+            repo: Repository name
+
+        Returns:
+            GoldCommit with commit details
+        """
+        repository = self._get_repo(repo)
+        commit = repository.ref(ref).get_commit()
+
+        return GoldCommit(
+            commit_id=commit.id,
+            message=commit.message,
+            committer=commit.committer,
+            creation_date=datetime.fromtimestamp(commit.creation_date, tz=UTC),
+            metadata=dict(commit.metadata) if commit.metadata else {},
+            parents=list(commit.parents) if commit.parents else [],
+        )
+
+    def merge(
+        self,
+        source_branch: str,
+        dest_branch: str = "main",
+        repo: str | None = None,
+    ) -> GoldCommit:
+        """Merge a source branch into destination.
+
+        Args:
+            source_branch: Branch to merge from
+            dest_branch: Branch to merge into (default: main)
+            repo: Repository name
+
+        Returns:
+            GoldCommit of the merge commit
+        """
+        repository = self._get_repo(repo)
+        dest = repository.branch(dest_branch)
+
+        try:
+            result = dest.merge(source_branch)
+
+            logger.info(
+                "lakefs_merge_completed",
+                source=source_branch,
+                dest=dest_branch,
+                commit_id=result,
+            )
+
+            return self.get_commit(result, repo)
+        except Exception as e:
+            logger.error(
+                "lakefs_merge_failed",
+                source=source_branch,
+                dest=dest_branch,
+                error=str(e),
+            )
+            raise
+
+    def diff(
+        self,
+        ref1: str,
+        ref2: str,
+        repo: str | None = None,
+    ) -> list[dict[str, str]]:
+        """Get diff between two references.
+
+        Args:
+            ref1: First reference (older)
+            ref2: Second reference (newer)
+            repo: Repository name
+
+        Returns:
+            List of changed paths with their types
+        """
+        repository = self._get_repo(repo)
+        changes = repository.ref(ref1).diff(ref2)
+
+        return [{"path": change.path, "type": change.type} for change in changes]
+
+    def checkout(
+        self,
+        ref: str,
+        repo: str | None = None,
+    ) -> str:
+        """Get the storage path for a specific reference.
+
+        Use this to point Iceberg/Parquet readers to versioned data.
+
+        Args:
+            ref: Reference (branch, tag, or commit ID)
+            repo: Repository name
+
+        Returns:
+            Storage path (e.g., "lakefs://heber-gold/v1.0.0/")
+        """
+        repo_name = repo or self.config.default_repo
+        return f"lakefs://{repo_name}/{ref}/"
+
+
+# Singleton
+_manager: LakeFSVersionManager | None = None
+
+
+@lru_cache(maxsize=1)
+def get_version_manager() -> LakeFSVersionManager:
+    """Get the singleton version manager instance."""
+    global _manager
+    if _manager is None:
+        _manager = LakeFSVersionManager()
+    return _manager
 
 
 
@@ -36536,6 +38595,199 @@ echo "============================================"
 echo "Snapshot: ${LATEST_SNAPSHOT}"
 echo "Status: PASSED"
 echo ""
+
+
+
+================================================
+FILE: soda/checks/bars.yaml
+================================================
+# Soda Core Checks for Silver Bars Dataset
+
+# =============================================================================
+# Data Presence & Freshness
+# =============================================================================
+
+checks for heber_silver.bars:
+  # Basic data presence
+  - row_count > 0:
+      name: "Table has data"
+
+  # Freshness SLA - data should be available within 1 hour
+  - freshness(ts_available) < 1h:
+      name: "Data freshness SLA"
+      warn: when > 30m
+      fail: when > 1h
+
+# =============================================================================
+# Zero-Leakage Constraints
+# =============================================================================
+
+  # ts_available must not be in the future (prevents data leakage)
+  - max(ts_available) <= '${CURRENT_TIME}':
+      name: "No future ts_available (zero-leakage)"
+
+  # ts_available must be >= ts_event (can't be available before event)
+  - failed rows:
+      name: "ts_available >= ts_event"
+      fail condition: ts_available < ts_event
+
+# =============================================================================
+# Data Completeness
+# =============================================================================
+
+  # Required fields must not be null
+  - missing_count(event_id) = 0:
+      name: "event_id required"
+
+  - missing_count(instrument_key) = 0:
+      name: "instrument_key required"
+
+  - missing_count(ts_event) = 0:
+      name: "ts_event required"
+
+  - missing_count(ts_available) = 0:
+      name: "ts_available required"
+
+  # OHLCV data completeness
+  - missing_percent(open) < 1%:
+      name: "Open price fill rate"
+
+  - missing_percent(high) < 1%:
+      name: "High price fill rate"
+
+  - missing_percent(low) < 1%:
+      name: "Low price fill rate"
+
+  - missing_percent(close) < 1%:
+      name: "Close price fill rate"
+
+  - missing_percent(volume) < 5%:
+      name: "Volume fill rate"
+
+# =============================================================================
+# Data Validity
+# =============================================================================
+
+  # Price sanity checks
+  - min(open) >= 0:
+      name: "Open price non-negative"
+
+  - min(close) >= 0:
+      name: "Close price non-negative"
+
+  - min(volume) >= 0:
+      name: "Volume non-negative"
+
+  # OHLC relationship: high >= low
+  - failed rows:
+      name: "High >= Low"
+      fail condition: high < low
+
+  # OHLC relationship: high >= open and high >= close
+  - failed rows:
+      name: "High is highest"
+      fail condition: high < open or high < close
+
+  # OHLC relationship: low <= open and low <= close
+  - failed rows:
+      name: "Low is lowest"
+      fail condition: low > open or low > close
+
+# =============================================================================
+# Uniqueness
+# =============================================================================
+
+  - duplicate_count(event_id) = 0:
+      name: "No duplicate event_ids"
+
+# =============================================================================
+# Referential Integrity
+# =============================================================================
+
+  - values in (instrument_type) must exist in ['equity', 'option', 'index', 'etf', 'crypto', 'forex']:
+      name: "Valid instrument types"
+
+
+
+================================================
+FILE: soda/checks/quotes.yaml
+================================================
+# Soda Core Checks for Silver Quotes Dataset
+
+checks for heber_silver.quotes:
+  # =============================================================================
+  # Data Presence & Freshness
+  # =============================================================================
+
+  - row_count > 0:
+      name: "Table has data"
+
+  - freshness(ts_available) < 30m:
+      name: "Quotes freshness (stricter than bars)"
+      warn: when > 15m
+      fail: when > 30m
+
+  # =============================================================================
+  # Zero-Leakage Constraints
+  # =============================================================================
+
+  - max(ts_available) <= '${CURRENT_TIME}':
+      name: "No future ts_available"
+
+  - failed rows:
+      name: "ts_available >= ts_event"
+      fail condition: ts_available < ts_event
+
+  # =============================================================================
+  # Data Completeness
+  # =============================================================================
+
+  - missing_count(event_id) = 0:
+      name: "event_id required"
+
+  - missing_count(instrument_key) = 0:
+      name: "instrument_key required"
+
+  - missing_count(bid_price) = 0:
+      name: "bid_price required"
+
+  - missing_count(ask_price) = 0:
+      name: "ask_price required"
+
+  - missing_percent(bid_size) < 5%:
+      name: "bid_size fill rate"
+
+  - missing_percent(ask_size) < 5%:
+      name: "ask_size fill rate"
+
+  # =============================================================================
+  # Data Validity
+  # =============================================================================
+
+  - min(bid_price) >= 0:
+      name: "bid_price non-negative"
+
+  - min(ask_price) >= 0:
+      name: "ask_price non-negative"
+
+  # Spread check: ask >= bid
+  - failed rows:
+      name: "ask >= bid (positive spread)"
+      fail condition: ask_price < bid_price
+      warn: when > 1%  # Allow some crossed quotes during volatility
+
+  - min(bid_size) >= 0:
+      name: "bid_size non-negative"
+
+  - min(ask_size) >= 0:
+      name: "ask_size non-negative"
+
+  # =============================================================================
+  # Uniqueness
+  # =============================================================================
+
+  - duplicate_count(event_id) = 0:
+      name: "No duplicate event_ids"
 
 
 

@@ -68,8 +68,8 @@ services:
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/minio/data:/data
     ports:
-      - "9000:9000" # S3 API
-      - "9001:9001" # Console
+      - "19000:9000" # S3 API
+      - "19001:9001" # Console
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 10s
@@ -117,7 +117,7 @@ services:
       KARAPACE_REGISTRY_PORT: 8081
       KARAPACE_LOG_LEVEL: INFO
     ports:
-      - "8081:8081" # Schema Registry API
+      - "18081:8081" # Schema Registry API
     restart: unless-stopped
 
   # OpenMetadata - Data Catalog (Phase 5)
