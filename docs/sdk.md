@@ -4,6 +4,16 @@ The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. 
 
 ## Installation
 
+```bash
+# Full installation (all dependencies)
+pip install heber
+
+# Lightweight SDK-only (minimal dependencies)
+pip install heber[sdk]
+```
+
+### From Source
+
 ```python
 from heber.sdk.client import HeberClient
 ```

@@ -1,6 +1,6 @@
 [project]
 name = "heber"
-version = "0.1.0"
+version = "0.2.0"
 description = "Heber Data Lakehouse - Centralized storage for market and intelligence data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -72,6 +72,19 @@ dev = [
 catalog = [
     "openmetadata-ingestion>=1.4",
 ]
+
+# Lightweight SDK-only install: pip install heber[sdk]
+# For external consumers who only need the client
+sdk = [
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+    "httpx>=0.26",
+    "pydantic>=2.0",
+    "structlog>=24.0",
+]
+
+[project.scripts]
+heber = "heber.cli:main"
 
 [build-system]
 requires = ["hatchling"]
