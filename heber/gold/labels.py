@@ -21,6 +21,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Constants
+LABEL_TYPE_DIR = "type=label"
+
 
 def parse_duration(duration_str: str) -> timedelta:
     """Parse duration string like '5d', '1h', '30m', '0s' into timedelta.
@@ -128,7 +131,7 @@ class LabelDataset:
 
     def save(self, gold_root: Path) -> Path:
         """Save metadata to gold layer."""
-        metadata_path = gold_root / f"dataset={self.name}" / "type=label" / "_metadata.json"
+        metadata_path = gold_root / f"dataset={self.name}" / LABEL_TYPE_DIR / "_metadata.json"
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(metadata_path, "w") as f:
@@ -140,7 +143,7 @@ class LabelDataset:
     @classmethod
     def load(cls, gold_root: Path, name: str) -> LabelDataset:
         """Load metadata from gold layer."""
-        metadata_path = gold_root / f"dataset={name}" / "type=label" / "_metadata.json"
+        metadata_path = gold_root / f"dataset={name}" / LABEL_TYPE_DIR / "_metadata.json"
         with open(metadata_path) as f:
             data = json.load(f)
         return cls.from_dict(data)
@@ -236,7 +239,7 @@ def write_label(
     )
     label_dataset.save(gold_root)
 
-    output_path = gold_root / f"dataset={dataset}" / "type=label" / f"version={version}"
+    output_path = gold_root / f"dataset={dataset}" / LABEL_TYPE_DIR / f"version={version}"
     output_path.mkdir(parents=True, exist_ok=True)
 
     parquet_path = output_path / "data.parquet"
@@ -275,7 +278,7 @@ def read_label(
     Returns:
         DataFrame with labels available at asof_time
     """
-    dataset_path = gold_root / f"dataset={dataset}" / "type=label"
+    dataset_path = gold_root / f"dataset={dataset}" / LABEL_TYPE_DIR
 
     if not dataset_path.exists():
         logger.warning("Label dataset not found", dataset=dataset)

@@ -171,7 +171,7 @@ class TestAccessControlManager:
         manager = AccessControlManager()
         manager.create_project("proj-001", "Test")
 
-        raw_token, token = manager.create_token("proj-001", "Short-lived Token", expires_in_days=30)
+        _raw_token, token = manager.create_token("proj-001", "Short-lived Token", expires_in_days=30)
 
         assert token.expires_at is not None
         assert token.is_valid()

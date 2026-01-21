@@ -13,6 +13,14 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Category constants
+CATEGORY_DATA_MODEL = "Data Model"
+CATEGORY_INFRASTRUCTURE = "Infrastructure"
+CATEGORY_ML_QUANT = "ML/Quant"
+CATEGORY_RELIABILITY = "Reliability"
+CATEGORY_TESTING = "Testing"
+CATEGORY_DATA_SOURCES = "Data Sources"
+
 
 @dataclass
 class DecisionRecord:
@@ -42,7 +50,7 @@ class DecisionRecord:
 DATA_MODEL_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="DM-001",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="How to partition Silver data?",
         decision="Partition by date (dt) and symbol for market data",
         rationale="Optimizes for common query pattern (symbol + date range)",
@@ -50,14 +58,14 @@ DATA_MODEL_DECISIONS: list[DecisionRecord] = [
     ),
     DecisionRecord(
         id="DM-002",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="ts_available vs ts_event?",
         decision="Use ts_available for all point-in-time queries",
         rationale="Prevents look-ahead bias in backtesting",
     ),
     DecisionRecord(
         id="DM-003",
-        category="Data Model",
+        category=CATEGORY_DATA_MODEL,
         question="Schema evolution strategy?",
         decision="Semver for schemas (v<major>.<minor>), backward compatible by default",
         rationale="Allows schema changes without breaking existing consumers",
@@ -67,14 +75,14 @@ DATA_MODEL_DECISIONS: list[DecisionRecord] = [
 INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="INF-001",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Cold storage tier?",
         decision="S3 Glacier for data older than 1 year",
         rationale="Cost optimization while maintaining data availability",
     ),
     DecisionRecord(
         id="INF-002",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Hot store technology?",
         decision="ClickHouse for real-time queries",
         rationale="Columnar storage optimized for analytical queries",
@@ -82,7 +90,7 @@ INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
     ),
     DecisionRecord(
         id="INF-003",
-        category="Infrastructure",
+        category=CATEGORY_INFRASTRUCTURE,
         question="Event bus technology?",
         decision="Redis Streams",
         rationale="Simple, fast, good consumer group support",
@@ -93,21 +101,21 @@ INFRASTRUCTURE_DECISIONS: list[DecisionRecord] = [
 ML_QUANT_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="ML-001",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Feature versioning strategy?",
         decision="GoldVersion with lineage tracking",
         rationale="Enables reproducibility and feature governance",
     ),
     DecisionRecord(
         id="ML-002",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Train/test split approach?",
         decision="Walk-forward with embargo period",
         rationale="Prevents data leakage in time-series data",
     ),
     DecisionRecord(
         id="ML-003",
-        category="ML/Quant",
+        category=CATEGORY_ML_QUANT,
         question="Label semantic?",
         decision="Forward-looking with explicit ts_available at label computation time",
         rationale="Ensures labels represent future returns not available at train time",
@@ -117,21 +125,21 @@ ML_QUANT_DECISIONS: list[DecisionRecord] = [
 RELIABILITY_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="REL-001",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="SLO targets for ingestion?",
         decision="99.9% availability, 10K events/sec throughput",
         rationale="Balances reliability with infrastructure cost",
     ),
     DecisionRecord(
         id="REL-002",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="Error budget policy?",
         decision="Freeze deploys when budget < 10%",
         rationale="Protects users from reliability degradation",
     ),
     DecisionRecord(
         id="REL-003",
-        category="Reliability",
+        category=CATEGORY_RELIABILITY,
         question="Circuit breaker thresholds?",
         decision="Open after 5 failures in 30s, half-open after 60s",
         rationale="Fast failure detection with reasonable recovery time",
@@ -141,21 +149,21 @@ RELIABILITY_DECISIONS: list[DecisionRecord] = [
 TESTING_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="TEST-001",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Test pyramid distribution?",
         decision="70% unit, 25% integration, 5% E2E",
         rationale="Fast feedback with comprehensive coverage",
     ),
     DecisionRecord(
         id="TEST-002",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Leakage test policy?",
         decision="0% tolerance, all leakage tests must pass",
         rationale="Zero-leakage is a critical invariant",
     ),
     DecisionRecord(
         id="TEST-003",
-        category="Testing",
+        category=CATEGORY_TESTING,
         question="Flaky test handling?",
         decision="Quarantine at >5% flake rate, fix within 3 days",
         rationale="Maintains CI reliability while allowing investigation",
@@ -165,21 +173,21 @@ TESTING_DECISIONS: list[DecisionRecord] = [
 DATA_SOURCE_DECISIONS: list[DecisionRecord] = [
     DecisionRecord(
         id="DS-001",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Structured vs unstructured boundary?",
         decision="Heber for structured (Parquet), Document Store for text",
         rationale="Optimizes each storage for its primary use case",
     ),
     DecisionRecord(
         id="DS-002",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Cross-reference mechanism?",
         decision="doc_store_id in Heber metadata pointing to Document Store",
         rationale="Single source of truth for metadata with external text storage",
     ),
     DecisionRecord(
         id="DS-003",
-        category="Data Sources",
+        category=CATEGORY_DATA_SOURCES,
         question="Provider priority?",
         decision="Alpaca (1), Unusual Whales (1), Finnhub (2), Alpha Vantage (3)",
         rationale="Based on data quality, reliability, and coverage",
