@@ -14,7 +14,7 @@
 | **Datasets** | §8-9 | ⏳ Partial |
 | **Zero-Leakage** | §10 | ⏳ Partial |
 | **Catalog & SDK** | §11 | ⏳ Partial |
-| **Operational** | §12 | ⬜ |
+| **Operational** | §12 | ✅ Done |
 | **Backfill** | §13 | ⬜ |
 | **Schema Evolution** | §14 | ⬜ |
 | **Retention** | §15 | ⬜ |
