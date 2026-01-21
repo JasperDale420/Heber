@@ -35,6 +35,9 @@ dependencies = [
     # Table Format (Phase 1: Iceberg)
     "pyiceberg[s3,pyarrow]>=0.7",
 
+    # Data Versioning (Phase 2: lakeFS)
+    "lakefs>=0.7",
+
     # Data Quality (Phase 3: Soda Core)
     "soda-core-duckdb>=3.0",
 
