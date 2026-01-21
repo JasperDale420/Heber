@@ -23,6 +23,8 @@ logger = structlog.get_logger(__name__)
 
 # Constants
 LABEL_TYPE_DIR = "type=label"
+DEFAULT_VERSION = "v1.0.0"
+DATA_PARQUET = "data.parquet"
 
 
 def parse_duration(duration_str: str) -> timedelta:
@@ -106,7 +108,7 @@ class LabelDataset:
 
     name: str
     metadata: LabelMetadata
-    version: str = "v1.0.0"
+    version: str = DEFAULT_VERSION
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     created_by: str = "system"
 
@@ -123,7 +125,7 @@ class LabelDataset:
     def from_dict(cls, data: dict[str, Any]) -> LabelDataset:
         return cls(
             name=data["name"],
-            version=data.get("version", "v1.0.0"),
+            version=data.get("version", DEFAULT_VERSION),
             created_at=datetime.fromisoformat(data["created_at"]),
             created_by=data.get("created_by", "system"),
             metadata=LabelMetadata.from_dict(data.get("metadata", {})),
@@ -192,7 +194,7 @@ def write_label(
     instrument_key_col: str = "instrument_key",
     label_time_col: str = "ts_label",
     label_value_col: str = "label",
-    version: str = "v1.0.0",
+    version: str = DEFAULT_VERSION,
     created_by: str = "system",
 ) -> Path:
     """Write labels to Gold layer with proper availability tracking (PRD §29.3).
@@ -242,7 +244,7 @@ def write_label(
     output_path = gold_root / f"dataset={dataset}" / LABEL_TYPE_DIR / f"version={version}"
     output_path.mkdir(parents=True, exist_ok=True)
 
-    parquet_path = output_path / "data.parquet"
+    parquet_path = output_path / DATA_PARQUET
     df.to_parquet(parquet_path, compression="snappy")
 
     logger.info(
@@ -285,14 +287,14 @@ def read_label(
         return pd.DataFrame()
 
     if version:
-        data_path = dataset_path / f"version={version}" / "data.parquet"
+        data_path = dataset_path / f"version={version}" / DATA_PARQUET
     else:
         versions = [d for d in dataset_path.iterdir() if d.is_dir() and d.name.startswith("version=")]
         if not versions:
             logger.warning("No versions found for label dataset", dataset=dataset)
             return pd.DataFrame()
         latest = sorted(versions, key=lambda d: d.name, reverse=True)[0]
-        data_path = latest / "data.parquet"
+        data_path = latest / DATA_PARQUET
 
     if not data_path.exists():
         logger.warning("Label data file not found", path=str(data_path))

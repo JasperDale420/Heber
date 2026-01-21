@@ -46,7 +46,7 @@ class TestGoldVersion:
 
         assert v1 < v2
         assert v2 < v3
-        assert v1 <= v1
+        assert v1 <= GoldVersion.parse("v1.0.0")  # Test <= with equivalent version
         assert v1 == GoldVersion.parse("v1.0.0")
 
     def test_wildcard_major(self):

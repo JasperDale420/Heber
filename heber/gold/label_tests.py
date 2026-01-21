@@ -165,7 +165,7 @@ class TestWriteAndReadLabel:
             result = read_label(gold_root, "returns_5d", asof_time)
 
             assert len(result) == 1
-            assert result.iloc[0]["label"] == 0.02
+            assert result.iloc[0]["label"] == pytest.approx(0.02)
 
     def test_read_label_filters_by_instrument(self):
         with tempfile.TemporaryDirectory() as tmpdir:
