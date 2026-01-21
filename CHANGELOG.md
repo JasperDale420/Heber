@@ -198,6 +198,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `GapResolutionRegistry` with 18 decisions across 6 categories
   - 17/17 tests passing
 
+- **Access Control** (Phase 56, PRD §11.9)
+  - `Project` for project-based access control
+  - `DatasetPermission` with layer-based access levels
+  - `SDKToken` with scopes, expiry, and validation
+  - `AccessControlManager` for permission checking
+  - Silver shared by default, Gold requires explicit permission
+  - 17/17 tests passing
+
 #### Part VI: Final Infrastructure (PRD §21-29)
 
 - **Backup & Disaster Recovery** (Phase 27, PRD §27)

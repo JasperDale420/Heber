@@ -942,11 +942,11 @@ Implement in order:
 
 ---
 
-## Phase 56: Access Control (§11.9) *FUTURE*
+## Phase 56: Access Control (§11.9) ✅
 
-- [ ] Restrict Gold datasets per project
-- [ ] Shared Silver datasets
-- [ ] SDK token enforcement
+- [x] Restrict Gold datasets per project
+- [x] Shared Silver datasets
+- [x] SDK token enforcement
 
 ---
 
