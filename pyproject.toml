@@ -44,6 +44,9 @@ dependencies = [
     # Schema Registry (Phase 4: Karapace)
     "python-schema-registry-client>=2.6",
 
+    # Data Catalog (Phase 5: OpenMetadata)
+    "openmetadata-ingestion>=1.4",
+
     # Observability
     "structlog>=24.0",
     "prometheus-client>=0.19",
