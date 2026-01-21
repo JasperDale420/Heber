@@ -93,13 +93,13 @@ class UniverseManager:
     def get_universe(
         self,
         asof_date: date | str,
-        filter_criteria: dict[str, Any] | None = None,
+        _filter_criteria: dict[str, Any] | None = None,
     ) -> list[str]:
         """Get universe as it existed on a specific date (PRD §35.3).
 
         Args:
             asof_date: Point-in-time date for universe snapshot
-            filter_criteria: Optional filter (asset_class, exchange, etc.)
+            _filter_criteria: Optional filter (asset_class, exchange, etc.) - Reserved for future use
 
         Returns:
             List of instrument keys that were active on asof_date
@@ -205,9 +205,8 @@ class UniverseManager:
 
         delisted = []
         for inst in self.instruments.values():
-            if inst.delist_date:
-                if start_date <= inst.delist_date <= end_date:
-                    delisted.append(inst)
+            if inst.delist_date and start_date <= inst.delist_date <= end_date:
+                delisted.append(inst)
 
         return delisted
 

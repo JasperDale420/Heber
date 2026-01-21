@@ -113,7 +113,7 @@ class TestBacktestDataLoader:
             label_dataset="returns_5d",
         )
 
-        features, labels = loader.load_train_data(
+        features, _ = loader.load_train_data(
             train_start="2024-01-01",
             train_end="2024-06-01",
         )
@@ -137,7 +137,7 @@ class TestBacktestDataLoader:
             label_dataset=None,
         )
 
-        features, labels = loader.load_train_data(
+        _, labels = loader.load_train_data(
             train_start="2024-01-01",
             train_end="2024-06-01",
         )
