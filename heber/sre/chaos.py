@@ -14,6 +14,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Procedure step constants
+STEP_ESTABLISH_BASELINE = "Establish baseline metrics"
+
 
 class ExperimentFrequency(str, Enum):
     """Chaos experiment frequency (PRD §41.3)."""
@@ -193,7 +196,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When a writer pod is killed, in-flight batch goes to DLQ and new pod starts cleanly",
         expected_outcome="In-flight batch to DLQ, restart clean",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "kubectl delete pod -l app=heber-writer --wait=false",
             "Observe for 2 minutes",
             "Check DLQ for in-flight events",
@@ -211,7 +214,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When S3 is throttled, writers apply backpressure without crashing",
         expected_outcome="Backpressure, writes queue, no crash",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Apply network throttle: tc qdisc add dev eth0 root tbf rate 1mbit burst 32kbit latency 400ms",
             "Observe for 5 minutes",
             "Remove throttle",
@@ -231,7 +234,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When Catalog is blocked, system operates in degraded mode using cached metadata",
         expected_outcome="Degraded mode, cache-only, no crash",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Block Catalog ingress: kubectl scale deployment heber-catalog --replicas=0",
             "Observe for 5 minutes",
             "Verify SDK uses cached metadata",
@@ -249,7 +252,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When a malformed event is injected, it goes to DLQ without affecting other events",
         expected_outcome="Event to DLQ, others unaffected",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Inject malformed JSON to event bus",
             "Observe for 1 minute",
             "Verify bad event in DLQ",
@@ -267,7 +270,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="When ClickHouse is unreachable, SDK falls back to Silver layer",
         expected_outcome="Hot Store fails, Silver fallback works",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Block ClickHouse network: kubectl exec -it clickhouse-0 -- iptables -A INPUT -j DROP",
             "Query via SDK",
             "Verify fallback to Silver",
@@ -287,7 +290,7 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         hypothesis="Under CPU stress, services slow down gracefully without OOM",
         expected_outcome="Graceful slowdown, no OOM",
         procedure=[
-            "Establish baseline metrics",
+            STEP_ESTABLISH_BASELINE,
             "Inject CPU stress: kubectl exec -it <pod> -- stress --cpu 4",
             "Observe for 3 minutes",
             "Remove stress",

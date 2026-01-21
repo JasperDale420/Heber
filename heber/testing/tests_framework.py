@@ -67,7 +67,7 @@ class TestCIGateEnforcer:
     def test_check_coverage(self):
         enforcer = CIGateEnforcer()
 
-        passed, msg = enforcer.check_coverage("heber-sdk", 92, 88)
+        passed, _msg = enforcer.check_coverage("heber-sdk", 92, 88)
 
         assert passed
 
@@ -105,14 +105,14 @@ class TestPerformanceTester:
     def test_check_slo_pass(self):
         tester = PerformanceTester()
 
-        passed, msg = tester.check_slo("Ingestion Throughput", 12000)
+        passed, _msg = tester.check_slo("Ingestion Throughput", 12000)
 
         assert passed
 
     def test_check_slo_fail(self):
         tester = PerformanceTester()
 
-        passed, msg = tester.check_slo("Ingestion Throughput", 5000)
+        passed, _msg = tester.check_slo("Ingestion Throughput", 5000)
 
         assert not passed
 

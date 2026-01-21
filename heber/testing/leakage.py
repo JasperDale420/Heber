@@ -238,7 +238,7 @@ class LeakageValidator:
 
     def validate_gold_lineage(
         self,
-        feature_ts_event: datetime,
+        _feature_ts_event: datetime,  # Reserved for future use in lineage tracking
         input_ts_available: datetime,
         label_ts_event: datetime,
     ) -> LeakageTestRun:
