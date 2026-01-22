@@ -108,8 +108,8 @@ This document tracks all UW API endpoints and their integration status with Data
 | `/api/market/spike` | SPIKE | ❌ | ❌ | ❌ |
 | `/api/market/top-net-impact` | Top Net Impact | ❌ | ❌ | ❌ |
 | `/api/market/total-options-volume` | Total Options Volume | ❌ | ❌ | ❌ |
-| `/api/market/sector-tide` | Sector Tide | ❌ | ❌ | ❌ |
-| `/api/market/etf-tide` | ETF Tide | ❌ | ❌ | ❌ |
+| `/api/market/sector-tide` | Sector Tide | ✅ | ✅ `market_tide` | ✅ |
+| `/api/market/etf-tide` | ETF Tide | ✅ | ✅ `market_tide` | ✅ |
 
 ---
 
@@ -216,13 +216,15 @@ This document tracks all UW API endpoints and their integration status with Data
 
 ## Summary
 
-### Complete (5)
+### Complete (7)
 
 - ✅ Congress Trades (`/api/congress/recent-trades`)
 - ✅ Darkpool (`/api/darkpool/*`)
 - ✅ Flow Alerts (`/api/option-trades/flow-alerts`)
 - ✅ Insider Trades (`/api/insider/transactions`)
 - ✅ Market Tide (`/api/market/tide`)
+- ✅ Sector Tide (`/api/market/sector-tide`) - uses `market_tide` table
+- ✅ ETF Tide (`/api/market/etf-tide`) - uses `market_tide` table
 
 ### In Progress (8)
 
@@ -251,13 +253,13 @@ See individual sections above
 
 ### Medium Priority (Research Data)
 
-5. Analyst Ratings
+1. Analyst Ratings
 2. News Headlines
 3. FDA Calendar
 4. Institution Holdings
 
 ### Lower Priority
 
-9. ETF data
+1. ETF data
 2. Screeners
 3. Volume profiles
