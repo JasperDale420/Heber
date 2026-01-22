@@ -25,7 +25,6 @@ from pyiceberg.types import (
     LongType,
     NestedField,
     StringType,
-    TimestampType,
     TimestamptzType,
 )
 
@@ -180,22 +179,39 @@ def get_silver_trades_schema() -> Schema:
 
 
 def get_silver_flow_alerts_schema() -> Schema:
-    """Iceberg schema for Silver flow_alerts table."""
+    """Iceberg schema for Silver flow_alerts table.
+
+    Matches UW Flow Alert API response.
+    """
     return Schema(
         *SILVER_BASE_FIELDS,
-        NestedField(20, "alert_type", StringType(), required=True),
-        NestedField(21, "sentiment", StringType(), required=True),
-        NestedField(22, "premium", DoubleType(), required=True),
+        NestedField(20, "alert_type", StringType(), required=False),  # alert_rule in UW
+        NestedField(21, "sentiment", StringType(), required=False),  # computed
+        NestedField(22, "premium", DoubleType(), required=True),  # total_premium
         NestedField(23, "volume", LongType(), required=True),
         NestedField(24, "open_interest", LongType(), required=False),
         NestedField(25, "strike", DoubleType(), required=False),
-        NestedField(26, "expiry", TimestampType(), required=False),
-        NestedField(27, "option_type", StringType(), required=False),
-        # Additional fields from Gateway NormalizedFlowAlert
+        NestedField(26, "expiry", StringType(), required=False),  # Changed to string YYYY-MM-DD
+        NestedField(27, "option_type", StringType(), required=False),  # call/put
         NestedField(28, "side", StringType(), required=False),  # bid, ask, mid
-        NestedField(29, "is_sweep", BooleanType(), required=False),
+        NestedField(29, "is_sweep", BooleanType(), required=False),  # has_sweep
         NestedField(30, "is_unusual", BooleanType(), required=False),
-        NestedField(31, "symbol", StringType(), required=False),  # Ticker symbol
+        NestedField(31, "symbol", StringType(), required=False),  # ticker
+        # Additional UW fields
+        NestedField(32, "option_chain", StringType(), required=False),  # OCC symbol
+        NestedField(33, "price", DoubleType(), required=False),  # Option price
+        NestedField(34, "underlying_price", DoubleType(), required=False),  # Stock price
+        NestedField(35, "alert_rule", StringType(), required=False),  # RepeatedHits, etc.
+        NestedField(36, "total_size", LongType(), required=False),  # Total contracts
+        NestedField(37, "trade_count", LongType(), required=False),  # Number of trades
+        NestedField(38, "volume_oi_ratio", DoubleType(), required=False),  # Vol/OI
+        NestedField(39, "total_ask_side_prem", DoubleType(), required=False),
+        NestedField(40, "total_bid_side_prem", DoubleType(), required=False),
+        NestedField(41, "all_opening_trades", BooleanType(), required=False),
+        NestedField(42, "has_floor", BooleanType(), required=False),
+        NestedField(43, "has_multileg", BooleanType(), required=False),
+        NestedField(44, "has_singleleg", BooleanType(), required=False),
+        NestedField(45, "expiry_count", LongType(), required=False),  # Number of expiries
     )
 
 
