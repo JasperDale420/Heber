@@ -199,12 +199,25 @@ def get_silver_flow_alerts_schema() -> Schema:
     )
 
 
+def get_silver_darkpool_schema() -> Schema:
+    """Iceberg schema for Silver darkpool trades table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),
+        NestedField(21, "price", DoubleType(), required=True),
+        NestedField(22, "size", LongType(), required=True),
+        NestedField(23, "notional", DoubleType(), required=True),
+        NestedField(24, "exchange", StringType(), required=False),
+    )
+
+
 # Schema registry for table creation
 SILVER_SCHEMAS: dict[str, Schema] = {
     "bars": get_silver_bars_schema(),
     "quotes": get_silver_quotes_schema(),
     "trades": get_silver_trades_schema(),
     "flow_alerts": get_silver_flow_alerts_schema(),
+    "darkpool": get_silver_darkpool_schema(),
 }
 
 
