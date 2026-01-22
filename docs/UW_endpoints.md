@@ -15,8 +15,8 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/alerts` | Alerts | ❌ | ❌ | ❌ |
-| `/api/alerts/configuration` | Alert configurations | ❌ | ❌ | ⚪ |
+| `/api/alerts` | Alerts | ✅ | ✅ `user_alerts` | ✅ |
+| `/api/alerts/configuration` | Alert configurations | ✅ | ⚪ | ⚪ |
 
 ---
 
@@ -216,8 +216,9 @@ This document tracks all UW API endpoints and their integration status with Data
 
 ## Summary
 
-### Complete (10)
+### Complete (11)
 
+- ✅ **User Alerts** (`/api/alerts`) - uses `user_alerts` table
 - ✅ Congress Trades (`/api/congress/recent-trades`)
 - ✅ Darkpool (`/api/darkpool/*`)
 - ✅ Flow Alerts (`/api/option-trades/flow-alerts`)
