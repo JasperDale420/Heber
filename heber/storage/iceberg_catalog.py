@@ -310,6 +310,34 @@ def get_silver_market_tide_schema() -> Schema:
     )
 
 
+def get_silver_greek_exposure_schema() -> Schema:
+    """Iceberg schema for Silver greek exposure (GEX) table.
+
+    Matches UW Greek Exposure API response exactly.
+    Supports main GEX, by-expiry, by-strike, and by-strike-expiry variants.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),  # Ticker
+        NestedField(21, "gex_type", StringType(), required=True),  # main, by_expiry, by_strike, by_strike_expiry
+        NestedField(22, "date", StringType(), required=False),  # Trading date YYYY-MM-DD
+        # Call greeks
+        NestedField(23, "call_gamma", DoubleType(), required=False),
+        NestedField(24, "call_delta", DoubleType(), required=False),
+        NestedField(25, "call_vanna", DoubleType(), required=False),
+        NestedField(26, "call_charm", DoubleType(), required=False),
+        # Put greeks
+        NestedField(27, "put_gamma", DoubleType(), required=False),
+        NestedField(28, "put_delta", DoubleType(), required=False),
+        NestedField(29, "put_vanna", DoubleType(), required=False),
+        NestedField(30, "put_charm", DoubleType(), required=False),
+        # Optional grouping fields
+        NestedField(31, "strike", DoubleType(), required=False),  # For by-strike variants
+        NestedField(32, "expiry", StringType(), required=False),  # For by-expiry variants
+        NestedField(33, "dte", LongType(), required=False),  # Days to expiry
+    )
+
+
 # Schema registry for table creation
 SILVER_SCHEMAS: dict[str, Schema] = {
     "bars": get_silver_bars_schema(),
@@ -320,6 +348,7 @@ SILVER_SCHEMAS: dict[str, Schema] = {
     "congress_trades": get_silver_congress_trades_schema(),
     "insider_trades": get_silver_insider_trades_schema(),
     "market_tide": get_silver_market_tide_schema(),
+    "greek_exposure": get_silver_greek_exposure_schema(),
 }
 
 
