@@ -338,6 +338,27 @@ def get_silver_greek_exposure_schema() -> Schema:
     )
 
 
+def get_silver_user_alerts_schema() -> Schema:
+    """Iceberg schema for Silver user alerts table.
+
+    Matches UW Alert API response exactly.
+    These are custom user-created alerts (dividends, trading halts, SEC filings, etc.)
+    Not to be confused with flow_alerts which are option flow signals.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "alert_id", StringType(), required=True),  # UW alert UUID
+        NestedField(21, "created_at", StringType(), required=False),  # ISO timestamp
+        NestedField(22, "name", StringType(), required=False),  # Alert name
+        NestedField(23, "noti_type", StringType(), required=True),  # dividends, trading_state, sec_filings, etc.
+        NestedField(24, "symbol", StringType(), required=False),  # Ticker or contract
+        NestedField(25, "symbol_type", StringType(), required=False),  # stock, option
+        NestedField(26, "tape_time", StringType(), required=False),  # Alert tape timestamp
+        NestedField(27, "user_noti_config_id", StringType(), required=False),  # User's alert config ID
+        NestedField(28, "meta", StringType(), required=False),  # JSON blob of alert-specific data
+    )
+
+
 # Schema registry for table creation
 SILVER_SCHEMAS: dict[str, Schema] = {
     "bars": get_silver_bars_schema(),
@@ -349,6 +370,7 @@ SILVER_SCHEMAS: dict[str, Schema] = {
     "insider_trades": get_silver_insider_trades_schema(),
     "market_tide": get_silver_market_tide_schema(),
     "greek_exposure": get_silver_greek_exposure_schema(),
+    "user_alerts": get_silver_user_alerts_schema(),
 }
 
 
