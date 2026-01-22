@@ -259,17 +259,35 @@ def get_silver_congress_trades_schema() -> Schema:
 
 
 def get_silver_insider_trades_schema() -> Schema:
-    """Iceberg schema for Silver insider trades table."""
+    """Iceberg schema for Silver insider trades table.
+
+    Matches UW Insider Trade Agg API response exactly.
+    """
     return Schema(
         *SILVER_BASE_FIELDS,
-        NestedField(20, "symbol", StringType(), required=True),
-        NestedField(21, "insider", StringType(), required=True),
-        NestedField(22, "title", StringType(), required=False),  # CEO, CFO, etc.
-        NestedField(23, "transaction_type", StringType(), required=True),
-        NestedField(24, "shares", LongType(), required=False),
+        NestedField(20, "ticker", StringType(), required=True),  # Stock symbol
+        NestedField(21, "owner_name", StringType(), required=True),  # Insider name
+        NestedField(22, "officer_title", StringType(), required=False),  # CEO, CFO, etc.
+        NestedField(23, "transaction_code", StringType(), required=True),  # S, P, A, etc.
+        NestedField(24, "amount", LongType(), required=False),  # Shares transacted (neg=sell)
         NestedField(25, "price", DoubleType(), required=False),
-        NestedField(26, "value", DoubleType(), required=False),
-        NestedField(27, "transaction_date", TimestamptzType(), required=False),
+        NestedField(26, "transaction_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(27, "filing_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(28, "formtype", StringType(), required=False),  # 4, 144, etc.
+        NestedField(29, "id", StringType(), required=False),  # Trade UUID
+        NestedField(30, "is_10b5_1", BooleanType(), required=False),  # Part of 10b5-1 plan
+        NestedField(31, "is_director", BooleanType(), required=False),
+        NestedField(32, "is_officer", BooleanType(), required=False),
+        NestedField(33, "is_ten_percent_owner", BooleanType(), required=False),
+        NestedField(34, "sector", StringType(), required=False),
+        NestedField(35, "marketcap", StringType(), required=False),
+        NestedField(36, "is_s_p_500", BooleanType(), required=False),
+        NestedField(37, "next_earnings_date", StringType(), required=False),
+        NestedField(38, "shares_owned_before", LongType(), required=False),
+        NestedField(39, "shares_owned_after", LongType(), required=False),
+        NestedField(40, "security_title", StringType(), required=False),  # Common Stock, etc.
+        NestedField(41, "natureofownership", StringType(), required=False),  # Direct, Indirect
+        NestedField(42, "transactions", LongType(), required=False),  # Number of transactions
     )
 
 
