@@ -24,9 +24,9 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/congress/trader/{politicianId}` | Recent Reports By Trader | ❌ | ❌ | ❌ |
-| `/api/congress/late-reports` | Recent Late Reports | ✅ | ❌ | 🔄 |
-| `/api/congress/recent-trades` | Recent Congress Trades | ✅ | ✅ `congress_trades` | ✅ |
+| `/api/congress/congress-trader` | Recent Reports By Trader | ✅ `get_congress_trader_reports` | ✅ `congress_trades` | ✅ |
+| `/api/congress/late-reports` | Recent Late Reports | ✅ `get_congress_late_reports` | ✅ `congress_trades` | ✅ |
+| `/api/congress/recent-trades` | Recent Congress Trades | ✅ `get_congress_trades` | ✅ `congress_trades` | ✅ |
 
 ---
 
@@ -43,9 +43,9 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/earnings/afterhours` | Afterhours | ❌ | ❌ | ❌ |
-| `/api/earnings/premarket` | Premarket | ❌ | ❌ | ❌ |
-| `/api/earnings/{ticker}` | Historical Ticker Earnings | ❌ | ❌ | ❌ |
+| `/api/earnings/afterhours` | Afterhours | ✅ `get_raw_earnings_afterhours` | ✅ `earnings` | ✅ |
+| `/api/earnings/premarket` | Premarket | ✅ `get_raw_earnings_premarket` | ✅ `earnings` | ✅ |
+| `/api/earnings/{ticker}` | Historical Ticker Earnings | ✅ `get_raw_earnings_ticker` | ✅ `earnings` | ✅ |
 
 ---
 
@@ -53,11 +53,11 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/etf/{ticker}/exposure` | Exposure | ❌ | ❌ | ❌ |
-| `/api/etf/{ticker}/holdings` | Holdings | ❌ | ❌ | ❌ |
-| `/api/etf/{ticker}/in-outflow` | Inflow & Outflow | ❌ | ❌ | ❌ |
-| `/api/etf/{ticker}/info` | Information | ❌ | ❌ | ❌ |
-| `/api/etf/{ticker}/weights` | Sector & Country weights | ❌ | ❌ | ❌ |
+| `/api/etf/{ticker}/exposure` | Exposure | ✅ `get_etf_ticker_exposure` | ✅ `etf_exposure` | ✅ |
+| `/api/etf/{ticker}/holdings` | Holdings | ✅ `get_etf_holdings` | ✅ `etf_holdings` | ✅ |
+| `/api/etf/{ticker}/in-outflow` | Inflow & Outflow | ✅ `get_etf_inflow_outflow` | ✅ `etf_inflow_outflow` | ✅ |
+| `/api/etf/{ticker}/info` | Information | ✅ `get_etf_info` | ✅ `etf_info` | ✅ |
+| `/api/etf/{ticker}/weights` | Sector & Country weights | ✅ `get_etf_country_weights` | ✅ `etf_weights` | ✅ |
 
 ---
 
@@ -65,8 +65,8 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/group-flow/{group}/greek-flow` | Greek flow | ❌ | ❌ | ❌ |
-| `/api/group-flow/{group}/greek-flow-expiry` | Greek flow by expiry | ❌ | ❌ | ❌ |
+| `/api/group-flow/{group}/greek-flow` | Greek flow | ✅ `get_group_greek_flow` | ✅ `group_flow` | ✅ |
+| `/api/group-flow/{group}/greek-flow-expiry` | Greek flow by expiry | ✅ `get_group_greek_flow_by_expiry` | ✅ `group_flow` | ✅ |
 
 ---
 
@@ -74,10 +74,10 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/insider/transactions` | Transactions | ✅ | ✅ `insider_trades` | ✅ |
-| `/api/insider/sector/{sector}/flow` | Sector Flow | ❌ | ❌ | ❌ |
-| `/api/insider/insiders` | Insiders | ❌ | ❌ | ❌ |
-| `/api/insider/ticker/{ticker}/flow` | Ticker Flow | ❌ | ❌ | ❌ |
+| `/api/insider/transactions` | Transactions | ✅ `get_insider_transactions` | ✅ `insider_trades` | ✅ |
+| `/api/insider/sector/{sector}/flow` | Sector Flow | ✅ `get_insider_sector_flow` | ✅ `insider_flow` | ✅ |
+| `/api/insider/insiders` | Insiders | ✅ `get_ticker_insiders` | ✅ `ticker_insiders` | ✅ |
+| `/api/insider/ticker/{ticker}/flow` | Ticker Flow | ✅ `get_insider_ticker_flow` | ✅ `insider_flow` | ✅ |
 
 ---
 
@@ -85,12 +85,12 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/institution/{name}/activity` | Institutional Activity | ❌ | ❌ | ❌ |
-| `/api/institution/{name}/holdings` | Institutional Holdings | ✅ | ❌ | 🔄 |
-| `/api/institution/{name}/sectors` | Sector Exposure | ❌ | ❌ | ❌ |
-| `/api/institution/ownership/{ticker}` | Institutional Ownership | ❌ | ❌ | ❌ |
-| `/api/institution/list` | List of Institutions | ❌ | ❌ | ❌ |
-| `/api/institution/latest-filings` | Latest Filings | ❌ | ❌ | ❌ |
+| `/api/institution/{name}/activity` | Institutional Activity | ✅ `get_institution_activity` | ✅ `institution_activity` | ✅ |
+| `/api/institution/{name}/holdings` | Institutional Holdings | ✅ `get_institution_holdings` | ✅ `institution_holdings` | ✅ |
+| `/api/institution/{name}/sectors` | Sector Exposure | ✅ `get_institution_sector_exposure` | ✅ `institution_sector_exposure` | ✅ |
+| `/api/institution/ownership/{ticker}` | Institutional Ownership | ✅ `get_institutional_ownership` | ✅ `institutional_ownership` | ✅ |
+| `/api/institution/list` | List of Institutions | ✅ `get_institutions` | ✅ Re-uses `institutional_ownership` | ✅ |
+| `/api/institution/latest-filings` | Latest Filings | ✅ `get_latest_institutional_filings` | ✅ `institution_activity` | ✅ |
 
 ---
 
@@ -98,18 +98,18 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/market/correlations` | Correlations | ❌ | ❌ | ❌ |
-| `/api/market/events` | Economic calendar | ❌ | ❌ | ❌ |
-| `/api/market/fda` | FDA Calendar | ✅ | ❌ | 🔄 |
-| `/api/market/insider-buy-sells` | Total Insider Buy & Sells | ❌ | ❌ | ❌ |
-| `/api/market/tide` | Market Tide | ✅ | ✅ `market_tide` | ✅ |
-| `/api/market/oi-change` | OI Change | ❌ | ❌ | ❌ |
-| `/api/market/sector-etfs` | Sector Etfs | ❌ | ❌ | ❌ |
-| `/api/market/spike` | SPIKE | ❌ | ❌ | ❌ |
-| `/api/market/top-net-impact` | Top Net Impact | ❌ | ❌ | ❌ |
-| `/api/market/total-options-volume` | Total Options Volume | ❌ | ❌ | ❌ |
-| `/api/market/sector-tide` | Sector Tide | ✅ | ✅ `market_tide` | ✅ |
-| `/api/market/etf-tide` | ETF Tide | ✅ | ✅ `market_tide` | ✅ |
+| `/api/market/correlations` | Correlations | ✅ `get_market_correlations` | ✅ JSON blob | ✅ |
+| `/api/market/events` | Economic calendar | ✅ `get_economic_calendar` | ✅ JSON blob | ✅ |
+| `/api/market/fda` | FDA Calendar | ✅ `get_fda_calendar` | ✅ JSON blob | ✅ |
+| `/api/market/insider-buy-sells` | Total Insider Buy & Sells | ✅ `get_market_insider_trades` | ✅ `insider_trades` | ✅ |
+| `/api/market/tide` | Market Tide | ✅ `get_market_tide` | ✅ `market_tide` | ✅ |
+| `/api/market/oi-change` | OI Change | ✅ `get_oi_change` | ✅ JSON blob | ✅ |
+| `/api/market/sector-etfs` | Sector Etfs | ✅ `get_sector_etfs` | ✅ `etf_info` | ✅ |
+| `/api/market/spike` | SPIKE | ✅ `get_market_spike` | ✅ JSON blob | ✅ |
+| `/api/market/top-net-impact` | Top Net Impact | ✅ `get_top_net_impact` | ✅ JSON blob | ✅ |
+| `/api/market/total-options-volume` | Total Options Volume | ✅ `get_market_options_volume` | ✅ JSON blob | ✅ |
+| `/api/market/sector-tide` | Sector Tide | ✅ `get_sector_tide` | ✅ `market_tide` | ✅ |
+| `/api/market/etf-tide` | ETF Tide | ✅ `get_market_tide_by_etf` | ✅ `market_tide` | ✅ |
 
 ---
 
@@ -117,7 +117,7 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/net-flow/expiry` | Net Flow Expiry | ❌ | ❌ | ❌ |
+| `/api/net-flow/expiry` | Net Flow Expiry | ✅ `get_net_flow_expiry` | ✅ JSON blob | ✅ |
 
 ---
 
@@ -125,7 +125,7 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/news/headlines` | News Headlines | ✅ | ❌ | 🔄 |
+| `/api/news/headlines` | News Headlines | ✅ `get_news_headlines` | ✅ JSON blob | ✅ |
 
 ---
 
@@ -133,10 +133,10 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/options/{contract}/flow` | Flow Data | ❌ | ❌ | ❌ |
-| `/api/options/{contract}/history` | Historic Data | ❌ | ❌ | ❌ |
-| `/api/options/{contract}/intraday` | Intraday Data | ❌ | ❌ | ❌ |
-| `/api/options/{contract}/volume-profile` | Volume Profile | ❌ | ❌ | ❌ |
+| `/api/options/{contract}/flow` | Flow Data | ✅ `get_option_contract_flow` | ✅ `flow_alerts` | ✅ |
+| `/api/options/{contract}/history` | Historic Data | ✅ `get_option_contract_historic` | ✅ JSON blob | ✅ |
+| `/api/options/{contract}/intraday` | Intraday Data | ✅ `get_option_contract_intraday` | ✅ JSON blob | ✅ |
+| `/api/options/{contract}/volume-profile` | Volume Profile | ✅ `get_option_contract_volume_profile` | ✅ JSON blob | ✅ |
 
 ---
 
@@ -144,8 +144,8 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/option-trades/flow-alerts` | Flow Alerts | ✅ | ✅ `flow_alerts` | ✅ |
-| `/api/option-trades/full-tape` | Full Tape | ❌ | ❌ | ❌ |
+| `/api/option-trades/flow-alerts` | Flow Alerts | ✅ `get_flow_alerts` | ✅ `flow_alerts` | ✅ |
+| `/api/option-trades/full-tape` | Full Tape | ✅ `get_full_tape` | ✅ `flow_alerts` | ✅ |
 
 ---
 
@@ -153,9 +153,9 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/politician-portfolios/holds/{ticker}` | Portfolio Holders by Ticker | ❌ | ❌ | ❌ |
-| `/api/politician-portfolios/people` | Politicians List | ❌ | ❌ | ❌ |
-| `/api/politician-portfolios/{politicianId}/trades` | Politician Trades | ❌ | ❌ | ❌ |
+| `/api/politician-portfolios/holds/{ticker}` | Portfolio Holders by Ticker | ✅ `get_politician_holders` | ✅ `congress` | ✅ |
+| `/api/politician-portfolios/people` | Politicians List | ✅ `get_politician_people` | ✅ JSON blob | ✅ |
+| `/api/politician-portfolios/{politicianId}/trades` | Politician Trades | ✅ `get_politician_portfolios` | ✅ `congress` | ✅ |
 
 ---
 
@@ -163,7 +163,7 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/season/earnings` | Earnings Calendar | ❌ | ❌ | ❌ |
+| `/api/season/earnings` | Earnings Calendar | ✅ `get_earnings_premarket`/`get_earnings_afterhours` | ✅ `earnings` | ✅ |
 
 ---
 
@@ -171,7 +171,7 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/spike/{ticker}` | Ticker SPIKE | ❌ | ❌ | ❌ |
+| `/api/spike/{ticker}` | Ticker SPIKE | ✅ `get_market_spike` (via ticker param) | ✅ JSON blob | ✅ |
 
 ---
 
@@ -179,29 +179,29 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/stock/{ticker}/analyst-ratings` | Analyst Ratings | ✅ | ❌ | 🔄 |
-| `/api/stock/{ticker}/company` | Company Information | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/contract-chain` | Contract Chain | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/earnings-history` | Earnings History | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/expirations` | Option Expirations | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/flow` | Stock Flow | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/flow-expiry` | Flow per Expiry | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/flow-strike` | Flow per Strike | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/greek-exposure` | Greek Exposure | ✅ | ✅ `greek_exposure` | ✅ |
-| `/api/stock/{ticker}/greek-exposure-expiry` | Greek Exposure by Expiry | ✅ | ✅ `greek_exposure` | ✅ |
-| `/api/stock/{ticker}/greek-exposure-strike` | Greek Exposure by Strike | ✅ | ✅ `greek_exposure` | ✅ |
-| `/api/stock/{ticker}/historical-volatility` | Historical Volatility | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/hottest-chains` | Hottest Chains | ✅ | ❌ | 🔄 |
-| `/api/stock/{ticker}/institution-ownership` | Institution Ownership | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/iv-rank` | IV Rank | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/max-pain` | Max Pain | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/news` | Ticker News | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/oi-change` | OI Change | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/option-volume` | Option Volume | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/overview` | Stock Overview | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/quote` | Stock Quote | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/short-data` | Short Data | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/volume-oi-expiry` | Volume & OI by Expiry | ❌ | ❌ | ❌ |
+| `/api/stock/{ticker}/analyst-ratings` | Analyst Ratings | ✅ `get_analyst_ratings` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/company` | Company Information | ✅ `get_stock_info` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/contract-chain` | Contract Chain | ✅ `get_stock_option_chains` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/earnings-history` | Earnings History | ✅ `get_earnings_ticker` | ✅ `earnings` | ✅ |
+| `/api/stock/{ticker}/expirations` | Option Expirations | ✅ `get_stock_option_contracts` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/flow` | Stock Flow | ✅ `get_ticker_flow` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/flow-expiry` | Flow per Expiry | ✅ `get_ticker_flow_by_expiry` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/flow-strike` | Flow per Strike | ✅ `get_ticker_flow_by_strike` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/greek-exposure` | Greek Exposure | ✅ `get_stock_greek_exposure` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-expiry` | Greek Exposure by Expiry | ✅ `get_stock_greek_exposure_by_expiry` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-strike` | Greek Exposure by Strike | ✅ `get_stock_greek_exposure_by_strike` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/historical-volatility` | Historical Volatility | ✅ `get_historical_volatility` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/hottest-chains` | Hottest Chains | ✅ `get_hottest_chains` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/institution-ownership` | Institution Ownership | ✅ `get_institutional_ownership` | ✅ `institutional_ownership` | ✅ |
+| `/api/stock/{ticker}/iv-rank` | IV Rank | ✅ `get_iv_rank` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/max-pain` | Max Pain | ✅ `get_max_pain` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/news` | Ticker News | ✅ `get_ticker_news` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/oi-change` | OI Change | ✅ `get_oi_change` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/option-volume` | Option Volume | ✅ `get_options_volume` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/overview` | Stock Overview | ✅ `get_stock_state` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/quote` | Stock Quote | ✅ `get_stock_info` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/short-data` | Short Data | ✅ `get_short_data` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/volume-oi-expiry` | Volume & OI by Expiry | ✅ `get_volume_oi_by_expiry` | ✅ JSON blob | ✅ |
 
 ---
 
@@ -209,8 +209,8 @@ This document tracks all UW API endpoints and their integration status with Data
 
 | Endpoint | Summary | Gateway | Heber Schema | Status |
 |----------|---------|---------|--------------|--------|
-| `/api/stock-screener` | Stock Screener | ❌ | ❌ | ❌ |
-| `/api/screener/option-contracts` | Option Contract Screener | ❌ | ❌ | ❌ |
+| `/api/stock-screener` | Stock Screener | ✅ `get_stock_screener` | ✅ JSON blob | ✅ |
+| `/api/screener/option-contracts` | Option Contract Screener | ✅ `get_options_screener` | ✅ JSON blob | ✅ |
 
 ---
 

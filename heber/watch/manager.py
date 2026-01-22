@@ -1,0 +1,309 @@
+"""Watch Manager - CRUD operations for alert watches in Redis."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import structlog
+
+from heber.watch.models import (
+    POLL_CONFIG,
+    AlertWatch,
+    WatchHorizon,
+    WatchKeys,
+    WatchSnapshot,
+    WatchStatus,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+class WatchManager:
+    """Manages alert watches in Redis.
+
+    Provides CRUD operations and query methods for the watch list.
+    """
+
+    def __init__(self, redis_client: Any):
+        """Initialize with Redis client.
+
+        Args:
+            redis_client: Redis client (sync or async)
+        """
+        self.redis = redis_client
+
+    def create_watch(
+        self,
+        alert_id: str,
+        occ_symbol: str,
+        underlying: str,
+        put_call: str,
+        expiry: str,
+        strike: float,
+        entry_price: float,
+        spot_at_alert: float,
+        alert_time: datetime,
+        horizon: WatchHorizon,
+        tp_threshold: float,
+        sl_threshold: float,
+        atr_at_alert: float | None = None,
+    ) -> AlertWatch:
+        """Create a new alert watch.
+
+        Args:
+            alert_id: UW alert ID
+            occ_symbol: OCC option symbol
+            underlying: Stock ticker
+            put_call: C or P
+            expiry: Expiry date string
+            strike: Strike price
+            entry_price: Option mid at alert
+            spot_at_alert: Underlying price at alert
+            alert_time: When alert fired
+            horizon: Trading horizon
+            tp_threshold: Take profit threshold
+            sl_threshold: Stop loss threshold
+            atr_at_alert: ATR value (optional)
+
+        Returns:
+            Created AlertWatch
+        """
+        watch_id = str(uuid.uuid4())
+
+        # Calculate window end based on horizon
+        config = POLL_CONFIG[horizon]
+        window_end = alert_time + timedelta(hours=config["max_duration_hours"])
+
+        watch = AlertWatch(
+            watch_id=watch_id,
+            alert_id=alert_id,
+            occ_symbol=occ_symbol,
+            underlying=underlying,
+            put_call=put_call,
+            expiry=expiry,
+            strike=strike,
+            entry_price=entry_price,
+            spot_at_alert=spot_at_alert,
+            atr_at_alert=atr_at_alert,
+            alert_time=alert_time,
+            window_end=window_end,
+            horizon=horizon,
+            tp_threshold=tp_threshold,
+            sl_threshold=sl_threshold,
+            status=WatchStatus.WATCHING,
+        )
+
+        # Store in Redis
+        self._save_watch(watch)
+
+        logger.info(
+            "Created alert watch",
+            watch_id=watch_id,
+            alert_id=alert_id,
+            occ_symbol=occ_symbol,
+            horizon=horizon.value,
+            window_end=window_end.isoformat(),
+        )
+
+        return watch
+
+    def get_watch(self, watch_id: str) -> AlertWatch | None:
+        """Get a watch by ID."""
+        key = WatchKeys.watch_key(watch_id)
+        data = self.redis.get(key)
+
+        if not data:
+            return None
+
+        return AlertWatch.model_validate_json(data)
+
+    def get_active_watches(self) -> list[AlertWatch]:
+        """Get all watches with WATCHING status."""
+        watch_ids = self.redis.smembers(WatchKeys.ACTIVE_WATCHES)
+
+        watches = []
+        for watch_id in watch_ids:
+            watch = self.get_watch(watch_id)
+            if watch and watch.status == WatchStatus.WATCHING:
+                watches.append(watch)
+
+        return watches
+
+    def get_watches_for_symbol(self, occ_symbol: str) -> list[AlertWatch]:
+        """Get all watches for a specific contract."""
+        key = WatchKeys.by_symbol_key(occ_symbol)
+        watch_ids = self.redis.smembers(key)
+
+        watches = []
+        for watch_id in watch_ids:
+            watch = self.get_watch(watch_id)
+            if watch:
+                watches.append(watch)
+
+        return watches
+
+    def update_watch_price(
+        self,
+        watch_id: str,
+        current_price: float,
+        timestamp: datetime,
+    ) -> AlertWatch | None:
+        """Update watch with new price and compute metrics.
+
+        Args:
+            watch_id: Watch ID
+            current_price: Latest option mid price
+            timestamp: Snapshot timestamp
+
+        Returns:
+            Updated AlertWatch or None if not found
+        """
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return None
+
+        # Compute return
+        current_return = (current_price - watch.entry_price) / watch.entry_price
+
+        # Update MFE/MAE
+        mfe = max(watch.mfe or -float("inf"), current_return)
+        mae = min(watch.mae or float("inf"), current_return)
+
+        # Update watch
+        watch.current_price = current_price
+        watch.current_return = current_return
+        watch.mfe = mfe
+        watch.mae = mae
+        watch.snapshot_count += 1
+        watch.updated_at = datetime.now(UTC)
+
+        self._save_watch(watch)
+
+        return watch
+
+    def complete_watch(
+        self,
+        watch_id: str,
+        status: WatchStatus,
+        outcome_return: float,
+        bars_to_hit: int | None = None,
+    ) -> AlertWatch | None:
+        """Mark watch as complete with final outcome.
+
+        Args:
+            watch_id: Watch ID
+            status: Final status (HIT_TP, HIT_SL, EXPIRED)
+            outcome_return: Final return at outcome
+            bars_to_hit: Number of snapshots until barrier (if any)
+
+        Returns:
+            Updated AlertWatch
+        """
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return None
+
+        watch.status = status
+        watch.outcome_time = datetime.now(UTC)
+        watch.outcome_return = outcome_return
+        watch.bars_to_hit = bars_to_hit
+        watch.updated_at = datetime.now(UTC)
+
+        self._save_watch(watch)
+
+        # Remove from active set
+        self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch_id)
+
+        logger.info(
+            "Completed alert watch",
+            watch_id=watch_id,
+            status=status.value,
+            outcome_return=outcome_return,
+        )
+
+        return watch
+
+    def add_snapshot(self, snapshot: WatchSnapshot) -> None:
+        """Add a price snapshot for a watch."""
+        key = WatchKeys.snapshots_key(snapshot.watch_id)
+        self.redis.rpush(key, snapshot.model_dump_json())
+
+    def get_snapshots(self, watch_id: str) -> list[WatchSnapshot]:
+        """Get all snapshots for a watch."""
+        key = WatchKeys.snapshots_key(watch_id)
+        data = self.redis.lrange(key, 0, -1)
+
+        return [WatchSnapshot.model_validate_json(d) for d in data]
+
+    def get_expired_watches(self) -> list[AlertWatch]:
+        """Get watches that have passed their window_end time."""
+        now = datetime.now(UTC)
+        active = self.get_active_watches()
+
+        return [w for w in active if w.window_end <= now]
+
+    def cleanup_expired(self) -> int:
+        """Mark expired watches as EXPIRED and remove from active.
+
+        Returns:
+            Number of watches expired
+        """
+        expired = self.get_expired_watches()
+
+        for watch in expired:
+            final_return = watch.current_return or 0.0
+            self.complete_watch(
+                watch.watch_id,
+                WatchStatus.EXPIRED,
+                final_return,
+                bars_to_hit=watch.snapshot_count,
+            )
+
+        logger.info("Cleaned up expired watches", count=len(expired))
+
+        return len(expired)
+
+    def delete_watch(self, watch_id: str) -> bool:
+        """Delete a watch and its snapshots."""
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return False
+
+        # Remove from all indexes
+        self.redis.delete(WatchKeys.watch_key(watch_id))
+        self.redis.delete(WatchKeys.snapshots_key(watch_id))
+        self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch_id)
+        self.redis.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch_id)
+
+        return True
+
+    def _save_watch(self, watch: AlertWatch) -> None:
+        """Save watch to Redis."""
+        key = WatchKeys.watch_key(watch.watch_id)
+        self.redis.set(key, watch.model_dump_json())
+
+        # Add to active set if watching
+        if watch.status == WatchStatus.WATCHING:
+            self.redis.sadd(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+
+        # Add to symbol index
+        self.redis.sadd(
+            WatchKeys.by_symbol_key(watch.occ_symbol),
+            watch.watch_id,
+        )
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get watch list statistics."""
+        active = self.get_active_watches()
+
+        by_horizon = {}
+        for watch in active:
+            h = watch.horizon
+            by_horizon[h] = by_horizon.get(h, 0) + 1
+
+        return {
+            "active_count": len(active),
+            "by_horizon": by_horizon,
+        }

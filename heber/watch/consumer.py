@@ -1,0 +1,299 @@
+"""Alert Watch Consumer - Creates watches from flow_alerts stream.
+
+Listens to the flow_alerts Redis stream and automatically creates
+watches for each incoming alert.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
+
+import httpx
+import redis
+import structlog
+
+from heber.features.templates.alert_labels import (
+    AlertHorizon,
+    ContractBarrierConfig,
+    classify_horizon,
+)
+from heber.watch.manager import WatchManager
+from heber.watch.models import WatchHorizon
+
+logger = structlog.get_logger(__name__)
+
+# Stream configuration
+FLOW_ALERTS_STREAM = "heber:stream:flow_alerts"
+CONSUMER_GROUP = "watch-consumer"
+CONSUMER_NAME = "watch-consumer-1"
+DATA_GATEWAY_URL = "http://localhost:8000"
+
+
+def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
+    """Convert AlertHorizon enum to WatchHorizon enum."""
+    mapping = {
+        AlertHorizon.INTRADAY: WatchHorizon.INTRADAY,
+        AlertHorizon.SWING: WatchHorizon.SWING,
+        AlertHorizon.LEAP: WatchHorizon.LEAP,
+    }
+    return mapping.get(horizon, WatchHorizon.SWING)
+
+
+class AlertWatchConsumer:
+    """Consumes flow alerts and creates watches.
+
+    Runs as a background service, listening to the flow_alerts Redis stream.
+    """
+
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        watch_manager: WatchManager,
+        contract_config: ContractBarrierConfig | None = None,
+        gateway_url: str = DATA_GATEWAY_URL,
+    ):
+        """Initialize the consumer.
+
+        Args:
+            redis_client: Redis client
+            watch_manager: WatchManager instance
+            contract_config: Barrier configuration for contracts
+            gateway_url: Data Gateway URL for fetching entry prices
+        """
+        self.redis = redis_client
+        self.manager = watch_manager
+        self.config = contract_config or ContractBarrierConfig.moderate()
+        self.gateway_url = gateway_url
+        self._running = False
+
+    def setup_consumer_group(self) -> None:
+        """Create consumer group if it doesn't exist."""
+        try:
+            self.redis.xgroup_create(
+                FLOW_ALERTS_STREAM,
+                CONSUMER_GROUP,
+                id="0",
+                mkstream=True,
+            )
+            logger.info(
+                "Created consumer group",
+                stream=FLOW_ALERTS_STREAM,
+                group=CONSUMER_GROUP,
+            )
+        except redis.ResponseError as e:
+            if "BUSYGROUP" in str(e):
+                # Group already exists
+                pass
+            else:
+                raise
+
+    async def run(self) -> None:
+        """Run the consumer as a continuous service."""
+        self._running = True
+        self.setup_consumer_group()
+
+        logger.info(
+            "Starting alert watch consumer",
+            stream=FLOW_ALERTS_STREAM,
+            group=CONSUMER_GROUP,
+        )
+
+        while self._running:
+            try:
+                # Read new messages from stream
+                messages = self.redis.xreadgroup(
+                    CONSUMER_GROUP,
+                    CONSUMER_NAME,
+                    {FLOW_ALERTS_STREAM: ">"},
+                    count=100,
+                    block=5000,
+                )
+
+                if messages:
+                    for _stream, entries in messages:
+                        for msg_id, data in entries:
+                            await self._process_alert(msg_id, data)
+                            # Acknowledge message
+                            self.redis.xack(FLOW_ALERTS_STREAM, CONSUMER_GROUP, msg_id)
+
+            except Exception as e:
+                logger.error("Consumer error", error=str(e))
+                await asyncio.sleep(1)
+
+    def stop(self) -> None:
+        """Stop the consumer."""
+        self._running = False
+        logger.info("Alert watch consumer stopped")
+
+    async def _process_alert(self, msg_id: str, data: dict) -> None:
+        """Process a single alert and create a watch.
+
+        Args:
+            msg_id: Redis message ID
+            data: Alert data from stream
+        """
+        try:
+            # Parse alert data
+            alert = self._parse_alert(data)
+
+            if not alert:
+                logger.warning("Could not parse alert", msg_id=msg_id)
+                return
+
+            # Skip if no OCC symbol
+            if not alert.get("occ_symbol"):
+                logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
+                return
+
+            # Determine horizon based on DTE
+            dte = alert.get("dte", 5)
+            alert_horizon = classify_horizon(dte)
+            watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+
+            # Get entry price (option quote at alert time)
+            entry_price = await self._get_entry_price(alert["occ_symbol"])
+
+            if not entry_price or entry_price <= 0:
+                logger.warning(
+                    "Could not get entry price",
+                    occ_symbol=alert["occ_symbol"],
+                )
+                # Use contract_px from alert if available
+                entry_price = alert.get("contract_px", 1.0)
+
+            # Create watch
+            watch = self.manager.create_watch(
+                alert_id=alert["id"],
+                occ_symbol=alert["occ_symbol"],
+                underlying=alert["underlying"],
+                put_call=alert["put_call"],
+                expiry=alert.get("expiry", ""),
+                strike=alert.get("strike", 0.0),
+                entry_price=entry_price,
+                spot_at_alert=alert.get("spot_px", 0.0),
+                alert_time=alert.get("ts_event", datetime.now(UTC)),
+                horizon=watch_horizon,
+                tp_threshold=self.config.tp_pct,
+                sl_threshold=self.config.sl_pct,
+            )
+
+            logger.info(
+                "Created watch from alert",
+                watch_id=watch.watch_id,
+                alert_id=alert["id"],
+                occ_symbol=alert["occ_symbol"],
+                horizon=watch_horizon.value,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to process alert",
+                msg_id=msg_id,
+                error=str(e),
+            )
+
+    def _parse_alert(self, data: dict) -> dict | None:
+        """Parse alert data from stream message.
+
+        Args:
+            data: Raw message data (may be bytes or nested JSON)
+
+        Returns:
+            Parsed alert dict or None
+        """
+        try:
+            # Handle bytes keys/values
+            parsed = {}
+            for k, v in data.items():
+                key = k.decode() if isinstance(k, bytes) else k
+                val = v.decode() if isinstance(v, bytes) else v
+
+                # Try to parse JSON values
+                if isinstance(val, str) and val.startswith("{"):
+                    try:
+                        val = json.loads(val)
+                    except json.JSONDecodeError:
+                        pass
+
+                parsed[key] = val
+
+            # If data was nested JSON
+            if "data" in parsed and isinstance(parsed["data"], dict):
+                parsed = {**parsed, **parsed["data"]}
+
+            # Map common field names
+            result = {
+                "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
+                "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
+                "underlying": parsed.get("underlying") or parsed.get("ticker"),
+                "put_call": parsed.get("put_call") or parsed.get("type", "C")[0].upper(),
+                "expiry": parsed.get("expiry"),
+                "strike": float(parsed.get("strike", 0) or 0),
+                "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
+                "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
+            }
+
+            # Calculate DTE if expiry available
+            if result["expiry"]:
+                try:
+                    from datetime import date
+
+                    exp_date = datetime.strptime(str(result["expiry"])[:10], "%Y-%m-%d").date()
+                    result["dte"] = (exp_date - date.today()).days
+                except Exception:
+                    result["dte"] = 5
+
+            # Parse timestamp
+            ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
+            if ts:
+                if isinstance(ts, str):
+                    result["ts_event"] = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                elif isinstance(ts, int | float):
+                    result["ts_event"] = datetime.fromtimestamp(ts, tz=UTC)
+                else:
+                    result["ts_event"] = datetime.now(UTC)
+            else:
+                result["ts_event"] = datetime.now(UTC)
+
+            return result
+
+        except Exception as e:
+            logger.error("Failed to parse alert", error=str(e))
+            return None
+
+    async def _get_entry_price(self, occ_symbol: str) -> float | None:
+        """Get latest option quote from Data Gateway.
+
+        Args:
+            occ_symbol: OCC option symbol
+
+        Returns:
+            Mid price or None
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.gateway_url}/api/v1/alpaca/options/quotes",
+                    params={"symbols": occ_symbol},
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    quotes = data.get("data", {}).get("quotes", {})
+                    quote = quotes.get(occ_symbol)
+
+                    if quote:
+                        bid = quote.get("bp") or quote.get("bid_price", 0)
+                        ask = quote.get("ap") or quote.get("ask_price", 0)
+
+                        if bid and ask:
+                            return (bid + ask) / 2
+                        return quote.get("last_price")
+
+                return None
+
+        except Exception as e:
+            logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
+            return None

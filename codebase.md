@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-21T15:47:34*
+*Generated: 2026-01-21T22:53:51*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 174
+Files analyzed: 181
 
-Estimated tokens: 271.7k
+Estimated tokens: 299.9k
 
 ---
 
@@ -31,7 +31,10 @@ Directory structure:
     ├── .secrets.baseline
     ├── .trivy.yaml
     ├── docs/
+    │   ├── Alpaca_market_data_endpoints.md
+    │   ├── Alpaca_trading_endpoints.md
     │   ├── sdk.md
+    │   ├── UW_endpoints.md
     │   └── operations/
     │       ├── backup-dr-runbook.md
     │       ├── cost-estimates.md
@@ -44,6 +47,7 @@ Directory structure:
     │   ├── feature_store.yaml
     │   └── feature_views/
     │       ├── __init__.py
+    │       ├── alert_labels.py
     │       ├── flow.py
     │       ├── labels.py
     │       ├── microstructure.py
@@ -81,8 +85,12 @@ Directory structure:
     │   │   └── tests.py
     │   ├── features/
     │   │   ├── __init__.py
+    │   │   ├── pipelines/
+    │   │   │   ├── __init__.py
+    │   │   │   └── alert_labels.py
     │   │   └── templates/
     │   │       ├── __init__.py
+    │   │       ├── alert_labels.py
     │   │       ├── cross_asset.py
     │   │       ├── flow.py
     │   │       ├── labels.py
@@ -449,6 +457,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `heber/features/templates/microstructure.py` - Spread, depth, imbalance metrics
   - `heber/features/templates/cross_asset.py` - Beta, alpha, relative strength, correlation
   - `heber/features/templates/labels.py` - Forward return labels, classification labels
+  - `heber/features/templates/alert_labels.py` - Flow alert return labels for underlying and option contracts
   - 7/7 tests passing
 
 - **Data Quality Contracts** (Phase 35, PRD §33)
@@ -903,14 +912,16 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://redis:6379
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_STREAM_NAME=heber:events
+      - HEBER_REDIS_CONSUMER_GROUP=heber-writers
       - HEBER_CLICKHOUSE_HOST=clickhouse
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       heber-catalog:
         condition: service_healthy
@@ -8910,6 +8921,380 @@ vulnerability:
 
 
 ================================================
+FILE: docs/Alpaca_market_data_endpoints.md
+================================================
+# Alpaca Market Data API Endpoint Coverage
+
+This document tracks the implementation status of Alpaca Market Data API endpoints in the Data Gateway and Heber data pipeline.
+
+**Legend:**
+
+- ✅ = Complete (Gateway method exists, Heber schema available)
+- 🔄 = In Progress (Gateway exists, needs Heber schema)
+- ❌ = Not Started
+
+---
+
+## Stocks Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v2/stocks/bars` | Historical bars | ✅ `get_bars` | ✅ `bars` | ✅ |
+| `GET /v2/stocks/bars/latest` | Latest bars | ✅ `get_latest_bars` | ✅ `bars` | ✅ |
+| `GET /v2/stocks/quotes` | Historical quotes | ✅ `get_historical_quotes` | ✅ `quotes` | ✅ |
+| `GET /v2/stocks/quotes/latest` | Latest quotes | ✅ `get_quotes` | ✅ `quotes` | ✅ |
+| `GET /v2/stocks/trades` | Historical trades | ✅ `get_trades` | ✅ `trades` | ✅ |
+| `GET /v2/stocks/trades/latest` | Latest trades | ✅ `get_latest_trades` | ✅ `trades` | ✅ |
+| `GET /v2/stocks/snapshots` | Stock snapshots | ✅ `get_snapshots` | ✅ JSON blob | ✅ |
+| `GET /v2/stocks/auctions` | Auction data | ✅ `get_auctions` | ✅ JSON blob | ✅ |
+| `GET /v2/stocks/{symbol}/bars` | Symbol bars | ✅ `get_bars` | ✅ `bars` | ✅ |
+| `GET /v2/stocks/{symbol}/bars/latest` | Symbol latest bar | ✅ `get_latest_bars` | ✅ `bars` | ✅ |
+| `GET /v2/stocks/{symbol}/quotes` | Symbol quotes | ✅ `get_historical_quotes` | ✅ `quotes` | ✅ |
+| `GET /v2/stocks/{symbol}/quotes/latest` | Symbol latest quote | ✅ `get_quotes` | ✅ `quotes` | ✅ |
+| `GET /v2/stocks/{symbol}/trades` | Symbol trades | ✅ `get_trades` | ✅ `trades` | ✅ |
+| `GET /v2/stocks/{symbol}/trades/latest` | Symbol latest trade | ✅ `get_latest_trades` | ✅ `trades` | ✅ |
+| `GET /v2/stocks/{symbol}/auctions` | Symbol auctions | ✅ `get_auctions` | ✅ JSON blob | ✅ |
+| `GET /v2/stocks/{symbol}/snapshots` | Symbol snapshot | ✅ `get_snapshots` | ✅ JSON blob | ✅ |
+| `GET /v2/stocks/meta/conditions/{ticktype}` | Condition codes | ✅ `get_condition_codes` | ✅ JSON blob | ✅ |
+| `GET /v2/stocks/meta/exchanges` | Exchange codes | ✅ `get_exchange_codes` | ✅ JSON blob | ✅ |
+
+---
+
+## Options Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/options/bars` | Option bars | ✅ `get_option_bars` | ✅ `bars` | ✅ |
+| `GET /v1beta1/options/quotes/latest` | Latest option quotes | ✅ `get_option_quotes` | ✅ `quotes` | ✅ |
+| `GET /v1beta1/options/trades` | Option trades | ✅ `get_option_trades` | ✅ `trades` | ✅ |
+| `GET /v1beta1/options/trades/latest` | Latest option trades | ✅ `get_option_latest_trades` | ✅ `trades` | ✅ |
+| `GET /v1beta1/options/snapshots` | Option snapshots | ✅ `get_option_snapshots` | ✅ `alpaca_option_contract` | ✅ |
+| `GET /v1beta1/options/snapshots/{underlying}` | Underlying snapshots | ✅ `get_option_snapshots` | ✅ `alpaca_option_contract` | ✅ |
+| `GET /v1beta1/options/meta/conditions/{ticktype}` | Condition codes | ✅ `get_condition_codes` | ✅ JSON blob | ✅ |
+| `GET /v1beta1/options/meta/exchanges` | Exchange codes | ✅ `get_exchange_codes` | ✅ JSON blob | ✅ |
+
+---
+
+## Crypto Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta3/crypto/{loc}/bars` | Crypto bars | ✅ `get_crypto_bars` | ✅ `bars` | ✅ |
+| `GET /v1beta3/crypto/{loc}/latest/bars` | Latest crypto bars | ✅ `get_crypto_latest_bars` | ✅ `bars` | ✅ |
+| `GET /v1beta3/crypto/{loc}/trades` | Crypto trades | ✅ `get_crypto_trades` | ✅ `trades` | ✅ |
+| `GET /v1beta3/crypto/{loc}/latest/trades` | Latest crypto trades | ✅ `get_crypto_latest_trades` | ✅ `trades` | ✅ |
+| `GET /v1beta3/crypto/{loc}/quotes` | Crypto quotes | ✅ `get_crypto_quotes` | ✅ `quotes` | ✅ |
+| `GET /v1beta3/crypto/{loc}/latest/quotes` | Latest crypto quotes | ✅ `get_crypto_quotes` | ✅ `quotes` | ✅ |
+| `GET /v1beta3/crypto/{loc}/snapshots` | Crypto snapshots | ✅ `get_crypto_snapshot` | ✅ JSON blob | ✅ |
+| `GET /v1beta3/crypto/{loc}/latest/orderbooks` | Crypto orderbooks | ✅ `get_crypto_orderbook` | ✅ JSON blob | ✅ |
+
+---
+
+## Crypto Perpetuals Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/crypto-perps/{loc}/latest/bars` | Perp bars | ❌ | ❌ | ❌ |
+| `GET /v1beta1/crypto-perps/{loc}/latest/pricing` | Perp pricing | ❌ | ❌ | ❌ |
+| `GET /v1beta1/crypto-perps/{loc}/latest/orderbooks` | Perp orderbooks | ❌ | ❌ | ❌ |
+| `GET /v1beta1/crypto-perps/{loc}/latest/quotes` | Perp quotes | ❌ | ❌ | ❌ |
+| `GET /v1beta1/crypto-perps/{loc}/latest/trades` | Perp trades | ❌ | ❌ | ❌ |
+
+---
+
+## Forex Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/forex/latest/rates` | Latest FX rates | ✅ `get_forex_rates` | ✅ JSON blob | ✅ |
+| `GET /v1beta1/forex/rates` | Historical FX rates | ✅ `get_forex_rates_historical` | ✅ JSON blob | ✅ |
+
+---
+
+## Screener Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/screener/stocks/most-actives` | Most actives | ✅ `get_most_actives` | ✅ JSON blob | ✅ |
+| `GET /v1beta1/screener/{market_type}/movers` | Market movers | ✅ `get_movers` | ✅ JSON blob | ✅ |
+
+---
+
+## News Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/news` | News articles | ✅ `get_news` | ✅ JSON blob | ✅ |
+
+---
+
+## Logos Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/logos/{symbol}` | Company logo | ✅ `get_logo` | N/A (binary) | ✅ |
+
+---
+
+## Fixed Income Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1beta1/fixed_income/latest/prices` | Treasury prices | ✅ `get_fixed_income_prices` | ✅ JSON blob | ✅ |
+
+---
+
+## Corporate Actions Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `GET /v1/corporate-actions` | Corporate actions | ✅ `get_corporate_actions` | ✅ `corporate_actions` | ✅ |
+
+---
+
+## Summary
+
+### Complete (42 of 47 endpoints = 89%)
+
+| Category | Complete | Total | Coverage |
+|----------|----------|-------|----------|
+| Stocks | 18 | 18 | **100%** |
+| Options | 8 | 8 | **100%** |
+| Crypto | 8 | 8 | **100%** |
+| Forex | 2 | 2 | **100%** |
+| Screener | 2 | 2 | **100%** |
+| News | 1 | 1 | **100%** |
+| Logos | 1 | 1 | **100%** |
+| Fixed Income | 1 | 1 | **100%** |
+| Corporate Actions | 1 | 1 | **100%** |
+| **Crypto Perpetuals** | 0 | 5 | 0% |
+
+### Not Implemented (5 endpoints - Crypto Perpetuals)
+
+All crypto perpetuals endpoints - specialized use case excluded from standard equities/options trading. These can be added if needed.
+
+---
+
+## Heber Schema Mapping
+
+The Alpaca Market Data API reuses existing Heber schemas:
+
+| Alpaca Data Type | Heber Schema |
+|------------------|--------------|
+| Stock Bars | `bars` |
+| Stock Quotes | `quotes` |
+| Stock Trades | `trades` |
+| Option Bars | `bars` |
+| Option Quotes | `quotes` |
+| Option Trades | `trades` |
+| Option Snapshots | `alpaca_option_contract` |
+| Crypto Bars | `bars` |
+| Crypto Quotes | `quotes` |
+| Crypto Trades | `trades` |
+| Aggregated/Meta | JSON blob |
+
+
+
+================================================
+FILE: docs/Alpaca_trading_endpoints.md
+================================================
+# Alpaca Trading API Endpoint Coverage
+
+This document tracks the implementation status of Alpaca Trading API endpoints in the Data Gateway and Heber data pipeline.
+
+**Legend:**
+
+- ✅ = Complete (Gateway method exists, Heber schema available if applicable)
+- 🔄 = In Progress (Gateway method exists, needs Heber schema)
+- ❌ = Not Started
+
+---
+
+## Account Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/account` | GET | Get Account | ✅ `get_account` | ✅ `account_snapshot` | ✅ |
+| `/v2/account/configurations` | GET | Get Configurations | ✅ `get_account_configurations` | ✅ JSON blob | ✅ |
+| `/v2/account/configurations` | PATCH | Update Configurations | ✅ `set_account_configurations` | N/A (write) | ✅ |
+| `/v2/account/activities` | GET | Get Activities | ✅ `get_account_activities` | ✅ JSON blob | ✅ |
+| `/v2/account/activities/{activity_type}` | GET | Get Activities by Type | ✅ `get_account_activities` | ✅ JSON blob | ✅ |
+| `/v2/account/portfolio/history` | GET | Portfolio History | ✅ `get_portfolio_history` | ✅ `portfolio_history` | ✅ |
+
+---
+
+## Orders Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/orders` | POST | Create Order | ✅ `create_order` | N/A (write) | ✅ |
+| `/v2/orders` | GET | Get All Orders | ✅ `get_orders` | ✅ `orders_history` | ✅ |
+| `/v2/orders` | DELETE | Cancel All Orders | ✅ `cancel_all_orders` | N/A (write) | ✅ |
+| `/v2/orders:by_client_order_id` | GET | Get Order by Client ID | ✅ `get_order_by_client_id` | ✅ `orders_history` | ✅ |
+| `/v2/orders/{order_id}` | GET | Get Order | ✅ `get_order` | ✅ `orders_history` | ✅ |
+| `/v2/orders/{order_id}` | PATCH | Replace Order | ✅ `replace_order` | N/A (write) | ✅ |
+| `/v2/orders/{order_id}` | DELETE | Cancel Order | ✅ `cancel_order` | N/A (write) | ✅ |
+
+---
+
+## Positions Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/positions` | GET | Get All Positions | ✅ `get_positions` | ✅ `alpaca_position` | ✅ |
+| `/v2/positions` | DELETE | Close All Positions | ✅ `close_all_positions` | N/A (write) | ✅ |
+| `/v2/positions/{symbol_or_asset_id}` | GET | Get Position | ✅ `get_position` | ✅ `alpaca_position` | ✅ |
+| `/v2/positions/{symbol_or_asset_id}` | DELETE | Close Position | ✅ `close_position` | N/A (write) | ✅ |
+| `/v2/positions/{symbol_or_contract_id}/exercise` | POST | Exercise Option | ✅ `exercise_option_position` | N/A (write) | ✅ |
+| `/v2/positions/{symbol_or_contract_id}/do-not-exercise` | POST | Do Not Exercise | ✅ `do_not_exercise_option` | N/A (write) | ✅ |
+
+---
+
+## Watchlists Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/watchlists` | GET | Get All Watchlists | ✅ `get_watchlists` | ✅ JSON blob | ✅ |
+| `/v2/watchlists` | POST | Create Watchlist | ✅ `create_watchlist` | N/A (write) | ✅ |
+| `/v2/watchlists/{watchlist_id}` | GET | Get Watchlist | ✅ `get_watchlist` | ✅ JSON blob | ✅ |
+| `/v2/watchlists/{watchlist_id}` | PUT | Update Watchlist | ✅ `update_watchlist` | N/A (write) | ✅ |
+| `/v2/watchlists/{watchlist_id}` | POST | Add Symbol | ✅ `add_asset_to_watchlist` | N/A (write) | ✅ |
+| `/v2/watchlists/{watchlist_id}` | DELETE | Delete Watchlist | ✅ `delete_watchlist` | N/A (write) | ✅ |
+| `/v2/watchlists:by_name` | GET | Get by Name | ❌ | ✅ JSON blob | ❌ |
+| `/v2/watchlists:by_name` | PUT | Update by Name | ❌ | N/A (write) | ❌ |
+| `/v2/watchlists:by_name` | POST | Add Symbol by Name | ❌ | N/A (write) | ❌ |
+| `/v2/watchlists:by_name` | DELETE | Delete by Name | ❌ | N/A (write) | ❌ |
+| `/v2/watchlists/{watchlist_id}/{symbol}` | DELETE | Remove Symbol | ✅ `remove_asset_from_watchlist` | N/A (write) | ✅ |
+
+---
+
+## Assets Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/assets` | GET | Get All Assets | ✅ `get_assets` | ✅ `assets` | ✅ |
+| `/v2/assets/{symbol_or_asset_id}` | GET | Get Asset | ✅ `get_asset` | ✅ `assets` | ✅ |
+| `/v2/assets/fixed_income/us_treasuries` | GET | US Treasuries | ✅ `get_fixed_income_prices` | ✅ JSON blob | ✅ |
+
+---
+
+## Market Data (Calendar/Clock) Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/calendar` | GET | Trading Calendar | ✅ `get_calendar` | ✅ `market_calendar` | ✅ |
+| `/v2/clock` | GET | Market Clock | ✅ `get_clock` | ✅ `market_clock` | ✅ |
+
+---
+
+## Options Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/options/contracts` | GET | Get Option Contracts | ✅ `get_option_chain` | ✅ `option_contracts` | ✅ |
+| `/v2/options/contracts/{symbol_or_id}` | GET | Get Option Contract | ✅ `get_option_chain` | ✅ `option_contracts` | ✅ |
+
+---
+
+## Corporate Actions Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/corporate_actions/announcements/{id}` | GET | Get Announcement | ✅ `get_corporate_actions` | ✅ `corporate_actions` | ✅ |
+| `/v2/corporate_actions/announcements` | GET | Get Announcements | ✅ `get_corporate_actions` | ✅ `corporate_actions` | ✅ |
+
+---
+
+## Wallets Controller (Crypto)
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/wallets` | GET | Get Wallets | ❌ | ❌ | ❌ |
+| `/v2/wallets/transfers` | GET | Get Transfers | ❌ | ❌ | ❌ |
+| `/v2/wallets/transfers` | POST | Create Transfer | ❌ | N/A (write) | ❌ |
+| `/v2/wallets/transfers/{transfer_id}` | GET | Get Transfer | ❌ | ❌ | ❌ |
+| `/v2/wallets/whitelists` | GET | Get Whitelists | ❌ | ❌ | ❌ |
+| `/v2/wallets/whitelists` | POST | Create Whitelist | ❌ | N/A (write) | ❌ |
+| `/v2/wallets/whitelists/{whitelisted_address_id}` | DELETE | Delete Whitelist | ❌ | N/A (write) | ❌ |
+| `/v2/wallets/fees/estimate` | GET | Estimate Fees | ❌ | ❌ | ❌ |
+
+---
+
+## Perpetuals Controller
+
+| Endpoint | Method | Summary | Gateway | Heber Schema | Status |
+|----------|--------|---------|---------|--------------|--------|
+| `/v2/perpetuals/wallets` | GET | Get Perpetual Wallets | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/wallets/transfers` | GET | Get Transfers | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/wallets/transfers` | POST | Create Transfer | ❌ | N/A (write) | ❌ |
+| `/v2/perpetuals/wallets/transfers/{transfer_id}` | GET | Get Transfer | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/wallets/whitelists` | GET | Get Whitelists | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/wallets/whitelists` | POST | Create Whitelist | ❌ | N/A (write) | ❌ |
+| `/v2/perpetuals/wallets/whitelists/{whitelisted_address_id}` | DELETE | Delete Whitelist | ❌ | N/A (write) | ❌ |
+| `/v2/perpetuals/wallets/fees/estimate` | GET | Estimate Fees | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/leverage` | GET | Get Leverage | ❌ | ❌ | ❌ |
+| `/v2/perpetuals/leverage` | POST | Set Leverage | ❌ | N/A (write) | ❌ |
+| `/v2/perpetuals/account_vitals` | GET | Account Vitals | ❌ | ❌ | ❌ |
+
+---
+
+## Summary
+
+### Complete (39 of 57 endpoints)
+
+| Category | Complete | Total | Coverage |
+|----------|----------|-------|----------|
+| Account | 6 | 6 | 100% |
+| Orders | 7 | 7 | 100% |
+| Positions | 4 | 6 | 67% |
+| Watchlists | 7 | 11 | 64% |
+| Assets | 3 | 3 | 100% |
+| Market Data | 2 | 2 | 100% |
+| Options | 2 | 2 | 100% |
+| Corporate Actions | 2 | 2 | 100% |
+| Wallets | 0 | 8 | 0% |
+| Perpetuals | 0 | 11 | 0% |
+
+### Not Implemented (18 endpoints)
+
+**Positions:**
+
+- Exercise option position
+- Do-not-exercise option position
+
+**Watchlists (by name variants):**
+
+- Get/Update/Add/Delete by name (4 endpoints)
+
+**Crypto Wallets:**
+
+- All wallet endpoints (8 endpoints)
+
+**Perpetuals:**
+
+- All perpetual endpoints (11 endpoints)
+
+---
+
+## Priority Queue
+
+### High Priority (Core Trading)
+
+All core trading endpoints are **complete** ✅
+
+### Medium Priority
+
+1. Option exercise endpoints (2)
+2. Watchlist by-name variants (4)
+
+### Low Priority (Not in Current Scope)
+
+1. Crypto Wallets (8) - specialized use case
+2. Perpetuals (11) - specialized use case
+
+
+
+================================================
 FILE: docs/sdk.md
 ================================================
 # Heber SDK
@@ -9076,6 +9461,281 @@ The SDK is a thin wrapper over:
 | Schema registry | Apicurio Registry |
 
 The OSS migration makes the SDK more stable by replacing custom implementations with well-tested open source APIs.
+
+
+
+================================================
+FILE: docs/UW_endpoints.md
+================================================
+# UnusualWhales API Endpoints Tracking
+
+This document tracks all UW API endpoints and their integration status with Data-Gateway and Heber.
+
+## Legend
+
+- ✅ **Complete** - Schema matches UW API exactly
+- 🔄 **In Progress** - Partially implemented
+- ❌ **Not Started** - No schema exists
+- ⚪ **Not Needed** - Not relevant for storage
+
+---
+
+## Alerts Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/alerts` | Alerts | ✅ | ✅ `user_alerts` | ✅ |
+| `/api/alerts/configuration` | Alert configurations | ✅ | ⚪ | ⚪ |
+
+---
+
+## Congress Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/congress/congress-trader` | Recent Reports By Trader | ✅ `get_congress_trader_reports` | ✅ `congress_trades` | ✅ |
+| `/api/congress/late-reports` | Recent Late Reports | ✅ `get_congress_late_reports` | ✅ `congress_trades` | ✅ |
+| `/api/congress/recent-trades` | Recent Congress Trades | ✅ `get_congress_trades` | ✅ `congress_trades` | ✅ |
+
+---
+
+## Darkpool Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/darkpool/recent` | Recent Darkpool Trades | ✅ | ✅ `darkpool` | ✅ |
+| `/api/darkpool/{ticker}` | Ticker Darkpool Trades | ✅ | ✅ `darkpool` | ✅ |
+
+---
+
+## Earnings Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/earnings/afterhours` | Afterhours | ✅ `get_raw_earnings_afterhours` | ✅ `earnings` | ✅ |
+| `/api/earnings/premarket` | Premarket | ✅ `get_raw_earnings_premarket` | ✅ `earnings` | ✅ |
+| `/api/earnings/{ticker}` | Historical Ticker Earnings | ✅ `get_raw_earnings_ticker` | ✅ `earnings` | ✅ |
+
+---
+
+## ETF Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/etf/{ticker}/exposure` | Exposure | ✅ `get_etf_ticker_exposure` | ✅ `etf_exposure` | ✅ |
+| `/api/etf/{ticker}/holdings` | Holdings | ✅ `get_etf_holdings` | ✅ `etf_holdings` | ✅ |
+| `/api/etf/{ticker}/in-outflow` | Inflow & Outflow | ✅ `get_etf_inflow_outflow` | ✅ `etf_inflow_outflow` | ✅ |
+| `/api/etf/{ticker}/info` | Information | ✅ `get_etf_info` | ✅ `etf_info` | ✅ |
+| `/api/etf/{ticker}/weights` | Sector & Country weights | ✅ `get_etf_country_weights` | ✅ `etf_weights` | ✅ |
+
+---
+
+## Group Flow Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/group-flow/{group}/greek-flow` | Greek flow | ✅ `get_group_greek_flow` | ✅ `group_flow` | ✅ |
+| `/api/group-flow/{group}/greek-flow-expiry` | Greek flow by expiry | ✅ `get_group_greek_flow_by_expiry` | ✅ `group_flow` | ✅ |
+
+---
+
+## Insider Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/insider/transactions` | Transactions | ✅ `get_insider_transactions` | ✅ `insider_trades` | ✅ |
+| `/api/insider/sector/{sector}/flow` | Sector Flow | ✅ `get_insider_sector_flow` | ✅ `insider_flow` | ✅ |
+| `/api/insider/insiders` | Insiders | ✅ `get_ticker_insiders` | ✅ `ticker_insiders` | ✅ |
+| `/api/insider/ticker/{ticker}/flow` | Ticker Flow | ✅ `get_insider_ticker_flow` | ✅ `insider_flow` | ✅ |
+
+---
+
+## Institution Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/institution/{name}/activity` | Institutional Activity | ✅ `get_institution_activity` | ✅ `institution_activity` | ✅ |
+| `/api/institution/{name}/holdings` | Institutional Holdings | ✅ `get_institution_holdings` | ✅ `institution_holdings` | ✅ |
+| `/api/institution/{name}/sectors` | Sector Exposure | ✅ `get_institution_sector_exposure` | ✅ `institution_sector_exposure` | ✅ |
+| `/api/institution/ownership/{ticker}` | Institutional Ownership | ✅ `get_institutional_ownership` | ✅ `institutional_ownership` | ✅ |
+| `/api/institution/list` | List of Institutions | ✅ `get_institutions` | ✅ Re-uses `institutional_ownership` | ✅ |
+| `/api/institution/latest-filings` | Latest Filings | ✅ `get_latest_institutional_filings` | ✅ `institution_activity` | ✅ |
+
+---
+
+## Market Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/market/correlations` | Correlations | ✅ `get_market_correlations` | ✅ JSON blob | ✅ |
+| `/api/market/events` | Economic calendar | ✅ `get_economic_calendar` | ✅ JSON blob | ✅ |
+| `/api/market/fda` | FDA Calendar | ✅ `get_fda_calendar` | ✅ JSON blob | ✅ |
+| `/api/market/insider-buy-sells` | Total Insider Buy & Sells | ✅ `get_market_insider_trades` | ✅ `insider_trades` | ✅ |
+| `/api/market/tide` | Market Tide | ✅ `get_market_tide` | ✅ `market_tide` | ✅ |
+| `/api/market/oi-change` | OI Change | ✅ `get_oi_change` | ✅ JSON blob | ✅ |
+| `/api/market/sector-etfs` | Sector Etfs | ✅ `get_sector_etfs` | ✅ `etf_info` | ✅ |
+| `/api/market/spike` | SPIKE | ✅ `get_market_spike` | ✅ JSON blob | ✅ |
+| `/api/market/top-net-impact` | Top Net Impact | ✅ `get_top_net_impact` | ✅ JSON blob | ✅ |
+| `/api/market/total-options-volume` | Total Options Volume | ✅ `get_market_options_volume` | ✅ JSON blob | ✅ |
+| `/api/market/sector-tide` | Sector Tide | ✅ `get_sector_tide` | ✅ `market_tide` | ✅ |
+| `/api/market/etf-tide` | ETF Tide | ✅ `get_market_tide_by_etf` | ✅ `market_tide` | ✅ |
+
+---
+
+## Net Flow Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/net-flow/expiry` | Net Flow Expiry | ✅ `get_net_flow_expiry` | ✅ JSON blob | ✅ |
+
+---
+
+## News Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/news/headlines` | News Headlines | ✅ `get_news_headlines` | ✅ JSON blob | ✅ |
+
+---
+
+## Option Contract Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/options/{contract}/flow` | Flow Data | ✅ `get_option_contract_flow` | ✅ `flow_alerts` | ✅ |
+| `/api/options/{contract}/history` | Historic Data | ✅ `get_option_contract_historic` | ✅ JSON blob | ✅ |
+| `/api/options/{contract}/intraday` | Intraday Data | ✅ `get_option_contract_intraday` | ✅ JSON blob | ✅ |
+| `/api/options/{contract}/volume-profile` | Volume Profile | ✅ `get_option_contract_volume_profile` | ✅ JSON blob | ✅ |
+
+---
+
+## Option Trade Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/option-trades/flow-alerts` | Flow Alerts | ✅ `get_flow_alerts` | ✅ `flow_alerts` | ✅ |
+| `/api/option-trades/full-tape` | Full Tape | ✅ `get_full_tape` | ✅ `flow_alerts` | ✅ |
+
+---
+
+## Politician Portfolios Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/politician-portfolios/holds/{ticker}` | Portfolio Holders by Ticker | ✅ `get_politician_holders` | ✅ `congress` | ✅ |
+| `/api/politician-portfolios/people` | Politicians List | ✅ `get_politician_people` | ✅ JSON blob | ✅ |
+| `/api/politician-portfolios/{politicianId}/trades` | Politician Trades | ✅ `get_politician_portfolios` | ✅ `congress` | ✅ |
+
+---
+
+## Season Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/season/earnings` | Earnings Calendar | ✅ `get_earnings_premarket`/`get_earnings_afterhours` | ✅ `earnings` | ✅ |
+
+---
+
+## Spike Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/spike/{ticker}` | Ticker SPIKE | ✅ `get_market_spike` (via ticker param) | ✅ JSON blob | ✅ |
+
+---
+
+## Stock Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/stock/{ticker}/analyst-ratings` | Analyst Ratings | ✅ `get_analyst_ratings` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/company` | Company Information | ✅ `get_stock_info` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/contract-chain` | Contract Chain | ✅ `get_stock_option_chains` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/earnings-history` | Earnings History | ✅ `get_earnings_ticker` | ✅ `earnings` | ✅ |
+| `/api/stock/{ticker}/expirations` | Option Expirations | ✅ `get_stock_option_contracts` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/flow` | Stock Flow | ✅ `get_ticker_flow` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/flow-expiry` | Flow per Expiry | ✅ `get_ticker_flow_by_expiry` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/flow-strike` | Flow per Strike | ✅ `get_ticker_flow_by_strike` | ✅ `flow_alerts` | ✅ |
+| `/api/stock/{ticker}/greek-exposure` | Greek Exposure | ✅ `get_stock_greek_exposure` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-expiry` | Greek Exposure by Expiry | ✅ `get_stock_greek_exposure_by_expiry` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-strike` | Greek Exposure by Strike | ✅ `get_stock_greek_exposure_by_strike` | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/historical-volatility` | Historical Volatility | ✅ `get_historical_volatility` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/hottest-chains` | Hottest Chains | ✅ `get_hottest_chains` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/institution-ownership` | Institution Ownership | ✅ `get_institutional_ownership` | ✅ `institutional_ownership` | ✅ |
+| `/api/stock/{ticker}/iv-rank` | IV Rank | ✅ `get_iv_rank` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/max-pain` | Max Pain | ✅ `get_max_pain` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/news` | Ticker News | ✅ `get_ticker_news` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/oi-change` | OI Change | ✅ `get_oi_change` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/option-volume` | Option Volume | ✅ `get_options_volume` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/overview` | Stock Overview | ✅ `get_stock_state` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/quote` | Stock Quote | ✅ `get_stock_info` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/short-data` | Short Data | ✅ `get_short_data` | ✅ JSON blob | ✅ |
+| `/api/stock/{ticker}/volume-oi-expiry` | Volume & OI by Expiry | ✅ `get_volume_oi_by_expiry` | ✅ JSON blob | ✅ |
+
+---
+
+## Screener Controller
+
+| Endpoint | Summary | Gateway | Heber Schema | Status |
+|----------|---------|---------|--------------|--------|
+| `/api/stock-screener` | Stock Screener | ✅ `get_stock_screener` | ✅ JSON blob | ✅ |
+| `/api/screener/option-contracts` | Option Contract Screener | ✅ `get_options_screener` | ✅ JSON blob | ✅ |
+
+---
+
+## Summary
+
+### Complete (11)
+
+- ✅ **User Alerts** (`/api/alerts`) - uses `user_alerts` table
+- ✅ Congress Trades (`/api/congress/recent-trades`)
+- ✅ Darkpool (`/api/darkpool/*`)
+- ✅ Flow Alerts (`/api/option-trades/flow-alerts`)
+- ✅ Insider Trades (`/api/insider/transactions`)
+- ✅ Market Tide (`/api/market/tide`)
+- ✅ Sector Tide (`/api/market/sector-tide`) - uses `market_tide` table
+- ✅ ETF Tide (`/api/market/etf-tide`) - uses `market_tide` table
+- ✅ Greek Exposure (`/api/stock/{ticker}/greek-exposure`) - uses `greek_exposure` table
+- ✅ Greek Exposure by Expiry - uses `greek_exposure` table
+- ✅ Greek Exposure by Strike - uses `greek_exposure` table
+
+### In Progress (8)
+
+- 🔄 Congress Late Reports
+- 🔄 FDA Calendar
+- 🔄 Greek Exposure (3 endpoints)
+- 🔄 Hottest Chains
+- 🔄 News Headlines
+- 🔄 Analyst Ratings
+- 🔄 Institution Holdings
+
+### Not Started (~80+)
+
+See individual sections above
+
+---
+
+## Priority Queue
+
+### High Priority (Market Data Core)
+
+1. Greek Exposure (GEX)
+2. Hottest Chains
+3. OI Change
+4. Earnings Calendar
+
+### Medium Priority (Research Data)
+
+1. Analyst Ratings
+2. News Headlines
+3. FDA Calendar
+4. Institution Holdings
+
+### Lower Priority
+
+1. ETF data
+2. Screeners
+3. Volume profiles
 
 
 
@@ -9992,6 +10652,13 @@ equity = Entity(
     join_keys=["instrument_key"],
 )
 
+# Entity for flow alert labels
+alert = Entity(
+    name="alert",
+    description="Individual flow alert from Unusual Whales",
+    join_keys=["alert_id"],
+)
+
 
 
 ================================================
@@ -10034,6 +10701,161 @@ entity_key_serialization_version: 2
 FILE: features/feature_views/__init__.py
 ================================================
 """Feature views package."""
+
+
+
+================================================
+FILE: features/feature_views/alert_labels.py
+================================================
+"""Alert barrier label feature views for Feast (PRD §31.12).
+
+Barrier-based labels for flow alerts: "Should I take this alert?"
+Uses ATR-scaled TP/SL barriers with DTE-aware horizons.
+"""
+
+from datetime import timedelta
+
+from feast import FeatureView, Field, FileSource
+from feast.types import Float32, Int64, String
+
+from features.entities import alert
+
+# =============================================================================
+# All Horizons Combined
+# =============================================================================
+
+alert_barrier_labels_source = FileSource(
+    name="alert_barrier_labels_source",
+    path="/data/gold/dataset=labels_alert_barriers/type=label/",
+    timestamp_field="ts_alert",
+    created_timestamp_column="ts_available",
+)
+
+alert_barrier_labels = FeatureView(
+    name="labels_alert_barriers",
+    entities=[alert],
+    ttl=timedelta(days=365),
+    schema=[
+        # Alert context
+        Field(name="underlying", dtype=String),
+        Field(name="put_call", dtype=String),
+        Field(name="dte", dtype=Int64),
+        Field(name="horizon", dtype=String),  # intraday, swing, leap
+        # Prices at alert
+        Field(name="spot_at_alert", dtype=Float32),
+        Field(name="atr_at_alert", dtype=Float32),
+        # Barrier thresholds used
+        Field(name="tp_threshold", dtype=Float32),
+        Field(name="sl_threshold", dtype=Float32),
+        # THE LABEL: 1 = take it, 0 = skip
+        Field(name="hit_tp_first", dtype=Int64),
+        # Raw MFE/MAE
+        Field(name="mfe", dtype=Float32),
+        Field(name="mae", dtype=Float32),
+        # Slippage-adjusted MFE/MAE
+        Field(name="mfe_adj", dtype=Float32),
+        Field(name="mae_adj", dtype=Float32),
+        Field(name="bars_to_hit", dtype=Float32),
+        # Beta-neutral (SPY-relative) return
+        Field(name="beta_neutral_return", dtype=Float32),
+        # Regime context
+        Field(name="vix_at_alert", dtype=Float32),
+        Field(name="vix_regime", dtype=String),  # low, normal, high
+    ],
+    source=alert_barrier_labels_source,
+    online=False,  # Labels are offline-only for training
+    tags={
+        "dataset_type": "label",
+        "label_method": "barrier_tp_sl",
+        "horizons": "intraday,swing,leap",
+        "owner": "quant_team",
+        "data_source": "unusual_whales",
+    },
+)
+
+
+# =============================================================================
+# Intraday Only (for fast iteration on 0DTE strategies)
+# =============================================================================
+
+alert_intraday_labels_source = FileSource(
+    name="alert_intraday_labels_source",
+    path="/data/gold/dataset=labels_alert_intraday/type=label/",
+    timestamp_field="ts_alert",
+    created_timestamp_column="ts_available",
+)
+
+alert_intraday_labels = FeatureView(
+    name="labels_alert_intraday",
+    entities=[alert],
+    ttl=timedelta(days=90),
+    schema=[
+        Field(name="underlying", dtype=String),
+        Field(name="put_call", dtype=String),
+        Field(name="dte", dtype=Int64),
+        Field(name="spot_at_alert", dtype=Float32),
+        Field(name="atr_at_alert", dtype=Float32),
+        Field(name="tp_threshold", dtype=Float32),
+        Field(name="sl_threshold", dtype=Float32),
+        Field(name="hit_tp_first", dtype=Int64),
+        Field(name="mfe", dtype=Float32),
+        Field(name="mae", dtype=Float32),
+        Field(name="bars_to_hit", dtype=Float32),
+    ],
+    source=alert_intraday_labels_source,
+    online=False,
+    tags={
+        "dataset_type": "label",
+        "label_method": "barrier_tp_sl",
+        "horizons": "intraday",
+        "dte_range": "0-2",
+        "owner": "quant_team",
+        "data_source": "unusual_whales",
+        "use_case": "0dte_scalping",
+    },
+)
+
+
+# =============================================================================
+# Swing Only (weekly/bi-weekly options)
+# =============================================================================
+
+alert_swing_labels_source = FileSource(
+    name="alert_swing_labels_source",
+    path="/data/gold/dataset=labels_alert_swing/type=label/",
+    timestamp_field="ts_alert",
+    created_timestamp_column="ts_available",
+)
+
+alert_swing_labels = FeatureView(
+    name="labels_alert_swing",
+    entities=[alert],
+    ttl=timedelta(days=180),
+    schema=[
+        Field(name="underlying", dtype=String),
+        Field(name="put_call", dtype=String),
+        Field(name="dte", dtype=Int64),
+        Field(name="spot_at_alert", dtype=Float32),
+        Field(name="atr_at_alert", dtype=Float32),
+        Field(name="tp_threshold", dtype=Float32),
+        Field(name="sl_threshold", dtype=Float32),
+        Field(name="hit_tp_first", dtype=Int64),
+        Field(name="mfe", dtype=Float32),
+        Field(name="mae", dtype=Float32),
+        Field(name="bars_to_hit", dtype=Float32),
+    ],
+    source=alert_swing_labels_source,
+    online=False,
+    tags={
+        "dataset_type": "label",
+        "label_method": "barrier_tp_sl",
+        "horizons": "swing",
+        "dte_range": "3-21",
+        "owner": "quant_team",
+        "data_source": "unusual_whales",
+        "use_case": "weekly_options",
+    },
+)
 
 
 
@@ -16660,9 +17482,1027 @@ __all__ = [
 
 
 ================================================
+FILE: heber/features/pipelines/__init__.py
+================================================
+"""Feature Pipelines - Orchestrate data processing and label computation."""
+
+from heber.features.pipelines.alert_labels import AlertLabelsPipeline
+
+__all__ = ["AlertLabelsPipeline"]
+
+
+
+================================================
+FILE: heber/features/pipelines/alert_labels.py
+================================================
+"""Alert Labels Pipeline - Orchestrates label computation for flow alerts.
+
+This pipeline:
+1. Reads flow alerts from Silver
+2. Fetches corresponding bars (underlying symbols + SPY + UVXY)
+3. Computes barrier-based labels
+4. Writes labels to Gold
+
+Usage:
+    python -m heber.features.pipelines.alert_labels --start 2024-01-01 --end 2024-01-31
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import structlog
+
+from heber.config import settings
+from heber.features.templates.alert_labels import (
+    AlertHorizon,
+    BarrierConfig,
+    SlippageModel,
+    compute_barrier_labels,
+    compute_multi_horizon_labels,
+)
+from heber.sdk import HeberClient
+
+logger = structlog.get_logger(__name__)
+
+# Constants
+MARKET_PROXY = "SPY"
+VIX_PROXY = "UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
+LOOKBACK_DAYS = 30  # Days of bar history needed for ATR
+
+
+class AlertLabelsPipeline:
+    """Pipeline for computing barrier-based labels on flow alerts."""
+
+    def __init__(
+        self,
+        client: HeberClient | None = None,
+        slippage_model: SlippageModel | None = None,
+        output_dataset: str = "labels_alert_barriers",
+        project: str = "quant",
+        version: str = "v1",
+    ):
+        """Initialize the pipeline.
+
+        Args:
+            client: HeberClient instance (created if None)
+            slippage_model: Execution cost model
+            output_dataset: Name for output Gold dataset
+            project: Project name for Gold output
+            version: Version string for Gold output
+        """
+        self.client = client or HeberClient()
+        self.slippage_model = slippage_model or SlippageModel()
+        self.output_dataset = output_dataset
+        self.project = project
+        self.version = version
+
+    def run(
+        self,
+        start_date: datetime | str,
+        end_date: datetime | str,
+        use_intraday_bars: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Run the label computation pipeline.
+
+        Args:
+            start_date: Start of alert date range
+            end_date: End of alert date range
+            use_intraday_bars: Use 5-min bars for intraday alerts
+            dry_run: If True, compute but don't write
+
+        Returns:
+            Dict with pipeline stats
+        """
+        if isinstance(start_date, str):
+            start_date = datetime.fromisoformat(start_date)
+        if isinstance(end_date, str):
+            end_date = datetime.fromisoformat(end_date)
+
+        logger.info(
+            "Starting alert labels pipeline",
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+
+        # Step 1: Load flow alerts
+        logger.info("Loading flow alerts from Silver")
+        flow_alerts = self._load_flow_alerts(start_date, end_date)
+
+        if flow_alerts.empty:
+            logger.warning("No flow alerts found in date range")
+            return {"status": "no_data", "alerts_count": 0}
+
+        logger.info("Loaded flow alerts", count=len(flow_alerts))
+
+        # Step 2: Get unique underlyings
+        underlyings = flow_alerts["underlying"].unique().tolist()
+        # Add SPY and UVXY for market context
+        all_symbols = list(set(underlyings + [MARKET_PROXY, VIX_PROXY]))
+
+        logger.info("Fetching bars for symbols", count=len(all_symbols))
+
+        # Step 3: Load bars (with lookback for ATR)
+        bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
+        bar_end = end_date + timedelta(days=30)  # Forward for labels
+        daily_bars = self._load_bars(all_symbols, bar_start, bar_end)
+
+        if daily_bars.empty:
+            logger.error("No bars found for symbols")
+            return {"status": "no_bars", "alerts_count": len(flow_alerts)}
+
+        logger.info("Loaded daily bars", count=len(daily_bars))
+
+        # Step 4: Extract SPY and UVXY bars
+        spy_bars = daily_bars[daily_bars["instrument_key"] == MARKET_PROXY].copy()
+        uvxy_bars = daily_bars[daily_bars["instrument_key"] == VIX_PROXY].copy()
+
+        # Use UVXY close as VIX proxy
+        vix_bars = uvxy_bars.copy()
+
+        logger.info(
+            "Market context data",
+            spy_bars=len(spy_bars),
+            uvxy_bars=len(uvxy_bars),
+        )
+
+        # Step 5: Compute labels
+        logger.info("Computing barrier labels")
+
+        if use_intraday_bars:
+            # Load intraday bars for 0-2 DTE alerts
+            intraday_bars = self._load_intraday_bars(all_symbols, bar_start, bar_end)
+            labels = compute_multi_horizon_labels(
+                flow_alerts,
+                intraday_bars,
+                daily_bars,
+                spy_daily_bars_df=spy_bars,
+                vix_daily_bars_df=vix_bars,
+            )
+        else:
+            labels = compute_barrier_labels(
+                flow_alerts,
+                daily_bars,
+                spy_bars_df=spy_bars,
+                vix_bars_df=vix_bars,
+                slippage_model=self.slippage_model,
+            )
+
+        logger.info("Computed labels", count=len(labels))
+
+        # Step 6: Prepare for Gold write
+        labels = self._prepare_for_gold(labels)
+
+        # Step 7: Write to Gold
+        if not dry_run:
+            output_path = self.client.write_gold(
+                dataset=self.output_dataset,
+                df=labels,
+                project=self.project,
+                version=self.version,
+            )
+            logger.info("Wrote labels to Gold", path=str(output_path))
+        else:
+            logger.info("Dry run - skipping write")
+            output_path = None
+
+        # Compute stats
+        stats = self._compute_stats(labels)
+        stats["alerts_count"] = len(flow_alerts)
+        stats["labels_count"] = len(labels)
+        stats["status"] = "success"
+        stats["output_path"] = str(output_path) if output_path else None
+
+        logger.info("Pipeline complete", **stats)
+
+        return stats
+
+    def _load_flow_alerts(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> pd.DataFrame:
+        """Load flow alerts from Silver."""
+        alerts = self.client.read_silver(
+            dataset="flow_alerts",
+            time_range=(start_date, end_date),
+        )
+
+        if alerts.empty:
+            return alerts
+
+        # Ensure required columns
+        required = ["event_id", "underlying", "ts_event", "put_call", "expiry"]
+        missing = set(required) - set(alerts.columns)
+        if missing:
+            # Map from Silver schema if needed
+            column_map = {
+                "event_id": "id",
+                "underlying": "ticker",
+            }
+            for new_col, old_col in column_map.items():
+                if new_col in missing and old_col in alerts.columns:
+                    alerts[new_col] = alerts[old_col]
+
+        return alerts
+
+    def _load_bars(
+        self,
+        symbols: list[str],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> pd.DataFrame:
+        """Load daily bars from Silver."""
+        bars = self.client.read_silver(
+            dataset="bars",
+            time_range=(start_date, end_date),
+            instrument_keys=symbols,
+        )
+        return bars
+
+    def _load_intraday_bars(
+        self,
+        symbols: list[str],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> pd.DataFrame:
+        """Load intraday (5-min) bars from Silver."""
+        # Try loading from intraday_bars dataset
+        bars = self.client.read_silver(
+            dataset="bars_5min",
+            time_range=(start_date, end_date),
+            instrument_keys=symbols,
+        )
+
+        if bars.empty:
+            # Fallback to regular bars
+            logger.warning("No intraday bars found, using daily bars")
+            return self._load_bars(symbols, start_date, end_date)
+
+        return bars
+
+    def _prepare_for_gold(self, labels: pd.DataFrame) -> pd.DataFrame:
+        """Prepare labels DataFrame for Gold write."""
+        df = labels.copy()
+
+        # Ensure required Gold columns exist
+        if "instrument_key" not in df.columns:
+            # Use alert_id as instrument_key for alert entity
+            df["instrument_key"] = df["alert_id"]
+
+        if "ts_event" not in df.columns and "ts_alert" in df.columns:
+            df["ts_event"] = df["ts_alert"]
+
+        # Ensure ts_available exists (anti-leakage)
+        if "ts_available" not in df.columns:
+            # Default: label available 1 day after alert
+            df["ts_available"] = df["ts_event"] + timedelta(days=1)
+
+        # Drop rows with NaN labels (insufficient data)
+        df = df.dropna(subset=["hit_tp_first"])
+
+        return df
+
+    def _compute_stats(self, labels: pd.DataFrame) -> dict[str, Any]:
+        """Compute summary statistics from labels."""
+        valid = labels.dropna(subset=["hit_tp_first"])
+
+        if valid.empty:
+            return {
+                "win_rate": None,
+                "avg_mfe": None,
+                "avg_mae": None,
+            }
+
+        return {
+            "win_rate": float(valid["hit_tp_first"].mean()),
+            "avg_mfe": float(valid["mfe"].mean()) if "mfe" in valid else None,
+            "avg_mae": float(valid["mae"].mean()) if "mae" in valid else None,
+            "by_horizon": valid.groupby("horizon")["hit_tp_first"].mean().to_dict(),
+            "by_regime": valid.groupby("vix_regime")["hit_tp_first"].mean().to_dict()
+            if "vix_regime" in valid
+            else None,
+        }
+
+
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(description="Compute alert barrier labels")
+    parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
+    parser.add_argument("--intraday", action="store_true", help="Use intraday bars")
+    parser.add_argument("--dry-run", action="store_true", help="Don't write output")
+    parser.add_argument("--output", default="labels_alert_barriers", help="Output dataset name")
+    parser.add_argument("--project", default="quant", help="Project name")
+    parser.add_argument("--version", default="v1", help="Version string")
+
+    args = parser.parse_args()
+
+    pipeline = AlertLabelsPipeline(
+        output_dataset=args.output,
+        project=args.project,
+        version=args.version,
+    )
+
+    stats = pipeline.run(
+        start_date=args.start,
+        end_date=args.end,
+        use_intraday_bars=args.intraday,
+        dry_run=args.dry_run,
+    )
+
+    print(f"\nPipeline complete: {stats['status']}")
+    print(f"  Alerts: {stats.get('alerts_count', 0)}")
+    print(f"  Labels: {stats.get('labels_count', 0)}")
+    if stats.get("win_rate") is not None:
+        print(f"  Win rate: {stats['win_rate']:.1%}")
+    if stats.get("output_path"):
+        print(f"  Output: {stats['output_path']}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
 FILE: heber/features/templates/__init__.py
 ================================================
 """Feature Templates Package (PRD §32)."""
+
+
+
+================================================
+FILE: heber/features/templates/alert_labels.py
+================================================
+"""Alert Barrier Labels (PRD §32.7).
+
+Compute barrier-based labels for flow alerts: "Should I take this alert?"
+
+Key concepts:
+- **Barrier labeling**: Did price hit TP before SL?
+- **ATR-scaled thresholds**: Volatility-normalized, works across regimes
+- **DTE-aware horizons**: Intraday (0-2 DTE), Swing (3-21 DTE), LEAP (22+ DTE)
+- **MFE/MAE tracking**: Max favorable/adverse excursion for position sizing
+- **Beta-neutral returns**: SPY-relative for market-neutral analysis
+- **Regime context**: VIX level at alert time
+- **Slippage model**: Execution cost assumptions
+
+This follows the "referee not fan fiction" approach:
+- Labels come from market data outcomes, not hand-labeling
+- Rules-based simulation with TP/SL barriers
+- Volatility-normalized for regime robustness
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from enum import Enum
+
+import numpy as np
+import pandas as pd
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Default slippage assumptions (as decimal)
+DEFAULT_SLIPPAGE_PCT = 0.001  # 0.1% round-trip slippage
+DEFAULT_COMMISSION_PER_CONTRACT = 0.65  # Per contract fee
+
+# SPY as market proxy for beta-neutral calculation
+MARKET_PROXY = "SPY"
+
+# VIX thresholds for regime classification
+VIX_LOW = 15.0
+VIX_HIGH = 25.0
+
+
+class AlertHorizon(str, Enum):
+    """DTE-based horizon classification."""
+
+    INTRADAY = "intraday"  # 0-2 DTE: 30min - 2h window
+    SWING = "swing"  # 3-21 DTE: 1-5 day window
+    LEAP = "leap"  # 22+ DTE: 5-30 day window
+
+
+class VixRegime(str, Enum):
+    """VIX-based market regime."""
+
+    LOW = "low"  # VIX < 15: calm markets
+    NORMAL = "normal"  # VIX 15-25: typical volatility
+    HIGH = "high"  # VIX > 25: elevated fear
+
+
+@dataclass
+class BarrierConfig:
+    """Configuration for TP/SL barriers per horizon."""
+
+    horizon: AlertHorizon
+    tp_atr_mult: float  # TP = +tp_atr_mult × ATR
+    sl_atr_mult: float  # SL = -sl_atr_mult × ATR
+    max_window_bars: int  # Maximum bars to look forward
+    atr_period: int  # ATR lookback period
+
+    @classmethod
+    def intraday(cls) -> "BarrierConfig":
+        """Intraday config: tight barriers, 2h max window (assuming 5-min bars)."""
+        return cls(
+            horizon=AlertHorizon.INTRADAY,
+            tp_atr_mult=0.75,
+            sl_atr_mult=0.50,
+            max_window_bars=24,  # 2h @ 5-min bars
+            atr_period=14,
+        )
+
+    @classmethod
+    def swing(cls) -> "BarrierConfig":
+        """Swing config: wider barriers, 5-day max window (daily bars)."""
+        return cls(
+            horizon=AlertHorizon.SWING,
+            tp_atr_mult=1.5,
+            sl_atr_mult=1.0,
+            max_window_bars=5,  # 5 days
+            atr_period=14,
+        )
+
+    @classmethod
+    def leap(cls) -> "BarrierConfig":
+        """LEAP config: widest barriers, 30-day max window (daily bars)."""
+        return cls(
+            horizon=AlertHorizon.LEAP,
+            tp_atr_mult=2.5,
+            sl_atr_mult=1.5,
+            max_window_bars=30,  # 30 days
+            atr_period=20,
+        )
+
+
+@dataclass
+class SlippageModel:
+    """Model for execution costs and slippage."""
+
+    spread_pct: float = 0.0005  # Half spread (entry cost)
+    slippage_pct: float = 0.0005  # Market impact
+    commission_per_contract: float = 0.65
+
+    @property
+    def total_entry_cost_pct(self) -> float:
+        """Total cost to enter position as % of notional."""
+        return self.spread_pct + self.slippage_pct
+
+    @property
+    def total_roundtrip_cost_pct(self) -> float:
+        """Total cost to enter and exit as % of notional."""
+        return 2 * self.total_entry_cost_pct
+
+    def adjust_mfe(self, mfe: float) -> float:
+        """Adjust MFE for execution costs."""
+        return mfe - self.total_roundtrip_cost_pct
+
+    def adjust_mae(self, mae: float) -> float:
+        """Adjust MAE for execution costs (makes it worse)."""
+        return mae - self.total_entry_cost_pct
+
+
+def classify_horizon(dte: int) -> AlertHorizon:
+    """Classify alert horizon based on days-to-expiry."""
+    if dte <= 2:
+        return AlertHorizon.INTRADAY
+    elif dte <= 21:
+        return AlertHorizon.SWING
+    else:
+        return AlertHorizon.LEAP
+
+
+def classify_vix_regime(vix: float | None) -> str:
+    """Classify market regime based on VIX level."""
+    if vix is None or np.isnan(vix):
+        return VixRegime.NORMAL.value
+    elif vix < VIX_LOW:
+        return VixRegime.LOW.value
+    elif vix > VIX_HIGH:
+        return VixRegime.HIGH.value
+    else:
+        return VixRegime.NORMAL.value
+
+
+def compute_atr(
+    bars_df: pd.DataFrame,
+    period: int = 14,
+) -> pd.DataFrame:
+    """Compute Average True Range for volatility scaling."""
+    df = bars_df.copy()
+    df = df.sort_values(["instrument_key", "bar_start_ts"]).reset_index(drop=True)
+
+    # Compute true range components
+    high = df["high"]
+    low = df["low"]
+    prev_close = df.groupby("instrument_key")["close"].shift(1)
+
+    # True range is max of: high-low, |high-prev_close|, |low-prev_close|
+    df["_tr"] = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    # Compute ATR as rolling mean of TR per instrument
+    df["atr"] = df.groupby("instrument_key")["_tr"].transform(
+        lambda x: x.rolling(window=period, min_periods=1).mean()
+    )
+
+    # Drop temporary column
+    df = df.drop(columns=["_tr"])
+
+    return df
+
+
+def _get_price_at_time(
+    bars_df: pd.DataFrame,
+    instrument: str,
+    target_time: pd.Timestamp,
+) -> float | None:
+    """Get closing price for instrument at or before target time."""
+    instrument_bars = bars_df[bars_df["instrument_key"] == instrument]
+    before_target = instrument_bars[instrument_bars["bar_start_ts"] <= target_time]
+    if before_target.empty:
+        return None
+    return float(before_target.iloc[-1]["close"])
+
+
+def _compute_beta_neutral_return(
+    underlying_return: float,
+    spy_return: float | None,
+    beta: float = 1.0,
+) -> float | None:
+    """Compute beta-neutral (market-adjusted) return.
+
+    beta_neutral_return = underlying_return - beta * spy_return
+
+    Args:
+        underlying_return: Raw return of the underlying
+        spy_return: Return of SPY over same period
+        beta: Stock's beta to SPY (default 1.0 for simplicity)
+
+    Returns:
+        Beta-neutral return, or None if SPY data missing
+    """
+    if spy_return is None or np.isnan(spy_return):
+        return None
+    return underlying_return - beta * spy_return
+
+
+def _compute_barrier_outcome(
+    price_path: np.ndarray,
+    entry_price: float,
+    is_call: bool,
+    tp_threshold: float,
+    sl_threshold: float,
+    slippage_model: SlippageModel | None = None,
+) -> dict:
+    """Compute barrier-based outcome for a price path."""
+    if len(price_path) == 0:
+        return {
+            "hit_tp_first": np.nan,
+            "mfe": np.nan,
+            "mae": np.nan,
+            "mfe_adj": np.nan,
+            "mae_adj": np.nan,
+            "bars_to_hit": np.nan,
+        }
+
+    returns = (price_path - entry_price) / entry_price
+
+    # For calls: favorable = up, adverse = down
+    # For puts: flip the sign
+    if is_call:
+        favorable = returns
+        adverse = returns
+    else:
+        favorable = -returns
+        adverse = -returns
+
+    # MFE/MAE (raw)
+    mfe = float(np.nanmax(favorable))
+    mae = float(np.nanmin(adverse))
+
+    # Adjusted for slippage
+    if slippage_model:
+        mfe_adj = slippage_model.adjust_mfe(mfe)
+        mae_adj = slippage_model.adjust_mae(mae)
+    else:
+        mfe_adj = mfe
+        mae_adj = mae
+
+    # Barrier hits (use adjusted thresholds for realistic simulation)
+    adjusted_tp = tp_threshold
+    adjusted_sl = sl_threshold
+    if slippage_model:
+        # Need MORE movement to hit TP after costs
+        adjusted_tp = tp_threshold + slippage_model.total_roundtrip_cost_pct
+
+    tp_hit_idx = np.nonzero(favorable >= adjusted_tp)[0]
+    sl_hit_idx = np.nonzero(adverse <= -adjusted_sl)[0]
+
+    tp_first_bar = tp_hit_idx[0] if len(tp_hit_idx) > 0 else np.inf
+    sl_first_bar = sl_hit_idx[0] if len(sl_hit_idx) > 0 else np.inf
+
+    if tp_first_bar < sl_first_bar:
+        hit_tp_first = 1
+        bars_to_hit = int(tp_first_bar) + 1
+    elif sl_first_bar < tp_first_bar:
+        hit_tp_first = 0
+        bars_to_hit = int(sl_first_bar) + 1
+    else:
+        hit_tp_first = 0
+        bars_to_hit = np.nan
+
+    return {
+        "hit_tp_first": hit_tp_first,
+        "mfe": mfe,
+        "mae": mae,
+        "mfe_adj": mfe_adj,
+        "mae_adj": mae_adj,
+        "bars_to_hit": bars_to_hit,
+    }
+
+
+def _process_single_alert(
+    alert: pd.Series,
+    bars: pd.DataFrame,
+    spy_bars: pd.DataFrame | None,
+    vix_data: pd.DataFrame | None,
+    config: BarrierConfig,
+    slippage_model: SlippageModel | None,
+) -> dict:
+    """Process a single alert and compute all labels."""
+    alert_id = alert["event_id"]
+    underlying = alert["underlying"]
+    ts_alert = alert["ts_event"]
+    put_call = alert["put_call"]
+    expiry = alert["expiry"]
+
+    # Calculate DTE
+    alert_date = ts_alert.date() if hasattr(ts_alert, "date") else ts_alert
+    dte = (expiry - alert_date).days if isinstance(expiry, date) else 5
+
+    horizon = classify_horizon(dte)
+
+    # Get underlying bars
+    underlying_bars = bars[bars["instrument_key"] == underlying]
+    if underlying_bars.empty:
+        return _empty_result(alert_id, underlying, put_call, horizon, dte)
+
+    # Get ATR and spot at alert time
+    bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
+    if bars_at_alert.empty:
+        return _empty_result(alert_id, underlying, put_call, horizon, dte)
+
+    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
+    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+
+    # Compute thresholds
+    tp_threshold = config.tp_atr_mult * atr_at_alert / spot_at_alert
+    sl_threshold = config.sl_atr_mult * atr_at_alert / spot_at_alert
+
+    # Get forward price path
+    future_bars = underlying_bars[underlying_bars["bar_start_ts"] > ts_alert].head(
+        config.max_window_bars
+    )
+    if future_bars.empty:
+        return _empty_result(alert_id, underlying, put_call, horizon, dte)
+
+    price_path = future_bars["close"].values
+    is_call = put_call.upper() == "C"
+
+    # Compute barrier outcome
+    outcome = _compute_barrier_outcome(
+        price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model
+    )
+
+    # Get VIX at alert time (regime context)
+    vix_at_alert = None
+    if vix_data is not None and len(vix_data) > 0:
+        vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
+        if not vix_before.empty:
+            vix_at_alert = float(vix_before.iloc[-1]["close"])
+
+    # Compute beta-neutral return (SPY-relative)
+    beta_neutral_return = None
+    raw_return = outcome["mfe"] if outcome["hit_tp_first"] == 1 else outcome["mae"]
+
+    if spy_bars is not None and len(spy_bars) > 0:
+        spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
+        end_time = ts_alert + timedelta(days=config.max_window_bars)
+        spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
+
+        if spy_at_alert and spy_at_end and spy_at_alert > 0:
+            spy_return = (spy_at_end - spy_at_alert) / spy_at_alert
+            if not np.isnan(raw_return):
+                beta_neutral_return = _compute_beta_neutral_return(raw_return, spy_return)
+
+    return {
+        "alert_id": alert_id,
+        "underlying": underlying,
+        "put_call": put_call,
+        "ts_alert": ts_alert,
+        "ts_event": ts_alert,
+        "dte": dte,
+        "horizon": horizon.value,
+        "spot_at_alert": spot_at_alert,
+        "atr_at_alert": atr_at_alert,
+        "tp_threshold": tp_threshold,
+        "sl_threshold": sl_threshold,
+        # Core label
+        "hit_tp_first": outcome["hit_tp_first"],
+        # Raw MFE/MAE
+        "mfe": outcome["mfe"],
+        "mae": outcome["mae"],
+        # Slippage-adjusted MFE/MAE
+        "mfe_adj": outcome["mfe_adj"],
+        "mae_adj": outcome["mae_adj"],
+        "bars_to_hit": outcome["bars_to_hit"],
+        # Beta-neutral (SPY-relative) return
+        "beta_neutral_return": beta_neutral_return,
+        # Regime context
+        "vix_at_alert": vix_at_alert,
+        "vix_regime": classify_vix_regime(vix_at_alert),
+        # Anti-leakage
+        "ts_available": ts_alert + timedelta(days=max(1, config.max_window_bars // 24)),
+    }
+
+
+def _empty_result(
+    alert_id: str,
+    underlying: str,
+    put_call: str,
+    horizon: AlertHorizon,
+    dte: int,
+) -> dict:
+    """Create empty result row for alerts with insufficient data."""
+    return {
+        "alert_id": alert_id,
+        "underlying": underlying,
+        "put_call": put_call,
+        "ts_alert": pd.NaT,
+        "ts_event": pd.NaT,
+        "dte": dte,
+        "horizon": horizon.value,
+        "spot_at_alert": np.nan,
+        "atr_at_alert": np.nan,
+        "tp_threshold": np.nan,
+        "sl_threshold": np.nan,
+        "hit_tp_first": np.nan,
+        "mfe": np.nan,
+        "mae": np.nan,
+        "mfe_adj": np.nan,
+        "mae_adj": np.nan,
+        "bars_to_hit": np.nan,
+        "beta_neutral_return": np.nan,
+        "vix_at_alert": np.nan,
+        "vix_regime": VixRegime.NORMAL.value,
+        "ts_available": pd.NaT,
+    }
+
+
+def compute_barrier_labels(
+    flow_alerts_df: pd.DataFrame,
+    bars_df: pd.DataFrame,
+    spy_bars_df: pd.DataFrame | None = None,
+    vix_bars_df: pd.DataFrame | None = None,
+    configs: dict[AlertHorizon, BarrierConfig] | None = None,
+    slippage_model: SlippageModel | None = None,
+) -> pd.DataFrame:
+    """Compute barrier-based labels for flow alerts.
+
+    For each alert, determines if price hit TP before SL within the
+    appropriate horizon window. Uses ATR-scaled barriers for
+    volatility-normalized thresholds.
+
+    Args:
+        flow_alerts_df: Flow alerts with columns:
+            - event_id: Alert identifier
+            - underlying: Stock ticker
+            - ts_event: Alert timestamp
+            - put_call: 'C' or 'P'
+            - expiry: Option expiry date
+            - spot_px: Underlying price at alert (optional)
+
+        bars_df: Bar data with columns:
+            - instrument_key: Instrument identifier
+            - bar_start_ts: Bar timestamp
+            - open, high, low, close: OHLC prices
+
+        spy_bars_df: Optional SPY bars for beta-neutral calculation
+
+        vix_bars_df: Optional VIX bars for regime context
+            - instrument_key: Should be 'VIX' or similar
+            - bar_start_ts: Timestamp
+            - close: VIX level
+
+        configs: Barrier configurations per horizon
+
+        slippage_model: Optional execution cost model
+
+    Returns:
+        DataFrame with barrier labels per alert including:
+            - hit_tp_first: THE LABEL (1=take, 0=skip)
+            - mfe, mae: Raw max favorable/adverse excursion
+            - mfe_adj, mae_adj: Slippage-adjusted MFE/MAE
+            - beta_neutral_return: SPY-relative return
+            - vix_at_alert, vix_regime: Market regime context
+    """
+    if configs is None:
+        configs = {
+            AlertHorizon.INTRADAY: BarrierConfig.intraday(),
+            AlertHorizon.SWING: BarrierConfig.swing(),
+            AlertHorizon.LEAP: BarrierConfig.leap(),
+        }
+
+    if slippage_model is None:
+        slippage_model = SlippageModel()
+
+    # Validate required columns
+    required_alert_cols = {"event_id", "underlying", "ts_event", "put_call", "expiry"}
+    missing = required_alert_cols - set(flow_alerts_df.columns)
+    if missing:
+        raise ValueError(f"Flow alerts missing required columns: {missing}")
+
+    required_bar_cols = {"instrument_key", "bar_start_ts", "high", "low", "close"}
+    missing = required_bar_cols - set(bars_df.columns)
+    if missing:
+        raise ValueError(f"Bars missing required columns: {missing}")
+
+    # Prepare data
+    alerts = flow_alerts_df.copy()
+    alerts["ts_event"] = pd.to_datetime(alerts["ts_event"], utc=True)
+    alerts["expiry"] = pd.to_datetime(alerts["expiry"]).dt.date
+
+    bars = bars_df.copy()
+    bars["bar_start_ts"] = pd.to_datetime(bars["bar_start_ts"], utc=True)
+    bars = bars.sort_values(["instrument_key", "bar_start_ts"])
+
+    # Compute ATR if not present
+    if "atr" not in bars.columns:
+        bars = compute_atr(bars, period=14)
+
+    # Prepare SPY bars
+    spy_bars = None
+    if spy_bars_df is not None and len(spy_bars_df) > 0:
+        spy_bars = spy_bars_df.copy()
+        spy_bars["bar_start_ts"] = pd.to_datetime(spy_bars["bar_start_ts"], utc=True)
+        spy_bars = spy_bars.sort_values("bar_start_ts")
+
+    # Prepare VIX data
+    vix_data = None
+    if vix_bars_df is not None and len(vix_bars_df) > 0:
+        vix_data = vix_bars_df.copy()
+        vix_data["bar_start_ts"] = pd.to_datetime(vix_data["bar_start_ts"], utc=True)
+        vix_data = vix_data.sort_values("bar_start_ts")
+
+    # Process each alert
+    results = []
+    for _, alert in alerts.iterrows():
+        expiry = alert["expiry"]
+        alert_date = alert["ts_event"].date()
+        dte = (expiry - alert_date).days if isinstance(expiry, date) else 5
+        horizon = classify_horizon(dte)
+        config = configs.get(horizon, BarrierConfig.swing())
+
+        result = _process_single_alert(
+            alert, bars, spy_bars, vix_data, config, slippage_model
+        )
+        results.append(result)
+
+    return pd.DataFrame(results)
+
+
+def compute_multi_horizon_labels(
+    flow_alerts_df: pd.DataFrame,
+    intraday_bars_df: pd.DataFrame,
+    daily_bars_df: pd.DataFrame,
+    spy_daily_bars_df: pd.DataFrame | None = None,
+    vix_daily_bars_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compute labels for ALL horizons, using appropriate bar granularity.
+
+    Intraday alerts use 5-min bars for fine-grained labeling.
+    Swing/LEAP alerts use daily bars.
+    """
+    alerts = flow_alerts_df.copy()
+    alerts["expiry"] = pd.to_datetime(alerts["expiry"]).dt.date
+    alerts["ts_event"] = pd.to_datetime(alerts["ts_event"], utc=True)
+
+    # Classify each alert
+    def get_dte(row):
+        alert_date = row["ts_event"].date()
+        if isinstance(row["expiry"], date):
+            return (row["expiry"] - alert_date).days
+        return 5
+
+    alerts["dte"] = alerts.apply(get_dte, axis=1)
+    alerts["horizon"] = alerts["dte"].apply(classify_horizon)
+
+    # Split by horizon
+    intraday_alerts = alerts[alerts["horizon"] == AlertHorizon.INTRADAY]
+    swing_leap_alerts = alerts[
+        alerts["horizon"].isin([AlertHorizon.SWING, AlertHorizon.LEAP])
+    ]
+
+    results = []
+
+    # Process intraday with 5-min bars
+    if len(intraday_alerts) > 0 and len(intraday_bars_df) > 0:
+        intraday_labels = compute_barrier_labels(
+            intraday_alerts,
+            intraday_bars_df,
+            spy_bars_df=spy_daily_bars_df,  # Still use daily SPY
+            vix_bars_df=vix_daily_bars_df,
+            configs={AlertHorizon.INTRADAY: BarrierConfig.intraday()},
+        )
+        results.append(intraday_labels)
+
+    # Process swing/LEAP with daily bars
+    if len(swing_leap_alerts) > 0 and len(daily_bars_df) > 0:
+        swing_leap_labels = compute_barrier_labels(
+            swing_leap_alerts,
+            daily_bars_df,
+            spy_bars_df=spy_daily_bars_df,
+            vix_bars_df=vix_daily_bars_df,
+            configs={
+                AlertHorizon.SWING: BarrierConfig.swing(),
+                AlertHorizon.LEAP: BarrierConfig.leap(),
+            },
+        )
+        results.append(swing_leap_labels)
+
+    if results:
+        return pd.concat(results, ignore_index=True)
+    return pd.DataFrame()
+
+
+# =============================================================================
+# Auxiliary: Analysis Functions
+# =============================================================================
+
+
+def compute_win_rate_by_feature(
+    labeled_df: pd.DataFrame,
+    feature_col: str,
+    bins: int = 10,
+) -> pd.DataFrame:
+    """Analyze win rate stratified by a feature."""
+    df = labeled_df.dropna(subset=["hit_tp_first", feature_col])
+
+    if df[feature_col].dtype in [np.float64, np.float32, np.int64, np.int32]:
+        df = df.copy()
+        df["bin"] = pd.qcut(df[feature_col], q=bins, duplicates="drop")
+    else:
+        df = df.copy()
+        df["bin"] = df[feature_col]
+
+    stats = (
+        df.groupby("bin")
+        .agg(
+            count=("hit_tp_first", "count"),
+            wins=("hit_tp_first", "sum"),
+            win_rate=("hit_tp_first", "mean"),
+        )
+        .reset_index()
+    )
+
+    return stats
+
+
+def compute_regime_analysis(labeled_df: pd.DataFrame) -> pd.DataFrame:
+    """Analyze win rates by VIX regime."""
+    df = labeled_df.dropna(subset=["hit_tp_first", "vix_regime"])
+
+    stats = (
+        df.groupby("vix_regime")
+        .agg(
+            count=("hit_tp_first", "count"),
+            wins=("hit_tp_first", "sum"),
+            win_rate=("hit_tp_first", "mean"),
+            avg_mfe=("mfe", "mean"),
+            avg_mae=("mae", "mean"),
+            avg_beta_neutral=("beta_neutral_return", "mean"),
+        )
+        .reset_index()
+    )
+
+    return stats
 
 
 
@@ -30942,11 +32782,11 @@ from pyiceberg.catalog import Catalog, load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.table import Table
 from pyiceberg.types import (
+    BooleanType,
     DoubleType,
     LongType,
     NestedField,
     StringType,
-    TimestampType,
     TimestamptzType,
 )
 
@@ -31082,8 +32922,10 @@ def get_silver_quotes_schema() -> Schema:
         NestedField(21, "bid_size", LongType(), required=True),
         NestedField(22, "ask_price", DoubleType(), required=True),
         NestedField(23, "ask_size", LongType(), required=True),
-        NestedField(24, "exchange", StringType(), required=False),
-        NestedField(25, "conditions", StringType(), required=False),
+        NestedField(24, "bid_exchange", StringType(), required=False),  # Alpaca WS: bx
+        NestedField(25, "ask_exchange", StringType(), required=False),  # Alpaca WS: ax
+        NestedField(26, "conditions", StringType(), required=False),  # Alpaca WS: c (JSON)
+        NestedField(27, "tape", StringType(), required=False),  # Alpaca WS: z (A/B/C)
     )
 
 
@@ -31093,25 +32935,716 @@ def get_silver_trades_schema() -> Schema:
         *SILVER_BASE_FIELDS,
         NestedField(20, "price", DoubleType(), required=True),
         NestedField(21, "size", LongType(), required=True),
-        NestedField(22, "exchange", StringType(), required=False),
-        NestedField(23, "conditions", StringType(), required=False),
-        NestedField(24, "tape", StringType(), required=False),
-        NestedField(25, "trade_id", StringType(), required=False),
+        NestedField(22, "exchange", StringType(), required=False),  # Stocks: exchange code
+        NestedField(23, "conditions", StringType(), required=False),  # Stocks: trade conditions (JSON)
+        NestedField(24, "tape", StringType(), required=False),  # Stocks: A/B/C tape
+        NestedField(25, "trade_id", StringType(), required=False),  # Both: unique trade ID
+        NestedField(26, "taker_side", StringType(), required=False),  # Crypto: B=buy, S=sell
     )
 
 
 def get_silver_flow_alerts_schema() -> Schema:
-    """Iceberg schema for Silver flow_alerts table."""
+    """Iceberg schema for Silver flow_alerts table.
+
+    Matches UW Flow Alert API response.
+    """
     return Schema(
         *SILVER_BASE_FIELDS,
-        NestedField(20, "alert_type", StringType(), required=True),
-        NestedField(21, "sentiment", StringType(), required=True),
-        NestedField(22, "premium", DoubleType(), required=True),
+        NestedField(20, "alert_type", StringType(), required=False),  # alert_rule in UW
+        NestedField(21, "sentiment", StringType(), required=False),  # computed
+        NestedField(22, "premium", DoubleType(), required=True),  # total_premium
         NestedField(23, "volume", LongType(), required=True),
         NestedField(24, "open_interest", LongType(), required=False),
         NestedField(25, "strike", DoubleType(), required=False),
-        NestedField(26, "expiry", TimestampType(), required=False),
-        NestedField(27, "option_type", StringType(), required=False),
+        NestedField(26, "expiry", StringType(), required=False),  # Changed to string YYYY-MM-DD
+        NestedField(27, "option_type", StringType(), required=False),  # call/put
+        NestedField(28, "side", StringType(), required=False),  # bid, ask, mid
+        NestedField(29, "is_sweep", BooleanType(), required=False),  # has_sweep
+        NestedField(30, "is_unusual", BooleanType(), required=False),
+        NestedField(31, "symbol", StringType(), required=False),  # ticker
+        # Additional UW fields
+        NestedField(32, "option_chain", StringType(), required=False),  # OCC symbol
+        NestedField(33, "price", DoubleType(), required=False),  # Option price
+        NestedField(34, "underlying_price", DoubleType(), required=False),  # Stock price
+        NestedField(35, "alert_rule", StringType(), required=False),  # RepeatedHits, etc.
+        NestedField(36, "total_size", LongType(), required=False),  # Total contracts
+        NestedField(37, "trade_count", LongType(), required=False),  # Number of trades
+        NestedField(38, "volume_oi_ratio", DoubleType(), required=False),  # Vol/OI
+        NestedField(39, "total_ask_side_prem", DoubleType(), required=False),
+        NestedField(40, "total_bid_side_prem", DoubleType(), required=False),
+        NestedField(41, "all_opening_trades", BooleanType(), required=False),
+        NestedField(42, "has_floor", BooleanType(), required=False),
+        NestedField(43, "has_multileg", BooleanType(), required=False),
+        NestedField(44, "has_singleleg", BooleanType(), required=False),
+        NestedField(45, "expiry_count", LongType(), required=False),  # Number of expiries
+    )
+
+
+def get_silver_darkpool_schema() -> Schema:
+    """Iceberg schema for Silver darkpool trades table.
+
+    Matches UW darkpool API response.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),
+        NestedField(21, "price", DoubleType(), required=True),
+        NestedField(22, "size", LongType(), required=True),
+        NestedField(23, "notional", DoubleType(), required=True),  # premium in UW
+        NestedField(24, "exchange", StringType(), required=False),  # market_center
+        NestedField(25, "tracking_id", StringType(), required=False),  # Unique trade ID
+        NestedField(26, "nbbo_bid", DoubleType(), required=False),  # NBBO bid at trade
+        NestedField(27, "nbbo_ask", DoubleType(), required=False),  # NBBO ask at trade
+        NestedField(28, "ext_hours", StringType(), required=False),  # extended_hours_trade
+        NestedField(29, "trade_settlement", StringType(), required=False),  # regular_settlement
+        NestedField(30, "canceled", BooleanType(), required=False),  # Was trade cancelled
+    )
+
+
+def get_silver_congress_trades_schema() -> Schema:
+    """Iceberg schema for Silver congressional trades table.
+
+    Matches UW Senate Stock API response exactly.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # Stock symbol
+        NestedField(21, "name", StringType(), required=True),  # Politician's standard name
+        NestedField(22, "txn_type", StringType(), required=True),  # Buy/Sell
+        NestedField(23, "amounts", StringType(), required=False),  # Range like "$15,001 - $50,000"
+        NestedField(24, "transaction_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(25, "filed_at_date", StringType(), required=False),  # Disclosure date
+        NestedField(26, "member_type", StringType(), required=False),  # house/senate
+        NestedField(27, "politician_id", StringType(), required=False),  # UUID for tracking
+        NestedField(28, "reporter", StringType(), required=False),  # Who filed
+        NestedField(29, "notes", StringType(), required=False),  # Subholding details
+        NestedField(30, "issuer", StringType(), required=False),  # not-disclosed, joint, etc.
+        NestedField(31, "is_active", BooleanType(), required=False),  # Still in office
+    )
+
+
+def get_silver_insider_trades_schema() -> Schema:
+    """Iceberg schema for Silver insider trades table.
+
+    Matches UW Insider Trade Agg API response exactly.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # Stock symbol
+        NestedField(21, "owner_name", StringType(), required=True),  # Insider name
+        NestedField(22, "officer_title", StringType(), required=False),  # CEO, CFO, etc.
+        NestedField(23, "transaction_code", StringType(), required=True),  # S, P, A, etc.
+        NestedField(24, "amount", LongType(), required=False),  # Shares transacted (neg=sell)
+        NestedField(25, "price", DoubleType(), required=False),
+        NestedField(26, "transaction_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(27, "filing_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(28, "formtype", StringType(), required=False),  # 4, 144, etc.
+        NestedField(29, "id", StringType(), required=False),  # Trade UUID
+        NestedField(30, "is_10b5_1", BooleanType(), required=False),  # Part of 10b5-1 plan
+        NestedField(31, "is_director", BooleanType(), required=False),
+        NestedField(32, "is_officer", BooleanType(), required=False),
+        NestedField(33, "is_ten_percent_owner", BooleanType(), required=False),
+        NestedField(34, "sector", StringType(), required=False),
+        NestedField(35, "marketcap", StringType(), required=False),
+        NestedField(36, "is_s_p_500", BooleanType(), required=False),
+        NestedField(37, "next_earnings_date", StringType(), required=False),
+        NestedField(38, "shares_owned_before", LongType(), required=False),
+        NestedField(39, "shares_owned_after", LongType(), required=False),
+        NestedField(40, "security_title", StringType(), required=False),  # Common Stock, etc.
+        NestedField(41, "natureofownership", StringType(), required=False),  # Direct, Indirect
+        NestedField(42, "transactions", LongType(), required=False),  # Number of transactions
+    )
+
+
+def get_silver_market_tide_schema() -> Schema:
+    """Iceberg schema for Silver market tide/sentiment table.
+
+    Matches UW Daily Market Tide API response.
+    Supports market tide, sector tide, and ETF tide (all use same UW schema).
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "tide_type", StringType(), required=True),  # market, sector, etf
+        NestedField(21, "date", StringType(), required=False),  # Trading date YYYY-MM-DD
+        NestedField(22, "net_call_premium", DoubleType(), required=True),
+        NestedField(23, "net_put_premium", DoubleType(), required=True),
+        NestedField(24, "net_volume", LongType(), required=False),  # Net volume (call - put)
+        NestedField(25, "sentiment", StringType(), required=False),  # bullish/bearish/neutral (computed)
+        NestedField(26, "sector", StringType(), required=False),  # For sector tide
+        NestedField(27, "ticker", StringType(), required=False),  # For ETF tide
+    )
+
+
+def get_silver_greek_exposure_schema() -> Schema:
+    """Iceberg schema for Silver greek exposure (GEX) table.
+
+    Matches UW Greek Exposure API response exactly.
+    Supports main GEX, by-expiry, by-strike, and by-strike-expiry variants.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),  # Ticker
+        NestedField(21, "gex_type", StringType(), required=True),  # main, by_expiry, by_strike, by_strike_expiry
+        NestedField(22, "date", StringType(), required=False),  # Trading date YYYY-MM-DD
+        # Call greeks
+        NestedField(23, "call_gamma", DoubleType(), required=False),
+        NestedField(24, "call_delta", DoubleType(), required=False),
+        NestedField(25, "call_vanna", DoubleType(), required=False),
+        NestedField(26, "call_charm", DoubleType(), required=False),
+        # Put greeks
+        NestedField(27, "put_gamma", DoubleType(), required=False),
+        NestedField(28, "put_delta", DoubleType(), required=False),
+        NestedField(29, "put_vanna", DoubleType(), required=False),
+        NestedField(30, "put_charm", DoubleType(), required=False),
+        # Optional grouping fields
+        NestedField(31, "strike", DoubleType(), required=False),  # For by-strike variants
+        NestedField(32, "expiry", StringType(), required=False),  # For by-expiry variants
+        NestedField(33, "dte", LongType(), required=False),  # Days to expiry
+    )
+
+
+def get_silver_user_alerts_schema() -> Schema:
+    """Iceberg schema for Silver user alerts table.
+
+    Matches UW Alert API response exactly.
+    These are custom user-created alerts (dividends, trading halts, SEC filings, etc.)
+    Not to be confused with flow_alerts which are option flow signals.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "alert_id", StringType(), required=True),  # UW alert UUID
+        NestedField(21, "created_at", StringType(), required=False),  # ISO timestamp
+        NestedField(22, "name", StringType(), required=False),  # Alert name
+        NestedField(23, "noti_type", StringType(), required=True),  # dividends, trading_state, sec_filings, etc.
+        NestedField(24, "symbol", StringType(), required=False),  # Ticker or contract
+        NestedField(25, "symbol_type", StringType(), required=False),  # stock, option
+        NestedField(26, "tape_time", StringType(), required=False),  # Alert tape timestamp
+        NestedField(27, "user_noti_config_id", StringType(), required=False),  # User's alert config ID
+        NestedField(28, "meta", StringType(), required=False),  # JSON blob of alert-specific data
+    )
+
+
+def get_silver_earnings_schema() -> Schema:
+    """Iceberg schema for Silver earnings table.
+
+    Comprehensive schema capturing both UW Earnings (premarket/afterhours calendar)
+    and Historical Ticker Earnings schemas. Uses earnings_type discriminator.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        # Discriminator and common fields
+        NestedField(20, "symbol", StringType(), required=True),  # Ticker symbol
+        NestedField(21, "earnings_type", StringType(), required=True),  # 'premarket', 'afterhours', 'historical'
+        NestedField(22, "report_date", StringType(), required=False),  # Earnings report date
+        NestedField(23, "report_time", StringType(), required=False),  # premarket/postmarket
+        NestedField(24, "actual_eps", StringType(), required=False),  # Actual EPS
+        NestedField(25, "street_mean_est", StringType(), required=False),  # Street consensus estimate
+        NestedField(26, "source", StringType(), required=False),  # company, analyst, etc.
+        NestedField(27, "ending_fiscal_quarter", StringType(), required=False),  # Fiscal quarter end date
+        NestedField(28, "expected_move", StringType(), required=False),  # Expected price move
+        NestedField(29, "expected_move_perc", StringType(), required=False),  # Expected move percentage
+        # Calendar-specific fields (premarket/afterhours)
+        NestedField(30, "full_name", StringType(), required=False),  # Company full name
+        NestedField(31, "sector", StringType(), required=False),  # Sector
+        NestedField(32, "marketcap", StringType(), required=False),  # Market cap
+        NestedField(33, "has_options", BooleanType(), required=False),  # Has options
+        NestedField(34, "is_s_p_500", BooleanType(), required=False),  # In S&P 500
+        NestedField(35, "continent", StringType(), required=False),  # Continent
+        NestedField(36, "country_code", StringType(), required=False),  # Country code
+        NestedField(37, "country_name", StringType(), required=False),  # Country name
+        NestedField(38, "pre_earnings_close", StringType(), required=False),  # Close before earnings
+        NestedField(39, "pre_earnings_date", StringType(), required=False),  # Date before earnings
+        NestedField(40, "post_earnings_close", StringType(), required=False),  # Close after earnings
+        NestedField(41, "post_earnings_date", StringType(), required=False),  # Date after earnings
+        NestedField(42, "reaction", StringType(), required=False),  # Price reaction
+        # Historical ticker-specific fields
+        NestedField(43, "pre_earnings_move_1d", StringType(), required=False),
+        NestedField(44, "pre_earnings_move_3d", StringType(), required=False),
+        NestedField(45, "pre_earnings_move_1w", StringType(), required=False),
+        NestedField(46, "pre_earnings_move_2w", StringType(), required=False),
+        NestedField(47, "post_earnings_move_1d", StringType(), required=False),
+        NestedField(48, "post_earnings_move_3d", StringType(), required=False),
+        NestedField(49, "post_earnings_move_1w", StringType(), required=False),
+        NestedField(50, "post_earnings_move_2w", StringType(), required=False),
+        NestedField(51, "long_straddle_1d", StringType(), required=False),
+        NestedField(52, "long_straddle_1w", StringType(), required=False),
+        NestedField(53, "short_straddle_1d", StringType(), required=False),
+        NestedField(54, "short_straddle_1w", StringType(), required=False),
+    )
+
+
+def get_silver_etf_info_schema() -> Schema:
+    """Iceberg schema for Silver ETF info table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # ETF ticker
+        NestedField(21, "name", StringType(), required=False),  # ETF full name
+        NestedField(22, "description", StringType(), required=False),  # ETF description
+        NestedField(23, "etf_company", StringType(), required=False),  # Issuer
+        NestedField(24, "domicile", StringType(), required=False),  # Country domicile
+        NestedField(25, "inception_date", StringType(), required=False),  # Launch date
+        NestedField(26, "expense_ratio", StringType(), required=False),  # Expense ratio
+        NestedField(27, "aum", StringType(), required=False),  # Assets under management
+        NestedField(28, "holdings_count", LongType(), required=False),  # Number of holdings
+        NestedField(29, "has_options", BooleanType(), required=False),  # Has options
+        NestedField(30, "avg30_volume", StringType(), required=False),  # 30-day avg volume
+        NestedField(31, "call_vol", LongType(), required=False),  # Call volume
+        NestedField(32, "put_vol", LongType(), required=False),  # Put volume
+        NestedField(33, "opt_vol", LongType(), required=False),  # Total options volume
+        NestedField(34, "stock_vol", LongType(), required=False),  # Stock volume
+        NestedField(35, "website", StringType(), required=False),  # ETF website
+    )
+
+
+def get_silver_etf_holdings_schema() -> Schema:
+    """Iceberg schema for Silver ETF holdings table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "etf_ticker", StringType(), required=True),  # Parent ETF
+        NestedField(21, "ticker", StringType(), required=True),  # Holding ticker
+        NestedField(22, "name", StringType(), required=False),  # Company name
+        NestedField(23, "short_name", StringType(), required=False),  # Short name
+        NestedField(24, "sector", StringType(), required=False),  # Sector
+        NestedField(25, "weight", StringType(), required=False),  # Weight in ETF
+        NestedField(26, "shares", LongType(), required=False),  # Shares held
+        NestedField(27, "type", StringType(), required=False),  # stock/other
+        NestedField(28, "close", StringType(), required=False),  # Close price
+        NestedField(29, "high", StringType(), required=False),  # Day high
+        NestedField(30, "low", StringType(), required=False),  # Day low
+        NestedField(31, "open", StringType(), required=False),  # Day open
+        NestedField(32, "prev_price", StringType(), required=False),  # Previous close
+        NestedField(33, "volume", LongType(), required=False),  # Day volume
+        NestedField(34, "avg30_volume", StringType(), required=False),  # 30-day avg volume
+        NestedField(35, "week52_high", StringType(), required=False),  # 52-week high
+        NestedField(36, "week52_low", StringType(), required=False),  # 52-week low
+        NestedField(37, "has_options", BooleanType(), required=False),  # Has options
+        NestedField(38, "call_volume", LongType(), required=False),  # Call volume
+        NestedField(39, "put_volume", LongType(), required=False),  # Put volume
+        NestedField(40, "call_premium", StringType(), required=False),  # Call premium
+        NestedField(41, "put_premium", StringType(), required=False),  # Put premium
+        NestedField(42, "bullish_premium", StringType(), required=False),  # Bullish premium
+        NestedField(43, "bearish_premium", StringType(), required=False),  # Bearish premium
+    )
+
+
+def get_silver_etf_exposure_schema() -> Schema:
+    """Iceberg schema for Silver ETF exposure table (ticker in which ETFs)."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # Stock ticker
+        NestedField(21, "etf", StringType(), required=True),  # ETF ticker
+        NestedField(22, "full_name", StringType(), required=False),  # ETF full name
+        NestedField(23, "weight", StringType(), required=False),  # Weight of ticker in ETF
+        NestedField(24, "shares", LongType(), required=False),  # Shares held
+        NestedField(25, "last_price", StringType(), required=False),  # Last price
+        NestedField(26, "prev_price", StringType(), required=False),  # Previous close
+    )
+
+
+def get_silver_etf_inflow_outflow_schema() -> Schema:
+    """Iceberg schema for Silver ETF inflow/outflow table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # ETF ticker
+        NestedField(21, "date", StringType(), required=True),  # Trading date
+        NestedField(22, "change", LongType(), required=False),  # Share change
+        NestedField(23, "change_prem", StringType(), required=False),  # Premium change
+        NestedField(24, "close", StringType(), required=False),  # Close price
+        NestedField(25, "volume", LongType(), required=False),  # Volume
+        NestedField(26, "is_fomc", BooleanType(), required=False),  # FOMC date flag
+    )
+
+
+def get_silver_etf_weights_schema() -> Schema:
+    """Iceberg schema for Silver ETF sector/country weights table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # ETF ticker
+        NestedField(21, "weight_type", StringType(), required=True),  # 'sector' or 'country'
+        NestedField(22, "name", StringType(), required=True),  # Sector or country name
+        NestedField(23, "weight", StringType(), required=False),  # Allocation weight
+    )
+
+
+def get_silver_group_flow_schema() -> Schema:
+    """Iceberg schema for Silver group flow table.
+
+    Captures Greek flow (delta & vega) for flow groups like sectors/industries.
+    Works for both per-minute and per-minute-per-expiry data.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "flow_group", StringType(), required=True),  # airline, tech, etc.
+        NestedField(21, "timestamp", StringType(), required=True),  # Minute timestamp
+        NestedField(22, "expiry", StringType(), required=False),  # Optional expiry for by-expiry
+        # Delta and vega flows
+        NestedField(23, "dir_delta_flow", StringType(), required=False),  # Directional delta flow
+        NestedField(24, "dir_vega_flow", StringType(), required=False),  # Directional vega flow
+        NestedField(25, "total_delta_flow", StringType(), required=False),  # Total delta flow
+        NestedField(26, "total_vega_flow", StringType(), required=False),  # Total vega flow
+        # OTM flows
+        NestedField(27, "otm_dir_delta_flow", StringType(), required=False),  # OTM directional delta
+        NestedField(28, "otm_dir_vega_flow", StringType(), required=False),  # OTM directional vega
+        NestedField(29, "otm_total_delta_flow", StringType(), required=False),  # OTM total delta
+        NestedField(30, "otm_total_vega_flow", StringType(), required=False),  # OTM total vega
+        # Call/put premium and volume
+        NestedField(31, "net_call_premium", StringType(), required=False),  # Net call premium
+        NestedField(32, "net_put_premium", StringType(), required=False),  # Net put premium
+        NestedField(33, "net_call_volume", LongType(), required=False),  # Net call volume
+        NestedField(34, "net_put_volume", LongType(), required=False),  # Net put volume
+        # Aggregates
+        NestedField(35, "volume", LongType(), required=False),  # Total volume
+        NestedField(36, "transactions", LongType(), required=False),  # Transaction count
+    )
+
+
+def get_silver_insider_flow_schema() -> Schema:
+    """Iceberg schema for Silver insider flow table.
+
+    Used for both sector flow and ticker flow endpoints, with flow_type discriminator.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "flow_type", StringType(), required=True),  # 'sector' or 'ticker'
+        NestedField(21, "identifier", StringType(), required=True),  # sector name or ticker
+        NestedField(22, "date", StringType(), required=True),  # Trading date
+        NestedField(23, "buy_sell", StringType(), required=True),  # 'buy' or 'sell'
+        NestedField(24, "avg_price", StringType(), required=False),  # Average price
+        NestedField(25, "premium", StringType(), required=False),  # Total premium
+        NestedField(26, "volume", LongType(), required=False),  # Share volume
+        NestedField(27, "transactions", LongType(), required=False),  # Transaction count
+        NestedField(28, "uniq_insiders", LongType(), required=False),  # Unique insiders
+    )
+
+
+def get_silver_ticker_insiders_schema() -> Schema:
+    """Iceberg schema for Silver ticker insiders table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # Stock ticker
+        NestedField(21, "insider_id", LongType(), required=True),  # Insider ID
+        NestedField(22, "name", StringType(), required=False),  # Insider name
+        NestedField(23, "name_slug", StringType(), required=False),  # URL slug
+        NestedField(24, "is_person", BooleanType(), required=False),  # Is person vs entity
+        NestedField(25, "logo_url", StringType(), required=False),  # Logo URL
+        NestedField(26, "social_links", StringType(), required=False),  # JSON array of links
+    )
+
+
+def get_silver_institution_activity_schema() -> Schema:
+    """Iceberg schema for Silver institutional activity table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "institution_name", StringType(), required=True),  # Institution name
+        NestedField(21, "ticker", StringType(), required=True),  # Stock ticker
+        NestedField(22, "filing_date", StringType(), required=True),  # Filing date
+        NestedField(23, "report_date", StringType(), required=False),  # Report date
+        NestedField(24, "security_type", StringType(), required=False),  # Share, Fund, etc.
+        NestedField(25, "put_call", StringType(), required=False),  # Put/Call indicator
+        NestedField(26, "units", LongType(), required=False),  # Current units
+        NestedField(27, "units_change", LongType(), required=False),  # Change in units
+        NestedField(28, "avg_price", StringType(), required=False),  # Average price
+        NestedField(29, "close", StringType(), required=False),  # Stock close price
+        NestedField(30, "buy_price", StringType(), required=False),  # Buy price
+        NestedField(31, "sell_price", StringType(), required=False),  # Sell price
+        NestedField(32, "price_on_filing", StringType(), required=False),  # Price on filing date
+        NestedField(33, "price_on_report", StringType(), required=False),  # Price on report date
+        NestedField(34, "shares_outstanding", StringType(), required=False),  # Total shares
+    )
+
+
+def get_silver_institution_holdings_schema() -> Schema:
+    """Iceberg schema for Silver institutional holdings table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "institution_name", StringType(), required=True),  # Institution name
+        NestedField(21, "ticker", StringType(), required=True),  # Stock ticker
+        NestedField(22, "full_name", StringType(), required=False),  # Full stock name
+        NestedField(23, "sector", StringType(), required=False),  # Stock sector
+        NestedField(24, "date", StringType(), required=False),  # Report date
+        NestedField(25, "first_buy", StringType(), required=False),  # First purchase date
+        NestedField(26, "price_first_buy", StringType(), required=False),  # Price at first buy
+        NestedField(27, "security_type", StringType(), required=False),  # Share, Fund, etc.
+        NestedField(28, "put_call", StringType(), required=False),  # Put/Call indicator
+        NestedField(29, "units", LongType(), required=False),  # Current units
+        NestedField(30, "units_change", LongType(), required=False),  # Change in units
+        NestedField(31, "historical_units", StringType(), required=False),  # JSON array
+        NestedField(32, "value", LongType(), required=False),  # Position value
+        NestedField(33, "avg_price", StringType(), required=False),  # Average price
+        NestedField(34, "close", StringType(), required=False),  # Stock close price
+        NestedField(35, "perc_of_total", DoubleType(), required=False),  # % of portfolio
+        NestedField(36, "perc_of_share_value", DoubleType(), required=False),  # % of shares
+        NestedField(37, "shares_outstanding", StringType(), required=False),  # Total shares
+    )
+
+
+def get_silver_institution_sector_exposure_schema() -> Schema:
+    """Iceberg schema for Silver institutional sector exposure table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "institution_name", StringType(), required=True),  # Institution name
+        NestedField(21, "sector", StringType(), required=True),  # Sector name
+        NestedField(22, "report_date", StringType(), required=False),  # Report date
+        NestedField(23, "positions", LongType(), required=False),  # Total positions
+        NestedField(24, "positions_closed", LongType(), required=False),  # Closed positions
+        NestedField(25, "positions_decreased", LongType(), required=False),  # Decreased
+        NestedField(26, "positions_increased", LongType(), required=False),  # Increased
+        NestedField(27, "value", StringType(), required=False),  # Total value
+    )
+
+
+def get_silver_institutional_ownership_schema() -> Schema:
+    """Iceberg schema for Silver institutional ownership table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "ticker", StringType(), required=True),  # Stock ticker
+        NestedField(21, "name", StringType(), required=True),  # Institution name
+        NestedField(22, "short_name", StringType(), required=False),  # Short name
+        NestedField(23, "filing_date", StringType(), required=False),  # Filing date
+        NestedField(24, "report_date", StringType(), required=False),  # Report date
+        NestedField(25, "first_buy", StringType(), required=False),  # First purchase date
+        NestedField(26, "units", LongType(), required=False),  # Current units
+        NestedField(27, "units_change", LongType(), required=False),  # Change in units
+        NestedField(28, "historical_units", StringType(), required=False),  # JSON array
+        NestedField(29, "value", StringType(), required=False),  # Position value
+        NestedField(30, "avg_price", StringType(), required=False),  # Average price
+        NestedField(31, "inst_value", StringType(), required=False),  # Total institution value
+        NestedField(32, "inst_share_value", StringType(), required=False),  # Share value
+        NestedField(33, "shares_outstanding", StringType(), required=False),  # Total shares
+        NestedField(34, "people", StringType(), required=False),  # JSON array of people
+        NestedField(35, "tags", StringType(), required=False),  # JSON array of tags
+    )
+
+
+# =============================================================================
+# Alpaca Trading API Schemas
+# =============================================================================
+
+
+def get_silver_alpaca_account_schema() -> Schema:
+    """Iceberg schema for Alpaca account snapshots.
+
+    Matches Alpaca Trading API /v2/account response (36 fields).
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        # Identity
+        NestedField(20, "account_id", StringType(), required=True),
+        NestedField(21, "account_number", StringType(), required=True),
+        NestedField(22, "status", StringType(), required=True),
+        NestedField(23, "currency", StringType(), required=True),
+        # Balances
+        NestedField(24, "cash", DoubleType(), required=True),
+        NestedField(25, "portfolio_value", DoubleType(), required=False),
+        NestedField(26, "equity", DoubleType(), required=False),
+        NestedField(27, "last_equity", DoubleType(), required=False),
+        NestedField(28, "buying_power", DoubleType(), required=False),
+        NestedField(29, "daytrading_buying_power", DoubleType(), required=False),
+        NestedField(30, "non_marginable_buying_power", DoubleType(), required=False),
+        # Market values
+        NestedField(31, "long_market_value", DoubleType(), required=False),
+        NestedField(32, "short_market_value", DoubleType(), required=False),
+        # Margin
+        NestedField(33, "initial_margin", DoubleType(), required=False),
+        NestedField(34, "maintenance_margin", DoubleType(), required=False),
+        NestedField(35, "last_maintenance_margin", DoubleType(), required=False),
+        NestedField(36, "sma", DoubleType(), required=False),
+        NestedField(37, "multiplier", DoubleType(), required=False),
+        # Restrictions
+        NestedField(38, "pattern_day_trader", BooleanType(), required=False),
+        NestedField(39, "daytrade_count", LongType(), required=False),
+        NestedField(40, "shorting_enabled", BooleanType(), required=False),
+        NestedField(41, "trading_blocked", BooleanType(), required=False),
+        NestedField(42, "account_blocked", BooleanType(), required=False),
+        NestedField(43, "trade_suspended_by_user", BooleanType(), required=False),
+        NestedField(44, "transfers_blocked", BooleanType(), required=False),
+        # Fees and pending
+        NestedField(45, "accrued_fees", DoubleType(), required=False),
+        NestedField(46, "pending_transfer_in", DoubleType(), required=False),
+        NestedField(47, "pending_transfer_out", DoubleType(), required=False),
+        # Timestamps
+        NestedField(48, "created_at", StringType(), required=False),
+        NestedField(49, "balance_asof", StringType(), required=False),
+    )
+
+
+def get_silver_alpaca_order_schema() -> Schema:
+    """Iceberg schema for Alpaca orders.
+
+    Matches Alpaca Trading API /v2/orders response (33 fields).
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        # Identity
+        NestedField(20, "order_id", StringType(), required=True),
+        NestedField(21, "client_order_id", StringType(), required=False),
+        NestedField(22, "symbol", StringType(), required=True),
+        NestedField(23, "asset_id", StringType(), required=False),
+        NestedField(24, "asset_class", StringType(), required=False),
+        # Quantities
+        NestedField(25, "qty", DoubleType(), required=False),
+        NestedField(26, "filled_qty", DoubleType(), required=False),
+        NestedField(27, "notional", DoubleType(), required=False),
+        NestedField(28, "filled_avg_price", DoubleType(), required=False),
+        # Order type
+        NestedField(29, "order_type", StringType(), required=True),
+        NestedField(30, "side", StringType(), required=True),
+        NestedField(31, "time_in_force", StringType(), required=True),
+        NestedField(32, "order_class", StringType(), required=False),
+        # Prices
+        NestedField(33, "limit_price", DoubleType(), required=False),
+        NestedField(34, "stop_price", DoubleType(), required=False),
+        NestedField(35, "trail_percent", DoubleType(), required=False),
+        NestedField(36, "trail_price", DoubleType(), required=False),
+        # Status
+        NestedField(37, "status", StringType(), required=True),
+        NestedField(38, "extended_hours", BooleanType(), required=False),
+        NestedField(39, "legs", StringType(), required=False),  # JSON array
+        # Timestamps
+        NestedField(40, "created_at", StringType(), required=False),
+        NestedField(41, "submitted_at", StringType(), required=False),
+        NestedField(42, "filled_at", StringType(), required=False),
+        NestedField(43, "expired_at", StringType(), required=False),
+        NestedField(44, "canceled_at", StringType(), required=False),
+        NestedField(45, "failed_at", StringType(), required=False),
+        NestedField(46, "replaced_at", StringType(), required=False),
+        # Links
+        NestedField(47, "replaced_by", StringType(), required=False),
+        NestedField(48, "replaces", StringType(), required=False),
+    )
+
+
+def get_silver_alpaca_position_schema() -> Schema:
+    """Iceberg schema for Alpaca positions.
+
+    Matches Alpaca Trading API /v2/positions response (18 fields).
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        # Identity
+        NestedField(20, "asset_id", StringType(), required=True),
+        NestedField(21, "symbol", StringType(), required=True),
+        NestedField(22, "exchange", StringType(), required=False),
+        NestedField(23, "asset_class", StringType(), required=False),
+        # Holdings
+        NestedField(24, "qty", DoubleType(), required=True),
+        NestedField(25, "qty_available", DoubleType(), required=False),
+        NestedField(26, "side", StringType(), required=False),
+        NestedField(27, "avg_entry_price", DoubleType(), required=True),
+        NestedField(28, "cost_basis", DoubleType(), required=False),
+        # Values
+        NestedField(29, "market_value", DoubleType(), required=False),
+        NestedField(30, "current_price", DoubleType(), required=False),
+        NestedField(31, "lastday_price", DoubleType(), required=False),
+        NestedField(32, "change_today", DoubleType(), required=False),
+        # P&L
+        NestedField(33, "unrealized_pl", DoubleType(), required=False),
+        NestedField(34, "unrealized_plpc", DoubleType(), required=False),
+        NestedField(35, "unrealized_intraday_pl", DoubleType(), required=False),
+        NestedField(36, "unrealized_intraday_plpc", DoubleType(), required=False),
+        NestedField(37, "asset_marginable", BooleanType(), required=False),
+    )
+
+
+def get_silver_alpaca_portfolio_history_schema() -> Schema:
+    """Iceberg schema for Alpaca portfolio history.
+
+    Matches Alpaca Trading API /v2/account/portfolio/history response (8 fields).
+    Note: Arrays stored as JSON strings for Iceberg compatibility.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "timestamps", StringType(), required=False),  # JSON array
+        NestedField(21, "equities", StringType(), required=False),  # JSON array
+        NestedField(22, "profit_losses", StringType(), required=False),  # JSON array
+        NestedField(23, "profit_loss_pcts", StringType(), required=False),  # JSON array
+        NestedField(24, "base_value", DoubleType(), required=False),
+        NestedField(25, "base_value_asof", StringType(), required=False),
+        NestedField(26, "timeframe", StringType(), required=False),
+    )
+
+
+def get_silver_alpaca_activity_schema() -> Schema:
+    """Iceberg schema for Alpaca account activities.
+
+    Matches Alpaca Trading API /v2/account/activities response.
+    Combines TradeActivity and NonTradeActivity fields.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "activity_id", StringType(), required=True),
+        NestedField(21, "activity_type", StringType(), required=True),
+        NestedField(22, "transaction_time", StringType(), required=False),
+        # Trade activity fields
+        NestedField(23, "symbol", StringType(), required=False),
+        NestedField(24, "side", StringType(), required=False),
+        NestedField(25, "qty", DoubleType(), required=False),
+        NestedField(26, "price", DoubleType(), required=False),
+        NestedField(27, "net_amount", DoubleType(), required=False),
+        NestedField(28, "order_id", StringType(), required=False),
+        NestedField(29, "cum_qty", DoubleType(), required=False),
+        NestedField(30, "leaves_qty", DoubleType(), required=False),
+        # Non-trade activity fields
+        NestedField(31, "date", StringType(), required=False),
+        NestedField(32, "description", StringType(), required=False),
+        NestedField(33, "status", StringType(), required=False),
+    )
+
+
+def get_silver_alpaca_asset_schema() -> Schema:
+    """Iceberg schema for Alpaca assets.
+
+    Matches Alpaca Trading API /v2/assets response.
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "asset_id", StringType(), required=True),
+        NestedField(21, "symbol", StringType(), required=True),
+        NestedField(22, "name", StringType(), required=False),
+        NestedField(23, "exchange", StringType(), required=False),
+        NestedField(24, "asset_class", StringType(), required=False),
+        NestedField(25, "status", StringType(), required=False),
+        # Trading attributes
+        NestedField(26, "tradable", BooleanType(), required=False),
+        NestedField(27, "marginable", BooleanType(), required=False),
+        NestedField(28, "shortable", BooleanType(), required=False),
+        NestedField(29, "easy_to_borrow", BooleanType(), required=False),
+        NestedField(30, "fractionable", BooleanType(), required=False),
+        # Margin requirements
+        NestedField(31, "maintenance_margin_requirement", DoubleType(), required=False),
+        NestedField(32, "min_order_size", DoubleType(), required=False),
+        NestedField(33, "min_trade_increment", DoubleType(), required=False),
+        NestedField(34, "price_increment", DoubleType(), required=False),
+    )
+
+
+def get_silver_alpaca_option_contract_schema() -> Schema:
+    """Iceberg schema for Alpaca option contracts.
+
+    Matches Alpaca Trading API /v2/options/contracts response (19 fields).
+    """
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "contract_id", StringType(), required=True),
+        NestedField(21, "symbol", StringType(), required=True),
+        NestedField(22, "name", StringType(), required=False),
+        NestedField(23, "status", StringType(), required=False),
+        NestedField(24, "tradable", BooleanType(), required=False),
+        # Option details
+        NestedField(25, "root_symbol", StringType(), required=False),
+        NestedField(26, "underlying_symbol", StringType(), required=True),
+        NestedField(27, "underlying_asset_id", StringType(), required=False),
+        NestedField(28, "option_type", StringType(), required=True),  # call/put
+        NestedField(29, "option_style", StringType(), required=False),  # american/european
+        NestedField(30, "strike_price", DoubleType(), required=True),
+        NestedField(31, "expiration_date", StringType(), required=True),
+        NestedField(32, "multiplier", DoubleType(), required=False),
+        NestedField(33, "contract_size", DoubleType(), required=False),
+        # Market data
+        NestedField(34, "open_interest", LongType(), required=False),
+        NestedField(35, "open_interest_date", StringType(), required=False),
+        NestedField(36, "close_price", DoubleType(), required=False),
+        NestedField(37, "close_price_date", StringType(), required=False),
     )
 
 
@@ -31121,6 +33654,33 @@ SILVER_SCHEMAS: dict[str, Schema] = {
     "quotes": get_silver_quotes_schema(),
     "trades": get_silver_trades_schema(),
     "flow_alerts": get_silver_flow_alerts_schema(),
+    "darkpool": get_silver_darkpool_schema(),
+    "congress_trades": get_silver_congress_trades_schema(),
+    "insider_trades": get_silver_insider_trades_schema(),
+    "market_tide": get_silver_market_tide_schema(),
+    "greek_exposure": get_silver_greek_exposure_schema(),
+    "user_alerts": get_silver_user_alerts_schema(),
+    "earnings": get_silver_earnings_schema(),
+    "etf_info": get_silver_etf_info_schema(),
+    "etf_holdings": get_silver_etf_holdings_schema(),
+    "etf_exposure": get_silver_etf_exposure_schema(),
+    "etf_inflow_outflow": get_silver_etf_inflow_outflow_schema(),
+    "etf_weights": get_silver_etf_weights_schema(),
+    "group_flow": get_silver_group_flow_schema(),
+    "insider_flow": get_silver_insider_flow_schema(),
+    "ticker_insiders": get_silver_ticker_insiders_schema(),
+    "institution_activity": get_silver_institution_activity_schema(),
+    "institution_holdings": get_silver_institution_holdings_schema(),
+    "institution_sector_exposure": get_silver_institution_sector_exposure_schema(),
+    "institutional_ownership": get_silver_institutional_ownership_schema(),
+    # Alpaca Trading API schemas
+    "alpaca_account": get_silver_alpaca_account_schema(),
+    "alpaca_order": get_silver_alpaca_order_schema(),
+    "alpaca_position": get_silver_alpaca_position_schema(),
+    "alpaca_portfolio_history": get_silver_alpaca_portfolio_history_schema(),
+    "alpaca_activity": get_silver_alpaca_activity_schema(),
+    "alpaca_asset": get_silver_alpaca_asset_schema(),
+    "alpaca_option_contract": get_silver_alpaca_option_contract_schema(),
 }
 
 

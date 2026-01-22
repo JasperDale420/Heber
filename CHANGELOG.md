@@ -79,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `heber/features/templates/microstructure.py` - Spread, depth, imbalance metrics
   - `heber/features/templates/cross_asset.py` - Beta, alpha, relative strength, correlation
   - `heber/features/templates/labels.py` - Forward return labels, classification labels
+  - `heber/features/templates/alert_labels.py` - Flow alert return labels for underlying and option contracts
   - 7/7 tests passing
 
 - **Data Quality Contracts** (Phase 35, PRD §33)
