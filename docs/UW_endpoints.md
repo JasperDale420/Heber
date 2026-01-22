@@ -187,9 +187,9 @@ This document tracks all UW API endpoints and their integration status with Data
 | `/api/stock/{ticker}/flow` | Stock Flow | ❌ | ❌ | ❌ |
 | `/api/stock/{ticker}/flow-expiry` | Flow per Expiry | ❌ | ❌ | ❌ |
 | `/api/stock/{ticker}/flow-strike` | Flow per Strike | ❌ | ❌ | ❌ |
-| `/api/stock/{ticker}/greek-exposure` | Greek Exposure | ✅ | ❌ | 🔄 |
-| `/api/stock/{ticker}/greek-exposure-expiry` | Greek Exposure by Expiry | ✅ | ❌ | 🔄 |
-| `/api/stock/{ticker}/greek-exposure-strike` | Greek Exposure by Strike | ✅ | ❌ | 🔄 |
+| `/api/stock/{ticker}/greek-exposure` | Greek Exposure | ✅ | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-expiry` | Greek Exposure by Expiry | ✅ | ✅ `greek_exposure` | ✅ |
+| `/api/stock/{ticker}/greek-exposure-strike` | Greek Exposure by Strike | ✅ | ✅ `greek_exposure` | ✅ |
 | `/api/stock/{ticker}/historical-volatility` | Historical Volatility | ❌ | ❌ | ❌ |
 | `/api/stock/{ticker}/hottest-chains` | Hottest Chains | ✅ | ❌ | 🔄 |
 | `/api/stock/{ticker}/institution-ownership` | Institution Ownership | ❌ | ❌ | ❌ |
@@ -216,7 +216,7 @@ This document tracks all UW API endpoints and their integration status with Data
 
 ## Summary
 
-### Complete (7)
+### Complete (10)
 
 - ✅ Congress Trades (`/api/congress/recent-trades`)
 - ✅ Darkpool (`/api/darkpool/*`)
@@ -225,6 +225,9 @@ This document tracks all UW API endpoints and their integration status with Data
 - ✅ Market Tide (`/api/market/tide`)
 - ✅ Sector Tide (`/api/market/sector-tide`) - uses `market_tide` table
 - ✅ ETF Tide (`/api/market/etf-tide`) - uses `market_tide` table
+- ✅ Greek Exposure (`/api/stock/{ticker}/greek-exposure`) - uses `greek_exposure` table
+- ✅ Greek Exposure by Expiry - uses `greek_exposure` table
+- ✅ Greek Exposure by Strike - uses `greek_exposure` table
 
 ### In Progress (8)
 
