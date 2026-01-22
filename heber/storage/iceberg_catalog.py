@@ -237,17 +237,24 @@ def get_silver_darkpool_schema() -> Schema:
 
 
 def get_silver_congress_trades_schema() -> Schema:
-    """Iceberg schema for Silver congressional trades table."""
+    """Iceberg schema for Silver congressional trades table.
+
+    Matches UW Senate Stock API response exactly.
+    """
     return Schema(
         *SILVER_BASE_FIELDS,
-        NestedField(20, "symbol", StringType(), required=True),
-        NestedField(21, "politician", StringType(), required=True),
-        NestedField(22, "transaction_type", StringType(), required=True),  # buy/sell
-        NestedField(23, "amount", StringType(), required=False),  # Range like "$1M-$5M"
-        NestedField(24, "transaction_date", TimestamptzType(), required=False),
-        NestedField(25, "disclosure_date", TimestamptzType(), required=False),
-        NestedField(26, "party", StringType(), required=False),  # D/R
-        NestedField(27, "chamber", StringType(), required=False),  # House/Senate
+        NestedField(20, "ticker", StringType(), required=True),  # Stock symbol
+        NestedField(21, "name", StringType(), required=True),  # Politician's standard name
+        NestedField(22, "txn_type", StringType(), required=True),  # Buy/Sell
+        NestedField(23, "amounts", StringType(), required=False),  # Range like "$15,001 - $50,000"
+        NestedField(24, "transaction_date", StringType(), required=False),  # YYYY-MM-DD
+        NestedField(25, "filed_at_date", StringType(), required=False),  # Disclosure date
+        NestedField(26, "member_type", StringType(), required=False),  # house/senate
+        NestedField(27, "politician_id", StringType(), required=False),  # UUID for tracking
+        NestedField(28, "reporter", StringType(), required=False),  # Who filed
+        NestedField(29, "notes", StringType(), required=False),  # Subholding details
+        NestedField(30, "issuer", StringType(), required=False),  # not-disclosed, joint, etc.
+        NestedField(31, "is_active", BooleanType(), required=False),  # Still in office
     )
 
 
