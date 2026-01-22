@@ -200,14 +200,23 @@ def get_silver_flow_alerts_schema() -> Schema:
 
 
 def get_silver_darkpool_schema() -> Schema:
-    """Iceberg schema for Silver darkpool trades table."""
+    """Iceberg schema for Silver darkpool trades table.
+
+    Matches UW darkpool API response.
+    """
     return Schema(
         *SILVER_BASE_FIELDS,
         NestedField(20, "symbol", StringType(), required=True),
         NestedField(21, "price", DoubleType(), required=True),
         NestedField(22, "size", LongType(), required=True),
-        NestedField(23, "notional", DoubleType(), required=True),
-        NestedField(24, "exchange", StringType(), required=False),
+        NestedField(23, "notional", DoubleType(), required=True),  # premium in UW
+        NestedField(24, "exchange", StringType(), required=False),  # market_center
+        NestedField(25, "tracking_id", StringType(), required=False),  # Unique trade ID
+        NestedField(26, "nbbo_bid", DoubleType(), required=False),  # NBBO bid at trade
+        NestedField(27, "nbbo_ask", DoubleType(), required=False),  # NBBO ask at trade
+        NestedField(28, "ext_hours", StringType(), required=False),  # extended_hours_trade
+        NestedField(29, "trade_settlement", StringType(), required=False),  # regular_settlement
+        NestedField(30, "canceled", BooleanType(), required=False),  # Was trade cancelled
     )
 
 
