@@ -214,14 +214,16 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://redis:6379
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_STREAM_NAME=heber:events
+      - HEBER_REDIS_CONSUMER_GROUP=heber-writers
       - HEBER_CLICKHOUSE_HOST=clickhouse
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       heber-catalog:
         condition: service_healthy

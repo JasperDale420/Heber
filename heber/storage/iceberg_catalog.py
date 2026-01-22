@@ -20,6 +20,7 @@ from pyiceberg.catalog import Catalog, load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.table import Table
 from pyiceberg.types import (
+    BooleanType,
     DoubleType,
     LongType,
     NestedField,
@@ -190,6 +191,11 @@ def get_silver_flow_alerts_schema() -> Schema:
         NestedField(25, "strike", DoubleType(), required=False),
         NestedField(26, "expiry", TimestampType(), required=False),
         NestedField(27, "option_type", StringType(), required=False),
+        # Additional fields from Gateway NormalizedFlowAlert
+        NestedField(28, "side", StringType(), required=False),  # bid, ask, mid
+        NestedField(29, "is_sweep", BooleanType(), required=False),
+        NestedField(30, "is_unusual", BooleanType(), required=False),
+        NestedField(31, "symbol", StringType(), required=False),  # Ticker symbol
     )
 
 

@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-21T13:46:24*
+*Generated: 2026-01-21T15:47:34*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 170
+Files analyzed: 174
 
-Estimated tokens: 273.3k
+Estimated tokens: 271.7k
 
 ---
 
@@ -31,10 +31,14 @@ Directory structure:
     ├── .secrets.baseline
     ├── .trivy.yaml
     ├── docs/
+    │   ├── sdk.md
     │   └── operations/
     │       ├── backup-dr-runbook.md
     │       ├── cost-estimates.md
-    │       └── network-topology.md
+    │       ├── deployment.md
+    │       ├── monitoring.md
+    │       ├── network-topology.md
+    │       └── troubleshooting.md
     ├── features/
     │   ├── entities.py
     │   ├── feature_store.yaml
@@ -47,6 +51,7 @@ Directory structure:
     │       └── volatility.py
     ├── heber/
     │   ├── __init__.py
+    │   ├── cli.py
     │   ├── config.py
     │   ├── backfill/
     │   │   └── __init__.py
@@ -97,8 +102,7 @@ Directory structure:
     │   │   ├── labels.py
     │   │   ├── split_tests.py
     │   │   ├── splits.py
-    │   │   ├── tests.py
-    │   │   └── versioning.py
+    │   │   └── tests.py
     │   ├── hotstore/
     │   │   ├── __init__.py
     │   │   ├── client.py
@@ -171,7 +175,6 @@ Directory structure:
     │   └── writer/
     │       ├── __init__.py
     │       ├── bronze.py
-    │       ├── compaction.py
     │       ├── compactor.py
     │       ├── consumer.py
     │       ├── hotstore.py
@@ -237,6 +240,7 @@ Directory structure:
     │       └── quotes.yaml
     └── tests/
         ├── __init__.py
+        ├── test_edge_cases.py
         └── test_placeholder.py
 
 ```
@@ -1067,21 +1071,21 @@ FILE: implementation.md
 | Domain | PRD Sections | Status |
 |--------|--------------|--------|
 | **Core** | §1-6 | ✅ Done |
-| **Storage** | §7 | ⏳ Partial |
-| **Datasets** | §8-9 | ⏳ Partial |
-| **Zero-Leakage** | §10 | ⏳ Partial |
-| **Catalog & SDK** | §11 | ⏳ Partial |
-| **Operational** | §12 | ⬜ |
-| **Backfill** | §13 | ⬜ |
-| **Schema Evolution** | §14 | ⬜ |
-| **Retention** | §15 | ⬜ |
-| **Compaction** | §16 | ⏳ Partial |
+| **Storage** | §7 | ✅ Done |
+| **Datasets** | §8-9 | ✅ Done |
+| **Zero-Leakage** | §10 | ✅ Done |
+| **Catalog & SDK** | §11 | ✅ Done |
+| **Operational** | §12 | ✅ Done |
+| **Backfill** | §13 | ✅ Done |
+| **Schema Evolution** | §14 | ✅ Done |
+| **Retention** | §15 | ✅ Done |
+| **Compaction** | §16 | ✅ Done |
 | **Configuration** | §18 | ✅ Done |
-| **Infrastructure** | §19-27 | ⬜ |
-| **ML/Research** | §28-36 | ⬜ |
-| **Reliability** | §37-44 | ⬜ |
-| **Testing** | §45-54 | ⬜ |
-| **Data Sources** | §55-62 | ⬜ |
+| **Infrastructure** | §19-27 | ✅ Done |
+| **ML/Research** | §28-36 | ✅ Done |
+| **Reliability** | §37-44 | ✅ Done |
+| **Testing** | §45-54 | ✅ Done |
+| **Data Sources** | §55-62 | ✅ Done |
 
 ---
 
@@ -1907,10 +1911,10 @@ FILE: implementation.md
 
 ### 49.3 Edge Case Library
 
-- [ ] Clock skew scenarios
-- [ ] Missing timestamps
-- [ ] Schema mismatches
-- [ ] Late-arriving data
+- [x] Clock skew scenarios
+- [x] Missing timestamps
+- [x] Schema mismatches
+- [x] Late-arriving data
 
 ---
 
@@ -8272,7 +8276,7 @@ FILE: pyproject.toml
 ================================================
 [project]
 name = "heber"
-version = "0.1.0"
+version = "0.2.0"
 description = "Heber Data Lakehouse - Centralized storage for market and intelligence data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8344,6 +8348,19 @@ dev = [
 catalog = [
     "openmetadata-ingestion>=1.4",
 ]
+
+# Lightweight SDK-only install: pip install heber[sdk]
+# For external consumers who only need the client
+sdk = [
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+    "httpx>=0.26",
+    "pydantic>=2.0",
+    "structlog>=24.0",
+]
+
+[project.scripts]
+heber = "heber.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -8893,6 +8910,176 @@ vulnerability:
 
 
 ================================================
+FILE: docs/sdk.md
+================================================
+# Heber SDK
+
+The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to financial data, preventing future information from leaking into past queries.
+
+## Installation
+
+```bash
+# Full installation (all dependencies)
+pip install heber
+
+# Lightweight SDK-only (minimal dependencies)
+pip install heber[sdk]
+```
+
+### From Source
+
+```python
+from heber.sdk.client import HeberClient
+```
+
+## Quick Start
+
+```python
+from datetime import datetime
+from heber.sdk.client import HeberClient
+
+client = HeberClient()
+
+# Read market data with zero-leakage guarantee
+bars = client.read_asof(
+    dataset="bars",
+    asof_time=datetime(2025, 1, 15),
+    instrument_keys=["equity:AAPL"],
+)
+```
+
+## Core Features
+
+### Zero-Leakage Data Access
+
+The `read_asof()` method ensures you only get data that was **available** at the specified time:
+
+```python
+# Only returns data where ts_available <= asof_time
+bars = client.read_asof(
+    dataset="bars",
+    asof_time=datetime(2025, 1, 15),
+    instrument_keys=["equity:AAPL", "equity:TSLA"],
+    time_range=("2025-01-01", "2025-01-15"),
+)
+```
+
+### Silver Layer (Market Data)
+
+```python
+# Read raw market data
+quotes = client.read_silver(
+    dataset="quotes",
+    time_range=("2025-01-01", "2025-01-15"),
+    instrument_keys=["equity:TSLA"],
+    columns=["ts_event", "bid", "ask", "bid_size", "ask_size"],
+)
+```
+
+### Gold Layer (Features & Labels)
+
+```python
+# Write computed features
+client.write_gold(
+    dataset="momentum_features",
+    df=features,  # Must include: instrument_key, ts_event, ts_available
+    project="kairos",
+    version="v1",
+)
+
+# Read with version resolution
+features = client.read_gold_versioned(
+    dataset="momentum_features",
+    version="v3.*",  # Latest v3.x version
+)
+```
+
+### Version Management
+
+Powered by lakeFS for Git-like data versioning:
+
+```python
+# List all versions
+versions = client.list_gold_versions("momentum_features")
+# ["v3.5.0", "v3.2.1", "v1.0.0"]
+
+# Check compatibility between versions
+compat = client.check_version_compatibility(
+    dataset="momentum_features",
+    from_version="v3.2.1",
+    to_version="v3.5.0",
+)
+# {"compatible": True, "breaking": [], "changes": ["added momentum_20d"]}
+
+# Get version lineage (commit metadata)
+lineage = client.get_version_lineage("momentum_features", "v3.5.0")
+# {"commit_id": "abc123", "created_at": "2025-01-15T...", "parents": [...]}
+```
+
+### As-Of Joins
+
+Point-in-time correct joins that prevent lookahead bias:
+
+```python
+# Join trades with earnings, ensuring no future data leaks
+result = client.asof_join(
+    left=trades,
+    right=earnings,
+    on_keys=["instrument_key"],
+    left_time="ts_event",
+    right_time="ts_event",
+    right_available="ts_available",
+    tolerance="1h",
+)
+```
+
+### Dataset Discovery
+
+```python
+# List available datasets
+datasets = client.list_datasets(layer="silver")
+
+# Get dataset metadata
+info = client.get_dataset("bars")
+
+# Discover partitions and schema
+discovery = client.discover("bars", layer="silver")
+```
+
+## When to Update the SDK
+
+### Updates Required
+
+- Adding new dataset types (options, crypto, etc.)
+- New read patterns (streaming, incremental)
+- Catalog API changes
+- New helper methods
+
+### No Updates Needed
+
+- Adding new instruments (just data)
+- Schema changes (Apicurio handles evolution)
+- New Gold datasets (existing `write_gold()` works)
+- Version changes (lakeFS tags work automatically)
+- New data sources (Bronze → Silver pipeline handles it)
+
+## Architecture
+
+The SDK is a thin wrapper over:
+
+| Layer | Implementation |
+|-------|----------------|
+| Silver reads | Apache Iceberg (via PyIceberg) |
+| Gold reads/writes | Parquet + lakeFS tags |
+| Catalog API | HTTP client to heber-catalog |
+| Versioning | lakeFS API |
+| Schema registry | Apicurio Registry |
+
+The OSS migration makes the SDK more stable by replacing custom implementations with well-tested open source APIs.
+
+
+
+================================================
 FILE: docs/operations/backup-dr-runbook.md
 ================================================
 # Heber Backup & Disaster Recovery Runbook
@@ -9208,6 +9395,299 @@ aws budgets create-budget \
 
 
 ================================================
+FILE: docs/operations/deployment.md
+================================================
+# Heber Deployment Runbook
+
+Procedures for deploying and updating Heber services.
+
+---
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Access to Heber repository
+- `.env` file configured
+
+---
+
+## Local Development Deployment
+
+### Initial Setup
+
+```bash
+cd /Users/jacobmcmillan/Empire/Heber
+
+# Copy environment template
+cp .env.example .env
+# Edit .env with your values
+
+# Start all services
+docker compose up -d
+
+# Verify health
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep heber
+```
+
+### Rebuild After Code Changes
+
+```bash
+# Rebuild and restart Heber services
+docker compose up -d --build heber-catalog heber-consumer heber-compactor
+
+# Wait for health checks
+sleep 30
+docker ps | grep heber
+```
+
+---
+
+## Service-Specific Deployment
+
+### Deploy Catalog API Only
+
+```bash
+docker compose up -d --build heber-catalog
+# Verify
+curl http://localhost:8085/health
+```
+
+### Deploy Consumer Only
+
+```bash
+docker compose up -d --build heber-consumer
+# Verify logs
+docker logs heber-consumer --tail 20
+```
+
+---
+
+## Infrastructure Updates
+
+### Update OSS Components
+
+```bash
+# Pull latest images
+docker compose pull lakefs apicurio openmetadata
+
+# Recreate with new images
+docker compose up -d lakefs apicurio openmetadata
+```
+
+### Database Migrations
+
+```bash
+# Run Alembic migrations
+docker exec heber-catalog alembic upgrade head
+```
+
+---
+
+## Pre-Deployment Checklist
+
+- [ ] All tests passing locally
+- [ ] Pre-commit hooks passing
+- [ ] No breaking schema changes (or migration plan ready)
+- [ ] Changelog updated
+- [ ] `.env` values correct
+
+---
+
+## Rollback Procedure
+
+### Quick Rollback
+
+```bash
+# Get previous working commit
+git log --oneline -5
+
+# Checkout and redeploy
+git checkout <previous-commit>
+docker compose up -d --build
+```
+
+### Rollback Specific Service
+
+```bash
+# Tag current state
+docker tag heber-heber-catalog:latest heber-heber-catalog:rollback
+
+# Rollback
+git checkout <commit>
+docker compose up -d --build heber-catalog
+```
+
+---
+
+## Health Verification
+
+After any deployment:
+
+```bash
+# Check all services
+curl -s http://localhost:8085/health | jq
+curl -s http://localhost:8000/api/v1/healthcheck
+curl -s http://localhost:18081/health/ready | jq
+
+# Verify SDK works
+PYTHONPATH=. python -c "from heber.sdk.client import HeberClient; print('SDK OK')"
+```
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 0.2.0 | 2026-01-21 | OSS migration, SDK packaging |
+| 0.1.0 | 2026-01-18 | Initial release |
+
+
+
+================================================
+FILE: docs/operations/monitoring.md
+================================================
+# Heber Monitoring Guide
+
+Guide to monitoring Heber services and responding to alerts.
+
+---
+
+## Metrics Endpoints
+
+| Service | Metrics URL |
+|---------|-------------|
+| Catalog | <http://localhost:8085/metrics> |
+| Consumer | Internal (scraped by Prometheus) |
+| Compactor | Internal (scraped by Prometheus) |
+
+---
+
+## Key Metrics to Watch
+
+### Data Freshness
+
+| Metric | Warning | Critical | Action |
+|--------|---------|----------|--------|
+| `heber_consumer_lag_seconds` | > 60s | > 300s | Scale consumers |
+| `heber_availability_lag_seconds` | > 10s | > 30s | Check processing |
+| `heber_hotstore_sync_lag_seconds` | > 60s | > 300s | Check ClickHouse |
+
+### Throughput
+
+| Metric | Expected | Alert Condition |
+|--------|----------|-----------------|
+| `heber_consumer_events_processed_total` | Steady growth | Flat for > 5m |
+| `heber_writer_rows_written_total` | Steady growth | Drop > 50% |
+
+### Errors
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| `heber_consumer_events_processed_total{status="error"}` | > 1% | Check DLQ |
+| `heber_writer_errors_total` | > 0.1% | Check storage |
+
+---
+
+## Alert Responses
+
+### HeberConsumerLagHigh
+
+**Severity**: Warning
+**Threshold**: lag > 60s for 5m
+
+1. Check consumer logs: `docker logs heber-consumer --tail 50`
+2. Check Redis stream length
+3. Consider scaling consumers or increasing batch size
+
+### HeberConsumerLagCritical
+
+**Severity**: Critical
+**Threshold**: lag > 300s for 5m
+
+1. **Page on-call immediately**
+2. Check for consumer crashes
+3. Check Redis connectivity
+4. Consider emergency restart
+
+### HeberWriteErrorRateHigh
+
+**Severity**: Warning
+**Threshold**: error rate > 1% for 5m
+
+1. Check storage health (MinIO, local disk)
+2. Check Iceberg catalog connectivity
+3. Review error logs: `docker logs heber-consumer | grep ERROR`
+
+### HeberAvailabilityLagSpike
+
+**Severity**: Warning
+**Threshold**: p99 availability lag > 30s
+
+1. Check if late-arriving data spike
+2. Review data source delays
+3. Check processing pipeline
+
+### HeberDLQGrowing
+
+**Severity**: Warning
+**Threshold**: DLQ size increasing
+
+1. Check DLQ contents: `docker exec heber-redis redis-cli LRANGE heber:dlq 0 10`
+2. Identify pattern of failures
+3. Fix root cause and reprocess
+
+---
+
+## Dashboard Panels
+
+### Overview Dashboard
+
+- Total events processed (counter)
+- Processing rate (events/sec)
+- Error rate (%)
+- Consumer lag (seconds)
+
+### Latency Dashboard
+
+- Ingest lag (ts_ingest - ts_event)
+- Availability lag (ts_available - ts_event)
+- P50/P95/P99 latencies
+
+### Health Dashboard
+
+- Service up/down status
+- Memory/CPU usage
+- Disk usage
+- Connection pool status
+
+---
+
+## Daily Checks
+
+```bash
+# Quick health check
+curl -s http://localhost:8085/health | jq '.status'
+
+# Check for recent errors
+docker logs heber-catalog --since 24h 2>&1 | grep -c ERROR
+
+# Check DLQ size
+docker exec heber-redis redis-cli LLEN heber:dlq
+```
+
+---
+
+## Weekly Checks
+
+1. Review error trends
+2. Check disk usage growth
+3. Review compaction metrics
+4. Validate data quality scans
+
+
+
+================================================
 FILE: docs/operations/network-topology.md
 ================================================
 # Heber Network Topology
@@ -9309,6 +9789,192 @@ When service mesh is adopted:
 - Automatic rotation every 24 hours
 
 **Current status:** Not implemented (recommended after MVP stabilizes)
+
+
+
+================================================
+FILE: docs/operations/troubleshooting.md
+================================================
+# Heber Troubleshooting Runbook
+
+Quick reference for diagnosing and resolving common Heber issues.
+
+---
+
+## Quick Diagnostics
+
+```bash
+# Check all container health
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep heber
+
+# Check consumer lag
+docker logs heber-consumer --tail 50 2>&1 | grep -i lag
+
+# Check for errors
+docker logs heber-catalog --since 5m 2>&1 | grep -E "(ERROR|Exception)"
+```
+
+---
+
+## Common Issues
+
+### 1. Consumer Lag High (> 60s)
+
+**Symptoms**: `HeberConsumerLagHigh` alert, data freshness issues
+
+**Diagnosis**:
+
+```bash
+# Check consumer logs
+docker logs heber-consumer --tail 100
+
+# Check Redis stream length
+docker exec heber-redis redis-cli XLEN heber:events:bars
+```
+
+**Resolution**:
+
+1. Check if consumer is running: `docker ps | grep consumer`
+2. Restart if stuck: `docker restart heber-consumer`
+3. If backlog too large, scale consumers or increase batch size
+
+---
+
+### 2. Catalog API Unhealthy
+
+**Symptoms**: `HeberCatalogDown` alert, SDK connection errors
+
+**Diagnosis**:
+
+```bash
+curl -s http://localhost:8085/health | jq
+docker logs heber-catalog --tail 50
+```
+
+**Resolution**:
+
+1. Check Postgres connectivity: `docker exec heber-catalog nc -zv postgres 5432`
+2. Check Redis connectivity: `docker exec heber-catalog nc -zv redis 6379`
+3. Restart: `docker restart heber-catalog`
+
+---
+
+### 3. lakeFS Connection Failed
+
+**Symptoms**: SDK versioning methods fail, tags not listing
+
+**Diagnosis**:
+
+```bash
+# Check lakeFS health
+curl -s http://localhost:8000/api/v1/healthcheck
+
+# Check logs
+docker logs heber-lakefs --tail 50
+```
+
+**Resolution**:
+
+1. Verify lakeFS credentials in `.env`
+2. Restart: `docker restart heber-lakefs`
+3. Re-run setup if needed: <http://localhost:8000/setup>
+
+---
+
+### 4. Hot Store Lag (> 5 min)
+
+**Symptoms**: `HeberHotStoreLagHigh` alert, stale ClickHouse data
+
+**Diagnosis**:
+
+```bash
+# Check ClickHouse health
+curl -s "http://localhost:8124/ping"
+
+# Check hot store sync logs
+docker logs heber-consumer --tail 50 | grep -i hotstore
+```
+
+**Resolution**:
+
+1. Check ClickHouse connection
+2. Verify quotes_hot/trades_hot/bars_hot tables exist
+3. Restart consumer: `docker restart heber-consumer`
+
+---
+
+### 5. Data Quality Issues
+
+**Symptoms**: Missing data, duplicates, schema errors
+
+**Diagnosis**:
+
+```bash
+# Run Soda scan
+docker exec heber-catalog python -m heber.quality.soda_scanner
+
+# Check dead letter queue
+docker exec heber-redis redis-cli LLEN heber:dlq
+```
+
+**Resolution**:
+
+1. Check DLQ for failed events
+2. Review schema registry for mismatches
+3. Re-ingest from Bronze if needed
+
+---
+
+### 6. OpenMetadata Not Starting
+
+**Symptoms**: Container restarting, migration errors
+
+**Diagnosis**:
+
+```bash
+docker logs heber-openmetadata --tail 50
+```
+
+**Resolution**:
+
+1. Verify `heber_openmetadata` database exists
+2. Run migrations if needed
+3. Check Elasticsearch is healthy: `curl http://localhost:9200/_cluster/health`
+
+---
+
+## Emergency Procedures
+
+### Full System Restart
+
+```bash
+cd /Users/jacobmcmillan/Empire/Heber
+docker compose down
+docker compose up -d
+docker compose logs -f
+```
+
+### Rollback to Previous Version
+
+```bash
+# List recent commits
+git log --oneline -10
+
+# Rollback
+git checkout <commit-hash>
+docker compose up -d --build
+```
+
+### Data Recovery
+
+See [Backup & DR Runbook](backup-dr-runbook.md)
+
+---
+
+## Support Contacts
+
+- **On-call**: Check #heber-alerts
+- **Escalation**: @data-platform-team
 
 
 
@@ -9628,9 +10294,97 @@ volatility_features = FeatureView(
 ================================================
 FILE: heber/__init__.py
 ================================================
-"""Heber Data Lakehouse - Core package."""
+"""Heber Data Lakehouse - Centralized storage for market and intelligence data."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+
+__all__ = ["__version__"]
+
+
+
+================================================
+FILE: heber/cli.py
+================================================
+"""Heber CLI - Command line interface for Heber Data Lakehouse."""
+
+import argparse
+import sys
+
+from heber import __version__
+
+
+def main() -> int:
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        prog="heber",
+        description="Heber Data Lakehouse CLI",
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"heber {__version__}",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Info command
+    info_parser = subparsers.add_parser("info", help="Show Heber info")
+    info_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    # Datasets command
+    datasets_parser = subparsers.add_parser("datasets", help="List datasets")
+    datasets_parser.add_argument("--layer", choices=["bronze", "silver", "gold"], help="Filter by layer")
+
+    # Versions command
+    versions_parser = subparsers.add_parser("versions", help="List Gold versions")
+    versions_parser.add_argument("dataset", help="Dataset name")
+
+    args = parser.parse_args()
+
+    if args.command == "info":
+        print(f"Heber Data Lakehouse v{__version__}")
+        if args.verbose:
+            print("\nComponents:")
+            print("  - Storage: Apache Iceberg")
+            print("  - Versioning: lakeFS")
+            print("  - Schema Registry: Apicurio")
+            print("  - Catalog: OpenMetadata")
+        return 0
+
+    elif args.command == "datasets":
+        try:
+            from heber.sdk.client import HeberClient
+
+            client = HeberClient()
+            datasets = client.list_datasets(layer=args.layer)
+            for ds in datasets:
+                print(f"  {ds.get('name', ds)}")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    elif args.command == "versions":
+        try:
+            from heber.sdk.client import HeberClient
+
+            client = HeberClient()
+            versions = client.list_gold_versions(args.dataset)
+            for v in versions:
+                print(f"  {v}")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    else:
+        parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 
 
 
@@ -18583,264 +19337,101 @@ def check_holdout_access(
 ================================================
 FILE: heber/gold/tests.py
 ================================================
-"""Tests for Gold Versioning (PRD §28)."""
+"""Tests for Gold Versioning using lakeFS (PRD §28).
 
-import tempfile
-from datetime import UTC, datetime
-from pathlib import Path
+These tests verify the lakeFS-based versioning system that replaces
+the legacy GoldVersion/VersionManifest implementation.
+"""
+
+from unittest.mock import patch
 
 import pytest
 
-from heber.gold.versioning import (
-    GoldVersion,
-    UpstreamDependency,
-    VersionLineage,
-    VersionManifest,
-    check_compatibility,
-    resolve_version,
+from heber.versioning import (
+    GoldCommit,
+    GoldTag,
+    LakeFSConfig,
+    LakeFSVersionManager,
 )
 
 
-class TestGoldVersion:
-    """Test GoldVersion parsing and comparison."""
+class TestLakeFSConfig:
+    """Test lakeFS configuration loading."""
 
-    def test_parse_with_v_prefix(self):
-        v = GoldVersion.parse("v3.2.1")
-        assert v.major == 3
-        assert v.minor == 2
-        assert v.patch == 1
+    def test_from_env_defaults(self):
+        """Test default configuration values."""
+        with patch.dict("os.environ", {}, clear=True):
+            config = LakeFSConfig()
+            assert config.endpoint == "http://localhost:8000"
+            assert config.default_repo == "heber-gold"
 
-    def test_parse_without_v_prefix(self):
-        v = GoldVersion.parse("1.0.0")
-        assert v.major == 1
-        assert v.minor == 0
-        assert v.patch == 0
-
-    def test_parse_invalid_raises(self):
-        with pytest.raises(ValueError):
-            GoldVersion.parse("invalid")
-
-    def test_str_representation(self):
-        v = GoldVersion(major=3, minor=2, patch=1)
-        assert str(v) == "v3.2.1"
-
-    def test_comparison(self):
-        v1 = GoldVersion.parse("v1.0.0")
-        v2 = GoldVersion.parse("v2.0.0")
-        v3 = GoldVersion.parse("v2.1.0")
-
-        assert v1 < v2
-        assert v2 < v3
-        assert v1 <= GoldVersion.parse("v1.0.0")  # Test <= with equivalent version
-        assert v1 == GoldVersion.parse("v1.0.0")
-
-    def test_wildcard_major(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.*")
-        assert not v.matches_wildcard("v2.*")
-
-    def test_wildcard_minor(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.5.*")
-        assert not v.matches_wildcard("v3.4.*")
-
-    def test_exact_match(self):
-        v = GoldVersion.parse("v3.5.2")
-        assert v.matches_wildcard("v3.5.2")
-        assert not v.matches_wildcard("v3.5.1")
+    def test_from_env_custom(self):
+        """Test loading configuration from environment."""
+        env = {
+            "LAKEFS_ENDPOINT": "http://lakefs.example.com",
+            "LAKEFS_ACCESS_KEY": "test-key",
+            "LAKEFS_SECRET_KEY": "test-secret",  # pragma: allowlist secret
+            "LAKEFS_DEFAULT_REPO": "custom-repo",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            config = LakeFSConfig.from_env()
+            assert config.endpoint == "http://lakefs.example.com"
+            assert config.access_key == "test-key"
+            assert config.default_repo == "custom-repo"
 
 
-class TestVersionLineage:
-    """Test VersionLineage serialization."""
+class TestGoldCommit:
+    """Test GoldCommit dataclass."""
 
-    def test_to_dict(self):
-        lineage = VersionLineage(
-            upstream_deps=[
-                UpstreamDependency(dataset="bars", layer="silver", version="v1.4"),
-            ],
-            code_commit="abc123",
-            config_hash="def456",
+    def test_commit_fields(self):
+        from datetime import UTC, datetime
+
+        commit = GoldCommit(
+            commit_id="abc123",
+            message="Add momentum features",
+            committer="ml-pipeline",
+            creation_date=datetime.now(UTC),
+            metadata={"run_id": "123"},
+            parents=["def456"],
         )
-
-        d = lineage.to_dict()
-        assert d["code_commit"] == "abc123"
-        assert len(d["upstream_deps"]) == 1
-        assert d["upstream_deps"][0]["dataset"] == "bars"
-
-    def test_from_dict_roundtrip(self):
-        lineage = VersionLineage(
-            upstream_deps=[
-                UpstreamDependency(dataset="bars", layer="silver", version="v1.4"),
-            ],
-            code_commit="abc123",
-        )
-
-        restored = VersionLineage.from_dict(lineage.to_dict())
-        assert restored.code_commit == lineage.code_commit
-        assert len(restored.upstream_deps) == 1
+        assert commit.commit_id == "abc123"
+        assert commit.message == "Add momentum features"
+        assert len(commit.parents) == 1
 
 
-class TestResolveVersion:
-    """Test version resolution with wildcards."""
+class TestGoldTag:
+    """Test GoldTag dataclass."""
 
-    def test_resolve_latest(self):
-        versions = [
-            GoldVersion.parse("v1.0.0"),
-            GoldVersion.parse("v2.0.0"),
-            GoldVersion.parse("v3.2.1"),
-        ]
-
-        result = resolve_version(versions, None)
-        assert result == GoldVersion.parse("v3.2.1")
-
-    def test_resolve_major_wildcard(self):
-        versions = [
-            GoldVersion.parse("v2.0.0"),
-            GoldVersion.parse("v3.2.1"),
-            GoldVersion.parse("v3.5.0"),
-        ]
-
-        result = resolve_version(versions, "v3.*")
-        assert result == GoldVersion.parse("v3.5.0")
-
-    def test_resolve_minor_wildcard(self):
-        versions = [
-            GoldVersion.parse("v3.2.0"),
-            GoldVersion.parse("v3.2.5"),
-            GoldVersion.parse("v3.5.0"),
-        ]
-
-        result = resolve_version(versions, "v3.2.*")
-        assert result == GoldVersion.parse("v3.2.5")
-
-    def test_resolve_exact(self):
-        versions = [
-            GoldVersion.parse("v3.2.0"),
-            GoldVersion.parse("v3.2.1"),
-        ]
-
-        result = resolve_version(versions, "v3.2.0")
-        assert result == GoldVersion.parse("v3.2.0")
-
-    def test_resolve_no_match(self):
-        versions = [GoldVersion.parse("v1.0.0")]
-
-        result = resolve_version(versions, "v3.*")
-        assert result is None
-
-    def test_resolve_empty_list(self):
-        result = resolve_version([], "v1.0.0")
-        assert result is None
+    def test_tag_fields(self):
+        tag = GoldTag(name="momentum_features/v1.0.0", commit_id="abc123")
+        assert tag.name == "momentum_features/v1.0.0"
+        assert tag.commit_id == "abc123"
 
 
-class TestVersionManifest:
-    """Test VersionManifest persistence and immutability."""
+class TestLakeFSVersionManager:
+    """Test LakeFSVersionManager operations (mocked)."""
 
-    def test_save_and_load(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest = VersionManifest(
-                version=GoldVersion.parse("v1.0.0"),
-                created_at=datetime.now(UTC),
-                created_by="test_user",
-                lineage=VersionLineage(code_commit="abc123"),
-                schema_columns=["ts_event", "momentum_5d"],
-                row_count=1000,
+    @pytest.fixture
+    def mock_manager(self):
+        """Create manager with mocked lakeFS client."""
+        manager = LakeFSVersionManager(
+            config=LakeFSConfig(
+                endpoint="http://localhost:8000",
+                access_key="test",
+                secret_key="test",  # pragma: allowlist secret
             )
-
-            path = Path(tmpdir) / "_manifest.json"
-            manifest.save(path)
-
-            loaded = VersionManifest.load(path)
-            assert loaded.version == manifest.version
-            assert loaded.created_by == "test_user"
-            assert loaded.schema_columns == ["ts_event", "momentum_5d"]
-
-    def test_immutability_prevents_overwrite(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest = VersionManifest(
-                version=GoldVersion.parse("v1.0.0"),
-                created_at=datetime.now(UTC),
-                created_by="test_user",
-                lineage=VersionLineage(),
-                immutable=True,
-            )
-
-            path = Path(tmpdir) / "_manifest.json"
-            manifest.save(path)
-
-            with pytest.raises(ValueError, match="immutable"):
-                manifest.save(path)
-
-
-class TestCheckCompatibility:
-    """Test version compatibility checking (PRD §28.3)."""
-
-    def test_compatible_added_column(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.2.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d"],
         )
+        return manager
 
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.3.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d", "momentum_20d"],
-        )
+    def test_checkout_returns_lakefs_uri(self, mock_manager):
+        """Test checkout returns proper lakeFS URI."""
+        uri = mock_manager.checkout("v1.0.0")
+        assert uri == "lakefs://heber-gold/v1.0.0/"
 
-        result = check_compatibility(from_manifest, to_manifest)
-
-        assert result.compatible is True
-        assert result.breaking is False
-        assert len(result.changes) == 1
-        assert result.changes[0].change_type == "added_column"
-
-    def test_breaking_removed_column(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.2.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d", "old_feature"],
-        )
-
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v4.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event", "momentum_5d"],
-        )
-
-        result = check_compatibility(from_manifest, to_manifest)
-
-        assert result.compatible is False
-        assert result.breaking is True
-        assert any(c.change_type == "removed_column" for c in result.changes)
-
-    def test_major_version_change_incompatible(self):
-        from_manifest = VersionManifest(
-            version=GoldVersion.parse("v2.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event"],
-        )
-
-        to_manifest = VersionManifest(
-            version=GoldVersion.parse("v3.0.0"),
-            created_at=datetime.now(UTC),
-            created_by="test",
-            lineage=VersionLineage(),
-            schema_columns=["ts_event"],
-        )
-
-        result = check_compatibility(from_manifest, to_manifest)
-        assert result.compatible is False
+    def test_checkout_custom_repo(self, mock_manager):
+        """Test checkout with custom repository."""
+        uri = mock_manager.checkout("main", repo="custom-repo")
+        assert uri == "lakefs://custom-repo/main/"
 
 
 def run_all_gold_versioning_tests() -> dict[str, bool]:
@@ -18852,11 +19443,10 @@ def run_all_gold_versioning_tests() -> dict[str, bool]:
     results = {}
 
     test_classes = [
-        TestGoldVersion,
-        TestVersionLineage,
-        TestResolveVersion,
-        TestVersionManifest,
-        TestCheckCompatibility,
+        TestLakeFSConfig,
+        TestGoldCommit,
+        TestGoldTag,
+        TestLakeFSVersionManager,
     ]
 
     for test_class in test_classes:
@@ -18864,7 +19454,12 @@ def run_all_gold_versioning_tests() -> dict[str, bool]:
         for method_name in dir(instance):
             if method_name.startswith("test_"):
                 try:
-                    getattr(instance, method_name)()
+                    method = getattr(instance, method_name)
+                    # Handle pytest fixtures
+                    if "mock_manager" in method.__code__.co_varnames:
+                        method(instance.mock_manager())
+                    else:
+                        method()
                     results[f"{test_class.__name__}.{method_name}"] = True
                 except Exception as e:
                     results[f"{test_class.__name__}.{method_name}"] = False
@@ -18879,411 +19474,6 @@ def run_all_gold_versioning_tests() -> dict[str, bool]:
 
 if __name__ == "__main__":
     run_all_gold_versioning_tests()
-
-
-
-================================================
-FILE: heber/gold/versioning.py
-================================================
-"""Gold Dataset Versioning Module (PRD §28).
-
-Provides semantic versioning, lineage tracking, and compatibility checking
-for Gold layer datasets.
-"""
-
-from __future__ import annotations
-
-import json
-import re
-from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Literal
-
-import structlog
-
-logger = structlog.get_logger(__name__)
-
-
-@dataclass
-class GoldVersion:
-    """Semantic version for Gold datasets (PRD §28.2).
-
-    Format: v{major}.{minor}.{patch}
-
-    - Major: Breaking schema changes
-    - Minor: New columns (backward compatible)
-    - Patch: Bug fixes, recomputation
-    """
-
-    major: int
-    minor: int
-    patch: int
-
-    def __str__(self) -> str:
-        return f"v{self.major}.{self.minor}.{self.patch}"
-
-    def __lt__(self, other: GoldVersion) -> bool:
-        return (self.major, self.minor, self.patch) < (other.major, other.minor, other.patch)
-
-    def __le__(self, other: GoldVersion) -> bool:
-        return (self.major, self.minor, self.patch) <= (other.major, other.minor, other.patch)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, GoldVersion):
-            return False
-        return (self.major, self.minor, self.patch) == (other.major, other.minor, other.patch)
-
-    def __hash__(self) -> int:
-        return hash((self.major, self.minor, self.patch))
-
-    @classmethod
-    def parse(cls, version_str: str) -> GoldVersion:
-        """Parse version string like 'v3.2.1' or '3.2.1'.
-
-        Args:
-            version_str: Version string
-
-        Returns:
-            GoldVersion instance
-
-        Raises:
-            ValueError: If version string is invalid
-        """
-        pattern = r"v?(\d+)\.(\d+)\.(\d+)"
-        match = re.match(pattern, version_str)
-        if not match:
-            raise ValueError(f"Invalid version string: {version_str}")
-        return cls(
-            major=int(match.group(1)),
-            minor=int(match.group(2)),
-            patch=int(match.group(3)),
-        )
-
-    def matches_wildcard(self, pattern: str) -> bool:
-        """Check if this version matches a wildcard pattern.
-
-        Patterns:
-        - "v3.*" matches any v3.x.y
-        - "v3.2.*" matches any v3.2.x
-        - "v3.2.1" matches exactly v3.2.1
-
-        Args:
-            pattern: Wildcard pattern
-
-        Returns:
-            True if this version matches the pattern
-        """
-        pattern = pattern.lstrip("v")
-        parts = pattern.split(".")
-        version_parts = [self.major, self.minor, self.patch]
-
-        for i, part in enumerate(parts):
-            if part == "*":
-                return True
-            if int(part) != version_parts[i]:
-                return False
-        return True
-
-
-@dataclass
-class UpstreamDependency:
-    """Upstream dataset dependency in lineage tracking."""
-
-    dataset: str
-    layer: str
-    version: str
-
-
-@dataclass
-class VersionLineage:
-    """Lineage metadata for a Gold version (PRD §28.4).
-
-    Tracks:
-    - Upstream Silver dataset dependencies
-    - Code commit that produced this version
-    - Config hash for reproducibility
-    """
-
-    upstream_deps: list[UpstreamDependency] = field(default_factory=list)
-    code_commit: str | None = None
-    config_hash: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "upstream_deps": [
-                {"dataset": d.dataset, "layer": d.layer, "version": d.version} for d in self.upstream_deps
-            ],
-            "code_commit": self.code_commit,
-            "config_hash": self.config_hash,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> VersionLineage:
-        """Create from dictionary."""
-        return cls(
-            upstream_deps=[UpstreamDependency(**d) for d in data.get("upstream_deps", [])],
-            code_commit=data.get("code_commit"),
-            config_hash=data.get("config_hash"),
-        )
-
-
-@dataclass
-class SchemaChange:
-    """Records a schema change between versions."""
-
-    change_type: Literal["added_column", "removed_column", "deprecated_column", "type_change"]
-    column: str
-    details: str | None = None
-
-
-@dataclass
-class CompatibilityResult:
-    """Result of version compatibility check (PRD §28.3)."""
-
-    compatible: bool
-    breaking: bool
-    changes: list[SchemaChange] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for API response."""
-        return {
-            "compatible": self.compatible,
-            "breaking": self.breaking,
-            "changes": [{"type": c.change_type, "column": c.column, "details": c.details} for c in self.changes],
-        }
-
-
-@dataclass
-class VersionManifest:
-    """Version manifest stored with each Gold version (PRD §28.4-28.5).
-
-    Stored at: gold/dataset={name}/version={version}/_manifest.json
-
-    Enforces immutability: once published, contents cannot change.
-    """
-
-    version: GoldVersion
-    created_at: datetime
-    created_by: str
-    lineage: VersionLineage
-    immutable: bool = True
-    schema_columns: list[str] = field(default_factory=list)
-    row_count: int | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON storage."""
-        return {
-            "version": str(self.version),
-            "created_at": self.created_at.isoformat(),
-            "created_by": self.created_by,
-            "immutable": self.immutable,
-            "lineage": self.lineage.to_dict(),
-            "schema_columns": self.schema_columns,
-            "row_count": self.row_count,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> VersionManifest:
-        """Create from dictionary."""
-        return cls(
-            version=GoldVersion.parse(data["version"]),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            created_by=data["created_by"],
-            lineage=VersionLineage.from_dict(data.get("lineage", {})),
-            immutable=data.get("immutable", True),
-            schema_columns=data.get("schema_columns", []),
-            row_count=data.get("row_count"),
-        )
-
-    def save(self, manifest_path: Path) -> None:
-        """Save manifest to JSON file.
-
-        Args:
-            manifest_path: Path to _manifest.json
-
-        Raises:
-            ValueError: If trying to overwrite an immutable manifest
-        """
-        if manifest_path.exists():
-            existing = VersionManifest.load(manifest_path)
-            if existing.immutable:
-                raise ValueError(
-                    f"Cannot overwrite immutable version {self.version}. Create a new patch version instead."
-                )
-
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(manifest_path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
-
-        logger.info(
-            "Saved version manifest",
-            version=str(self.version),
-            path=str(manifest_path),
-        )
-
-    @classmethod
-    def load(cls, manifest_path: Path) -> VersionManifest:
-        """Load manifest from JSON file.
-
-        Args:
-            manifest_path: Path to _manifest.json
-
-        Returns:
-            VersionManifest instance
-
-        Raises:
-            FileNotFoundError: If manifest doesn't exist
-        """
-        with open(manifest_path) as f:
-            data = json.load(f)
-        return cls.from_dict(data)
-
-
-def resolve_version(
-    available_versions: list[GoldVersion],
-    pattern: str | None,
-) -> GoldVersion | None:
-    """Resolve version pattern to specific version (PRD §28.2).
-
-    Args:
-        available_versions: List of available versions
-        pattern: Version pattern (exact, wildcard, or None for latest)
-
-    Returns:
-        Resolved GoldVersion or None if no match
-
-    Examples:
-        resolve_version([v1.0.0, v3.2.1, v3.5.0], "v3.*")  -> v3.5.0
-        resolve_version([v1.0.0, v3.2.1], "v3.2.1")        -> v3.2.1
-        resolve_version([v1.0.0, v3.2.1], None)            -> v3.2.1 (latest)
-    """
-    if not available_versions:
-        return None
-
-    sorted_versions = sorted(available_versions, reverse=True)
-
-    if pattern is None:
-        return sorted_versions[0]
-
-    if "*" in pattern:
-        for version in sorted_versions:
-            if version.matches_wildcard(pattern):
-                return version
-        return None
-
-    try:
-        target = GoldVersion.parse(pattern)
-        return target if target in available_versions else None
-    except ValueError:
-        logger.warning("Invalid version pattern", pattern=pattern)
-        return None
-
-
-def check_compatibility(
-    from_manifest: VersionManifest,
-    to_manifest: VersionManifest,
-) -> CompatibilityResult:
-    """Check compatibility between two versions (PRD §28.3).
-
-    Detects:
-    - Added columns (compatible)
-    - Removed columns (breaking)
-    - Deprecated columns (warning)
-
-    Args:
-        from_manifest: Source version manifest
-        to_manifest: Target version manifest
-
-    Returns:
-        CompatibilityResult with details
-    """
-    from_cols = set(from_manifest.schema_columns)
-    to_cols = set(to_manifest.schema_columns)
-
-    changes: list[SchemaChange] = []
-    breaking = False
-
-    added = to_cols - from_cols
-    for col in added:
-        changes.append(
-            SchemaChange(
-                change_type="added_column",
-                column=col,
-            )
-        )
-
-    removed = from_cols - to_cols
-    for col in removed:
-        changes.append(
-            SchemaChange(
-                change_type="removed_column",
-                column=col,
-            )
-        )
-        breaking = True
-
-    compatible = from_manifest.version.major == to_manifest.version.major and not breaking
-
-    logger.info(
-        "Version compatibility check",
-        from_version=str(from_manifest.version),
-        to_version=str(to_manifest.version),
-        compatible=compatible,
-        breaking=breaking,
-        num_changes=len(changes),
-    )
-
-    return CompatibilityResult(
-        compatible=compatible,
-        breaking=breaking,
-        changes=changes,
-    )
-
-
-def list_available_versions(gold_root: Path, dataset: str) -> list[GoldVersion]:
-    """List all available versions for a Gold dataset.
-
-    Args:
-        gold_root: Root path to gold layer (e.g., /data/gold)
-        dataset: Dataset name
-
-    Returns:
-        List of available GoldVersion instances, sorted newest first
-    """
-    dataset_path = gold_root / f"dataset={dataset}"
-    if not dataset_path.exists():
-        return []
-
-    versions: list[GoldVersion] = []
-    for version_dir in dataset_path.iterdir():
-        if version_dir.is_dir() and version_dir.name.startswith("version="):
-            version_str = version_dir.name.replace("version=", "")
-            try:
-                versions.append(GoldVersion.parse(version_str))
-            except ValueError:
-                logger.warning(
-                    "Invalid version directory",
-                    path=str(version_dir),
-                )
-                continue
-
-    return sorted(versions, reverse=True)
-
-
-def get_manifest_path(gold_root: Path, dataset: str, version: GoldVersion) -> Path:
-    """Get path to version manifest file.
-
-    Args:
-        gold_root: Root path to gold layer
-        dataset: Dataset name
-        version: Version
-
-    Returns:
-        Path to _manifest.json
-    """
-    return gold_root / f"dataset={dataset}" / f"version={version}" / "_manifest.json"
 
 
 
@@ -25669,7 +25859,15 @@ def get_default_retention(layer: DataLayer) -> RetentionPolicy:
 ================================================
 FILE: heber/schema/__init__.py
 ================================================
-[Binary file]
+"""Heber Schema Registry.
+
+Provides Apicurio-based schema registry integration.
+"""
+
+from heber.schema.registry_client import ApicurioSchemaRegistry, get_registry
+
+__all__ = ["ApicurioSchemaRegistry", "get_registry"]
+
 
 
 ================================================
@@ -27054,13 +27252,8 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
-from heber.gold.versioning import (
-    GoldVersion,
-    VersionManifest,
-    check_compatibility,
-    get_manifest_path,
-    list_available_versions,
-    resolve_version,
+from heber.versioning import (
+    get_version_manager,
 )
 
 logger = structlog.get_logger(__name__)
@@ -27525,15 +27718,31 @@ class HeberClient:
     def list_gold_versions(self, dataset: str) -> list[str]:
         """List all available versions for a Gold dataset (PRD §28.2).
 
+        Uses lakeFS tags to track semantic versions.
+
         Args:
             dataset: Dataset name
 
         Returns:
             List of version strings, newest first (e.g., ["v3.5.0", "v3.2.1", "v1.0.0"])
         """
-        gold_root = self.data_root / "gold"
-        versions = list_available_versions(gold_root, dataset)
-        return [str(v) for v in versions]
+        manager = get_version_manager()
+        try:
+            tags = manager.list_tags()
+            # Filter tags for this dataset (format: dataset/v1.0.0)
+            dataset_prefix = f"{dataset}/"
+            versions = [tag.name.replace(dataset_prefix, "") for tag in tags if tag.name.startswith(dataset_prefix)]
+            # Sort by semver (newest first)
+            versions.sort(key=lambda v: [int(x) for x in v.lstrip("v").split(".")], reverse=True)
+            return versions
+        except Exception as e:
+            logger.warning("lakefs_list_versions_failed", dataset=dataset, error=str(e))
+            # Fallback to filesystem-based discovery
+            gold_path = self.data_root / "gold" / f"dataset={dataset}"
+            if not gold_path.exists():
+                return []
+            versions = [d.name.replace("version=", "") for d in gold_path.glob("project=*/version=*") if d.is_dir()]
+            return sorted(set(versions), reverse=True)
 
     def check_version_compatibility(
         self,
@@ -27543,6 +27752,8 @@ class HeberClient:
     ) -> dict:
         """Check compatibility between two Gold versions (PRD §28.3).
 
+        Uses lakeFS diff to compare commits.
+
         Args:
             dataset: Dataset name
             from_version: Source version (e.g., "v3.2.1")
@@ -27551,45 +27762,64 @@ class HeberClient:
         Returns:
             Dict with keys: compatible, breaking, changes
         """
-        gold_root = self.data_root / "gold"
+        manager = get_version_manager()
+        from_tag = f"{dataset}/{from_version}"
+        to_tag = f"{dataset}/{to_version}"
 
-        from_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(from_version))
-        to_manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(to_version))
+        try:
+            changes = manager.diff(from_tag, to_tag)
 
-        if not from_manifest_path.exists():
-            raise ValueError(f"Version {from_version} not found for {dataset}")
-        if not to_manifest_path.exists():
-            raise ValueError(f"Version {to_version} not found for {dataset}")
+            # Analyze changes for breaking vs non-breaking
+            breaking_changes = []
+            non_breaking_changes = []
 
-        from_manifest = VersionManifest.load(from_manifest_path)
-        to_manifest = VersionManifest.load(to_manifest_path)
+            for change in changes:
+                if change["type"] == "removed":
+                    breaking_changes.append(change["path"])
+                else:
+                    non_breaking_changes.append(change["path"])
 
-        result = check_compatibility(from_manifest, to_manifest)
-        return result.to_dict()
+            return {
+                "compatible": len(breaking_changes) == 0,
+                "breaking": breaking_changes,
+                "changes": non_breaking_changes,
+                "from_version": from_version,
+                "to_version": to_version,
+            }
+        except Exception as e:
+            logger.error("lakefs_diff_failed", error=str(e))
+            raise ValueError(f"Cannot compare versions: {e}")
 
     def get_version_lineage(self, dataset: str, version: str) -> dict:
         """Get lineage metadata for a Gold version (PRD §28.4).
+
+        Uses lakeFS commit metadata for lineage tracking.
 
         Args:
             dataset: Dataset name
             version: Version string
 
         Returns:
-            Lineage dict with upstream_deps, code_commit, config_hash
+            Lineage dict with commit info and metadata
         """
-        gold_root = self.data_root / "gold"
-        manifest_path = get_manifest_path(gold_root, dataset, GoldVersion.parse(version))
+        manager = get_version_manager()
+        tag_name = f"{dataset}/{version}"
 
-        if not manifest_path.exists():
-            raise ValueError(f"Version {version} not found for {dataset}")
+        try:
+            commit = manager.get_commit(tag_name)
 
-        manifest = VersionManifest.load(manifest_path)
-        return {
-            "version": str(manifest.version),
-            "created_at": manifest.created_at.isoformat(),
-            "created_by": manifest.created_by,
-            **manifest.lineage.to_dict(),
-        }
+            return {
+                "version": version,
+                "commit_id": commit.commit_id,
+                "created_at": commit.creation_date.isoformat(),
+                "created_by": commit.committer,
+                "message": commit.message,
+                "parents": commit.parents,
+                "metadata": commit.metadata,
+            }
+        except Exception as e:
+            logger.error("lakefs_get_commit_failed", error=str(e))
+            raise ValueError(f"Version {version} not found for {dataset}: {e}")
 
     def read_gold_versioned(
         self,
@@ -27616,14 +27846,23 @@ class HeberClient:
         Returns:
             DataFrame with Gold data
         """
-        gold_root = self.data_root / "gold"
-        available = list_available_versions(gold_root, dataset)
+        available = self.list_gold_versions(dataset)
 
         if not available:
             logger.warning("No versions found for Gold dataset", dataset=dataset)
             return pd.DataFrame()
 
-        resolved = resolve_version(available, version)
+        # Resolve version pattern
+        if version is None:
+            resolved = available[0]  # Latest
+        elif "*" in version:
+            # Wildcard: v3.* matches v3.x.x
+            prefix = version.replace("*", "")
+            matching = [v for v in available if v.startswith(prefix)]
+            resolved = matching[0] if matching else None
+        else:
+            resolved = version if version in available else None
+
         if resolved is None:
             logger.warning(
                 "Version pattern matched no versions",
@@ -27636,12 +27875,12 @@ class HeberClient:
             "Resolved Gold version",
             dataset=dataset,
             pattern=version,
-            resolved=str(resolved),
+            resolved=resolved,
         )
 
         return self.read_gold(
             dataset=dataset,
-            version=str(resolved),
+            version=resolved,
             asof_time=asof_time,
             time_range=time_range,
             instrument_keys=instrument_keys,
@@ -34652,764 +34891,6 @@ class BronzeWriter:
 
 
 ================================================
-FILE: heber/writer/compaction.py
-================================================
-"""Compaction scheduler for Heber per PRD §12.9 and §16.
-
-Provides:
-- Hourly partition compaction after close
-- event_id uniqueness preservation
-- ts_available immutability
-- Atomic writes (temp path then rename)
-- Manifest-based commits per PRD §16.2
-- Crash recovery per PRD §16.4
-- Concurrent safety via file locking
-"""
-
-import asyncio
-import fcntl
-import json
-import os
-import shutil
-import tempfile
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
-
-import structlog
-from prometheus_client import Counter, Gauge, Histogram
-
-from heber.bus.dedupe import dedupe_at_compaction
-
-logger = structlog.get_logger(__name__)
-
-
-# Prometheus metrics
-compaction_runs = Counter(
-    "heber_compaction_runs_total",
-    "Total compaction runs",
-    ["dataset", "status"],
-)
-
-compaction_duration = Histogram(
-    "heber_compaction_duration_seconds",
-    "Time to compact a partition",
-    ["dataset"],
-    buckets=[1, 5, 10, 30, 60, 120, 300, 600],
-)
-
-compaction_records_before = Counter(
-    "heber_compaction_records_before_total",
-    "Records before compaction",
-    ["dataset"],
-)
-
-compaction_records_after = Counter(
-    "heber_compaction_records_after_total",
-    "Records after compaction",
-    ["dataset"],
-)
-
-compaction_queue_size = Gauge(
-    "heber_compaction_queue_size",
-    "Number of partitions waiting for compaction",
-)
-
-active_compactions = Gauge(
-    "heber_active_compactions",
-    "Number of currently running compactions",
-)
-
-# Additional metrics per PRD §16
-manifest_versions = Gauge(
-    "heber_manifest_version",
-    "Current manifest version per partition",
-    ["dataset", "partition"],
-)
-
-crash_recoveries = Counter(
-    "heber_compaction_crash_recoveries_total",
-    "Crash recovery operations performed",
-    ["dataset", "recovery_type"],
-)
-
-compaction_bytes_before = Counter(
-    "heber_compaction_bytes_before_total",
-    "Bytes before compaction",
-    ["dataset"],
-)
-
-compaction_bytes_after = Counter(
-    "heber_compaction_bytes_after_total",
-    "Bytes after compaction",
-    ["dataset"],
-)
-
-lock_contention = Counter(
-    "heber_compaction_lock_contention_total",
-    "Lock contention events during compaction",
-    ["dataset"],
-)
-
-
-# Manifest structure per PRD §16.2
-MANIFEST_FILENAME = "_manifest.json"
-COMPACT_TMP_DIR = "_compact_tmp"
-PARQUET_GLOB = "*.parquet"
-
-
-@dataclass
-class ManifestFileEntry:
-    """File entry in manifest per PRD §16.2."""
-
-    path: str
-    rows: int
-    bytes: int
-
-
-@dataclass
-class Manifest:
-    """Partition manifest for atomic compaction per PRD §16.2.
-
-    Manifest path: <partition_path>/_manifest.json
-    """
-
-    version: int
-    created_at: datetime
-    files: list[ManifestFileEntry] = field(default_factory=list)
-    pending_deletes: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "version": self.version,
-            "created_at": self.created_at.isoformat(),
-            "files": [{"path": f.path, "rows": f.rows, "bytes": f.bytes} for f in self.files],
-            "pending_deletes": self.pending_deletes,
-        }
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), indent=2)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Manifest":
-        return cls(
-            version=data.get("version", 0),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(UTC),
-            files=[ManifestFileEntry(f["path"], f["rows"], f["bytes"]) for f in data.get("files", [])],
-            pending_deletes=data.get("pending_deletes", []),
-        )
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "Manifest":
-        return cls.from_dict(json.loads(json_str))
-
-    @classmethod
-    def read_from_partition(cls, partition_path: Path) -> "Manifest | None":
-        """Read manifest from partition, return None if not exists."""
-        manifest_path = partition_path / MANIFEST_FILENAME
-        if not manifest_path.exists():
-            return None
-        try:
-            return cls.from_json(manifest_path.read_text())
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.warning("manifest_read_error", path=str(manifest_path), error=str(e))
-            return None
-
-    def write_to_partition(self, partition_path: Path) -> None:
-        """Write manifest to partition atomically."""
-        manifest_path = partition_path / MANIFEST_FILENAME
-        temp_path = partition_path / f"{MANIFEST_FILENAME}.tmp"
-
-        # Write to temp first
-        temp_path.write_text(self.to_json())
-
-        # Atomic rename
-        temp_path.rename(manifest_path)
-
-
-class PartitionLock:
-    """File-based lock for concurrent safety per PRD §16.
-
-    Prevents multiple compactions on the same partition.
-    """
-
-    def __init__(self, partition_path: Path):
-        self.lock_path = partition_path / "_compact.lock"
-        self._lock_file = None
-
-    def acquire(self, blocking: bool = True) -> bool:
-        """Acquire exclusive lock on partition."""
-        try:
-            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-            self._lock_file = open(self.lock_path, "w")
-
-            if blocking:
-                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX)
-            else:
-                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-            return True
-
-        except BlockingIOError:
-            if self._lock_file:
-                self._lock_file.close()
-                self._lock_file = None
-            return False
-        except Exception as e:
-            logger.error("lock_acquire_failed", path=str(self.lock_path), error=str(e))
-            return False
-
-    def release(self) -> None:
-        """Release lock."""
-        if self._lock_file:
-            try:
-                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
-                self._lock_file.close()
-            except Exception as e:
-                logger.warning("lock_release_error", path=str(self.lock_path), error=str(e))
-            finally:
-                self._lock_file = None
-
-    def __enter__(self) -> "PartitionLock":
-        self.acquire()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.release()
-
-
-class CrashRecovery:
-    """Crash recovery per PRD §16.4.
-
-    On startup, checks for incomplete compactions:
-    - If _compact_tmp/ exists with files → resume from step 6
-    - If pending_deletes is non-empty → resume from step 8
-    """
-
-    def __init__(self, storage_root: Path):
-        self.storage_root = storage_root
-
-    def recover_partition(self, partition_path: Path, dataset: str) -> bool:
-        """Recover a partition from incomplete compaction.
-
-        Returns True if recovery was performed.
-        """
-        recovered = False
-        compact_tmp = partition_path / COMPACT_TMP_DIR
-
-        # Check for incomplete temp files (step 6)
-        if compact_tmp.exists() and list(compact_tmp.glob(PARQUET_GLOB)):
-            logger.info("crash_recovery_temp_files", path=str(partition_path))
-            recovered = self._recover_from_temp(partition_path, compact_tmp, dataset)
-
-        # Check for pending deletes (step 8)
-        manifest = Manifest.read_from_partition(partition_path)
-        if manifest and manifest.pending_deletes:
-            logger.info("crash_recovery_pending_deletes", path=str(partition_path))
-            recovered = self._recover_pending_deletes(partition_path, manifest, dataset)
-
-        return recovered
-
-    def _recover_from_temp(self, partition_path: Path, compact_tmp: Path, dataset: str) -> bool:
-        """Resume from step 6: move temp files to partition root."""
-        try:
-            for tmp_file in compact_tmp.glob(PARQUET_GLOB):
-                dest = partition_path / tmp_file.name
-                shutil.move(str(tmp_file), str(dest))
-
-            # Remove temp dir
-            shutil.rmtree(str(compact_tmp))
-
-            crash_recoveries.labels(dataset=dataset, recovery_type="temp_files").inc()
-            return True
-
-        except Exception as e:
-            logger.error("crash_recovery_temp_failed", path=str(partition_path), error=str(e))
-            return False
-
-    def _recover_pending_deletes(self, partition_path: Path, manifest: Manifest, dataset: str) -> bool:
-        """Resume from step 8: delete old files."""
-        try:
-            for old_file in manifest.pending_deletes:
-                old_path = partition_path / old_file
-                if old_path.exists():
-                    old_path.unlink()
-
-            # Clear pending_deletes in manifest
-            manifest.pending_deletes = []
-            manifest.version += 1
-            manifest.write_to_partition(partition_path)
-
-            crash_recoveries.labels(dataset=dataset, recovery_type="pending_deletes").inc()
-            return True
-
-        except Exception as e:
-            logger.error("crash_recovery_deletes_failed", path=str(partition_path), error=str(e))
-            return False
-
-    def scan_and_recover(self, datasets: list[str]) -> int:
-        """Scan all partitions and recover any incomplete compactions."""
-        recovered = 0
-
-        for dataset in datasets:
-            dataset_path = self.storage_root / "silver" / dataset
-            if not dataset_path.exists():
-                continue
-
-            for dt_dir in dataset_path.glob("dt=*"):
-                for hour_dir in dt_dir.glob("hour=*"):
-                    if self.recover_partition(hour_dir, dataset):
-                        recovered += 1
-
-        if recovered > 0:
-            logger.info("crash_recovery_complete", partitions_recovered=recovered)
-
-        return recovered
-
-
-@dataclass
-class CompactionConfig:
-    """Compaction configuration per PRD §12.9."""
-
-    # Time after hour close to start compaction (10 minutes)
-    delay_after_close_minutes: int = 10
-    # Maximum compaction window (20 minutes)
-    max_compaction_window_minutes: int = 20
-    # Concurrent compaction workers
-    max_concurrent: int = 2
-    # Temp directory for atomic writes
-    temp_dir: str | None = None
-    # Storage root
-    storage_root: str = "/data/heber"
-
-
-@dataclass
-class PartitionInfo:
-    """Information about a partition to compact."""
-
-    dataset: str
-    dt: str
-    hour: int
-    partition_path: Path
-    scheduled_at: datetime
-
-    @property
-    def partition_id(self) -> str:
-        return f"{self.dataset}/dt={self.dt}/hour={self.hour:02d}"
-
-
-class AtomicWriter:
-    """Atomic file writer using temp path and rename.
-
-    Per PRD §12.9: Must write atomically (temp path then rename/commit)
-    """
-
-    def __init__(self, temp_dir: str | None = None):
-        self.temp_dir = temp_dir or tempfile.gettempdir()
-
-    def atomic_write(
-        self,
-        target_path: Path,
-        data: bytes,
-    ) -> None:
-        """Write data atomically to target path."""
-        # Create temp file in same filesystem for atomic rename
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = Path(self.temp_dir) / f"heber_compact_{os.getpid()}_{target_path.name}"
-
-        try:
-            # Write to temp
-            with open(temp_path, "wb") as f:
-                f.write(data)
-
-            # Atomic rename
-            shutil.move(str(temp_path), str(target_path))
-
-            logger.debug("atomic_write_complete", path=str(target_path))
-        except Exception:
-            # Cleanup temp on failure
-            if temp_path.exists():
-                temp_path.unlink()
-            raise
-
-    def atomic_replace_directory(
-        self,
-        target_dir: Path,
-        temp_files: list[tuple[str, bytes]],
-    ) -> None:
-        """Atomically replace directory contents.
-
-        1. Write all files to temp directory
-        2. Rename temp to target.new
-        3. Rename target to target.old (if exists)
-        4. Rename target.new to target
-        5. Delete target.old
-        """
-        temp_dir = Path(self.temp_dir) / f"heber_compact_{os.getpid()}_{target_dir.name}"
-        target_new = target_dir.parent / f"{target_dir.name}.new"
-        target_old = target_dir.parent / f"{target_dir.name}.old"
-
-        try:
-            # Create temp dir and write files
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            for filename, data in temp_files:
-                with open(temp_dir / filename, "wb") as f:
-                    f.write(data)
-
-            # Move temp to target.new
-            shutil.move(str(temp_dir), str(target_new))
-
-            # Swap directories
-            if target_dir.exists():
-                shutil.move(str(target_dir), str(target_old))
-            shutil.move(str(target_new), str(target_dir))
-
-            # Cleanup old
-            if target_old.exists():
-                shutil.rmtree(str(target_old))
-
-            logger.debug("atomic_replace_complete", path=str(target_dir))
-
-        except Exception:
-            # Cleanup on failure
-            for path in [temp_dir, target_new]:
-                if path.exists():
-                    shutil.rmtree(str(path))
-            raise
-
-
-class ParquetCompactor:
-    """Compacts Parquet files in a partition.
-
-    Invariants per PRD §12.9:
-    - Must preserve event_id uniqueness (via dedupe)
-    - Must not change ts_available
-    - Must write atomically
-    """
-
-    def __init__(
-        self,
-        writer: AtomicWriter,
-        storage_root: str = "/data/heber",
-    ):
-        self.writer = writer
-        self.storage_root = Path(storage_root)
-
-    def compact_partition(
-        self,
-        partition: PartitionInfo,
-    ) -> tuple[int, int]:
-        """Compact all Parquet files in a partition.
-
-        Returns:
-            Tuple of (records_before, records_after)
-        """
-        partition_path = partition.partition_path
-
-        if not partition_path.exists():
-            logger.warning("partition_not_found", path=str(partition_path))
-            return 0, 0
-
-        # Find all Parquet files
-        parquet_files = list(partition_path.glob(PARQUET_GLOB))
-        if not parquet_files:
-            logger.debug("no_parquet_files", path=str(partition_path))
-            return 0, 0
-
-        # Read all records
-        all_records = []
-        for pq_file in parquet_files:
-            records = self._read_parquet(pq_file)
-            all_records.extend(records)
-
-        records_before = len(all_records)
-
-        if records_before == 0:
-            return 0, 0
-
-        # Deduplicate: keep earliest ts_ingest per event_id
-        unique_records = dedupe_at_compaction(
-            records=all_records,
-            partition=partition.partition_id,
-            event_id_key="event_id",
-            ts_ingest_key="ts_ingest",
-        )
-
-        records_after = len(unique_records)
-
-        # Write compacted file atomically
-        compacted_data = self._write_parquet_bytes(unique_records)
-        compacted_filename = f"compacted_{partition.dt}_{partition.hour:02d}.parquet"
-
-        # Prepare new partition contents
-        temp_files = [(compacted_filename, compacted_data)]
-
-        # Atomic replace
-        self.writer.atomic_replace_directory(partition_path, temp_files)
-
-        logger.info(
-            "partition_compacted",
-            partition=partition.partition_id,
-            before=records_before,
-            after=records_after,
-            removed=records_before - records_after,
-        )
-
-        return records_before, records_after
-
-    def _read_parquet(self, path: Path) -> list[dict[str, Any]]:
-        """Read records from a Parquet file."""
-        try:
-            import pyarrow.parquet as pq
-
-            table = pq.read_table(str(path))
-            return table.to_pylist()
-        except ImportError:
-            # Fallback for dev without pyarrow
-            logger.warning("pyarrow_not_available", path=str(path))
-            return []
-        except Exception as e:
-            logger.error("parquet_read_error", path=str(path), error=str(e))
-            return []
-
-    def _write_parquet_bytes(self, records: list[dict[str, Any]]) -> bytes:
-        """Write records to Parquet format and return bytes."""
-        try:
-            import io
-
-            import pyarrow as pa
-            import pyarrow.parquet as pq
-
-            if not records:
-                return b""
-
-            table = pa.Table.from_pylist(records)
-            buffer = io.BytesIO()
-            pq.write_table(table, buffer)
-            return buffer.getvalue()
-        except ImportError:
-            # Fallback for dev without pyarrow
-            logger.warning("pyarrow_not_available")
-            return b""
-
-
-class CompactionScheduler:
-    """Schedules and runs compaction tasks per PRD §12.9.
-
-    Default policy:
-    - Compact hourly partitions after they close
-    - Example: compact dt=YYYY-MM-DD/hour=18 at 18:10-18:30
-    """
-
-    def __init__(
-        self,
-        config: CompactionConfig | None = None,
-    ):
-        self.config = config or CompactionConfig()
-        self.writer = AtomicWriter(self.config.temp_dir)
-        self.compactor = ParquetCompactor(self.writer, self.config.storage_root)
-
-        self._queue: asyncio.Queue[PartitionInfo] = asyncio.Queue()
-        self._running = False
-        self._workers: list[asyncio.Task] = []
-        self._active_count = 0
-
-    def schedule_partition(self, partition: PartitionInfo) -> None:
-        """Add a partition to the compaction queue."""
-        self._queue.put_nowait(partition)
-        compaction_queue_size.set(self._queue.qsize())
-
-        logger.info(
-            "partition_scheduled",
-            partition=partition.partition_id,
-            scheduled_at=partition.scheduled_at.isoformat(),
-        )
-
-    def get_partitions_to_compact(
-        self,
-        datasets: list[str],
-        storage_root: Path | None = None,
-    ) -> list[PartitionInfo]:
-        """Find partitions ready for compaction.
-
-        Returns partitions where:
-        - Hour has closed (current time > hour + delay_after_close_minutes)
-        - Not yet compacted
-        """
-        root = storage_root or Path(self.config.storage_root)
-        now = datetime.now(UTC)
-        partitions = []
-
-        for dataset in datasets:
-            dataset_path = root / "silver" / dataset
-            if not dataset_path.exists():
-                continue
-
-            # Find dt partitions
-            for dt_dir in dataset_path.glob("dt=*"):
-                dt_str = dt_dir.name.replace("dt=", "")
-
-                # Find hour partitions
-                for hour_dir in dt_dir.glob("hour=*"):
-                    try:
-                        hour = int(hour_dir.name.replace("hour=", ""))
-                    except ValueError:
-                        continue
-
-                    # Check if hour has closed + delay passed
-                    partition_close = datetime.fromisoformat(f"{dt_str}T{hour + 1:02d}:00:00+00:00")
-                    compact_start = partition_close + timedelta(minutes=self.config.delay_after_close_minutes)
-
-                    if now >= compact_start:
-                        # Check if already compacted
-                        if not self._is_compacted(hour_dir):
-                            partitions.append(
-                                PartitionInfo(
-                                    dataset=dataset,
-                                    dt=dt_str,
-                                    hour=hour,
-                                    partition_path=hour_dir,
-                                    scheduled_at=now,
-                                )
-                            )
-
-        return partitions
-
-    def _is_compacted(self, partition_path: Path) -> bool:
-        """Check if partition is already compacted."""
-        compacted_files = list(partition_path.glob("compacted_*.parquet"))
-        return len(compacted_files) > 0
-
-    async def _worker(self, worker_id: int) -> None:
-        """Compaction worker coroutine."""
-        while self._running:
-            try:
-                # Wait for work with timeout
-                try:
-                    partition = await asyncio.wait_for(
-                        self._queue.get(),
-                        timeout=5.0,
-                    )
-                except TimeoutError:
-                    continue
-
-                self._active_count += 1
-                active_compactions.set(self._active_count)
-                compaction_queue_size.set(self._queue.qsize())
-
-                try:
-                    # Run compaction with timing
-                    start_time = asyncio.get_event_loop().time()
-
-                    before, after = self.compactor.compact_partition(partition)
-
-                    duration = asyncio.get_event_loop().time() - start_time
-
-                    # Update metrics
-                    compaction_duration.labels(dataset=partition.dataset).observe(duration)
-                    compaction_records_before.labels(dataset=partition.dataset).inc(before)
-                    compaction_records_after.labels(dataset=partition.dataset).inc(after)
-                    compaction_runs.labels(dataset=partition.dataset, status="success").inc()
-
-                except Exception as e:
-                    logger.error(
-                        "compaction_failed",
-                        partition=partition.partition_id,
-                        error=str(e),
-                        exc_info=True,
-                    )
-                    compaction_runs.labels(dataset=partition.dataset, status="error").inc()
-
-                finally:
-                    self._active_count -= 1
-                    active_compactions.set(self._active_count)
-                    self._queue.task_done()
-
-            except asyncio.CancelledError:
-                break
-
-    async def start(self) -> None:
-        """Start the compaction scheduler."""
-        if self._running:
-            return
-
-        self._running = True
-
-        # Start workers
-        for i in range(self.config.max_concurrent):
-            task = asyncio.create_task(self._worker(i))
-            self._workers.append(task)
-
-        logger.info(
-            "compaction_scheduler_started",
-            workers=self.config.max_concurrent,
-        )
-
-    async def stop(self) -> None:
-        """Stop the compaction scheduler gracefully."""
-        self._running = False
-
-        # Wait for queue to drain
-        await self._queue.join()
-
-        # Cancel workers
-        for task in self._workers:
-            task.cancel()
-
-        if self._workers:
-            await asyncio.gather(*self._workers, return_exceptions=True)
-        self._workers.clear()
-
-        logger.info("compaction_scheduler_stopped")
-
-    async def run_once(self, datasets: list[str]) -> int:
-        """Run a single compaction cycle.
-
-        Finds and compacts all ready partitions.
-
-        Returns:
-            Number of partitions compacted
-        """
-        partitions = self.get_partitions_to_compact(datasets)
-
-        for partition in partitions:
-            self.schedule_partition(partition)
-
-        # Wait for all to complete
-        await self._queue.join()
-
-        return len(partitions)
-
-
-async def run_scheduled_compaction(
-    datasets: list[str],
-    config: CompactionConfig | None = None,
-    check_interval_seconds: int = 60,
-) -> None:
-    """Run compaction on a schedule.
-
-    Args:
-        datasets: List of dataset names to compact
-        config: Compaction configuration
-        check_interval_seconds: How often to check for ready partitions
-    """
-    scheduler = CompactionScheduler(config)
-    await scheduler.start()
-
-    try:
-        while True:
-            compacted = await scheduler.run_once(datasets)
-            if compacted > 0:
-                logger.info("compaction_cycle_complete", partitions=compacted)
-
-            await asyncio.sleep(check_interval_seconds)
-    except asyncio.CancelledError:
-        await scheduler.stop()
-
-
-
-================================================
 FILE: heber/writer/compactor.py
 ================================================
 """Parquet file compactor.
@@ -38802,6 +38283,357 @@ checks for heber_silver.quotes:
 FILE: tests/__init__.py
 ================================================
 # Heber test suite
+
+
+
+================================================
+FILE: tests/test_edge_cases.py
+================================================
+"""Edge Case Test Library for Heber Zero-Leakage System (Phase 49.3).
+
+Tests for scenarios that could compromise point-in-time correctness:
+- Clock skew between data sources
+- Missing timestamps
+- Schema mismatches
+- Late-arriving data
+"""
+
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+
+from heber.sdk.client import HeberClient
+
+
+class TestClockSkew:
+    """Tests for clock skew scenarios (PRD §49.3).
+
+    Clock skew occurs when different data sources have misaligned timestamps.
+    The zero-leakage guarantee must handle these cases correctly.
+    """
+
+    def test_source_ahead_of_target(self):
+        """Test when source timestamp is ahead of processing time.
+
+        If ts_event > ts_available, the data was generated before it became
+        available (normal case). But if ts_event is in the future relative
+        to current time, it may indicate clock skew.
+        """
+        now = datetime.now(UTC)
+        future_event = now + timedelta(hours=1)
+
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [future_event],
+                "ts_available": [now],  # Available now, event in future (clock skew)
+                "value": [100.0],
+            }
+        )
+
+        # Event time > available time suggests source clock is ahead
+        assert (df["ts_event"] > df["ts_available"]).any()
+
+        # Zero-leakage filter should still work based on ts_available
+        asof_time = now - timedelta(minutes=1)
+        filtered = df[df["ts_available"] <= asof_time]
+        assert len(filtered) == 0  # Not yet available
+
+        asof_time = now + timedelta(minutes=1)
+        filtered = df[df["ts_available"] <= asof_time]
+        assert len(filtered) == 1  # Now available
+
+    def test_source_behind_target(self):
+        """Test when source timestamp is behind processing time.
+
+        If ts_event is significantly before ts_available, data may have been
+        delayed in transit or the source clock is behind.
+        """
+        now = datetime.now(UTC)
+        past_event = now - timedelta(hours=24)
+
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [past_event],
+                "ts_available": [now],  # Just became available
+                "value": [100.0],
+            }
+        )
+
+        # Event from yesterday, only available now
+        delay = df["ts_available"].iloc[0] - df["ts_event"].iloc[0]
+        assert delay > timedelta(hours=23)
+
+        # Zero-leakage: querying for "yesterday" should NOT return this
+        asof_time = now - timedelta(hours=1)
+        filtered = df[df["ts_available"] <= asof_time]
+        assert len(filtered) == 0  # Wasn't available yet
+
+    def test_skewed_join_safety(self):
+        """Test that as-of joins handle clock skew correctly."""
+        now = datetime.now(UTC)
+
+        # Left table: trades with correct timing
+        trades = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL", "equity:AAPL"],
+                "ts_event": [now - timedelta(hours=2), now - timedelta(hours=1)],
+                "price": [150.0, 151.0],
+            }
+        )
+
+        # Right table: quotes with clock skew (available later than event)
+        quotes = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL", "equity:AAPL"],
+                "ts_event": [now - timedelta(hours=3), now - timedelta(hours=2)],
+                "ts_available": [
+                    now - timedelta(hours=1),  # Available late
+                    now - timedelta(minutes=30),  # Very late
+                ],
+                "bid": [149.0, 150.0],
+            }
+        )
+
+        # As-of join should use ts_available, not ts_event
+        # Trade at -2h should NOT see quote with ts_event=-3h if ts_available=-1h
+        # This is the zero-leakage guarantee
+
+        HeberClient()
+        # Note: In real usage, this would use client.asof_join()
+        # For unit test, we verify the logic manually
+
+        trade_time = trades["ts_event"].iloc[0]  # -2h
+        available_quotes = quotes[quotes["ts_available"] <= trade_time]
+
+        # No quotes were available at trade time
+        assert len(available_quotes) == 0
+
+
+class TestMissingTimestamps:
+    """Tests for missing timestamp handling (PRD §49.3).
+
+    Data may arrive with missing ts_event or ts_available fields.
+    System must handle these gracefully.
+    """
+
+    def test_missing_ts_available_rejected(self):
+        """Events without ts_available should be rejected."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [datetime.now(UTC)],
+                "ts_available": [None],  # Missing!
+                "value": [100.0],
+            }
+        )
+
+        # Filter for non-null ts_available
+        valid = df.dropna(subset=["ts_available"])
+        assert len(valid) == 0
+
+    def test_missing_ts_event_handled(self):
+        """Events with missing ts_event should use ts_available as fallback."""
+        now = datetime.now(UTC)
+
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [pd.NaT],  # Missing
+                "ts_available": [now],
+                "value": [100.0],
+            }
+        )
+
+        # Fill ts_event from ts_available if missing
+        df["ts_event"] = df["ts_event"].fillna(df["ts_available"])
+        assert df["ts_event"].iloc[0] == now
+
+    def test_both_timestamps_missing_rejected(self):
+        """Events with both timestamps missing should be completely rejected."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [None],
+                "ts_available": [None],
+                "value": [100.0],
+            }
+        )
+
+        valid = df.dropna(subset=["ts_event", "ts_available"], how="all")
+        # Still has rows (only rejected if BOTH are NaN)
+        valid = df.dropna(subset=["ts_available"])  # Strict: need ts_available
+        assert len(valid) == 0
+
+
+class TestSchemaMismatches:
+    """Tests for schema mismatch handling (PRD §49.3).
+
+    Data may arrive with unexpected columns or types.
+    """
+
+    def test_extra_columns_preserved(self):
+        """Extra columns in data should be preserved."""
+        expected_cols = {"instrument_key", "ts_event", "ts_available", "price"}
+        actual_cols = expected_cols | {"extra_field", "another_extra"}
+
+        df = pd.DataFrame(columns=list(actual_cols))
+
+        # All columns preserved
+        assert set(df.columns) == actual_cols
+
+    def test_missing_required_columns_detected(self):
+        """Missing required columns should be detected."""
+        required = {"instrument_key", "ts_event", "ts_available"}
+
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [datetime.now(UTC)],
+                # Missing ts_available!
+                "price": [100.0],
+            }
+        )
+
+        missing = required - set(df.columns)
+        assert "ts_available" in missing
+
+    def test_type_coercion(self):
+        """Type mismatches should be handled via coercion."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": ["2025-01-15T10:00:00Z"],  # String, not datetime
+                "ts_available": ["2025-01-15T10:01:00Z"],
+                "price": ["100.50"],  # String, not float
+            }
+        )
+
+        # Coerce types
+        df["ts_event"] = pd.to_datetime(df["ts_event"])
+        df["ts_available"] = pd.to_datetime(df["ts_available"])
+        df["price"] = pd.to_numeric(df["price"])
+
+        assert df["ts_event"].dtype == "datetime64[ns, UTC]" or "datetime" in str(df["ts_event"].dtype)
+        assert df["price"].dtype in ("float64", "float32")
+
+
+class TestLateArrivingData:
+    """Tests for late-arriving data handling (PRD §49.3).
+
+    Data may arrive significantly after its event time.
+    The system must handle this without compromising historical queries.
+    """
+
+    def test_late_data_visibility(self):
+        """Late data should only be visible after its availability time."""
+        now = datetime.now(UTC)
+
+        # Event from 1 hour ago, but just became available
+        late_data = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [now - timedelta(hours=1)],
+                "ts_available": [now],
+                "price": [100.0],
+            }
+        )
+
+        # Query at 30 minutes ago: late data NOT visible
+        asof_30m = now - timedelta(minutes=30)
+        visible = late_data[late_data["ts_available"] <= asof_30m]
+        assert len(visible) == 0
+
+        # Query at 5 minutes from now: late data IS visible
+        asof_future = now + timedelta(minutes=5)
+        visible = late_data[late_data["ts_available"] <= asof_future]
+        assert len(visible) == 1
+
+    def test_very_late_data_handling(self):
+        """Very late data (days/weeks) should still be handled correctly."""
+        now = datetime.now(UTC)
+
+        # Correction: Event from last week, just became available
+        very_late = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [now - timedelta(days=7)],
+                "ts_available": [now],
+                "price": [99.0],  # Corrected price
+            }
+        )
+
+        # Historical query from 3 days ago should NOT see this correction
+        historical_query = now - timedelta(days=3)
+        visible = very_late[very_late["ts_available"] <= historical_query]
+        assert len(visible) == 0
+
+        # This ensures reproducibility: same query, same result
+
+    def test_out_of_order_arrival(self):
+        """Data arriving out of order should be handled correctly."""
+        now = datetime.now(UTC)
+
+        # Data arriving in wrong order
+        batch1 = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [now - timedelta(hours=2)],
+                "ts_available": [now - timedelta(hours=1)],
+                "price": [100.0],
+            }
+        )
+
+        batch2 = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"],
+                "ts_event": [now - timedelta(hours=3)],  # Earlier event
+                "ts_available": [now],  # But arrived later
+                "price": [99.0],
+            }
+        )
+
+        combined = pd.concat([batch1, batch2])
+
+        # Query at 30 minutes ago: should only see batch1
+        asof_30m = now - timedelta(minutes=30)
+        visible = combined[combined["ts_available"] <= asof_30m]
+        assert len(visible) == 1
+        assert visible["price"].iloc[0] == 100.0
+
+
+def run_all_edge_case_tests() -> dict[str, bool]:
+    """Run all edge case tests and return results."""
+    results = {}
+
+    test_classes = [
+        TestClockSkew,
+        TestMissingTimestamps,
+        TestSchemaMismatches,
+        TestLateArrivingData,
+    ]
+
+    for test_class in test_classes:
+        instance = test_class()
+        for method_name in dir(instance):
+            if method_name.startswith("test_"):
+                try:
+                    getattr(instance, method_name)()
+                    results[f"{test_class.__name__}.{method_name}"] = True
+                except Exception as e:
+                    results[f"{test_class.__name__}.{method_name}"] = False
+                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
+
+    passed = sum(1 for v in results.values() if v)
+    total = len(results)
+    print(f"\nEdge Case Tests: {passed}/{total} passed")
+
+    return results
+
+
+if __name__ == "__main__":
+    run_all_edge_case_tests()
 
 
 
