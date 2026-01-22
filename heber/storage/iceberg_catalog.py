@@ -211,6 +211,48 @@ def get_silver_darkpool_schema() -> Schema:
     )
 
 
+def get_silver_congress_trades_schema() -> Schema:
+    """Iceberg schema for Silver congressional trades table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),
+        NestedField(21, "politician", StringType(), required=True),
+        NestedField(22, "transaction_type", StringType(), required=True),  # buy/sell
+        NestedField(23, "amount", StringType(), required=False),  # Range like "$1M-$5M"
+        NestedField(24, "transaction_date", TimestamptzType(), required=False),
+        NestedField(25, "disclosure_date", TimestamptzType(), required=False),
+        NestedField(26, "party", StringType(), required=False),  # D/R
+        NestedField(27, "chamber", StringType(), required=False),  # House/Senate
+    )
+
+
+def get_silver_insider_trades_schema() -> Schema:
+    """Iceberg schema for Silver insider trades table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "symbol", StringType(), required=True),
+        NestedField(21, "insider", StringType(), required=True),
+        NestedField(22, "title", StringType(), required=False),  # CEO, CFO, etc.
+        NestedField(23, "transaction_type", StringType(), required=True),
+        NestedField(24, "shares", LongType(), required=False),
+        NestedField(25, "price", DoubleType(), required=False),
+        NestedField(26, "value", DoubleType(), required=False),
+        NestedField(27, "transaction_date", TimestamptzType(), required=False),
+    )
+
+
+def get_silver_market_tide_schema() -> Schema:
+    """Iceberg schema for Silver market tide/sentiment table."""
+    return Schema(
+        *SILVER_BASE_FIELDS,
+        NestedField(20, "net_call_premium", DoubleType(), required=True),
+        NestedField(21, "net_put_premium", DoubleType(), required=True),
+        NestedField(22, "call_volume", LongType(), required=True),
+        NestedField(23, "put_volume", LongType(), required=True),
+        NestedField(24, "sentiment", StringType(), required=True),  # bullish/bearish/neutral
+    )
+
+
 # Schema registry for table creation
 SILVER_SCHEMAS: dict[str, Schema] = {
     "bars": get_silver_bars_schema(),
@@ -218,6 +260,9 @@ SILVER_SCHEMAS: dict[str, Schema] = {
     "trades": get_silver_trades_schema(),
     "flow_alerts": get_silver_flow_alerts_schema(),
     "darkpool": get_silver_darkpool_schema(),
+    "congress_trades": get_silver_congress_trades_schema(),
+    "insider_trades": get_silver_insider_trades_schema(),
+    "market_tide": get_silver_market_tide_schema(),
 }
 
 
