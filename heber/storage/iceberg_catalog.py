@@ -294,15 +294,19 @@ def get_silver_insider_trades_schema() -> Schema:
 def get_silver_market_tide_schema() -> Schema:
     """Iceberg schema for Silver market tide/sentiment table.
 
-    Matches UW market/tide API response.
+    Matches UW Daily Market Tide API response.
+    Supports market tide, sector tide, and ETF tide (all use same UW schema).
     """
     return Schema(
         *SILVER_BASE_FIELDS,
-        NestedField(20, "date", StringType(), required=False),  # Trading date YYYY-MM-DD
-        NestedField(21, "net_call_premium", DoubleType(), required=True),
-        NestedField(22, "net_put_premium", DoubleType(), required=True),
-        NestedField(23, "net_volume", LongType(), required=False),  # Net volume (call - put)
-        NestedField(24, "sentiment", StringType(), required=True),  # bullish/bearish/neutral
+        NestedField(20, "tide_type", StringType(), required=True),  # market, sector, etf
+        NestedField(21, "date", StringType(), required=False),  # Trading date YYYY-MM-DD
+        NestedField(22, "net_call_premium", DoubleType(), required=True),
+        NestedField(23, "net_put_premium", DoubleType(), required=True),
+        NestedField(24, "net_volume", LongType(), required=False),  # Net volume (call - put)
+        NestedField(25, "sentiment", StringType(), required=False),  # bullish/bearish/neutral (computed)
+        NestedField(26, "sector", StringType(), required=False),  # For sector tide
+        NestedField(27, "ticker", StringType(), required=False),  # For ETF tide
     )
 
 
