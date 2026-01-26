@@ -134,7 +134,7 @@ class HotStoreWriter:
         self._client = client
         self._sync_states: dict[str, SyncState] = {}
 
-    async def get_client(self) -> ClickHouseClient:
+    def get_client(self) -> ClickHouseClient:
         """Get or create ClickHouse client."""
         if self._client is None:
             # Lazy import to avoid hard dependency
@@ -173,7 +173,7 @@ class HotStoreWriter:
 
     async def ensure_table(self, table: HotStoreTable) -> None:
         """Create table if not exists with TTL."""
-        client = await self.get_client()
+        client = self.get_client()
         ttl_days = self.get_ttl_days(table)
 
         # Table creation DDL per PRD requirements
@@ -220,7 +220,7 @@ class HotStoreWriter:
             return 0
 
         table = self.get_table_for_dataset(dataset)
-        client = await self.get_client()
+        client = self.get_client()
 
         start_time = asyncio.get_event_loop().time()
 
@@ -275,7 +275,7 @@ class HotStoreWriter:
     async def get_row_count(self, dataset: str) -> int:
         """Get current row count in Hot Store."""
         table = self.get_table_for_dataset(dataset)
-        client = await self.get_client()
+        client = self.get_client()
 
         try:
             result = await client.execute(f"SELECT count() FROM {table.value}")
@@ -340,14 +340,14 @@ class HotStoreSyncer:
                 continue
 
             # Read and sync each partition
-            records = await self._read_partition(dt_dir)
+            records = self._read_partition(dt_dir)
             if records:
                 synced = await self.writer.write_batch(dataset, records)
                 total_synced += synced
 
         return total_synced
 
-    async def _read_partition(self, partition_path) -> list[dict[str, Any]]:
+    def _read_partition(self, partition_path) -> list[dict[str, Any]]:
         """Read records from a partition."""
         try:
             import pyarrow.parquet as pq
@@ -454,7 +454,7 @@ class HotStoreReader:
         """
         if query_type == QueryType.BACKTEST_RESEARCH:
             # Silver only - never use Hot Store
-            return await self._query_silver(dataset, **filters)
+            return self._query_silver(dataset, **filters)
 
         elif query_type == QueryType.REALTIME_DASHBOARD:
             # Hot Store only - accept staleness
@@ -465,8 +465,8 @@ class HotStoreReader:
             results = await self._query_hot_store(dataset, **filters)
 
             # Check for gaps and fallback to Silver
-            if self._has_gaps(results, **filters):
-                silver_results = await self._query_silver(dataset, **filters)
+            if self._has_gaps(results):
+                silver_results = self._query_silver(dataset, **filters)
                 results = self._merge_results(results, silver_results)
 
             return results
@@ -499,7 +499,7 @@ class HotStoreReader:
             logger.error("hot_store_query_failed", error=str(e))
             return []
 
-    async def _query_silver(
+    def _query_silver(
         self,
         dataset: str,
         **filters,
@@ -531,7 +531,7 @@ class HotStoreReader:
 
         return records
 
-    def _has_gaps(self, results: list[dict], **filters) -> bool:
+    def _has_gaps(self, results: list[dict]) -> bool:
         """Check if results have gaps that need Silver fallback."""
         if not results:
             return True
@@ -561,7 +561,7 @@ class MockClickHouseClient:
     def __init__(self):
         self._tables: dict[str, list[dict]] = {}
 
-    async def execute(self, query: str, params: dict | None = None) -> Any:
+    async def execute(self, query: str, params: dict | None = None) -> Any:  # noqa: ARG002
         """Execute a query."""
         if query.strip().upper().startswith("CREATE"):
             return None

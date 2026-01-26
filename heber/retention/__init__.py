@@ -491,62 +491,16 @@ class ReaperScheduler:
         """Add retention config for a dataset."""
         self.retention_configs[config.dataset] = config
 
-    async def run_once(self) -> ReaperResult:
+    def run_once(self) -> ReaperResult:
         """Run a single reaper pass per PRD §15.4 workflow."""
         result = ReaperResult(started_at=datetime.now(UTC))
 
         try:
             for dataset, config in self.retention_configs.items():
-                # Process each layer
-                for layer, policy in [
-                    (DataLayer.BRONZE, config.bronze),
-                    (DataLayer.SILVER, config.silver),
-                    (DataLayer.GOLD, config.gold),
-                ]:
-                    if policy.retention_days is None and policy.retention_versions is None:
-                        continue  # No retention policy
-
-                    partitions = self.worker.scan_partitions(dataset, layer)
-                    result.partitions_scanned += len(partitions)
-
-                    # Find expired
-                    if layer == DataLayer.GOLD and policy.retention_versions:
-                        expired = self.worker.find_expired_versions(partitions, policy, config.pinned_versions)
-                    else:
-                        expired = self.worker.find_expired_partitions(partitions, policy)
-
-                    pending_deletions.labels(
-                        dataset=dataset,
-                        layer=layer.value,
-                    ).set(len(expired))
-
-                    # Apply policy
-                    for partition in expired:
-                        success, reclaimed = self.worker.apply_policy(partition, policy.action)
-
-                        if success:
-                            if policy.action == LifecycleAction.ARCHIVE:
-                                result.partitions_archived += 1
-                            else:
-                                result.partitions_deleted += 1
-                            result.files_deleted += partition.file_count
-                            result.bytes_reclaimed += reclaimed
-                        else:
-                            result.errors.append(f"Failed: {partition.path}")
+                self._process_dataset(dataset, config, result)
 
             result.completed_at = datetime.now(UTC)
-            reaper_runs.labels(status="success").inc()
-
-            duration = (result.completed_at - result.started_at).total_seconds()
-            reaper_duration_seconds.observe(duration)
-
-            logger.info(
-                "reaper_run_complete",
-                partitions_scanned=result.partitions_scanned,
-                partitions_deleted=result.partitions_deleted,
-                bytes_reclaimed=result.bytes_reclaimed,
-                duration_seconds=duration,
-            )
+            self._log_success(result)
 
         except Exception as e:
             result.completed_at = datetime.now(UTC)
@@ -556,12 +510,80 @@ class ReaperScheduler:
 
         return result
 
+    def _process_dataset(
+        self,
+        dataset: str,
+        config: DatasetRetentionConfig,
+        result: ReaperResult,
+    ) -> None:
+        """Process retention for a single dataset across all layers."""
+        layer_policies = [
+            (DataLayer.BRONZE, config.bronze),
+            (DataLayer.SILVER, config.silver),
+            (DataLayer.GOLD, config.gold),
+        ]
+        for layer, policy in layer_policies:
+            if policy.retention_days is None and policy.retention_versions is None:
+                continue
+
+            partitions = self.worker.scan_partitions(dataset, layer)
+            result.partitions_scanned += len(partitions)
+
+            expired = self._find_expired(layer, partitions, policy, config.pinned_versions)
+            pending_deletions.labels(dataset=dataset, layer=layer.value).set(len(expired))
+
+            self._apply_policies(expired, policy, result)
+
+    def _find_expired(
+        self,
+        layer: DataLayer,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        pinned_versions: list[str],
+    ) -> list[PartitionInfo]:
+        """Find expired partitions based on layer and policy."""
+        if layer == DataLayer.GOLD and policy.retention_versions:
+            return self.worker.find_expired_versions(partitions, policy, pinned_versions)
+        return self.worker.find_expired_partitions(partitions, policy)
+
+    def _apply_policies(
+        self,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        result: ReaperResult,
+    ) -> None:
+        """Apply retention policy to expired partitions."""
+        for partition in partitions:
+            success, reclaimed = self.worker.apply_policy(partition, policy.action)
+            if success:
+                if policy.action == LifecycleAction.ARCHIVE:
+                    result.partitions_archived += 1
+                else:
+                    result.partitions_deleted += 1
+                result.files_deleted += partition.file_count
+                result.bytes_reclaimed += reclaimed
+            else:
+                result.errors.append(f"Failed: {partition.path}")
+
+    def _log_success(self, result: ReaperResult) -> None:
+        """Log successful reaper completion."""
+        reaper_runs.labels(status="success").inc()
+        duration = (result.completed_at - result.started_at).total_seconds()
+        reaper_duration_seconds.observe(duration)
+        logger.info(
+            "reaper_run_complete",
+            partitions_scanned=result.partitions_scanned,
+            partitions_deleted=result.partitions_deleted,
+            bytes_reclaimed=result.bytes_reclaimed,
+            duration_seconds=duration,
+        )
+
     async def run_scheduled(self) -> None:
         """Run reaper on schedule."""
         self._running = True
 
         while self._running:
-            await self.run_once()
+            self.run_once()
             await asyncio.sleep(self.run_interval_hours * 3600)
 
     def stop(self) -> None:

@@ -69,7 +69,7 @@ class EventConsumer:
 
             # Set ts_available if not present
             if envelope.ts_available is None:
-                envelope = envelope.with_ts_available(datetime.utcnow())
+                envelope = envelope.with_ts_available(datetime.now(UTC))
 
             # Write to Bronze (always)
             await self.bronze_writer.write(envelope)
@@ -108,45 +108,50 @@ class EventConsumer:
 
         while self.running:
             try:
-                # Read from stream with consumer group
-                messages = await self.redis.xreadgroup(
-                    groupname=settings.redis_consumer_group,
-                    consumername=self.consumer_name,
-                    streams={settings.redis_stream_name: ">"},
-                    count=100,
-                    block=1000,  # Block for 1 second
-                )
-
-                if not messages:
-                    continue
-
-                for _stream_name, stream_messages in messages:
-                    for message_id, message_data in stream_messages:
-                        success = await self.process_event(message_data)
-
-                        if success:
-                            # Acknowledge message
-                            await self.redis.xack(
-                                settings.redis_stream_name,
-                                settings.redis_consumer_group,
-                                message_id,
-                            )
-                        else:
-                            # TODO: Send to DLQ
-                            logger.warning("Event failed, needs DLQ", message_id=message_id)
-
-                # Flush writers periodically
-                await self.bronze_writer.flush_if_needed()
-                await self.silver_writer.flush_if_needed()
-
+                await self._consume_iteration()
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
-                break
+                raise  # Re-raise per best practice
             except Exception as e:
                 logger.error("Consumer error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)  # Back off on error
 
-        # Final flush
+        await self._final_flush()
+
+    async def _consume_iteration(self) -> None:
+        """Execute a single iteration of the consumer loop."""
+        messages = await self.redis.xreadgroup(
+            groupname=settings.redis_consumer_group,
+            consumername=self.consumer_name,
+            streams={settings.redis_stream_name: ">"},
+            count=100,
+            block=1000,
+        )
+
+        if not messages:
+            return
+
+        for _stream_name, stream_messages in messages:
+            for message_id, message_data in stream_messages:
+                await self._handle_message(message_id, message_data)
+
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
+
+    async def _handle_message(self, message_id: bytes, message_data: dict) -> None:
+        """Handle a single message from the stream."""
+        success = await self.process_event(message_data)
+        if success:
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                message_id,
+            )
+        else:
+            logger.warning("Event failed, needs DLQ", message_id=message_id)
+
+    async def _final_flush(self) -> None:
+        """Perform final flush when consumer stops."""
         await self.bronze_writer.flush()
         await self.silver_writer.flush()
         logger.info("Consumer stopped")

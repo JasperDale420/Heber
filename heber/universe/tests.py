@@ -203,7 +203,6 @@ class TestUniverseSnapshot:
 def run_all_survivor_bias_tests() -> dict[str, bool]:
     """Run all survivor bias tests."""
     results = {}
-
     test_classes = [
         TestInstrumentLifecycle,
         TestUniverseManager,
@@ -212,25 +211,42 @@ def run_all_survivor_bias_tests() -> dict[str, bool]:
     ]
 
     for test_class in test_classes:
-        instance = test_class()
+        _run_test_class(test_class, results)
+
+    _print_summary(results)
+    return results
+
+
+def _run_test_class(test_class: type, results: dict[str, bool]) -> None:
+    """Run all test methods in a test class."""
+    instance = test_class()
+    for method_name in dir(instance):
+        if method_name.startswith("test_"):
+            _run_test_method(instance, method_name, test_class.__name__, results)
+
+
+def _run_test_method(
+    instance: object,
+    method_name: str,
+    class_name: str,
+    results: dict[str, bool],
+) -> None:
+    """Run a single test method and record result."""
+    try:
         if hasattr(instance, "setup_method"):
             instance.setup_method()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    if hasattr(instance, "setup_method"):
-                        instance.setup_method()
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
+        getattr(instance, method_name)()
+        results[f"{class_name}.{method_name}"] = True
+    except Exception as e:
+        results[f"{class_name}.{method_name}"] = False
+        print(f"FAILED: {class_name}.{method_name}: {e}")
 
+
+def _print_summary(results: dict[str, bool]) -> None:
+    """Print test results summary."""
     passed = sum(1 for v in results.values() if v)
     total = len(results)
     print(f"\nSurvivor Bias Tests: {passed}/{total} passed")
-
-    return results
 
 
 if __name__ == "__main__":
