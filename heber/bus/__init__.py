@@ -295,7 +295,6 @@ class RedisEventBus(EventBus):
         """Consume messages using XREADGROUP."""
         while True:
             try:
-                # Read new messages for this consumer
                 results = await self._redis.xreadgroup(
                     groupname=config.group_name,
                     consumername=config.consumer_name,
@@ -305,36 +304,52 @@ class RedisEventBus(EventBus):
                 )
 
                 if results:
-                    messages = []
-                    for stream_name, stream_messages in results:
-                        for msg_id, msg_data in stream_messages:
-                            # Deserialize JSON fields
-                            parsed_data = {}
-                            for key, value in msg_data.items():
-                                try:
-                                    parsed_data[key] = json.loads(value)
-                                except (json.JSONDecodeError, TypeError):
-                                    parsed_data[key] = value
-
-                            message = Message(
-                                id=msg_id,
-                                stream=stream_name,
-                                data=parsed_data,
-                            )
-                            messages.append(message)
-                            messages_received.labels(stream=stream_name).inc()
-
+                    messages = self._parse_stream_results(results)
                     if messages:
                         yield messages
 
-                # Also check for pending messages that need claiming
                 await self._claim_idle_messages(config)
 
             except asyncio.CancelledError:
-                break
+                logger.info("consumer_cancelled", stream=config.stream.value)
+                raise  # Re-raise per Python best practice
             except Exception as e:
                 logger.error("consume_error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)
+
+    def _parse_stream_results(self, results: list) -> list[Message]:
+        """Parse XREADGROUP results into Message objects."""
+        messages = []
+        for stream_name, stream_messages in results:
+            for msg_id, msg_data in stream_messages:
+                message = self._parse_single_message(msg_id, stream_name, msg_data)
+                messages.append(message)
+                messages_received.labels(stream=stream_name).inc()
+        return messages
+
+    def _parse_single_message(
+        self,
+        msg_id: str,
+        stream_name: str,
+        msg_data: dict,
+    ) -> Message:
+        """Parse a single message, deserializing JSON fields."""
+        parsed_data = {}
+        for key, value in msg_data.items():
+            parsed_data[key] = self._deserialize_value(value)
+
+        return Message(
+            id=msg_id,
+            stream=stream_name,
+            data=parsed_data,
+        )
+
+    def _deserialize_value(self, value: str) -> Any:
+        """Attempt to deserialize a JSON value, return original if not JSON."""
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
 
     async def _claim_idle_messages(self, config: ConsumerConfig) -> list[Message]:
         """Claim idle messages from other consumers (on restart/crash)."""
@@ -474,7 +489,8 @@ class InMemoryEventBus(EventBus):
                     await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
-                break
+                logger.info("in_memory_consumer_cancelled")
+                raise  # Re-raise per Python best practice
 
     async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
         async with self._lock:
