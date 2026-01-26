@@ -213,7 +213,6 @@ class AlertLabelsPipeline:
         This fetches option price data from the Data Gateway and computes
         contract-level TP/SL barrier labels.
         """
-        # Get unique OCC symbols
         if "occ_symbol" not in flow_alerts.columns:
             logger.warning("No occ_symbol in flow alerts, skipping contract labels")
             return labels
@@ -225,78 +224,73 @@ class AlertLabelsPipeline:
 
         logger.info("Fetching option bars", contracts=len(occ_symbols))
 
-        # Fetch option bars from Data Gateway
         option_bars = asyncio.run(self._fetch_option_bars(occ_symbols, bar_start, bar_end))
 
         if option_bars.empty:
             logger.warning("No option bars returned from gateway")
-            # Add empty contract columns
-            for col in [
-                "contract_hit_tp_first",
-                "contract_mfe",
-                "contract_mae",
-                "contract_mfe_adj",
-                "contract_mae_adj",
-                "contract_bars_to_hit",
-            ]:
-                labels[col] = pd.NA
-            return labels
+            return self._add_empty_contract_columns(labels)
 
         logger.info("Fetched option bars", count=len(option_bars))
 
-        # Compute contract labels for each alert
-        contract_labels = []
+        contract_labels = [
+            self._compute_single_contract_label(row, flow_alerts, option_bars) for _, row in labels.iterrows()
+        ]
 
-        for _, row in labels.iterrows():
-            alert_id = row["alert_id"]
-            occ_symbol = (
-                flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
-                if alert_id in flow_alerts["event_id"].values
-                else None
-            )
-
-            if occ_symbol is None or pd.isna(occ_symbol):
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            # Get option bars for this contract
-            contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
-            if contract_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            # Get entry price (option price at alert time)
-            ts_alert = row["ts_alert"]
-            entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
-            if entry_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            entry_price = entry_bars.iloc[-1]["close"]
-
-            # Get forward price path
-            future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(
-                self.contract_config.max_window_bars
-            )
-
-            if future_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            price_path = future_bars["close"].values
-
-            # Compute contract barrier outcome
-            outcome = _compute_contract_barrier_outcome(
-                price_path, entry_price, self.contract_config, self.slippage_model
-            )
-            contract_labels.append(outcome)
-
-        # Merge contract labels into main DataFrame
         contract_df = pd.DataFrame(contract_labels)
         for col in contract_df.columns:
             labels[col] = contract_df[col].values
 
         return labels
+
+    def _add_empty_contract_columns(self, labels: pd.DataFrame) -> pd.DataFrame:
+        """Add empty contract label columns to DataFrame."""
+        for col in [
+            "contract_hit_tp_first",
+            "contract_mfe",
+            "contract_mae",
+            "contract_mfe_adj",
+            "contract_mae_adj",
+            "contract_bars_to_hit",
+        ]:
+            labels[col] = pd.NA
+        return labels
+
+    def _compute_single_contract_label(
+        self,
+        row: pd.Series,
+        flow_alerts: pd.DataFrame,
+        option_bars: pd.DataFrame,
+    ) -> dict:
+        """Compute contract barrier label for a single alert."""
+        alert_id = row["alert_id"]
+        occ_symbol = self._get_occ_symbol_for_alert(alert_id, flow_alerts)
+
+        if occ_symbol is None or pd.isna(occ_symbol):
+            return self._empty_contract_result()
+
+        contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
+        if contract_bars.empty:
+            return self._empty_contract_result()
+
+        ts_alert = row["ts_alert"]
+        entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
+        if entry_bars.empty:
+            return self._empty_contract_result()
+
+        entry_price = entry_bars.iloc[-1]["close"]
+        future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(self.contract_config.max_window_bars)
+
+        if future_bars.empty:
+            return self._empty_contract_result()
+
+        price_path = future_bars["close"].values
+        return _compute_contract_barrier_outcome(price_path, entry_price, self.contract_config, self.slippage_model)
+
+    def _get_occ_symbol_for_alert(self, alert_id: str, flow_alerts: pd.DataFrame) -> str | None:
+        """Look up OCC symbol for an alert ID."""
+        if alert_id not in flow_alerts["event_id"].values:
+            return None
+        return flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
 
     async def _fetch_option_bars(
         self,

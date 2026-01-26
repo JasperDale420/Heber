@@ -187,7 +187,6 @@ class OpenMetadataCatalog:
     def register_table(
         self,
         table: TableMetadata,
-        columns: list[ColumnMetadata] | None = None,
     ) -> str:
         """Register or update a table in the catalog.
 

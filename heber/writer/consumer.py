@@ -6,7 +6,7 @@ Subscribes to the event stream from Data Gateway and routes to Bronze/Silver wri
 import asyncio
 import json
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis.asyncio as redis
 import structlog
@@ -27,7 +27,7 @@ class EventConsumer:
         self.bronze_writer = BronzeWriter()
         self.silver_writer = SilverWriter()
         self.running = False
-        self.consumer_name = f"consumer-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
 
     async def connect(self):
         """Connect to Redis."""

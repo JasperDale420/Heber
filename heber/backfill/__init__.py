@@ -22,6 +22,9 @@ from prometheus_client import Counter, Gauge, Histogram
 
 logger = structlog.get_logger(__name__)
 
+# Default storage root
+DEFAULT_STORAGE_ROOT = "/data/heber"
+
 
 # Prometheus metrics
 backfill_jobs_total = Counter(
@@ -160,7 +163,7 @@ class BackfillChunk:
 class GapDetector:
     """Detects gaps in data coverage for backfill targeting."""
 
-    def __init__(self, storage_root: str = "/data/heber"):
+    def __init__(self, storage_root: str = DEFAULT_STORAGE_ROOT):
         self.storage_root = Path(storage_root)
 
     def detect_gaps(
@@ -247,7 +250,7 @@ class BackfillWriter:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT,
         custom_delay_seconds: int | None = None,
     ):
@@ -283,7 +286,7 @@ class BackfillWriter:
         record["quality_flags"] = flags
         return record
 
-    async def write_batch(
+    def write_batch(
         self,
         job: BackfillJob,
         records: list[dict[str, Any]],
@@ -309,7 +312,7 @@ class BackfillWriter:
 
         # Write to temp partition per PRD §13.6
         temp_path = self._get_temp_path(job, chunk_date)
-        await self._write_parquet(processed, temp_path)
+        self._write_parquet(processed, temp_path)
 
         # Atomic merge will be handled by compactor
         logger.info(
@@ -331,7 +334,7 @@ class BackfillWriter:
             / f"_backfill_{job.backfill_id}"
         )
 
-    async def _write_parquet(
+    def _write_parquet(
         self,
         records: list[dict[str, Any]],
         path: Path,
@@ -360,7 +363,7 @@ class BackfillCoordinator:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         data_fetcher: Callable | None = None,
     ):
         self.storage_root = storage_root
@@ -406,7 +409,6 @@ class BackfillCoordinator:
     def _generate_chunks(
         self,
         job: BackfillJob,
-        definition: BackfillJobDefinition,
     ) -> list[BackfillChunk]:
         """Generate work chunks for a backfill job."""
         chunks = []
@@ -451,7 +453,7 @@ class BackfillCoordinator:
             custom_delay_seconds=definition.custom_delay_seconds,
         )
 
-        chunks = self._generate_chunks(job, definition)
+        chunks = self._generate_chunks(job)
         total_chunks = len(chunks)
 
         try:
@@ -470,7 +472,7 @@ class BackfillCoordinator:
                 # Write with rate limiting
                 await asyncio.sleep(1.0 / definition.rate_limit_per_second)
 
-                rows = await writer.write_batch(job, records, chunk.chunk_date)
+                rows = writer.write_batch(job, records, chunk.chunk_date)
 
                 # Update progress
                 job.rows_written += rows
@@ -603,7 +605,7 @@ def create_backfill_router():
         job = coordinator.create_job(definition)
 
         # Start job in background
-        asyncio.create_task(coordinator.run_job(job.backfill_id, definition))
+        _background_task = asyncio.create_task(coordinator.run_job(job.backfill_id, definition))  # noqa: F841
 
         return job.to_dict()
 

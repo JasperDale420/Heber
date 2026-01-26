@@ -204,64 +204,75 @@ class AlertWatchConsumer:
             Parsed alert dict or None
         """
         try:
-            # Handle bytes keys/values
-            parsed = {}
-            for k, v in data.items():
-                key = k.decode() if isinstance(k, bytes) else k
-                val = v.decode() if isinstance(v, bytes) else v
-
-                # Try to parse JSON values
-                if isinstance(val, str) and val.startswith("{"):
-                    try:
-                        val = json.loads(val)
-                    except json.JSONDecodeError:
-                        pass
-
-                parsed[key] = val
-
-            # If data was nested JSON
-            if "data" in parsed and isinstance(parsed["data"], dict):
-                parsed = {**parsed, **parsed["data"]}
-
-            # Map common field names
-            result = {
-                "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
-                "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
-                "underlying": parsed.get("underlying") or parsed.get("ticker"),
-                "put_call": parsed.get("put_call") or parsed.get("type", "C")[0].upper(),
-                "expiry": parsed.get("expiry"),
-                "strike": float(parsed.get("strike", 0) or 0),
-                "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
-                "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
-            }
-
-            # Calculate DTE if expiry available
-            if result["expiry"]:
-                try:
-                    from datetime import date
-
-                    exp_date = datetime.strptime(str(result["expiry"])[:10], "%Y-%m-%d").date()
-                    result["dte"] = (exp_date - date.today()).days
-                except Exception:
-                    result["dte"] = 5
-
-            # Parse timestamp
-            ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
-            if ts:
-                if isinstance(ts, str):
-                    result["ts_event"] = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                elif isinstance(ts, int | float):
-                    result["ts_event"] = datetime.fromtimestamp(ts, tz=UTC)
-                else:
-                    result["ts_event"] = datetime.now(UTC)
-            else:
-                result["ts_event"] = datetime.now(UTC)
-
+            parsed = self._decode_stream_data(data)
+            result = self._map_alert_fields(parsed)
+            result["dte"] = self._calculate_dte(result.get("expiry"))
+            result["ts_event"] = self._parse_timestamp(parsed)
             return result
 
         except Exception as e:
             logger.error("Failed to parse alert", error=str(e))
             return None
+
+    def _decode_stream_data(self, data: dict) -> dict:
+        """Decode bytes and parse nested JSON from stream message."""
+        parsed = {}
+        for k, v in data.items():
+            key = k.decode() if isinstance(k, bytes) else k
+            val = v.decode() if isinstance(v, bytes) else v
+
+            if isinstance(val, str) and val.startswith("{"):
+                try:
+                    val = json.loads(val)
+                except json.JSONDecodeError:
+                    pass
+
+            parsed[key] = val
+
+        if "data" in parsed and isinstance(parsed["data"], dict):
+            parsed = {**parsed, **parsed["data"]}
+
+        return parsed
+
+    def _map_alert_fields(self, parsed: dict) -> dict:
+        """Map various field name conventions to standard fields."""
+        put_call_raw = parsed.get("put_call") or parsed.get("type", "C")
+        put_call = put_call_raw[0].upper() if put_call_raw else "C"
+
+        return {
+            "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
+            "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
+            "underlying": parsed.get("underlying") or parsed.get("ticker"),
+            "put_call": put_call,
+            "expiry": parsed.get("expiry"),
+            "strike": float(parsed.get("strike", 0) or 0),
+            "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
+            "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
+        }
+
+    def _calculate_dte(self, expiry: str | None) -> int:
+        """Calculate days to expiry from expiry string."""
+        if not expiry:
+            return 5
+        try:
+            from datetime import date
+
+            exp_date = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
+            return (exp_date - date.today()).days
+        except Exception:
+            return 5
+
+    def _parse_timestamp(self, parsed: dict) -> datetime:
+        """Parse timestamp from various field formats."""
+        ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
+        if not ts:
+            return datetime.now(UTC)
+
+        if isinstance(ts, str):
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if isinstance(ts, int | float):
+            return datetime.fromtimestamp(ts, tz=UTC)
+        return datetime.now(UTC)
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.

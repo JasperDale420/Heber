@@ -435,7 +435,6 @@ def _process_single_alert(
     # Calculate DTE
     alert_date = ts_alert.date() if hasattr(ts_alert, "date") else ts_alert
     dte = (expiry - alert_date).days if isinstance(expiry, date) else 5
-
     horizon = classify_horizon(dte)
 
     # Get underlying bars
@@ -444,12 +443,11 @@ def _process_single_alert(
         return _empty_result(alert_id, underlying, put_call, horizon, dte)
 
     # Get ATR and spot at alert time
-    bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
-    if bars_at_alert.empty:
+    entry_data = _get_entry_data(underlying_bars, ts_alert, alert)
+    if entry_data is None:
         return _empty_result(alert_id, underlying, put_call, horizon, dte)
 
-    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
-    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+    atr_at_alert, spot_at_alert = entry_data
 
     # Compute thresholds
     tp_threshold = config.tp_atr_mult * atr_at_alert / spot_at_alert
@@ -466,26 +464,12 @@ def _process_single_alert(
     # Compute barrier outcome
     outcome = _compute_barrier_outcome(price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model)
 
-    # Get VIX at alert time (regime context)
-    vix_at_alert = None
-    if vix_data is not None and len(vix_data) > 0:
-        vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
-        if not vix_before.empty:
-            vix_at_alert = float(vix_before.iloc[-1]["close"])
+    # Get VIX at alert time
+    vix_at_alert = _get_vix_at_alert(vix_data, ts_alert)
 
-    # Compute beta-neutral return (SPY-relative)
-    beta_neutral_return = None
+    # Compute beta-neutral return
     raw_return = outcome["mfe"] if outcome["hit_tp_first"] == 1 else outcome["mae"]
-
-    if spy_bars is not None and len(spy_bars) > 0:
-        spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
-        end_time = ts_alert + timedelta(days=config.max_window_bars)
-        spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
-
-        if spy_at_alert and spy_at_end and spy_at_alert > 0:
-            spy_return = (spy_at_end - spy_at_alert) / spy_at_alert
-            if not np.isnan(raw_return):
-                beta_neutral_return = _compute_beta_neutral_return(raw_return, spy_return)
+    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config.max_window_bars, raw_return)
 
     return {
         "alert_id": alert_id,
@@ -499,23 +483,62 @@ def _process_single_alert(
         "atr_at_alert": atr_at_alert,
         "tp_threshold": tp_threshold,
         "sl_threshold": sl_threshold,
-        # Core label
         "hit_tp_first": outcome["hit_tp_first"],
-        # Raw MFE/MAE
         "mfe": outcome["mfe"],
         "mae": outcome["mae"],
-        # Slippage-adjusted MFE/MAE
         "mfe_adj": outcome["mfe_adj"],
         "mae_adj": outcome["mae_adj"],
         "bars_to_hit": outcome["bars_to_hit"],
-        # Beta-neutral (SPY-relative) return
         "beta_neutral_return": beta_neutral_return,
-        # Regime context
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
-        # Anti-leakage
         "ts_available": ts_alert + timedelta(days=max(1, config.max_window_bars // 24)),
     }
+
+
+def _get_entry_data(
+    underlying_bars: pd.DataFrame,
+    ts_alert: pd.Timestamp,
+    alert: pd.Series,
+) -> tuple[float, float] | None:
+    """Get ATR and spot price at alert time."""
+    bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
+    if bars_at_alert.empty:
+        return None
+    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
+    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+    return atr_at_alert, spot_at_alert
+
+
+def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> float | None:
+    """Get VIX level at alert time."""
+    if vix_data is None or len(vix_data) == 0:
+        return None
+    vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
+    if vix_before.empty:
+        return None
+    return float(vix_before.iloc[-1]["close"])
+
+
+def _compute_spy_relative_return(
+    spy_bars: pd.DataFrame | None,
+    ts_alert: pd.Timestamp,
+    max_window_bars: int,
+    raw_return: float,
+) -> float | None:
+    """Compute SPY-relative beta-neutral return."""
+    if spy_bars is None or len(spy_bars) == 0 or np.isnan(raw_return):
+        return None
+
+    spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
+    end_time = ts_alert + timedelta(days=max_window_bars)
+    spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
+
+    if not spy_at_alert or not spy_at_end or spy_at_alert <= 0:
+        return None
+
+    spy_return = (spy_at_end - spy_at_alert) / spy_at_alert
+    return _compute_beta_neutral_return(raw_return, spy_return)
 
 
 def _empty_result(

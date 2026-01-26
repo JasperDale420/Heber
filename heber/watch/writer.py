@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,8 @@ from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.models import WatchOutcome
 
 logger = structlog.get_logger(__name__)
+
+DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
 
 class LabelWriter:
@@ -111,7 +113,7 @@ class LabelWriter:
             )
             partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             file_path = partition_path / f"part-{ts}.parquet"
 
             group.drop(columns=["_date"]).to_parquet(file_path, compression="snappy")
@@ -127,7 +129,7 @@ class WatchService:
     def __init__(
         self,
         redis_client: Any,
-        gateway_url: str = "http://localhost:8000",
+        gateway_url: str = DEFAULT_GATEWAY_URL,
         output_path: Path | None = None,
     ):
         """Initialize the watch service.
@@ -199,7 +201,7 @@ class WatchService:
 
 def run_watch_service(
     redis_url: str = "redis://localhost:6379",
-    gateway_url: str = "http://localhost:8000",
+    gateway_url: str = DEFAULT_GATEWAY_URL,
     output_path: str | None = None,
 ) -> None:
     """CLI entry point for watch service.
@@ -229,7 +231,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run alert watch service")
     parser.add_argument("--redis", default="redis://localhost:6379", help="Redis URL")
-    parser.add_argument("--gateway", default="http://localhost:8000", help="Data Gateway URL")
+    parser.add_argument("--gateway", default=DEFAULT_GATEWAY_URL, help="Data Gateway URL")
     parser.add_argument("--output", help="Gold output path")
 
     args = parser.parse_args()

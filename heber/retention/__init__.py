@@ -21,6 +21,9 @@ from prometheus_client import Counter, Gauge, Histogram
 
 logger = structlog.get_logger(__name__)
 
+# Default storage root
+DEFAULT_STORAGE_ROOT = "/data/heber"
+
 
 # Prometheus metrics
 partitions_deleted = Counter(
@@ -227,7 +230,7 @@ class Archiver:
         self.archive_root = Path(archive_root)
         self.compress_on_archive = compress_on_archive
 
-    async def archive_partition(
+    def archive_partition(
         self,
         partition: PartitionInfo,
     ) -> tuple[bool, int]:
@@ -287,7 +290,7 @@ class ReaperWorker:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         safety_checker: DeletionSafetyChecker | None = None,
         archiver: Archiver | None = None,
         dry_run: bool = False,
@@ -384,7 +387,7 @@ class ReaperWorker:
 
         return expired
 
-    async def delete_partition(
+    def delete_partition(
         self,
         partition: PartitionInfo,
     ) -> tuple[bool, int]:
@@ -432,7 +435,7 @@ class ReaperWorker:
             )
             return False, 0
 
-    async def apply_policy(
+    def apply_policy(
         self,
         partition: PartitionInfo,
         action: LifecycleAction,
@@ -449,12 +452,12 @@ class ReaperWorker:
             return False, 0
 
         if action == LifecycleAction.DELETE:
-            return await self.delete_partition(partition)
+            return self.delete_partition(partition)
         elif action == LifecycleAction.ARCHIVE:
             # Archive first, then delete
-            archived, _ = await self.archiver.archive_partition(partition)
+            archived, _ = self.archiver.archive_partition(partition)
             if archived:
-                return await self.delete_partition(partition)
+                return self.delete_partition(partition)
             return False, 0
         elif action == LifecycleAction.COMPRESS:
             # Recompress in place (not yet implemented)
@@ -519,7 +522,7 @@ class ReaperScheduler:
 
                     # Apply policy
                     for partition in expired:
-                        success, reclaimed = await self.worker.apply_policy(partition, policy.action)
+                        success, reclaimed = self.worker.apply_policy(partition, policy.action)
 
                         if success:
                             if policy.action == LifecycleAction.ARCHIVE:
@@ -570,7 +573,7 @@ class ReaperScheduler:
 
 
 def create_reaper(
-    storage_root: str = "/data/heber",
+    storage_root: str = DEFAULT_STORAGE_ROOT,
     archive_root: str = "/data/heber/archive",
     dry_run: bool = False,
 ) -> ReaperScheduler:

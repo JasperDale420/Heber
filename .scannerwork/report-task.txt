@@ -1,6 +1,6 @@
 projectKey=heber
 serverUrl=http://localhost:9000
-serverVersion=25.11.0.114957
+serverVersion=26.1.0.118079
 dashboardUrl=http://localhost:9000/dashboard?id=heber
-ceTaskId=c2c8d696-4c4a-4cbf-9b37-cad78fc83ec1
-ceTaskUrl=http://localhost:9000/api/ce/task?id=c2c8d696-4c4a-4cbf-9b37-cad78fc83ec1
+ceTaskId=16d769a7-f0c9-4876-913f-d26aa7f4a3c8
+ceTaskUrl=http://localhost:9000/api/ce/task?id=16d769a7-f0c9-4876-913f-d26aa7f4a3c8

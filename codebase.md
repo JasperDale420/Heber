@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-21T22:53:51*
+*Generated: 2026-01-26T13:53:09*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 181
+Files analyzed: 188
 
-Estimated tokens: 299.9k
+Estimated tokens: 312.3k
 
 ---
 
@@ -180,6 +180,14 @@ Directory structure:
     │   │   └── tests.py
     │   ├── versioning/
     │   │   └── __init__.py
+    │   ├── watch/
+    │   │   ├── __init__.py
+    │   │   ├── checker.py
+    │   │   ├── consumer.py
+    │   │   ├── manager.py
+    │   │   ├── models.py
+    │   │   ├── poller.py
+    │   │   └── writer.py
     │   └── writer/
     │       ├── __init__.py
     │       ├── bronze.py
@@ -796,7 +804,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/healthcheck" ]
+      test: [ "CMD-SHELL", "wget -q --spider http://localhost:8000/api/v1/healthcheck" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -925,6 +933,8 @@ services:
         condition: service_healthy
       heber-catalog:
         condition: service_healthy
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   heber-compactor:
@@ -941,6 +951,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
 volumes:
@@ -8441,7 +8453,7 @@ FILE: .env.example
 
 # External Volume (where all data is stored)
 HEBER_DATA_ROOT=/Volumes/heber/data
-HEBER_VOLUME_ROOT=/Volumes/heber
+HEBER_VOLUME_ROOT=/Volumes/HeberDocker
 
 # Postgres (Catalog DB)
 POSTGRES_USER=heber
@@ -17500,8 +17512,9 @@ FILE: heber/features/pipelines/alert_labels.py
 This pipeline:
 1. Reads flow alerts from Silver
 2. Fetches corresponding bars (underlying symbols + SPY + UVXY)
-3. Computes barrier-based labels
-4. Writes labels to Gold
+3. Fetches option bars from Data Gateway (for contract-based labels)
+4. Computes barrier-based labels (both underlying and contract)
+5. Writes labels to Gold
 
 Usage:
     python -m heber.features.pipelines.alert_labels --start 2024-01-01 --end 2024-01-31
@@ -17510,18 +17523,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
 import structlog
 
-from heber.config import settings
 from heber.features.templates.alert_labels import (
-    AlertHorizon,
-    BarrierConfig,
+    ContractBarrierConfig,
     SlippageModel,
+    _compute_contract_barrier_outcome,
     compute_barrier_labels,
     compute_multi_horizon_labels,
 )
@@ -17533,39 +17546,52 @@ logger = structlog.get_logger(__name__)
 MARKET_PROXY = "SPY"
 VIX_PROXY = "UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
 LOOKBACK_DAYS = 30  # Days of bar history needed for ATR
+DATA_GATEWAY_URL = "http://localhost:8000"  # Data Gateway API
 
 
 class AlertLabelsPipeline:
-    """Pipeline for computing barrier-based labels on flow alerts."""
+    """Pipeline for computing barrier-based labels on flow alerts.
+
+    Supports two labeling modes:
+    1. Underlying-only: Uses stock price path for barrier detection
+    2. Contract + Underlying: Primary label from option prices, secondary from underlying
+    """
 
     def __init__(
         self,
         client: HeberClient | None = None,
         slippage_model: SlippageModel | None = None,
+        contract_config: ContractBarrierConfig | None = None,
         output_dataset: str = "labels_alert_barriers",
         project: str = "quant",
         version: str = "v1",
+        gateway_url: str = DATA_GATEWAY_URL,
     ):
         """Initialize the pipeline.
 
         Args:
             client: HeberClient instance (created if None)
             slippage_model: Execution cost model
+            contract_config: Contract barrier config (TP/SL percentages)
             output_dataset: Name for output Gold dataset
             project: Project name for Gold output
             version: Version string for Gold output
+            gateway_url: Data Gateway URL for fetching option bars
         """
         self.client = client or HeberClient()
         self.slippage_model = slippage_model or SlippageModel()
+        self.contract_config = contract_config or ContractBarrierConfig.moderate()
         self.output_dataset = output_dataset
         self.project = project
         self.version = version
+        self.gateway_url = gateway_url
 
     def run(
         self,
         start_date: datetime | str,
         end_date: datetime | str,
         use_intraday_bars: bool = False,
+        use_contract_labels: bool = True,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """Run the label computation pipeline.
@@ -17574,6 +17600,7 @@ class AlertLabelsPipeline:
             start_date: Start of alert date range
             end_date: End of alert date range
             use_intraday_bars: Use 5-min bars for intraday alerts
+            use_contract_labels: Fetch option bars and compute contract labels
             dry_run: If True, compute but don't write
 
         Returns:
@@ -17588,6 +17615,7 @@ class AlertLabelsPipeline:
             "Starting alert labels pipeline",
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
+            use_contract_labels=use_contract_labels,
         )
 
         # Step 1: Load flow alerts
@@ -17602,14 +17630,13 @@ class AlertLabelsPipeline:
 
         # Step 2: Get unique underlyings
         underlyings = flow_alerts["underlying"].unique().tolist()
-        # Add SPY and UVXY for market context
         all_symbols = list(set(underlyings + [MARKET_PROXY, VIX_PROXY]))
 
         logger.info("Fetching bars for symbols", count=len(all_symbols))
 
         # Step 3: Load bars (with lookback for ATR)
         bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
-        bar_end = end_date + timedelta(days=30)  # Forward for labels
+        bar_end = end_date + timedelta(days=30)
         daily_bars = self._load_bars(all_symbols, bar_start, bar_end)
 
         if daily_bars.empty:
@@ -17620,22 +17647,18 @@ class AlertLabelsPipeline:
 
         # Step 4: Extract SPY and UVXY bars
         spy_bars = daily_bars[daily_bars["instrument_key"] == MARKET_PROXY].copy()
-        uvxy_bars = daily_bars[daily_bars["instrument_key"] == VIX_PROXY].copy()
-
-        # Use UVXY close as VIX proxy
-        vix_bars = uvxy_bars.copy()
+        vix_bars = daily_bars[daily_bars["instrument_key"] == VIX_PROXY].copy()
 
         logger.info(
             "Market context data",
             spy_bars=len(spy_bars),
-            uvxy_bars=len(uvxy_bars),
+            uvxy_bars=len(vix_bars),
         )
 
-        # Step 5: Compute labels
-        logger.info("Computing barrier labels")
+        # Step 5: Compute underlying-based labels
+        logger.info("Computing underlying barrier labels")
 
         if use_intraday_bars:
-            # Load intraday bars for 0-2 DTE alerts
             intraday_bars = self._load_intraday_bars(all_symbols, bar_start, bar_end)
             labels = compute_multi_horizon_labels(
                 flow_alerts,
@@ -17653,12 +17676,17 @@ class AlertLabelsPipeline:
                 slippage_model=self.slippage_model,
             )
 
-        logger.info("Computed labels", count=len(labels))
+        logger.info("Computed underlying labels", count=len(labels))
 
-        # Step 6: Prepare for Gold write
+        # Step 6: Fetch option bars and compute contract labels
+        if use_contract_labels:
+            logger.info("Fetching option bars from Data Gateway")
+            labels = self._add_contract_labels(labels, flow_alerts, bar_start, bar_end)
+
+        # Step 7: Prepare for Gold write
         labels = self._prepare_for_gold(labels)
 
-        # Step 7: Write to Gold
+        # Step 8: Write to Gold
         if not dry_run:
             output_path = self.client.write_gold(
                 dataset=self.output_dataset,
@@ -17682,6 +17710,163 @@ class AlertLabelsPipeline:
 
         return stats
 
+    def _add_contract_labels(
+        self,
+        labels: pd.DataFrame,
+        flow_alerts: pd.DataFrame,
+        bar_start: datetime,
+        bar_end: datetime,
+    ) -> pd.DataFrame:
+        """Add contract-based labels by fetching option bars.
+
+        This fetches option price data from the Data Gateway and computes
+        contract-level TP/SL barrier labels.
+        """
+        # Get unique OCC symbols
+        if "occ_symbol" not in flow_alerts.columns:
+            logger.warning("No occ_symbol in flow alerts, skipping contract labels")
+            return labels
+
+        occ_symbols = flow_alerts["occ_symbol"].dropna().unique().tolist()
+        if not occ_symbols:
+            logger.warning("No OCC symbols found, skipping contract labels")
+            return labels
+
+        logger.info("Fetching option bars", contracts=len(occ_symbols))
+
+        # Fetch option bars from Data Gateway
+        option_bars = asyncio.run(self._fetch_option_bars(occ_symbols, bar_start, bar_end))
+
+        if option_bars.empty:
+            logger.warning("No option bars returned from gateway")
+            # Add empty contract columns
+            for col in [
+                "contract_hit_tp_first",
+                "contract_mfe",
+                "contract_mae",
+                "contract_mfe_adj",
+                "contract_mae_adj",
+                "contract_bars_to_hit",
+            ]:
+                labels[col] = pd.NA
+            return labels
+
+        logger.info("Fetched option bars", count=len(option_bars))
+
+        # Compute contract labels for each alert
+        contract_labels = []
+
+        for _, row in labels.iterrows():
+            alert_id = row["alert_id"]
+            occ_symbol = (
+                flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
+                if alert_id in flow_alerts["event_id"].values
+                else None
+            )
+
+            if occ_symbol is None or pd.isna(occ_symbol):
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            # Get option bars for this contract
+            contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
+            if contract_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            # Get entry price (option price at alert time)
+            ts_alert = row["ts_alert"]
+            entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
+            if entry_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            entry_price = entry_bars.iloc[-1]["close"]
+
+            # Get forward price path
+            future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(
+                self.contract_config.max_window_bars
+            )
+
+            if future_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            price_path = future_bars["close"].values
+
+            # Compute contract barrier outcome
+            outcome = _compute_contract_barrier_outcome(
+                price_path, entry_price, self.contract_config, self.slippage_model
+            )
+            contract_labels.append(outcome)
+
+        # Merge contract labels into main DataFrame
+        contract_df = pd.DataFrame(contract_labels)
+        for col in contract_df.columns:
+            labels[col] = contract_df[col].values
+
+        return labels
+
+    async def _fetch_option_bars(
+        self,
+        occ_symbols: list[str],
+        start: datetime,
+        end: datetime,
+    ) -> pd.DataFrame:
+        """Fetch option bars from the Data Gateway API."""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # Batch symbols (API may have limits)
+                batch_size = 100
+                all_bars = []
+
+                for i in range(0, len(occ_symbols), batch_size):
+                    batch = occ_symbols[i : i + batch_size]
+                    symbols_param = ",".join(batch)
+
+                    response = await client.get(
+                        f"{self.gateway_url}/api/v1/alpaca/options/bars",
+                        params={
+                            "symbols": symbols_param,
+                            "timeframe": "1Day",
+                            "start": start.isoformat(),
+                            "end": end.isoformat(),
+                        },
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        bars = data.get("data", {}).get("bars", [])
+                        all_bars.extend(bars)
+                    else:
+                        logger.warning(
+                            "Option bars request failed",
+                            status=response.status_code,
+                            batch_size=len(batch),
+                        )
+
+                if not all_bars:
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(all_bars)
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+                return df
+
+        except Exception as e:
+            logger.error("Failed to fetch option bars", error=str(e))
+            return pd.DataFrame()
+
+    def _empty_contract_result(self) -> dict:
+        """Return empty contract label result."""
+        return {
+            "contract_hit_tp_first": pd.NA,
+            "contract_mfe": pd.NA,
+            "contract_mae": pd.NA,
+            "contract_mfe_adj": pd.NA,
+            "contract_mae_adj": pd.NA,
+            "contract_bars_to_hit": pd.NA,
+        }
+
     def _load_flow_alerts(
         self,
         start_date: datetime,
@@ -17700,7 +17885,6 @@ class AlertLabelsPipeline:
         required = ["event_id", "underlying", "ts_event", "put_call", "expiry"]
         missing = set(required) - set(alerts.columns)
         if missing:
-            # Map from Silver schema if needed
             column_map = {
                 "event_id": "id",
                 "underlying": "ticker",
@@ -17732,7 +17916,6 @@ class AlertLabelsPipeline:
         end_date: datetime,
     ) -> pd.DataFrame:
         """Load intraday (5-min) bars from Silver."""
-        # Try loading from intraday_bars dataset
         bars = self.client.read_silver(
             dataset="bars_5min",
             time_range=(start_date, end_date),
@@ -17740,7 +17923,6 @@ class AlertLabelsPipeline:
         )
 
         if bars.empty:
-            # Fallback to regular bars
             logger.warning("No intraday bars found, using daily bars")
             return self._load_bars(symbols, start_date, end_date)
 
@@ -17750,44 +17932,43 @@ class AlertLabelsPipeline:
         """Prepare labels DataFrame for Gold write."""
         df = labels.copy()
 
-        # Ensure required Gold columns exist
         if "instrument_key" not in df.columns:
-            # Use alert_id as instrument_key for alert entity
             df["instrument_key"] = df["alert_id"]
 
         if "ts_event" not in df.columns and "ts_alert" in df.columns:
             df["ts_event"] = df["ts_alert"]
 
-        # Ensure ts_available exists (anti-leakage)
         if "ts_available" not in df.columns:
-            # Default: label available 1 day after alert
             df["ts_available"] = df["ts_event"] + timedelta(days=1)
 
-        # Drop rows with NaN labels (insufficient data)
-        df = df.dropna(subset=["hit_tp_first"])
+        # Drop rows with no labels at all
+        label_cols = ["hit_tp_first", "contract_hit_tp_first"]
+        existing_cols = [c for c in label_cols if c in df.columns]
+        if existing_cols:
+            df = df.dropna(subset=existing_cols, how="all")
 
         return df
 
     def _compute_stats(self, labels: pd.DataFrame) -> dict[str, Any]:
         """Compute summary statistics from labels."""
-        valid = labels.dropna(subset=["hit_tp_first"])
+        stats = {}
 
-        if valid.empty:
-            return {
-                "win_rate": None,
-                "avg_mfe": None,
-                "avg_mae": None,
-            }
+        # Underlying stats
+        if "hit_tp_first" in labels.columns:
+            valid = labels.dropna(subset=["hit_tp_first"])
+            if not valid.empty:
+                stats["underlying_win_rate"] = float(valid["hit_tp_first"].mean())
+                stats["avg_mfe"] = float(valid["mfe"].mean()) if "mfe" in valid else None
+                stats["by_horizon"] = valid.groupby("horizon")["hit_tp_first"].mean().to_dict()
 
-        return {
-            "win_rate": float(valid["hit_tp_first"].mean()),
-            "avg_mfe": float(valid["mfe"].mean()) if "mfe" in valid else None,
-            "avg_mae": float(valid["mae"].mean()) if "mae" in valid else None,
-            "by_horizon": valid.groupby("horizon")["hit_tp_first"].mean().to_dict(),
-            "by_regime": valid.groupby("vix_regime")["hit_tp_first"].mean().to_dict()
-            if "vix_regime" in valid
-            else None,
-        }
+        # Contract stats
+        if "contract_hit_tp_first" in labels.columns:
+            valid = labels.dropna(subset=["contract_hit_tp_first"])
+            if not valid.empty:
+                stats["contract_win_rate"] = float(valid["contract_hit_tp_first"].mean())
+                stats["contract_avg_mfe"] = float(valid["contract_mfe"].mean()) if "contract_mfe" in valid else None
+
+        return stats
 
 
 def main():
@@ -17796,10 +17977,12 @@ def main():
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--intraday", action="store_true", help="Use intraday bars")
+    parser.add_argument("--no-contract", action="store_true", help="Skip contract labels")
     parser.add_argument("--dry-run", action="store_true", help="Don't write output")
     parser.add_argument("--output", default="labels_alert_barriers", help="Output dataset name")
     parser.add_argument("--project", default="quant", help="Project name")
     parser.add_argument("--version", default="v1", help="Version string")
+    parser.add_argument("--gateway-url", default=DATA_GATEWAY_URL, help="Data Gateway URL")
 
     args = parser.parse_args()
 
@@ -17807,20 +17990,24 @@ def main():
         output_dataset=args.output,
         project=args.project,
         version=args.version,
+        gateway_url=args.gateway_url,
     )
 
     stats = pipeline.run(
         start_date=args.start,
         end_date=args.end,
         use_intraday_bars=args.intraday,
+        use_contract_labels=not args.no_contract,
         dry_run=args.dry_run,
     )
 
     print(f"\nPipeline complete: {stats['status']}")
     print(f"  Alerts: {stats.get('alerts_count', 0)}")
     print(f"  Labels: {stats.get('labels_count', 0)}")
-    if stats.get("win_rate") is not None:
-        print(f"  Win rate: {stats['win_rate']:.1%}")
+    if stats.get("underlying_win_rate") is not None:
+        print(f"  Underlying win rate: {stats['underlying_win_rate']:.1%}")
+    if stats.get("contract_win_rate") is not None:
+        print(f"  Contract win rate: {stats['contract_win_rate']:.1%}")
     if stats.get("output_path"):
         print(f"  Output: {stats['output_path']}")
 
@@ -17861,13 +18048,12 @@ This follows the "referee not fan fiction" approach:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
 
 import numpy as np
 import pandas as pd
-
 
 # =============================================================================
 # Constants
@@ -17912,7 +18098,7 @@ class BarrierConfig:
     atr_period: int  # ATR lookback period
 
     @classmethod
-    def intraday(cls) -> "BarrierConfig":
+    def intraday(cls) -> BarrierConfig:
         """Intraday config: tight barriers, 2h max window (assuming 5-min bars)."""
         return cls(
             horizon=AlertHorizon.INTRADAY,
@@ -17923,7 +18109,7 @@ class BarrierConfig:
         )
 
     @classmethod
-    def swing(cls) -> "BarrierConfig":
+    def swing(cls) -> BarrierConfig:
         """Swing config: wider barriers, 5-day max window (daily bars)."""
         return cls(
             horizon=AlertHorizon.SWING,
@@ -17934,7 +18120,7 @@ class BarrierConfig:
         )
 
     @classmethod
-    def leap(cls) -> "BarrierConfig":
+    def leap(cls) -> BarrierConfig:
         """LEAP config: widest barriers, 30-day max window (daily bars)."""
         return cls(
             horizon=AlertHorizon.LEAP,
@@ -17946,12 +18132,43 @@ class BarrierConfig:
 
 
 @dataclass
+class ContractBarrierConfig:
+    """Configuration for option contract TP/SL barriers.
+
+    Unlike underlying barriers (ATR-scaled), contract barriers are
+    typically fixed percentages since option returns are already
+    volatility-adjusted.
+    """
+
+    tp_pct: float = 0.25  # Take profit at +25%
+    sl_pct: float = 0.15  # Stop loss at -15%
+    max_window_bars: int = 5  # Max bars to track
+
+    @classmethod
+    def aggressive(cls) -> ContractBarrierConfig:
+        """Aggressive: quick scalp targets."""
+        return cls(tp_pct=0.15, sl_pct=0.10, max_window_bars=3)
+
+    @classmethod
+    def moderate(cls) -> ContractBarrierConfig:
+        """Moderate: balanced risk/reward."""
+        return cls(tp_pct=0.25, sl_pct=0.15, max_window_bars=5)
+
+    @classmethod
+    def conservative(cls) -> ContractBarrierConfig:
+        """Conservative: wider targets for swing trades."""
+        return cls(tp_pct=0.50, sl_pct=0.25, max_window_bars=10)
+
+
+@dataclass
 class SlippageModel:
     """Model for execution costs and slippage."""
 
     spread_pct: float = 0.0005  # Half spread (entry cost)
     slippage_pct: float = 0.0005  # Market impact
     commission_per_contract: float = 0.65
+    # Option-specific: wider spreads
+    option_spread_pct: float = 0.02  # Options often have 2-5% spreads
 
     @property
     def total_entry_cost_pct(self) -> float:
@@ -17963,6 +18180,11 @@ class SlippageModel:
         """Total cost to enter and exit as % of notional."""
         return 2 * self.total_entry_cost_pct
 
+    @property
+    def option_roundtrip_cost_pct(self) -> float:
+        """Total cost for option roundtrip."""
+        return 2 * self.option_spread_pct
+
     def adjust_mfe(self, mfe: float) -> float:
         """Adjust MFE for execution costs."""
         return mfe - self.total_roundtrip_cost_pct
@@ -17970,6 +18192,14 @@ class SlippageModel:
     def adjust_mae(self, mae: float) -> float:
         """Adjust MAE for execution costs (makes it worse)."""
         return mae - self.total_entry_cost_pct
+
+    def adjust_option_mfe(self, mfe: float) -> float:
+        """Adjust option MFE for wider spreads."""
+        return mfe - self.option_roundtrip_cost_pct
+
+    def adjust_option_mae(self, mae: float) -> float:
+        """Adjust option MAE for entry spread."""
+        return mae - self.option_spread_pct
 
 
 def classify_horizon(dte: int) -> AlertHorizon:
@@ -18018,9 +18248,7 @@ def compute_atr(
     ).max(axis=1)
 
     # Compute ATR as rolling mean of TR per instrument
-    df["atr"] = df.groupby("instrument_key")["_tr"].transform(
-        lambda x: x.rolling(window=period, min_periods=1).mean()
-    )
+    df["atr"] = df.groupby("instrument_key")["_tr"].transform(lambda x: x.rolling(window=period, min_periods=1).mean())
 
     # Drop temporary column
     df = df.drop(columns=["_tr"])
@@ -18138,6 +18366,86 @@ def _compute_barrier_outcome(
     }
 
 
+def _compute_contract_barrier_outcome(
+    option_price_path: np.ndarray,
+    entry_price: float,
+    config: ContractBarrierConfig,
+    slippage_model: SlippageModel | None = None,
+) -> dict:
+    """Compute barrier-based outcome for an option contract price path.
+
+    Unlike underlying barriers which use ATR scaling, contract barriers
+    use fixed percentage thresholds (e.g., +25% TP, -15% SL) since options
+    already embed volatility.
+
+    Args:
+        option_price_path: Array of option mid prices after entry
+        entry_price: Option price at alert time
+        config: ContractBarrierConfig with TP/SL percentages
+        slippage_model: Optional execution cost model
+
+    Returns:
+        Dict with contract-based labels
+    """
+    if len(option_price_path) == 0 or entry_price <= 0:
+        return {
+            "contract_hit_tp_first": np.nan,
+            "contract_mfe": np.nan,
+            "contract_mae": np.nan,
+            "contract_mfe_adj": np.nan,
+            "contract_mae_adj": np.nan,
+            "contract_bars_to_hit": np.nan,
+        }
+
+    # Compute returns (options are always long, so no call/put flip needed)
+    returns = (option_price_path - entry_price) / entry_price
+
+    # MFE/MAE
+    mfe = float(np.nanmax(returns))
+    mae = float(np.nanmin(returns))
+
+    # Adjust for option spreads
+    if slippage_model:
+        mfe_adj = slippage_model.adjust_option_mfe(mfe)
+        mae_adj = slippage_model.adjust_option_mae(mae)
+    else:
+        mfe_adj = mfe
+        mae_adj = mae
+
+    # Barrier thresholds (adjust TP for roundtrip costs)
+    tp_threshold = config.tp_pct
+    sl_threshold = config.sl_pct
+
+    if slippage_model:
+        tp_threshold = config.tp_pct + slippage_model.option_roundtrip_cost_pct
+
+    # Find barrier hits
+    tp_hit_idx = np.nonzero(returns >= tp_threshold)[0]
+    sl_hit_idx = np.nonzero(returns <= -sl_threshold)[0]
+
+    tp_first_bar = tp_hit_idx[0] if len(tp_hit_idx) > 0 else np.inf
+    sl_first_bar = sl_hit_idx[0] if len(sl_hit_idx) > 0 else np.inf
+
+    if tp_first_bar < sl_first_bar:
+        hit_tp_first = 1
+        bars_to_hit = int(tp_first_bar) + 1
+    elif sl_first_bar < tp_first_bar:
+        hit_tp_first = 0
+        bars_to_hit = int(sl_first_bar) + 1
+    else:
+        hit_tp_first = 0
+        bars_to_hit = np.nan
+
+    return {
+        "contract_hit_tp_first": hit_tp_first,
+        "contract_mfe": mfe,
+        "contract_mae": mae,
+        "contract_mfe_adj": mfe_adj,
+        "contract_mae_adj": mae_adj,
+        "contract_bars_to_hit": bars_to_hit,
+    }
+
+
 def _process_single_alert(
     alert: pd.Series,
     bars: pd.DataFrame,
@@ -18177,9 +18485,7 @@ def _process_single_alert(
     sl_threshold = config.sl_atr_mult * atr_at_alert / spot_at_alert
 
     # Get forward price path
-    future_bars = underlying_bars[underlying_bars["bar_start_ts"] > ts_alert].head(
-        config.max_window_bars
-    )
+    future_bars = underlying_bars[underlying_bars["bar_start_ts"] > ts_alert].head(config.max_window_bars)
     if future_bars.empty:
         return _empty_result(alert_id, underlying, put_call, horizon, dte)
 
@@ -18187,9 +18493,7 @@ def _process_single_alert(
     is_call = put_call.upper() == "C"
 
     # Compute barrier outcome
-    outcome = _compute_barrier_outcome(
-        price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model
-    )
+    outcome = _compute_barrier_outcome(price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model)
 
     # Get VIX at alert time (regime context)
     vix_at_alert = None
@@ -18380,9 +18684,7 @@ def compute_barrier_labels(
         horizon = classify_horizon(dte)
         config = configs.get(horizon, BarrierConfig.swing())
 
-        result = _process_single_alert(
-            alert, bars, spy_bars, vix_data, config, slippage_model
-        )
+        result = _process_single_alert(alert, bars, spy_bars, vix_data, config, slippage_model)
         results.append(result)
 
     return pd.DataFrame(results)
@@ -18416,9 +18718,7 @@ def compute_multi_horizon_labels(
 
     # Split by horizon
     intraday_alerts = alerts[alerts["horizon"] == AlertHorizon.INTRADAY]
-    swing_leap_alerts = alerts[
-        alerts["horizon"].isin([AlertHorizon.SWING, AlertHorizon.LEAP])
-    ]
+    swing_leap_alerts = alerts[alerts["horizon"].isin([AlertHorizon.SWING, AlertHorizon.LEAP])]
 
     results = []
 
@@ -37335,6 +37635,1542 @@ def get_version_manager() -> LakeFSVersionManager:
     if _manager is None:
         _manager = LakeFSVersionManager()
     return _manager
+
+
+
+================================================
+FILE: heber/watch/__init__.py
+================================================
+"""Alert Watch Service - Real-time tracking of flow alert outcomes.
+
+This package provides streaming infrastructure for tracking option contract
+outcomes after flow alerts fire. Instead of relying on historical data,
+it polls quotes in real-time to determine if TP/SL barriers are hit.
+"""
+
+from heber.watch.checker import BarrierChecker, outcome_to_label_row
+from heber.watch.consumer import AlertWatchConsumer
+from heber.watch.manager import WatchManager
+from heber.watch.models import (
+    POLL_CONFIG,
+    AlertWatch,
+    WatchHorizon,
+    WatchKeys,
+    WatchOutcome,
+    WatchSnapshot,
+    WatchStatus,
+)
+from heber.watch.poller import SnapshotPoller
+from heber.watch.writer import LabelWriter, WatchService, run_watch_service
+
+__all__ = [
+    # Models
+    "AlertWatch",
+    "WatchSnapshot",
+    "WatchOutcome",
+    "WatchStatus",
+    "WatchHorizon",
+    "WatchKeys",
+    "POLL_CONFIG",
+    # Services
+    "WatchManager",
+    "SnapshotPoller",
+    "BarrierChecker",
+    "AlertWatchConsumer",
+    "LabelWriter",
+    "WatchService",
+    # Functions
+    "outcome_to_label_row",
+    "run_watch_service",
+]
+
+
+
+================================================
+FILE: heber/watch/checker.py
+================================================
+"""Barrier Checker - Detects TP/SL hits and computes final labels."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import numpy as np
+import structlog
+
+from heber.features.templates.alert_labels import SlippageModel
+from heber.watch.manager import WatchManager
+from heber.watch.models import (
+    AlertWatch,
+    WatchOutcome,
+    WatchStatus,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+class BarrierChecker:
+    """Checks if watches have hit TP/SL barriers and computes labels.
+
+    This is called after new snapshots are added or on a schedule
+    to determine which watches have reached an outcome.
+    """
+
+    def __init__(
+        self,
+        watch_manager: WatchManager,
+        slippage_model: SlippageModel | None = None,
+    ):
+        """Initialize the checker.
+
+        Args:
+            watch_manager: WatchManager instance
+            slippage_model: Optional execution cost model
+        """
+        self.manager = watch_manager
+        self.slippage = slippage_model or SlippageModel()
+
+    def check_all(self) -> list[WatchOutcome]:
+        """Check all active watches for barrier hits.
+
+        Returns:
+            List of completed WatchOutcomes
+        """
+        active = self.manager.get_active_watches()
+        outcomes = []
+
+        for watch in active:
+            outcome = self.check_watch(watch)
+            if outcome:
+                outcomes.append(outcome)
+
+        return outcomes
+
+    def check_watch(self, watch: AlertWatch) -> WatchOutcome | None:
+        """Check a single watch for barrier hit.
+
+        Args:
+            watch: The watch to check
+
+        Returns:
+            WatchOutcome if complete, None if still watching
+        """
+        snapshots = self.manager.get_snapshots(watch.watch_id)
+
+        if not snapshots:
+            return None
+
+        # Build return path
+        returns = []
+        for snap in snapshots:
+            if snap.mid_px and watch.entry_price > 0:
+                ret = (snap.mid_px - watch.entry_price) / watch.entry_price
+                returns.append(ret)
+            elif snap.return_pct is not None:
+                returns.append(snap.return_pct)
+
+        if not returns:
+            return None
+
+        returns_arr = np.array(returns)
+
+        # Compute MFE/MAE
+        mfe = float(np.nanmax(returns_arr))
+        mae = float(np.nanmin(returns_arr))
+
+        # Check barriers
+        status, bars_to_hit = self._check_barriers(
+            returns_arr,
+            watch.tp_threshold,
+            watch.sl_threshold,
+        )
+
+        # Check expiry
+        now = datetime.now(UTC)
+        if status == WatchStatus.WATCHING and now >= watch.window_end:
+            status = WatchStatus.EXPIRED
+            bars_to_hit = len(returns)
+
+        # Still watching
+        if status == WatchStatus.WATCHING:
+            return None
+
+        # Determine final return
+        if bars_to_hit and bars_to_hit <= len(returns):
+            outcome_return = returns[bars_to_hit - 1]
+        else:
+            outcome_return = returns[-1]
+
+        # Complete the watch
+        self.manager.complete_watch(
+            watch.watch_id,
+            status,
+            outcome_return,
+            bars_to_hit,
+        )
+
+        # Build outcome
+        window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
+
+        outcome = WatchOutcome(
+            watch_id=watch.watch_id,
+            alert_id=watch.alert_id,
+            occ_symbol=watch.occ_symbol,
+            underlying=watch.underlying,
+            put_call=watch.put_call,
+            horizon=watch.horizon,
+            status=status,
+            outcome_time=now,
+            outcome_return=outcome_return,
+            bars_to_hit=bars_to_hit,
+            mfe=mfe,
+            mae=mae,
+            mfe_adj=self.slippage.adjust_option_mfe(mfe),
+            mae_adj=self.slippage.adjust_option_mae(mae),
+            hit_tp_first=1 if status == WatchStatus.HIT_TP else 0,
+            entry_price=watch.entry_price,
+            spot_at_alert=watch.spot_at_alert,
+            alert_time=watch.alert_time,
+            window_duration_hours=window_hours,
+        )
+
+        logger.info(
+            "Watch outcome determined",
+            watch_id=watch.watch_id,
+            status=status.value,
+            hit_tp_first=outcome.hit_tp_first,
+            mfe=mfe,
+            mae=mae,
+        )
+
+        return outcome
+
+    def _check_barriers(
+        self,
+        returns: np.ndarray,
+        tp_threshold: float,
+        sl_threshold: float,
+    ) -> tuple[WatchStatus, int | None]:
+        """Check if TP or SL barrier has been hit.
+
+        Args:
+            returns: Array of return values
+            tp_threshold: Take profit threshold
+            sl_threshold: Stop loss threshold
+
+        Returns:
+            (status, bars_to_hit)
+        """
+        # Adjust TP for execution costs
+        effective_tp = tp_threshold + self.slippage.option_roundtrip_cost_pct
+
+        tp_hits = np.nonzero(returns >= effective_tp)[0]
+        sl_hits = np.nonzero(returns <= -sl_threshold)[0]
+
+        tp_first = tp_hits[0] if len(tp_hits) > 0 else float("inf")
+        sl_first = sl_hits[0] if len(sl_hits) > 0 else float("inf")
+
+        if tp_first < sl_first:
+            return WatchStatus.HIT_TP, int(tp_first) + 1
+        elif sl_first < tp_first:
+            return WatchStatus.HIT_SL, int(sl_first) + 1
+        else:
+            return WatchStatus.WATCHING, None
+
+
+def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
+    """Convert WatchOutcome to a label row for Gold storage.
+
+    Args:
+        outcome: Completed watch outcome
+
+    Returns:
+        Dict suitable for DataFrame row
+    """
+    return {
+        # Identifiers
+        "alert_id": outcome.alert_id,
+        "watch_id": outcome.watch_id,
+        "instrument_key": outcome.alert_id,  # For Feast entity
+        # Contract info
+        "occ_symbol": outcome.occ_symbol,
+        "underlying": outcome.underlying,
+        "put_call": outcome.put_call,
+        # Timing
+        "ts_event": outcome.alert_time,
+        "ts_available": outcome.outcome_time,
+        "horizon": outcome.horizon,
+        # THE LABEL
+        "contract_hit_tp_first": outcome.hit_tp_first,
+        "outcome_reason": outcome.status,
+        # Path stats
+        "contract_mfe": outcome.mfe,
+        "contract_mae": outcome.mae,
+        "contract_mfe_adj": outcome.mfe_adj,
+        "contract_mae_adj": outcome.mae_adj,
+        "contract_bars_to_hit": outcome.bars_to_hit,
+        "outcome_return": outcome.outcome_return,
+        # Context
+        "entry_price": outcome.entry_price,
+        "spot_at_alert": outcome.spot_at_alert,
+        "window_duration_hours": outcome.window_duration_hours,
+    }
+
+
+
+================================================
+FILE: heber/watch/consumer.py
+================================================
+"""Alert Watch Consumer - Creates watches from flow_alerts stream.
+
+Listens to the flow_alerts Redis stream and automatically creates
+watches for each incoming alert.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
+
+import httpx
+import redis
+import structlog
+
+from heber.features.templates.alert_labels import (
+    AlertHorizon,
+    ContractBarrierConfig,
+    classify_horizon,
+)
+from heber.watch.manager import WatchManager
+from heber.watch.models import WatchHorizon
+
+logger = structlog.get_logger(__name__)
+
+# Stream configuration
+FLOW_ALERTS_STREAM = "heber:stream:flow_alerts"
+CONSUMER_GROUP = "watch-consumer"
+CONSUMER_NAME = "watch-consumer-1"
+DATA_GATEWAY_URL = "http://localhost:8000"
+
+
+def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
+    """Convert AlertHorizon enum to WatchHorizon enum."""
+    mapping = {
+        AlertHorizon.INTRADAY: WatchHorizon.INTRADAY,
+        AlertHorizon.SWING: WatchHorizon.SWING,
+        AlertHorizon.LEAP: WatchHorizon.LEAP,
+    }
+    return mapping.get(horizon, WatchHorizon.SWING)
+
+
+class AlertWatchConsumer:
+    """Consumes flow alerts and creates watches.
+
+    Runs as a background service, listening to the flow_alerts Redis stream.
+    """
+
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        watch_manager: WatchManager,
+        contract_config: ContractBarrierConfig | None = None,
+        gateway_url: str = DATA_GATEWAY_URL,
+    ):
+        """Initialize the consumer.
+
+        Args:
+            redis_client: Redis client
+            watch_manager: WatchManager instance
+            contract_config: Barrier configuration for contracts
+            gateway_url: Data Gateway URL for fetching entry prices
+        """
+        self.redis = redis_client
+        self.manager = watch_manager
+        self.config = contract_config or ContractBarrierConfig.moderate()
+        self.gateway_url = gateway_url
+        self._running = False
+
+    def setup_consumer_group(self) -> None:
+        """Create consumer group if it doesn't exist."""
+        try:
+            self.redis.xgroup_create(
+                FLOW_ALERTS_STREAM,
+                CONSUMER_GROUP,
+                id="0",
+                mkstream=True,
+            )
+            logger.info(
+                "Created consumer group",
+                stream=FLOW_ALERTS_STREAM,
+                group=CONSUMER_GROUP,
+            )
+        except redis.ResponseError as e:
+            if "BUSYGROUP" in str(e):
+                # Group already exists
+                pass
+            else:
+                raise
+
+    async def run(self) -> None:
+        """Run the consumer as a continuous service."""
+        self._running = True
+        self.setup_consumer_group()
+
+        logger.info(
+            "Starting alert watch consumer",
+            stream=FLOW_ALERTS_STREAM,
+            group=CONSUMER_GROUP,
+        )
+
+        while self._running:
+            try:
+                # Read new messages from stream
+                messages = self.redis.xreadgroup(
+                    CONSUMER_GROUP,
+                    CONSUMER_NAME,
+                    {FLOW_ALERTS_STREAM: ">"},
+                    count=100,
+                    block=5000,
+                )
+
+                if messages:
+                    for _stream, entries in messages:
+                        for msg_id, data in entries:
+                            await self._process_alert(msg_id, data)
+                            # Acknowledge message
+                            self.redis.xack(FLOW_ALERTS_STREAM, CONSUMER_GROUP, msg_id)
+
+            except Exception as e:
+                logger.error("Consumer error", error=str(e))
+                await asyncio.sleep(1)
+
+    def stop(self) -> None:
+        """Stop the consumer."""
+        self._running = False
+        logger.info("Alert watch consumer stopped")
+
+    async def _process_alert(self, msg_id: str, data: dict) -> None:
+        """Process a single alert and create a watch.
+
+        Args:
+            msg_id: Redis message ID
+            data: Alert data from stream
+        """
+        try:
+            # Parse alert data
+            alert = self._parse_alert(data)
+
+            if not alert:
+                logger.warning("Could not parse alert", msg_id=msg_id)
+                return
+
+            # Skip if no OCC symbol
+            if not alert.get("occ_symbol"):
+                logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
+                return
+
+            # Determine horizon based on DTE
+            dte = alert.get("dte", 5)
+            alert_horizon = classify_horizon(dte)
+            watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+
+            # Get entry price (option quote at alert time)
+            entry_price = await self._get_entry_price(alert["occ_symbol"])
+
+            if not entry_price or entry_price <= 0:
+                logger.warning(
+                    "Could not get entry price",
+                    occ_symbol=alert["occ_symbol"],
+                )
+                # Use contract_px from alert if available
+                entry_price = alert.get("contract_px", 1.0)
+
+            # Create watch
+            watch = self.manager.create_watch(
+                alert_id=alert["id"],
+                occ_symbol=alert["occ_symbol"],
+                underlying=alert["underlying"],
+                put_call=alert["put_call"],
+                expiry=alert.get("expiry", ""),
+                strike=alert.get("strike", 0.0),
+                entry_price=entry_price,
+                spot_at_alert=alert.get("spot_px", 0.0),
+                alert_time=alert.get("ts_event", datetime.now(UTC)),
+                horizon=watch_horizon,
+                tp_threshold=self.config.tp_pct,
+                sl_threshold=self.config.sl_pct,
+            )
+
+            logger.info(
+                "Created watch from alert",
+                watch_id=watch.watch_id,
+                alert_id=alert["id"],
+                occ_symbol=alert["occ_symbol"],
+                horizon=watch_horizon.value,
+            )
+
+        except Exception as e:
+            logger.error(
+                "Failed to process alert",
+                msg_id=msg_id,
+                error=str(e),
+            )
+
+    def _parse_alert(self, data: dict) -> dict | None:
+        """Parse alert data from stream message.
+
+        Args:
+            data: Raw message data (may be bytes or nested JSON)
+
+        Returns:
+            Parsed alert dict or None
+        """
+        try:
+            # Handle bytes keys/values
+            parsed = {}
+            for k, v in data.items():
+                key = k.decode() if isinstance(k, bytes) else k
+                val = v.decode() if isinstance(v, bytes) else v
+
+                # Try to parse JSON values
+                if isinstance(val, str) and val.startswith("{"):
+                    try:
+                        val = json.loads(val)
+                    except json.JSONDecodeError:
+                        pass
+
+                parsed[key] = val
+
+            # If data was nested JSON
+            if "data" in parsed and isinstance(parsed["data"], dict):
+                parsed = {**parsed, **parsed["data"]}
+
+            # Map common field names
+            result = {
+                "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
+                "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
+                "underlying": parsed.get("underlying") or parsed.get("ticker"),
+                "put_call": parsed.get("put_call") or parsed.get("type", "C")[0].upper(),
+                "expiry": parsed.get("expiry"),
+                "strike": float(parsed.get("strike", 0) or 0),
+                "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
+                "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
+            }
+
+            # Calculate DTE if expiry available
+            if result["expiry"]:
+                try:
+                    from datetime import date
+
+                    exp_date = datetime.strptime(str(result["expiry"])[:10], "%Y-%m-%d").date()
+                    result["dte"] = (exp_date - date.today()).days
+                except Exception:
+                    result["dte"] = 5
+
+            # Parse timestamp
+            ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
+            if ts:
+                if isinstance(ts, str):
+                    result["ts_event"] = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                elif isinstance(ts, int | float):
+                    result["ts_event"] = datetime.fromtimestamp(ts, tz=UTC)
+                else:
+                    result["ts_event"] = datetime.now(UTC)
+            else:
+                result["ts_event"] = datetime.now(UTC)
+
+            return result
+
+        except Exception as e:
+            logger.error("Failed to parse alert", error=str(e))
+            return None
+
+    async def _get_entry_price(self, occ_symbol: str) -> float | None:
+        """Get latest option quote from Data Gateway.
+
+        Args:
+            occ_symbol: OCC option symbol
+
+        Returns:
+            Mid price or None
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.gateway_url}/api/v1/alpaca/options/quotes",
+                    params={"symbols": occ_symbol},
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    quotes = data.get("data", {}).get("quotes", {})
+                    quote = quotes.get(occ_symbol)
+
+                    if quote:
+                        bid = quote.get("bp") or quote.get("bid_price", 0)
+                        ask = quote.get("ap") or quote.get("ask_price", 0)
+
+                        if bid and ask:
+                            return (bid + ask) / 2
+                        return quote.get("last_price")
+
+                return None
+
+        except Exception as e:
+            logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
+            return None
+
+
+
+================================================
+FILE: heber/watch/manager.py
+================================================
+"""Watch Manager - CRUD operations for alert watches in Redis."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import structlog
+
+from heber.watch.models import (
+    POLL_CONFIG,
+    AlertWatch,
+    WatchHorizon,
+    WatchKeys,
+    WatchSnapshot,
+    WatchStatus,
+)
+
+logger = structlog.get_logger(__name__)
+
+
+class WatchManager:
+    """Manages alert watches in Redis.
+
+    Provides CRUD operations and query methods for the watch list.
+    """
+
+    def __init__(self, redis_client: Any):
+        """Initialize with Redis client.
+
+        Args:
+            redis_client: Redis client (sync or async)
+        """
+        self.redis = redis_client
+
+    def create_watch(
+        self,
+        alert_id: str,
+        occ_symbol: str,
+        underlying: str,
+        put_call: str,
+        expiry: str,
+        strike: float,
+        entry_price: float,
+        spot_at_alert: float,
+        alert_time: datetime,
+        horizon: WatchHorizon,
+        tp_threshold: float,
+        sl_threshold: float,
+        atr_at_alert: float | None = None,
+    ) -> AlertWatch:
+        """Create a new alert watch.
+
+        Args:
+            alert_id: UW alert ID
+            occ_symbol: OCC option symbol
+            underlying: Stock ticker
+            put_call: C or P
+            expiry: Expiry date string
+            strike: Strike price
+            entry_price: Option mid at alert
+            spot_at_alert: Underlying price at alert
+            alert_time: When alert fired
+            horizon: Trading horizon
+            tp_threshold: Take profit threshold
+            sl_threshold: Stop loss threshold
+            atr_at_alert: ATR value (optional)
+
+        Returns:
+            Created AlertWatch
+        """
+        watch_id = str(uuid.uuid4())
+
+        # Calculate window end based on horizon
+        config = POLL_CONFIG[horizon]
+        window_end = alert_time + timedelta(hours=config["max_duration_hours"])
+
+        watch = AlertWatch(
+            watch_id=watch_id,
+            alert_id=alert_id,
+            occ_symbol=occ_symbol,
+            underlying=underlying,
+            put_call=put_call,
+            expiry=expiry,
+            strike=strike,
+            entry_price=entry_price,
+            spot_at_alert=spot_at_alert,
+            atr_at_alert=atr_at_alert,
+            alert_time=alert_time,
+            window_end=window_end,
+            horizon=horizon,
+            tp_threshold=tp_threshold,
+            sl_threshold=sl_threshold,
+            status=WatchStatus.WATCHING,
+        )
+
+        # Store in Redis
+        self._save_watch(watch)
+
+        logger.info(
+            "Created alert watch",
+            watch_id=watch_id,
+            alert_id=alert_id,
+            occ_symbol=occ_symbol,
+            horizon=horizon.value,
+            window_end=window_end.isoformat(),
+        )
+
+        return watch
+
+    def get_watch(self, watch_id: str) -> AlertWatch | None:
+        """Get a watch by ID."""
+        key = WatchKeys.watch_key(watch_id)
+        data = self.redis.get(key)
+
+        if not data:
+            return None
+
+        return AlertWatch.model_validate_json(data)
+
+    def get_active_watches(self) -> list[AlertWatch]:
+        """Get all watches with WATCHING status."""
+        watch_ids = self.redis.smembers(WatchKeys.ACTIVE_WATCHES)
+
+        watches = []
+        for watch_id in watch_ids:
+            watch = self.get_watch(watch_id)
+            if watch and watch.status == WatchStatus.WATCHING:
+                watches.append(watch)
+
+        return watches
+
+    def get_watches_for_symbol(self, occ_symbol: str) -> list[AlertWatch]:
+        """Get all watches for a specific contract."""
+        key = WatchKeys.by_symbol_key(occ_symbol)
+        watch_ids = self.redis.smembers(key)
+
+        watches = []
+        for watch_id in watch_ids:
+            watch = self.get_watch(watch_id)
+            if watch:
+                watches.append(watch)
+
+        return watches
+
+    def update_watch_price(
+        self,
+        watch_id: str,
+        current_price: float,
+        timestamp: datetime,
+    ) -> AlertWatch | None:
+        """Update watch with new price and compute metrics.
+
+        Args:
+            watch_id: Watch ID
+            current_price: Latest option mid price
+            timestamp: Snapshot timestamp
+
+        Returns:
+            Updated AlertWatch or None if not found
+        """
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return None
+
+        # Compute return
+        current_return = (current_price - watch.entry_price) / watch.entry_price
+
+        # Update MFE/MAE
+        mfe = max(watch.mfe or -float("inf"), current_return)
+        mae = min(watch.mae or float("inf"), current_return)
+
+        # Update watch
+        watch.current_price = current_price
+        watch.current_return = current_return
+        watch.mfe = mfe
+        watch.mae = mae
+        watch.snapshot_count += 1
+        watch.updated_at = datetime.now(UTC)
+
+        self._save_watch(watch)
+
+        return watch
+
+    def complete_watch(
+        self,
+        watch_id: str,
+        status: WatchStatus,
+        outcome_return: float,
+        bars_to_hit: int | None = None,
+    ) -> AlertWatch | None:
+        """Mark watch as complete with final outcome.
+
+        Args:
+            watch_id: Watch ID
+            status: Final status (HIT_TP, HIT_SL, EXPIRED)
+            outcome_return: Final return at outcome
+            bars_to_hit: Number of snapshots until barrier (if any)
+
+        Returns:
+            Updated AlertWatch
+        """
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return None
+
+        watch.status = status
+        watch.outcome_time = datetime.now(UTC)
+        watch.outcome_return = outcome_return
+        watch.bars_to_hit = bars_to_hit
+        watch.updated_at = datetime.now(UTC)
+
+        self._save_watch(watch)
+
+        # Remove from active set
+        self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch_id)
+
+        logger.info(
+            "Completed alert watch",
+            watch_id=watch_id,
+            status=status.value,
+            outcome_return=outcome_return,
+        )
+
+        return watch
+
+    def add_snapshot(self, snapshot: WatchSnapshot) -> None:
+        """Add a price snapshot for a watch."""
+        key = WatchKeys.snapshots_key(snapshot.watch_id)
+        self.redis.rpush(key, snapshot.model_dump_json())
+
+    def get_snapshots(self, watch_id: str) -> list[WatchSnapshot]:
+        """Get all snapshots for a watch."""
+        key = WatchKeys.snapshots_key(watch_id)
+        data = self.redis.lrange(key, 0, -1)
+
+        return [WatchSnapshot.model_validate_json(d) for d in data]
+
+    def get_expired_watches(self) -> list[AlertWatch]:
+        """Get watches that have passed their window_end time."""
+        now = datetime.now(UTC)
+        active = self.get_active_watches()
+
+        return [w for w in active if w.window_end <= now]
+
+    def cleanup_expired(self) -> int:
+        """Mark expired watches as EXPIRED and remove from active.
+
+        Returns:
+            Number of watches expired
+        """
+        expired = self.get_expired_watches()
+
+        for watch in expired:
+            final_return = watch.current_return or 0.0
+            self.complete_watch(
+                watch.watch_id,
+                WatchStatus.EXPIRED,
+                final_return,
+                bars_to_hit=watch.snapshot_count,
+            )
+
+        logger.info("Cleaned up expired watches", count=len(expired))
+
+        return len(expired)
+
+    def delete_watch(self, watch_id: str) -> bool:
+        """Delete a watch and its snapshots."""
+        watch = self.get_watch(watch_id)
+        if not watch:
+            return False
+
+        # Remove from all indexes
+        self.redis.delete(WatchKeys.watch_key(watch_id))
+        self.redis.delete(WatchKeys.snapshots_key(watch_id))
+        self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch_id)
+        self.redis.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch_id)
+
+        return True
+
+    def _save_watch(self, watch: AlertWatch) -> None:
+        """Save watch to Redis."""
+        key = WatchKeys.watch_key(watch.watch_id)
+        self.redis.set(key, watch.model_dump_json())
+
+        # Add to active set if watching
+        if watch.status == WatchStatus.WATCHING:
+            self.redis.sadd(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+
+        # Add to symbol index
+        self.redis.sadd(
+            WatchKeys.by_symbol_key(watch.occ_symbol),
+            watch.watch_id,
+        )
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get watch list statistics."""
+        active = self.get_active_watches()
+
+        by_horizon = {}
+        for watch in active:
+            h = watch.horizon
+            by_horizon[h] = by_horizon.get(h, 0) + 1
+
+        return {
+            "active_count": len(active),
+            "by_horizon": by_horizon,
+        }
+
+
+
+================================================
+FILE: heber/watch/models.py
+================================================
+"""Alert Watch Models - Pydantic models for tracking active alerts.
+
+The watch list tracks flow alerts that need ongoing monitoring to determine
+if they would have produced acceptable trade outcomes.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class WatchStatus(str, Enum):
+    """Status of an alert watch."""
+
+    WATCHING = "watching"  # Actively being tracked
+    HIT_TP = "hit_tp"  # Take profit barrier hit
+    HIT_SL = "hit_sl"  # Stop loss barrier hit
+    EXPIRED = "expired"  # Window ended without barrier hit
+    ERROR = "error"  # Failed to track (e.g., no quotes available)
+
+
+class WatchHorizon(str, Enum):
+    """Trading horizon classification."""
+
+    INTRADAY = "intraday"  # 0-2 DTE, 5-min polling, 4h max
+    SWING = "swing"  # 3-21 DTE, 15-min polling, 5d max
+    LEAP = "leap"  # 22+ DTE, 1h polling, 30d max
+
+
+class AlertWatch(BaseModel):
+    """A watch entry for tracking an alert's outcome.
+
+    This is stored in Redis and updated as new quotes arrive.
+    """
+
+    watch_id: str = Field(..., description="Unique watch identifier (UUID)")
+    alert_id: str = Field(..., description="Original UW alert ID")
+
+    # Contract identification
+    occ_symbol: str = Field(..., description="OCC option symbol")
+    underlying: str = Field(..., description="Underlying stock ticker")
+    put_call: str = Field(..., description="C or P")
+    expiry: str = Field(..., description="Option expiry date (YYYY-MM-DD)")
+    strike: float = Field(..., description="Strike price")
+
+    # Entry prices
+    entry_price: float = Field(..., description="Option mid at alert time")
+    spot_at_alert: float = Field(..., description="Underlying price at alert")
+    atr_at_alert: float | None = Field(None, description="ATR for underlying at alert")
+
+    # Timing
+    alert_time: datetime = Field(..., description="When alert fired")
+    window_end: datetime = Field(..., description="When to stop watching")
+    horizon: WatchHorizon = Field(..., description="Trading horizon")
+
+    # Barrier thresholds
+    tp_threshold: float = Field(..., description="Take profit threshold (decimal)")
+    sl_threshold: float = Field(..., description="Stop loss threshold (decimal)")
+
+    # Tracking state
+    status: WatchStatus = Field(default=WatchStatus.WATCHING)
+    current_price: float | None = Field(None, description="Latest option price")
+    current_return: float | None = Field(None, description="Current return")
+    mfe: float | None = Field(None, description="Max favorable excursion so far")
+    mae: float | None = Field(None, description="Max adverse excursion so far")
+    snapshot_count: int = Field(default=0, description="Number of snapshots collected")
+
+    # Outcome (populated when complete)
+    outcome_time: datetime | None = Field(None, description="When outcome determined")
+    outcome_return: float | None = Field(None, description="Final return at outcome")
+    bars_to_hit: int | None = Field(None, description="Snapshots until barrier hit")
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        use_enum_values = True
+
+
+class WatchSnapshot(BaseModel):
+    """A single price snapshot for a watched contract."""
+
+    watch_id: str
+    occ_symbol: str
+    timestamp: datetime
+
+    # Prices
+    bid_px: float | None = None
+    ask_px: float | None = None
+    mid_px: float | None = None
+    last_px: float | None = None
+
+    # Underlying context
+    underlying_price: float | None = None
+
+    # Computed
+    return_pct: float | None = None  # (mid - entry) / entry
+
+
+class WatchOutcome(BaseModel):
+    """Final outcome when watch completes."""
+
+    watch_id: str
+    alert_id: str
+    occ_symbol: str
+    underlying: str
+    put_call: str
+    horizon: str
+
+    # Outcome
+    status: WatchStatus
+    outcome_time: datetime
+    outcome_return: float
+    bars_to_hit: int | None
+
+    # Path statistics
+    mfe: float
+    mae: float
+    mfe_adj: float | None = None  # Adjusted for slippage
+    mae_adj: float | None = None
+
+    # Label (the key output)
+    hit_tp_first: int  # 1 if HIT_TP, 0 otherwise
+
+    # Context
+    entry_price: float
+    spot_at_alert: float
+    alert_time: datetime
+    window_duration_hours: float
+
+
+# Redis key patterns
+class WatchKeys:
+    """Redis key patterns for watch storage."""
+
+    # Hash: watch:{watch_id} -> AlertWatch JSON
+    WATCH = "heber:watch:{watch_id}"
+
+    # Set: watches:active -> set of active watch_ids
+    ACTIVE_WATCHES = "heber:watches:active"
+
+    # Set: watches:by_symbol:{occ_symbol} -> set of watch_ids for this contract
+    BY_SYMBOL = "heber:watches:by_symbol:{occ_symbol}"
+
+    # Sorted set: watches:expiring -> (watch_id, window_end_timestamp)
+    EXPIRING = "heber:watches:expiring"
+
+    # List: snapshots:{watch_id} -> list of WatchSnapshot JSON
+    SNAPSHOTS = "heber:snapshots:{watch_id}"
+
+    @classmethod
+    def watch_key(cls, watch_id: str) -> str:
+        return cls.WATCH.format(watch_id=watch_id)
+
+    @classmethod
+    def by_symbol_key(cls, occ_symbol: str) -> str:
+        return cls.BY_SYMBOL.format(occ_symbol=occ_symbol)
+
+    @classmethod
+    def snapshots_key(cls, watch_id: str) -> str:
+        return cls.SNAPSHOTS.format(watch_id=watch_id)
+
+
+# Polling configuration per horizon
+POLL_CONFIG = {
+    WatchHorizon.INTRADAY: {
+        "interval_seconds": 300,  # 5 minutes
+        "max_duration_hours": 4,
+    },
+    WatchHorizon.SWING: {
+        "interval_seconds": 900,  # 15 minutes
+        "max_duration_hours": 120,  # 5 days
+    },
+    WatchHorizon.LEAP: {
+        "interval_seconds": 3600,  # 1 hour
+        "max_duration_hours": 720,  # 30 days
+    },
+}
+
+
+
+================================================
+FILE: heber/watch/poller.py
+================================================
+"""Snapshot Poller - Fetches option quotes for active watches."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+import structlog
+
+from heber.watch.manager import WatchManager
+from heber.watch.models import (
+    POLL_CONFIG,
+    AlertWatch,
+    WatchSnapshot,
+)
+
+logger = structlog.get_logger(__name__)
+
+DEFAULT_GATEWAY_URL = "http://localhost:8000"
+
+
+class SnapshotPoller:
+    """Polls option quotes from Data Gateway for active watches.
+
+    Runs as a background service, fetching quotes at intervals
+    appropriate for each horizon.
+    """
+
+    def __init__(
+        self,
+        watch_manager: WatchManager,
+        gateway_url: str = DEFAULT_GATEWAY_URL,
+        batch_size: int = 100,
+    ):
+        """Initialize the poller.
+
+        Args:
+            watch_manager: WatchManager instance
+            gateway_url: Data Gateway API URL
+            batch_size: Max symbols per API request
+        """
+        self.manager = watch_manager
+        self.gateway_url = gateway_url
+        self.batch_size = batch_size
+        self._running = False
+
+    async def poll_once(self) -> dict[str, Any]:
+        """Run a single poll cycle.
+
+        Returns:
+            Stats from the poll cycle
+        """
+        # Get active watches grouped by symbol
+        active = self.manager.get_active_watches()
+
+        if not active:
+            return {"watches": 0, "quotes": 0, "errors": 0}
+
+        # Group by unique symbol
+        symbol_to_watches: dict[str, list[AlertWatch]] = {}
+        for watch in active:
+            symbol = watch.occ_symbol
+            if symbol not in symbol_to_watches:
+                symbol_to_watches[symbol] = []
+            symbol_to_watches[symbol].append(watch)
+
+        symbols = list(symbol_to_watches.keys())
+        logger.info("Polling quotes", symbols=len(symbols), watches=len(active))
+
+        # Fetch quotes in batches
+        quotes = await self._fetch_quotes(symbols)
+
+        # Update watches with new prices
+        updated = 0
+        for symbol, quote in quotes.items():
+            for watch in symbol_to_watches.get(symbol, []):
+                snapshot = self._create_snapshot(watch, quote)
+                self.manager.add_snapshot(snapshot)
+                self.manager.update_watch_price(
+                    watch.watch_id,
+                    snapshot.mid_px or snapshot.last_px,
+                    snapshot.timestamp,
+                )
+                updated += 1
+
+        return {
+            "watches": len(active),
+            "quotes": len(quotes),
+            "updated": updated,
+        }
+
+    async def run(self) -> None:
+        """Run the poller as a continuous service.
+
+        Uses the minimum interval from POLL_CONFIG (5 min for intraday).
+        """
+        self._running = True
+        min_interval = min(c["interval_seconds"] for c in POLL_CONFIG.values())
+
+        logger.info("Starting snapshot poller", interval_seconds=min_interval)
+
+        while self._running:
+            try:
+                stats = await self.poll_once()
+                logger.info("Poll cycle complete", **stats)
+
+                # Cleanup expired watches
+                expired = self.manager.cleanup_expired()
+                if expired:
+                    logger.info("Expired watches cleaned", count=expired)
+
+            except Exception as e:
+                logger.error("Poll cycle failed", error=str(e))
+
+            await asyncio.sleep(min_interval)
+
+    def stop(self) -> None:
+        """Stop the poller."""
+        self._running = False
+        logger.info("Snapshot poller stopped")
+
+    async def _fetch_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        """Fetch latest quotes from Data Gateway.
+
+        Args:
+            symbols: List of OCC symbols
+
+        Returns:
+            Dict mapping symbol to quote data
+        """
+        quotes = {}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for i in range(0, len(symbols), self.batch_size):
+                batch = symbols[i : i + self.batch_size]
+                symbols_param = ",".join(batch)
+
+                try:
+                    response = await client.get(
+                        f"{self.gateway_url}/api/v1/alpaca/options/quotes",
+                        params={"symbols": symbols_param},
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        for symbol, quote in data.get("data", {}).get("quotes", {}).items():
+                            quotes[symbol] = quote
+                    else:
+                        logger.warning(
+                            "Quote fetch failed",
+                            status=response.status_code,
+                            batch_size=len(batch),
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        "Quote fetch error",
+                        error=str(e),
+                        batch_size=len(batch),
+                    )
+
+        return quotes
+
+    def _create_snapshot(
+        self,
+        watch: AlertWatch,
+        quote: dict,
+    ) -> WatchSnapshot:
+        """Create a snapshot from quote data."""
+        bid = quote.get("bp") or quote.get("bid_price")
+        ask = quote.get("ap") or quote.get("ask_price")
+
+        if bid and ask:
+            mid = (bid + ask) / 2
+        else:
+            mid = quote.get("last_price")
+
+        return_pct = None
+        if mid and watch.entry_price > 0:
+            return_pct = (mid - watch.entry_price) / watch.entry_price
+
+        return WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=datetime.now(UTC),
+            bid_px=bid,
+            ask_px=ask,
+            mid_px=mid,
+            last_px=quote.get("last_price"),
+            underlying_price=quote.get("underlying_price"),
+            return_pct=return_pct,
+        )
+
+
+
+================================================
+FILE: heber/watch/writer.py
+================================================
+"""Alert Watch Writer - Writes completed outcomes to Gold layer."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import structlog
+
+from heber.watch.checker import BarrierChecker, outcome_to_label_row
+from heber.watch.models import WatchOutcome
+
+logger = structlog.get_logger(__name__)
+
+
+class LabelWriter:
+    """Writes completed watch outcomes to Gold storage.
+
+    Can write to either Parquet files or via HeberClient.
+    """
+
+    def __init__(
+        self,
+        output_path: Path | None = None,
+        heber_client: Any | None = None,
+        dataset: str = "labels_alert_barriers",
+        project: str = "watch",
+        version: str = "v1",
+    ):
+        """Initialize the writer.
+
+        Args:
+            output_path: Direct path to write Parquet (optional)
+            heber_client: HeberClient instance (optional)
+            dataset: Gold dataset name
+            project: Project name
+            version: Version string
+        """
+        self.output_path = output_path
+        self.client = heber_client
+        self.dataset = dataset
+        self.project = project
+        self.version = version
+        self._buffer: list[dict] = []
+        self._buffer_size = 100
+
+    def write_outcome(self, outcome: WatchOutcome) -> None:
+        """Write a single outcome (buffered).
+
+        Args:
+            outcome: Completed watch outcome
+        """
+        row = outcome_to_label_row(outcome)
+        self._buffer.append(row)
+
+        if len(self._buffer) >= self._buffer_size:
+            self.flush()
+
+    def write_outcomes(self, outcomes: list[WatchOutcome]) -> None:
+        """Write multiple outcomes.
+
+        Args:
+            outcomes: List of completed outcomes
+        """
+        for outcome in outcomes:
+            row = outcome_to_label_row(outcome)
+            self._buffer.append(row)
+
+        self.flush()
+
+    def flush(self) -> None:
+        """Flush buffered outcomes to storage."""
+        if not self._buffer:
+            return
+
+        df = pd.DataFrame(self._buffer)
+
+        if self.client:
+            self._write_via_client(df)
+        elif self.output_path:
+            self._write_to_parquet(df)
+        else:
+            logger.warning("No output configured, discarding labels", count=len(df))
+
+        logger.info("Flushed labels to Gold", count=len(self._buffer))
+        self._buffer = []
+
+    def _write_via_client(self, df: pd.DataFrame) -> None:
+        """Write using HeberClient."""
+        self.client.write_gold(
+            dataset=self.dataset,
+            df=df,
+            project=self.project,
+            version=self.version,
+        )
+
+    def _write_to_parquet(self, df: pd.DataFrame) -> None:
+        """Write directly to Parquet files."""
+        # Partition by date
+        df["_date"] = pd.to_datetime(df["ts_event"]).dt.date
+
+        for dt, group in df.groupby("_date"):
+            partition_path = (
+                self.output_path
+                / f"dataset={self.dataset}"
+                / f"project={self.project}"
+                / f"version={self.version}"
+                / f"dt={dt}"
+            )
+            partition_path.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            file_path = partition_path / f"part-{ts}.parquet"
+
+            group.drop(columns=["_date"]).to_parquet(file_path, compression="snappy")
+            logger.debug("Wrote partition", path=str(file_path), rows=len(group))
+
+
+class WatchService:
+    """Orchestrates all watch components.
+
+    Runs consumer, poller, checker, and writer together.
+    """
+
+    def __init__(
+        self,
+        redis_client: Any,
+        gateway_url: str = "http://localhost:8000",
+        output_path: Path | None = None,
+    ):
+        """Initialize the watch service.
+
+        Args:
+            redis_client: Redis client
+            gateway_url: Data Gateway URL
+            output_path: Path for Gold output
+        """
+        from heber.watch.consumer import AlertWatchConsumer
+        from heber.watch.manager import WatchManager
+        from heber.watch.poller import SnapshotPoller
+
+        self.redis = redis_client
+        self.manager = WatchManager(redis_client)
+        self.consumer = AlertWatchConsumer(redis_client, self.manager, gateway_url=gateway_url)
+        self.poller = SnapshotPoller(self.manager, gateway_url=gateway_url)
+        self.checker = BarrierChecker(self.manager)
+        self.writer = LabelWriter(output_path=output_path)
+        self._running = False
+
+    async def run(self) -> None:
+        """Run all components concurrently."""
+        import asyncio
+
+        self._running = True
+
+        logger.info("Starting watch service")
+
+        # Run consumer, poller, and checker loop concurrently
+        await asyncio.gather(
+            self.consumer.run(),
+            self.poller.run(),
+            self._check_and_write_loop(),
+        )
+
+    async def _check_and_write_loop(self) -> None:
+        """Periodically check for completed watches and write labels."""
+        import asyncio
+
+        while self._running:
+            try:
+                outcomes = self.checker.check_all()
+
+                if outcomes:
+                    self.writer.write_outcomes(outcomes)
+                    logger.info("Wrote outcomes", count=len(outcomes))
+
+            except Exception as e:
+                logger.error("Check/write error", error=str(e))
+
+            await asyncio.sleep(60)  # Check every minute
+
+    def stop(self) -> None:
+        """Stop all components."""
+        self._running = False
+        self.consumer.stop()
+        self.poller.stop()
+        self.writer.flush()
+        logger.info("Watch service stopped")
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get service statistics."""
+        return {
+            "watches": self.manager.get_stats(),
+            "buffer_size": len(self.writer._buffer),
+        }
+
+
+def run_watch_service(
+    redis_url: str = "redis://localhost:6379",
+    gateway_url: str = "http://localhost:8000",
+    output_path: str | None = None,
+) -> None:
+    """CLI entry point for watch service.
+
+    Args:
+        redis_url: Redis connection URL
+        gateway_url: Data Gateway URL
+        output_path: Path for Gold output
+    """
+    import asyncio
+
+    import redis
+
+    r = redis.from_url(redis_url)
+    path = Path(output_path) if output_path else None
+
+    service = WatchService(r, gateway_url=gateway_url, output_path=path)
+
+    try:
+        asyncio.run(service.run())
+    except KeyboardInterrupt:
+        service.stop()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run alert watch service")
+    parser.add_argument("--redis", default="redis://localhost:6379", help="Redis URL")
+    parser.add_argument("--gateway", default="http://localhost:8000", help="Data Gateway URL")
+    parser.add_argument("--output", help="Gold output path")
+
+    args = parser.parse_args()
+
+    run_watch_service(
+        redis_url=args.redis,
+        gateway_url=args.gateway,
+        output_path=args.output,
+    )
 
 
 

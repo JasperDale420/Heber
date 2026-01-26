@@ -43,7 +43,7 @@ class HotStoreClient:
             )
         return self._client
 
-    async def get_latest_quote(self, instrument_key: str) -> dict[str, Any] | None:
+    def get_latest_quote(self, instrument_key: str) -> dict[str, Any] | None:
         """Get latest quote for an instrument from Hot Store.
 
         Args:
@@ -64,7 +64,7 @@ class HotStoreClient:
             return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
-    async def get_latest_bar(self, instrument_key: str, timeframe: str = "1Min") -> dict[str, Any] | None:
+    def get_latest_bar(self, instrument_key: str, timeframe: str = "1Min") -> dict[str, Any] | None:
         """Get latest bar for an instrument from Hot Store.
 
         Args:
@@ -87,7 +87,7 @@ class HotStoreClient:
             return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
-    async def get_quotes_range(
+    def get_quotes_range(
         self,
         instrument_key: str,
         start: datetime,
@@ -114,7 +114,7 @@ class HotStoreClient:
         result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
         return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
-    async def get_trades_range(
+    def get_trades_range(
         self,
         instrument_key: str,
         start: datetime,
@@ -141,7 +141,7 @@ class HotStoreClient:
         result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
         return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
-    async def get_sync_lag_seconds(self, dataset: str) -> float:
+    def get_sync_lag_seconds(self, dataset: str) -> float:
         """Get sync lag between Silver and Hot Store (PRD §12.10.1).
 
         Args:
@@ -162,7 +162,7 @@ class HotStoreClient:
             return float(result.result_rows[0][0])
         return float("inf")  # No recent data
 
-    async def get_row_count(self, dataset: str, days: int = 7) -> int:
+    def get_row_count(self, dataset: str, days: int = 7) -> int:
         """Get row count for a dataset in the retention window.
 
         Args:
