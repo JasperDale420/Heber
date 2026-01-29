@@ -249,6 +249,29 @@ services:
       disable: true
     restart: unless-stopped
 
+  # Watch Service - Tracks flow alert outcomes for ML labeling
+  heber-watch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-watch
+    command: [ "python", "-m", "heber.watch" ]
+    environment:
+      # Uses heber:events stream from Data Gateway's Redis
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - HEBER_GOLD_PATH=/data/gold/labels_alert_barriers
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    depends_on:
+      heber-catalog:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
 volumes:
   heber-data:
     driver: local
