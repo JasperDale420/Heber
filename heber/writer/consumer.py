@@ -127,7 +127,12 @@ class EventConsumer:
         await self._final_flush()
 
     async def _consume_iteration(self) -> None:
-        """Execute a single iteration of the consumer loop."""
+        """Execute a single iteration of the consumer loop.
+
+        Flow: read batch → process all → flush to disk → ACK all.
+        This ensures data is persisted before we acknowledge to Redis,
+        preventing data loss on crash.
+        """
         messages = await self.redis.xreadgroup(
             groupname=settings.redis_consumer_group,
             consumername=self.consumer_name,
@@ -135,28 +140,38 @@ class EventConsumer:
             count=100,
             block=1000,
         )
+        # Always check for flush even with no messages (handles idle periods)
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
 
         if not messages:
             return
 
+        # Collect successfully processed message IDs
+        processed_ids: list[bytes] = []
+        failed_ids: list[bytes] = []
+
         for _stream_name, stream_messages in messages:
             for message_id, message_data in stream_messages:
-                await self._handle_message(message_id, message_data)
+                success = await self.process_event(message_data)
+                if success:
+                    processed_ids.append(message_id)
+                else:
+                    failed_ids.append(message_id)
+                    logger.warning("Event failed, needs DLQ", message_id=message_id)
 
+        # Flush to disk BEFORE acknowledging
         await self.bronze_writer.flush_if_needed()
         await self.silver_writer.flush_if_needed()
 
-    async def _handle_message(self, message_id: bytes, message_data: dict) -> None:
-        """Handle a single message from the stream."""
-        success = await self.process_event(message_data)
-        if success:
+        # Only ACK after successful flush
+        if processed_ids:
             await self.redis.xack(
                 settings.redis_stream_name,
                 settings.redis_consumer_group,
-                message_id,
+                *processed_ids,
             )
-        else:
-            logger.warning("Event failed, needs DLQ", message_id=message_id)
+            logger.debug("Acknowledged batch", count=len(processed_ids))
 
     async def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""
