@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-01-26T13:53:09*
+*Generated: 2026-01-30T00:03:44*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 188
+Files analyzed: 206
 
-Estimated tokens: 312.3k
+Estimated tokens: 339.3k
 
 ---
 
@@ -20,6 +20,7 @@ Directory structure:
 └── Heber/
     ├── README.md
     ├── CHANGELOG.md
+    ├── CLAUDE.md
     ├── docker-compose.yml
     ├── Dockerfile
     ├── implementation.md
@@ -33,6 +34,14 @@ Directory structure:
     ├── docs/
     │   ├── Alpaca_market_data_endpoints.md
     │   ├── Alpaca_trading_endpoints.md
+    │   ├── architecture.md
+    │   ├── catalog_api.md
+    │   ├── configuration.md
+    │   ├── data_contract.md
+    │   ├── hot_store.md
+    │   ├── iceberg_migration.md
+    │   ├── labeling_strategy.md
+    │   ├── schema_registry.md
     │   ├── sdk.md
     │   ├── UW_endpoints.md
     │   └── operations/
@@ -68,6 +77,9 @@ Directory structure:
     │   │   ├── backpressure.py
     │   │   ├── dedupe.py
     │   │   └── streams.py
+    │   ├── calendar/
+    │   │   ├── __init__.py
+    │   │   └── market.py
     │   ├── catalog/
     │   │   ├── __init__.py
     │   │   ├── access_control.py
@@ -116,6 +128,11 @@ Directory structure:
     │   │   ├── client.py
     │   │   ├── sync.py
     │   │   └── tables.py
+    │   ├── ml/
+    │   │   ├── __init__.py
+    │   │   ├── datasets.py
+    │   │   ├── inference.py
+    │   │   └── trainer.py
     │   ├── models/
     │   │   ├── __init__.py
     │   │   ├── envelope.py
@@ -182,8 +199,10 @@ Directory structure:
     │   │   └── __init__.py
     │   ├── watch/
     │   │   ├── __init__.py
+    │   │   ├── __main__.py
     │   │   ├── checker.py
     │   │   ├── consumer.py
+    │   │   ├── features.py
     │   │   ├── manager.py
     │   │   ├── models.py
     │   │   ├── poller.py
@@ -254,10 +273,12 @@ Directory structure:
     │   └── checks/
     │       ├── bars.yaml
     │       └── quotes.yaml
-    └── tests/
-        ├── __init__.py
-        ├── test_edge_cases.py
-        └── test_placeholder.py
+    ├── tests/
+    │   ├── __init__.py
+    │   ├── test_edge_cases.py
+    │   └── test_placeholder.py
+    └── .claude/
+        └── settings.local.json
 
 ```
 
@@ -270,50 +291,124 @@ FILE: README.md
 ================================================
 # Heber Data Lakehouse
 
-Centralized storage for market and intelligence data across all trading projects.
+Centralized storage and retrieval for market + intelligence data across all trading projects.
 
-## Quick Start
+## Quick Start (Local)
 
 ```bash
-# Initialize external volume directories
+# One-time: initialize external volume directories
 ./scripts/init_volume.sh
 
-# Start infrastructure
-docker-compose up -d
+# Copy environment template
+cp .env.example .env
+
+# Start infrastructure + Heber services
+docker compose up -d
 
 # Run tests
 uv run pytest tests/ -v
 ```
 
-## Architecture
+Local ports from `docker-compose.yml`:
+
+- Catalog API: `http://localhost:8085`
+- Postgres: `localhost:5433`
+- Redis: `localhost:6380`
+- ClickHouse: `localhost:8124` (HTTP), `localhost:9002` (native)
+- lakeFS: `http://localhost:8000`
+- MinIO: `http://localhost:19000` (S3), `http://localhost:19001` (console)
+- Apicurio Registry: `http://localhost:18081`
+- OpenMetadata: `http://localhost:8585`
+
+## Architecture (Current)
 
 ```
-Data Gateway → Redis Streams → Heber Writer → Bronze/Silver/Gold (Parquet)
-                                    ↓
-                              Heber Catalog (Postgres)
-                                    ↓
-                              Hot Store (ClickHouse)
+Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (Parquet)
+                                            v
+                                    heber-catalog (Postgres)
+                                            v
+                                      SDK + CLI
+                                            v
+                                Hot Store (ClickHouse)
 ```
 
-## Storage
+## Storage Layout
 
-All data is stored on the external volume `/Volumes/heber`:
+All data is stored on the external volume (default: `/Volumes/heber`):
 
-- `data/` - Bronze/Silver/Gold Parquet files
-- `postgres/` - Catalog database
-- `clickhouse/` - Hot Store
-- `redis/` - Event bus streams
+- `data/bronze/` - raw JSONL.gz (provider/feed/dt/hour)
+- `data/silver/` - normalized Parquet (feed/instrument_type/dt[/hour])
+- `data/gold/` - features/labels Parquet (dataset/project/version/dt)
+- `postgres/` - catalog database
+- `clickhouse/` - hot store
+- `redis/` - event bus streams
 
 ## Services
 
-- **heber-catalog**: REST API for dataset/instrument discovery
-- **heber-consumer**: Redis → Lake writer
-- **heber-compactor**: Periodic file compaction
+- **heber-catalog**: FastAPI service for datasets, instruments, and feed mappings
+- **heber-consumer**: Redis Streams consumer → Bronze/Silver writers
+- **heber-compactor**: Parquet file compaction (Silver/Gold)
+- **heber-watch**: Real-time flow alert tracking → TP/SL labels for ML
+- **Hot Store**: ClickHouse for low-latency reads (sync helpers in `heber/hotstore/`)
+
+### Watch Service
+
+Tracks flow alert outcomes for ML labeling:
+
+```bash
+# Run locally
+python -m heber.watch --help
+
+# Or with Docker
+docker compose up heber-watch
+```
+
+Environment variables:
+
+- `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6379`)
+- `DATA_GATEWAY_URL` - Data Gateway for option quotes (default: `http://localhost:8000`)
+- `HEBER_GOLD_PATH` - Gold layer output path
+
+### ML Package (`heber/ml/`)
+
+Meta-labeling infrastructure for predicting alert success:
+
+```python
+from heber.ml import (
+    MetaLabelDatasetBuilder,  # Join features + outcomes
+    MetaModelTrainer,          # Train LightGBM classifier
+    MetaLabelScorer,           # Score new alerts
+    AlertGate,                 # Filter low-probability alerts
+)
+
+# Build training dataset
+builder = MetaLabelDatasetBuilder()
+df = builder.build_from_parquet(start_date, end_date)
+
+# Train model
+trainer = MetaModelTrainer()
+trainer.train(x_train, y_train, x_val, y_val)
+trainer.save(Path("/models/meta_model"))
+
+# Score alerts (optional integration)
+scorer = MetaLabelScorer(config=InferenceConfig(model_path=Path("/models/meta_model")))
+await scorer.initialize()
+score = await scorer.score(alert)  # 0.0 - 1.0
+```
+
+**What runs automatically:**
+
+| Component | Automatic? | Notes |
+|-----------|------------|-------|
+| Feature capture | ✅ Yes | Triggers on every alert via `AlertWatchConsumer` |
+| Dataset building | ❌ No | Run manually for training |
+| Model training | ❌ No | Run manually, logs to MLflow |
+| Inference scoring | ⚙️ Optional | Enable `AlertGate` in consumer |
 
 ## SDK Usage
 
 ```python
-from heber.sdk import HeberClient
+from heber.sdk.client import HeberClient
 
 client = HeberClient()
 
@@ -323,6 +418,26 @@ bars = client.read_asof("bars", asof_time="2025-01-15", instrument_keys=["equity
 # Write Gold features
 client.write_gold("momentum_features", df=features, project="kairos", version="v1")
 ```
+
+## CLI Usage
+
+```bash
+heber info --verbose
+heber datasets --layer silver
+heber versions momentum_features
+```
+
+## Documentation
+
+- `docs/architecture.md` - system overview, data flow, and layers
+- `docs/catalog_api.md` - Catalog API reference
+- `docs/data_contract.md` - EventEnvelope + feed schema contract
+- `docs/schema_registry.md` - schema registry usage
+- `docs/iceberg_migration.md` - Iceberg migration status
+- `docs/hot_store.md` - Hot Store usage and sync notes
+- `docs/configuration.md` - environment variables and local vs container settings
+- `docs/sdk.md` - SDK usage and semantics
+- `docs/operations/` - runbooks (deployment, monitoring, backup/DR)
 
 ## Development
 
@@ -373,7 +488,7 @@ GitHub Actions workflow (`.github/workflows/ci.yaml`) runs:
 2. **Test** - Linting (ruff, mypy) + pytest with coverage
 3. **Scan** - Trivy security scanning for vulnerabilities
 4. **Push** - Container registry push (main branch only)
-5. **Deploy** - Staging → Production (main branch only)
+5. **Deploy** - Staging -> Production (main branch only)
 
 **Dependabot** auto-creates PRs for dependency updates weekly.
 
@@ -394,6 +509,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+#### Documentation
+
+- Added Catalog API reference (`docs/catalog_api.md`)
+- Added data contract (`docs/data_contract.md`)
+- Added schema registry usage (`docs/schema_registry.md`)
+- Added Iceberg migration status (`docs/iceberg_migration.md`)
+- Added Hot Store guide (`docs/hot_store.md`)
+- Added architecture overview (`docs/architecture.md`)
+- Added configuration guide updates and host port mapping (`docs/configuration.md`)
+
+#### Alert Watch Service (`heber/watch/`)
+
+Real-time tracking of flow alert outcomes for ML labeling:
+
+- **Watch Models** (`models.py`) - `AlertWatch`, `WatchSnapshot`, `WatchOutcome` Pydantic models with Redis key patterns
+- **Watch Manager** (`manager.py`) - CRUD operations for active watches in Redis
+- **Snapshot Poller** (`poller.py`) - Polls option quotes from Data Gateway every 5-15 min
+- **Barrier Checker** (`checker.py`) - Detects TP/SL barrier hits and computes labels
+- **Alert Consumer** (`consumer.py`) - Listens to `flow_alerts` Redis stream, auto-creates watches
+- **Label Writer** (`writer.py`) - Writes completed outcomes to Gold layer
+- **Service Orchestrator** (`WatchService`) - Runs all components concurrently
+
+Polling strategy by horizon:
+
+- Intraday (0-2 DTE): 5 min intervals, 4h max window
+- Swing (3-21 DTE): 15 min intervals, 5 day max window
+- LEAP (22+ DTE): 1 hour intervals, 30 day max window
+
+#### Trading Calendar Integration (`heber/calendar/`)
+
+Market-hours awareness for the watch service using `exchange-calendars`:
+
+- **`MarketCalendar`** class wrapping NYSE calendar (XNYS)
+- `is_market_open()` - Check if market is open for trading
+- `add_trading_hours()` - Skip non-trading time in window calculations
+- `trading_minutes_until()` - Count trading minutes between timestamps
+- `seconds_until_open()` - Sleep until market opens
+
+Integrated into watch service:
+
+- **SnapshotPoller** - Skips polling when market closed, sleeps until open
+- **WatchManager** - Window calculations use trading hours, not clock time
+- **BarrierChecker** - Adds `trading_minutes_to_hit` metric to outcomes
+
+#### Watch Service CLI & Docker
+
+Full integration for standalone operation:
+
+- **CLI entry point**: `python -m heber.watch [--redis URL] [--gateway URL] [--output PATH]`
+
+#### Meta-Labeling Feature Capture (`heber/watch/features.py`)
+
+Feature extraction for training meta-models that predict alert success:
+
+- **`AlertFeatures` dataclass** - 30 features captured at alert time:
+  - Contract info: strike, expiry, DTE, moneyness
+  - Alert characteristics: premium, volume, OI ratio, alert type
+  - Timing: hour, day of week, minutes since open/to close
+  - Sentiment: bullish/bearish/sweep/block flags
+- **`AlertFeatureExtractor`** - Extracts features from `FlowAlertRecord`
+- **Market enrichment** - Fetches Alpaca bars via Data Gateway for returns/volatility
+- **Greeks enrichment** - Fetches delta/gamma/theta/vega/IV from Alpaca option chain
+- **IV rank enrichment** - Fetches IV rank from UW options endpoint
+- **Redis storage** - Features stored with 7-day TTL for training
+- Integrated into `AlertWatchConsumer` - auto-captures on alert arrival
+
+#### ML Dataset Builder (`heber/ml/datasets.py`)
+
+Training dataset construction for meta-models:
+
+- **`MetaLabelDatasetBuilder`** - Joins features with outcomes
+- **`DatasetConfig`** - Configurable paths, filters, split ratios
+- **Temporal train/test split** - Purge/embargo to prevent leakage
+- **`to_xy()` helper** - Converts to (X, y) for sklearn-compatible training
+- Supports both Parquet files and Redis feature cache
+
+#### ML Training Pipeline (`heber/ml/trainer.py`)
+
+LightGBM-based meta-model training with MLflow integration:
+
+- **`MetaModelTrainer`** - Trains binary classifier on meta-labels
+- **`TrainingConfig`** - Hyperparameters and thresholds
+- **MLflow logging** - Tracks experiments, params, metrics, models
+- **`train_meta_model()`** - Convenience function for end-to-end training
+- **Save/load** - Joblib serialization with config JSON
+
+#### ML Inference Service (`heber/ml/inference.py`)
+
+Real-time scoring of alerts with trained meta-model:
+
+- **`MetaLabelScorer`** - Scores alerts with probability of TP hit
+- **`AlertGate`** - Fail-open gate to filter low-probability alerts
+- **`InferenceConfig`** - Thresholds and cache settings
+- **Score caching** - Redis-backed for repeated lookups
+- **Confidence classification** - "high" / "medium" / "low" buckets
+
+- **Environment variables**: `HEBER_REDIS_URL`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
+- **Docker service**: `heber-watch` in `docker-compose.yml`
+
+#### Contract-Based Barrier Labels
+
+Enhanced `alert_labels.py` template with option contract labeling:
+
+- **`ContractBarrierConfig`** - TP/SL thresholds for options (e.g., +25%/-15%)
+- **`_compute_contract_barrier_outcome()`** - Barrier detection on option price path
+- **Dual labeling** - Primary `contract_hit_tp_first` + secondary `hit_tp_first` (underlying)
+- **Presets**: `aggressive()`, `moderate()`, `conservative()`
+
+#### Alert Labels Pipeline Enhancement
+
+Updated `heber/features/pipelines/alert_labels.py`:
+
+- Fetches option bars from Data Gateway API
+- Computes both underlying and contract barrier labels
+- New CLI flags: `--no-contract`, `--gateway-url`
+
+### Fixed
+
+\n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
 #### Code Quality Pipeline
 
@@ -702,6 +937,83 @@ _For earlier history, see git commit log._
 
 
 ================================================
+FILE: CLAUDE.md
+================================================
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Heber is a data lakehouse for market and intelligence data. It ingests events from a Data Gateway via Redis Streams, writes them to Bronze (raw JSONL.gz) and Silver (normalized Parquet) storage layers, and provides a catalog API + Python SDK for zero-leakage data access. A Watch service tracks flow alert outcomes for ML labeling in the Gold layer.
+
+## Common Commands
+
+```bash
+# Install dependencies
+uv pip install -e ".[dev]"
+
+# Run tests
+uv run pytest tests/ -v
+
+# Run a single test file
+uv run pytest tests/test_foo.py -v
+
+# Run tests with coverage
+pytest tests/ -v --cov=heber --cov-report=term-missing
+
+# Lint and format
+ruff check heber/ --fix
+ruff format heber/
+
+# Run all pre-commit hooks
+pre-commit run --all-files
+
+# Start local dev stack
+docker compose up -d
+
+# Run services directly
+python -m heber.catalog.api       # Catalog API (FastAPI, port 8085)
+python -m heber.writer.consumer   # Event consumer
+python -m heber.watch             # Watch service (--redis, --gateway flags)
+
+# CLI
+heber info --verbose
+heber datasets --layer silver
+```
+
+## Architecture
+
+**Data flow:** Data Gateway → Redis Streams (`heber:events`) → `heber-consumer` → Bronze + Silver → Catalog DB (Postgres)
+
+**Storage layers:**
+- **Bronze** (`/Volumes/heber/data/bronze/`): Raw provider payloads, JSONL.gz, partitioned by `provider/feed/dt/hour`
+- **Silver** (`/Volumes/heber/data/silver/`): Normalized Parquet, partitioned by `feed/instrument_type/dt[/hour]`
+- **Gold** (`/Volumes/heber/data/gold/`): Features/labels Parquet, partitioned by `dataset/project/version/dt`
+
+**Core services:**
+- `heber/catalog/` — FastAPI catalog API backed by Postgres (datasets, instruments, feed mappings)
+- `heber/writer/` — Redis Streams consumer that validates `EventEnvelope`, stamps `ts_available`, writes Bronze + Silver
+- `heber/watch/` — Tracks flow alert outcomes: consumer → manager (Redis) → poller (quotes) → checker (TP/SL barriers) → writer (Gold)
+- `heber/sdk/` — `HeberClient` for reading data with point-in-time (`asof`) guarantees
+- `heber/ml/` — Meta-labeling pipeline: dataset builder → LightGBM trainer → inference scorer
+
+**Key concepts:**
+- `EventEnvelope` (`heber/models/`) is the canonical event wrapper used throughout ingestion
+- `ts_available` timestamp enforces zero-leakage for backtesting/ML — data is only visible after this time
+- Config via Pydantic Settings (`heber/config.py`), env prefix `HEBER_`
+
+## Code Style
+
+- Python 3.11, line length 120 (ruff)
+- Structured logging via structlog
+- Type hints throughout (mypy strict mode configured but currently disabled due to existing errors)
+- Security scanning: detect-secrets, bandit, trivy
+- Data volume root configurable via `HEBER_VOLUME_ROOT` (default `/Volumes/heber`)
+
+
+
+================================================
 FILE: docker-compose.yml
 ================================================
 services:
@@ -950,6 +1262,29 @@ services:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     depends_on:
       postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # Watch Service - Tracks flow alert outcomes for ML labeling
+  heber-watch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-watch
+    command: [ "python", "-m", "heber.watch" ]
+    environment:
+      # Uses heber:events stream from Data Gateway's Redis
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - HEBER_GOLD_PATH=/data/gold/labels_alert_barriers
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    depends_on:
+      heber-catalog:
         condition: service_healthy
     healthcheck:
       disable: true
@@ -2059,6 +2394,80 @@ Implement in order:
 ### 57.6 Summary §62
 
 - [x] Document: Data source decisions resolved (3 decisions)
+
+---
+
+## Phase 58: Alert Watch Service ✅
+
+Real-time flow alert outcome tracking for ML labeling.
+
+### 58.1 Watch Models
+
+- [x] `AlertWatch`, `WatchSnapshot`, `WatchOutcome` Pydantic models
+- [x] Redis key patterns for watch lifecycle
+
+### 58.2 Watch Components
+
+- [x] `WatchManager` - CRUD for active watches in Redis
+- [x] `SnapshotPoller` - Polls option quotes from Data Gateway
+- [x] `BarrierChecker` - Detects TP/SL barrier hits
+- [x] `AlertWatchConsumer` - Listens to `flow_alerts` Redis stream
+- [x] `LabelWriter` - Writes outcomes to Gold layer
+
+### 58.3 Trading Calendar
+
+- [x] `MarketCalendar` wrapper using `exchange-calendars` (XNYS)
+- [x] `is_market_open()`, `add_trading_hours()`, `trading_minutes_until()`
+- [x] Poller skips non-market hours, sleeps until next open
+
+### 58.4 Integration
+
+- [x] CLI entry point: `python -m heber.watch`
+- [x] Docker service: `heber-watch` in `docker-compose.yml`
+- [x] Environment variables: `HEBER_REDIS_URL`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
+
+---
+
+## Phase 59: Meta-Labeling ML Package ✅
+
+Machine learning infrastructure for predicting flow alert success.
+
+### 59.1 Feature Capture (`heber/watch/features.py`)
+
+- [x] `AlertFeatures` dataclass with 29 numeric features
+- [x] `AlertFeatureExtractor` - extracts from `FlowAlertRecord`
+- [x] Redis storage with 7-day TTL
+- [x] Integrated into `AlertWatchConsumer` - auto-captures on alert arrival
+
+### 59.2 Dataset Builder (`heber/ml/datasets.py`)
+
+- [x] `MetaLabelDatasetBuilder` - joins features with outcomes
+- [x] `DatasetConfig` - configurable paths, filters
+- [x] Temporal train/test split with purge/embargo (anti-leakage)
+- [x] `to_xy()` helper for sklearn compatibility
+
+### 59.3 Training Pipeline (`heber/ml/trainer.py`)
+
+- [x] `MetaModelTrainer` - LightGBM classifier
+- [x] `TrainingConfig` - hyperparameters, thresholds
+- [x] MLflow integration for experiment tracking
+- [x] Save/load with joblib + config JSON
+
+### 59.4 Inference Service (`heber/ml/inference.py`)
+
+- [x] `MetaLabelScorer` - scores alerts with trained model
+- [x] `AlertGate` - fail-open filter for low-probability alerts
+- [x] Redis caching for repeated lookups
+- [x] Confidence classification (high/medium/low)
+
+### 59.5 Runtime
+
+| Component | Runs Automatically? |
+|-----------|---------------------|
+| Feature capture | ✅ Yes - triggers on every alert |
+| Dataset building | ❌ Manual - run `build_from_parquet()` |
+| Model training | ❌ Manual - run `train_meta_model()` |
+| Inference scoring | ⚙️ Optional - enable `AlertGate` |
 
 ---
 
@@ -8352,6 +8761,9 @@ dependencies = [
     # Utils
     "httpx>=0.26",
     "tenacity>=8.2",
+
+    # Trading calendar (market hours, holidays)
+    "exchange-calendars>=4.5",
 ]
 
 [project.optional-dependencies]
@@ -9307,11 +9719,885 @@ All core trading endpoints are **complete** ✅
 
 
 ================================================
+FILE: docs/architecture.md
+================================================
+# Architecture
+
+## Overview
+
+Heber is a lakehouse for market and intelligence data with a strict **zero-leakage** contract. The system ingests events from Data Gateway, writes raw and normalized lake layers, registers datasets in a catalog, and exposes read access through the SDK and API.
+
+## Data Flow
+
+```
+Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (Parquet)
+                                            v
+                                    heber-catalog (Postgres)
+                                            v
+                                     SDK + CLI
+                                            v
+                                 Hot Store (ClickHouse)
+```
+
+## Data Layers
+
+- **Bronze**: Raw provider payloads, immutable, gzipped JSONL. Partitioned by `provider/feed/dt/hour`.
+- **Silver**: Normalized events for queries, Parquet. Partitioned by `feed/instrument_type/dt` (and `hour` for high-volume feeds).
+- **Gold**: Features/labels, Parquet. Partitioned by `dataset/project/version/dt`.
+
+## Core Services
+
+- **heber-consumer** (`heber/writer/consumer.py`)
+  - Redis Streams consumer; validates `EventEnvelope`, sets `ts_available`, writes Bronze + Silver.
+- **heber-compactor** (`heber/writer/compactor.py`)
+  - Periodic Parquet compaction for lake partitions.
+- **heber-catalog** (`heber/catalog/api.py`)
+  - FastAPI service with dataset, instrument, feed mapping, and backfill endpoints.
+- **hot store helpers** (`heber/hotstore/`)
+  - ClickHouse tables + query client; sync helpers are provided but not deployed in `docker-compose.yml`.
+
+## Event Contract (EventEnvelope)
+
+The canonical event format (see `heber/models/envelope.py`) includes:
+
+- **Identifiers**: `event_id`, `provider`, `feed`, `source`
+- **Instrument**: `instrument_type`, `instrument_key`, `symbol`
+- **Timestamps**: `ts_event`, `ts_ingest`, `ts_available`
+- **Payload**: normalized `payload` + optional `raw` (Bronze fidelity)
+
+Zero-leakage is enforced via `ts_available` and `read_asof()` semantics.
+
+## Catalog Schema (Postgres)
+
+The catalog tracks:
+
+- Datasets + schema versions (`datasets`, `dataset_versions`)
+- Instruments and provider mappings (`instrument_registry`, `instrument_provider_map`)
+- Feed mappings (`feed_mappings`)
+- Coverage metadata (`data_coverage`)
+
+See `heber/catalog/db.py` for the canonical schema.
+
+## Hot Store (ClickHouse)
+
+Low-latency access to recent quotes/trades/bars for dashboards and signals. The SDK uses lake data for backtests and research.
+
+## OSS Migration Components
+
+These modules are present but not yet wired into `HeberClient`:
+
+- **Iceberg**: `heber/storage/iceberg_catalog.py`, `heber/storage/iceberg_writer.py`
+- **Schema Registry**: `heber/schema/registry_client.py` (Confluent-compatible API)
+- **Versioning**: `heber/versioning/` (lakeFS client; used by SDK for Gold version tags)
+
+## Repository Map (Top-Level)
+
+- `heber/` - core services, SDK, and storage logic
+- `docs/` - SDK docs, ops runbooks, and provider endpoints
+- `k8s/`, `infrastructure/` - deployment manifests and Terraform
+- `scripts/` - volume init, docker build/push, backups
+
+
+
+================================================
+FILE: docs/catalog_api.md
+================================================
+# Catalog API
+
+Reference for the Heber Catalog service (`heber/catalog/api.py`).
+
+Base URL (local docker): `http://localhost:8085`
+
+## Health
+
+`GET /health`
+
+Response:
+
+```json
+{ "status": "healthy", "service": "heber-catalog" }
+```
+
+## Datasets
+
+### List datasets
+
+`GET /api/v1/datasets`
+
+Query params:
+
+- `layer` (optional): `bronze|silver|gold`
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "dataset_name": "bars",
+      "layer": "silver",
+      "owner": "shared",
+      "description": "Bars data",
+      "storage_root": "/Volumes/heber/data",
+      "path_template": "silver/feed={dataset}/instrument_type={instrument_type}/dt={dt}",
+      "partition_cols": ["feed", "instrument_type", "dt"],
+      "is_active": true
+    }
+  ],
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+### Get dataset
+
+`GET /api/v1/datasets/{name}`
+
+Response shape matches list item under `data`.
+
+### List dataset versions
+
+`GET /api/v1/datasets/{name}/versions`
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "schema_version": "v1",
+      "schema_json": { "fields": [] },
+      "is_current": true,
+      "created_at": "2026-01-20T00:00:00Z"
+    }
+  ],
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+### Get specific schema version
+
+`GET /api/v1/datasets/{name}/versions/{version}`
+
+Response shape matches list item under `data`.
+
+### Dataset coverage
+
+`GET /api/v1/datasets/{name}/coverage`
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "instrument_key": "equity:AAPL",
+      "dt_min": "2025-01-01",
+      "dt_max": "2025-01-31",
+      "approx_row_count": 123456
+    }
+  ],
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+### Create dataset
+
+`POST /api/v1/datasets`
+
+Request:
+
+```json
+{
+  "dataset_name": "bars",
+  "layer": "silver",
+  "owner": "shared",
+  "description": "Bars data",
+  "storage_root": "/Volumes/heber/data",
+  "path_template": "silver/feed={dataset}/instrument_type={instrument_type}/dt={dt}",
+  "partition_cols": ["feed", "instrument_type", "dt"],
+  "primary_keys": ["event_id"]
+}
+```
+
+Response:
+
+```json
+{
+  "data": { "dataset_name": "bars" },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+## Instruments
+
+### Get instrument
+
+`GET /api/v1/instruments/{key}`
+
+Response:
+
+```json
+{
+  "data": {
+    "instrument_key": "equity:AAPL",
+    "instrument_type": "equity",
+    "canonical_symbol": "AAPL",
+    "underlying_key": null,
+    "occ_symbol": null,
+    "expiry": null,
+    "strike": null,
+    "put_call": null
+  },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+### Lookup instruments
+
+`POST /api/v1/instruments/lookup`
+
+Request:
+
+```json
+{ "symbols": ["AAPL", "TSLA"] }
+```
+
+Response: array of `InstrumentResponse` objects under `data`.
+
+### Search instruments
+
+`GET /api/v1/instruments/search`
+
+Query params:
+
+- `instrument_type` (optional)
+- `symbol_prefix` (optional)
+- `limit` (optional, default 100, max 1000)
+
+### Upsert instrument
+
+`PUT /api/v1/instruments/{key}`
+
+Request:
+
+```json
+{
+  "instrument_key": "equity:AAPL",
+  "instrument_type": "equity",
+  "canonical_symbol": "AAPL",
+  "underlying_key": null,
+  "occ_symbol": null,
+  "expiry": null,
+  "strike": null,
+  "put_call": null
+}
+```
+
+Response:
+
+```json
+{
+  "data": { "instrument_key": "equity:AAPL" },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+## Feeds
+
+### List feed mappings
+
+`GET /api/v1/feeds`
+
+### Resolve feed mapping
+
+`GET /api/v1/feeds/resolve?provider={provider}&feed={feed}`
+
+Response:
+
+```json
+{
+  "data": { "silver_dataset_name": "bars" },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+## Backfill (in-memory)
+
+Backfill endpoints are in-memory only; they reset on process restart.
+
+### Create backfill job
+
+`POST /api/v1/backfill`
+
+Request:
+
+```json
+{
+  "provider": "alpaca",
+  "feed": "bars",
+  "instrument_keys": ["equity:AAPL"],
+  "start_date": "2025-01-01",
+  "end_date": "2025-01-31",
+  "project": "kairos"
+}
+```
+
+Response:
+
+```json
+{
+  "data": { "backfill_id": "uuid", "status": "pending" },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+### Get backfill job
+
+`GET /api/v1/backfill/{id}`
+
+### List backfill jobs
+
+`GET /api/v1/backfill?status={status}&limit={limit}`
+
+## Error Envelope
+
+Errors conform to:
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Dataset 'bars' not found"
+  },
+  "meta": { "ts": "2026-01-27T12:00:00Z" }
+}
+```
+
+Known error codes: `INVALID_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `INTERNAL_ERROR`.
+
+
+
+================================================
+FILE: docs/configuration.md
+================================================
+# Configuration
+
+Heber uses `pydantic-settings` with the `HEBER_` prefix and loads `.env` by default. See `heber/config.py` for authoritative defaults.
+
+Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clashing with existing mounts; adjust as needed.
+
+## Core Runtime Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEBER_DATA_ROOT` | `/Volumes/heber/data` | Root path for Bronze/Silver/Gold data |
+| `HEBER_VOLUME_ROOT` | `/Volumes/heber` | External volume root used by scripts/docker |
+| `HEBER_POSTGRES_URL` | `postgresql+asyncpg://heber:heber_dev_password@localhost:5432/heber_catalog` | Catalog DB connection string |
+| `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis Streams endpoint |
+| `HEBER_REDIS_STREAM_NAME` | `heber:events` | Redis stream name |
+| `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Redis consumer group |
+| `HEBER_CLICKHOUSE_HOST` | `localhost` | ClickHouse hostname |
+| `HEBER_CLICKHOUSE_PORT` | `9000` | ClickHouse native port |
+| `HEBER_CLICKHOUSE_USER` | `default` | ClickHouse user |
+| `HEBER_CLICKHOUSE_PASSWORD` | *(empty)* | ClickHouse password |
+| `HEBER_CLICKHOUSE_DATABASE` | `heber` | ClickHouse database |
+| `HEBER_API_HOST` | `0.0.0.0` | Catalog API bind host |
+| `HEBER_API_PORT` | `8080` | Catalog API port |
+| `HEBER_ENVIRONMENT` | `dev` | `dev`, `staging`, or `prod` |
+
+## Writer Tuning
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEBER_BRONZE_FLUSH_INTERVAL_SECONDS` | `30` | Max time before Bronze flush |
+| `HEBER_BRONZE_MAX_BATCH_SIZE` | `10000` | Max events per Bronze file |
+| `HEBER_SILVER_TARGET_FILE_SIZE_MB` | `256` | Target Parquet file size |
+| `HEBER_SILVER_MAX_ROWS_PER_FILE` | `1000000` | Max rows per Silver file |
+| `HEBER_SILVER_MAX_FLUSH_TIME_SECONDS` | `30` | Max time before Silver flush |
+| `HEBER_SILVER_ROW_GROUP_SIZE_MB` | `128` | Parquet row group size |
+
+## Local vs Container URLs
+
+`docker-compose.yml` exposes different host ports. If you run SDK/CLI on the host, use:
+
+- Postgres: `postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog`
+- Redis: `redis://localhost:6380`
+- ClickHouse: host `localhost`, port `9002`
+
+Inside containers, use the service names (`postgres`, `redis`, `clickhouse`) and their internal ports.
+
+## Docker Compose Ports (Host)
+
+From `docker-compose.yml`:
+
+- Postgres: `localhost:5433` (internal 5432)
+- Redis: `localhost:6380` (internal 6379)
+- ClickHouse HTTP: `localhost:8124` (internal 8123)
+- ClickHouse native: `localhost:9002` (internal 9000)
+- Catalog API: `http://localhost:8085` (internal 8080)
+- lakeFS: `http://localhost:8000`
+- MinIO: `http://localhost:19000` (S3), `http://localhost:19001` (console)
+- Apicurio Registry: `http://localhost:18081`
+- OpenMetadata: `http://localhost:8585`
+
+## One-Time Volume Init
+
+`scripts/init_volume.sh` uses `HEBER_VOLUME_ROOT` and creates:
+
+- `data/bronze`, `data/silver`, `data/gold`
+- `postgres/data`, `clickhouse/data`, `clickhouse/logs`, `redis/data`
+
+## OSS Migration Settings (Optional)
+
+These are read by modules in `heber/storage/`, `heber/versioning/`, and `heber/schema/`:
+
+- `ICEBERG_*` for Iceberg catalog + warehouse
+- `LAKEFS_*` for Gold versioning
+- `SCHEMA_REGISTRY_*` for schema registry
+- `MINIO_*` for S3-compatible storage
+
+See `.env.example` for the complete list.
+
+
+
+================================================
+FILE: docs/data_contract.md
+================================================
+# Data Contract
+
+Canonical event and dataset contract for Heber ingestion and storage.
+
+## EventEnvelope (Canonical)
+
+Source: `heber/models/envelope.py`
+
+Required fields:
+
+- `event_id` (str): idempotency hash
+- `provider` (str): data provider (alpaca, unusual_whales, etc)
+- `feed` (str): feed type (bars, quotes, trades, flow_alerts, etc)
+- `source` (str): delivery method (`websocket` or `rest`)
+- `instrument_type` (str): `equity|option|crypto|forex`
+- `instrument_key` (str): canonical key (e.g., `equity:AAPL`)
+- `symbol` (str): human-readable symbol
+- `ts_event` (datetime): event time from provider
+- `ts_ingest` (datetime): gateway receive/process time
+- `payload` (dict): normalized event payload
+
+Optional fields:
+
+- `schema_version` (str, default `v1`)
+- `lineage` (dict)
+- `quality_flags` (list[str])
+- `ts_available` (datetime): first safe time this record is queryable (set by Heber on write)
+- `raw` (dict): original provider message (Bronze fidelity)
+- `processing_delay_ms` (int, default `0`)
+
+Zero-leakage rule: reads for training/backtests must filter `ts_available <= asof_time`.
+
+## Instrument Key Formats
+
+Regex validation in `validate_instrument_key()`:
+
+- `equity:SYMBOL` (1-5 uppercase letters)
+- `crypto:BASE-QUOTE` (e.g., `crypto:BTC-USD`)
+- `forex:BASE-QUOTE` (e.g., `forex:EUR-USD`)
+- `option:OCC:...` (OCC standard option symbol)
+
+## Storage Layers
+
+- Bronze: raw envelope (JSONL.gz) partitioned by `provider/feed/dt/hour`
+- Silver: normalized Parquet partitioned by `feed/instrument_type/dt` (and `hour` for quotes/trades)
+- Gold: Parquet partitioned by `dataset/project/version/dt`
+
+## Silver Schemas (Parquet Writer)
+
+Source: `heber/writer/silver.py`
+
+All feeds include base fields:
+
+- `event_id`, `provider`, `feed`, `instrument_type`, `instrument_key`, `symbol`
+- `ts_event`, `ts_ingest`, `ts_available`
+- `source`, `schema_version`, `quality_flags`
+
+Feed-specific fields:
+
+### bars
+
+- `timeframe`, `bar_start_ts`, `open`, `high`, `low`, `close`, `volume`, `trade_count`, `vwap`
+
+### quotes
+
+- `bid_px`, `bid_sz`, `ask_px`, `ask_sz`, `bid_exchange`, `ask_exchange`
+
+### trades
+
+- `trade_id`, `price`, `size`, `exchange`, `tape`
+
+### flow_alerts
+
+- `underlying`, `occ_symbol`, `expiry`, `strike`, `put_call`
+- `premium`, `volume`, `open_interest`
+- `spot_px`, `contract_px`
+- `alert_type`, `side`, `aggressor`
+
+Unknown feeds are stored using `DEFAULT_SCHEMA` with a `payload_json` field.
+
+## Gold Datasets
+
+Gold writes require:
+
+- `instrument_key`, `ts_event`, `ts_available`
+
+Partition key: `dt` derived from `ts_event`. The SDK enforces `ts_available >= ts_event`.
+
+## SDK Semantics
+
+- `read_silver()`: reads Parquet from local filesystem.
+- `read_asof()`: enforces `ts_available <= asof_time`.
+- `write_gold()`: enforces zero-leakage and writes partitioned Parquet.
+- `read_gold_versioned()`: resolves via lakeFS tags if configured, otherwise filesystem.
+
+
+
+================================================
+FILE: docs/hot_store.md
+================================================
+# Hot Store (ClickHouse)
+
+Hot Store provides low-latency access to recent quotes, trades, and bars for dashboards and signals.
+
+## Components
+
+- Client: `heber/hotstore/client.py`
+- Sync helper: `heber/hotstore/sync.py`
+- Table definitions: `heber/hotstore/tables.py`
+
+## Tables
+
+Expected tables:
+
+- `quotes_hot`
+- `trades_hot`
+- `bars_hot`
+
+Retention is enforced by ClickHouse TTLs (see table definitions).
+
+## Sync Behavior
+
+`HotStoreSync` accepts `EventEnvelope` dicts and inserts rows into Hot Store:
+
+- Quotes: `feed == "quotes"`
+- Trades: `feed == "trades"`
+- Bars: `feed == "bars"`
+- All other feeds are lake-only (skip)
+
+`get_metrics()` returns sync lag and counters; `HotStoreClient.get_sync_lag_seconds()` uses `ts_available` to compute lag.
+
+## Deployment
+
+Hot Store containers run in `docker-compose.yml` (ClickHouse only). The sync service is not currently started by default.
+
+To deploy a sync process, run a service wrapper that reads events from Redis Streams or recent Silver partitions and calls `HotStoreSync.sync_event()` per event. This repo provides the sync logic, not a long-running service.
+
+## Query Patterns
+
+Hot Store is intended for:
+
+- Real-time dashboards (Hot Store only)
+- Strategy signals (Hot Store with Silver fallback)
+
+Backtests and research should use Silver/Gold only.
+
+
+
+================================================
+FILE: docs/iceberg_migration.md
+================================================
+# Iceberg Migration
+
+Iceberg support is present but not wired into the default writer/SDK paths.
+
+## Current State
+
+- Iceberg catalog + schemas live in `heber/storage/iceberg_catalog.py`.
+- Iceberg write/read helper lives in `heber/storage/iceberg_writer.py`.
+- `heber/writer/silver.py` still writes Parquet directly.
+- `HeberClient` reads from local Parquet partitions.
+
+## Configuration
+
+Iceberg settings are read from environment variables:
+
+- `ICEBERG_CATALOG_TYPE` (default `sql`)
+- `ICEBERG_CATALOG_URI`
+- `ICEBERG_WAREHOUSE`
+- `ICEBERG_S3_ENDPOINT`
+- `ICEBERG_S3_ACCESS_KEY`
+- `ICEBERG_S3_SECRET_KEY`
+
+## Enabling (Future Work)
+
+To migrate Silver writes to Iceberg:
+
+1) Initialize catalog storage and warehouse (S3 or MinIO).
+2) Ensure Iceberg catalog database exists (default: `heber_iceberg`).
+3) Replace calls in `heber/writer/consumer.py` to use `IcebergSilverWriter` for Silver writes.
+4) Update SDK reads to use Iceberg scans rather than Parquet filesystem.
+
+## Risks / Considerations
+
+- Schema compatibility between Parquet and Iceberg definitions.
+- Data migration strategy from existing Parquet partitions.
+- Operational monitoring for Iceberg snapshots and compaction.
+
+
+
+================================================
+FILE: docs/labeling_strategy.md
+================================================
+# Labeling Strategy for Financial ML
+
+Reference documentation for Heber's approach to labeling flow alerts and options data.
+
+## Triple-Barrier Method
+
+The triple-barrier method (Lopez de Prado, 2018) assigns labels based on which barrier price hits first:
+
+| Barrier | Condition | Label |
+|---------|-----------|-------|
+| **Upper (TP)** | Price rises +X% | +1 (success) |
+| **Lower (SL)** | Price falls -X% | -1 (failure) |
+| **Time Horizon** | Neither hit by deadline | 0 (expired) |
+
+### Advantages Over Fixed-Horizon Returns
+
+- **Captures path**: Fixed-horizon only sees endpoint; barriers capture the journey
+- **Volatility-aware**: Barrier distances can scale with volatility
+- **Risk-aligned**: Labels reflect actual trading outcomes (TP/SL hits)
+
+### Heber Implementation
+
+```python
+# heber/watch/checker.py
+class BarrierChecker:
+    def check_all(self, watch: AlertWatch, snapshot: WatchSnapshot) -> WatchOutcome | None:
+        # Upper barrier (TP)
+        if snapshot.mark >= watch.target_price:
+            return WatchOutcome(outcome="TP_HIT", ...)
+
+        # Lower barrier (SL)
+        if snapshot.mark <= watch.stop_price:
+            return WatchOutcome(outcome="SL_HIT", ...)
+
+        # Time barrier
+        if now >= watch.window_end:
+            return WatchOutcome(outcome="EXPIRED", ...)
+```
+
+## Meta-Labeling
+
+Meta-labeling is a **two-stage approach** that improves precision without sacrificing recall.
+
+### The Core Insight
+
+Most ML classifiers face a recall/precision trade-off. In trading:
+
+- High recall = catch opportunities, but many false positives (losing trades)
+- High precision = fewer losses, but miss opportunities
+
+Meta-labeling separates these concerns into two models.
+
+### Two-Stage Architecture
+
+```
+Stage 1: Primary Model (or Signal)
+├── Goal: High recall - catch all potential opportunities
+├── Output: Direction prediction (+1 or -1)
+└── Example: Flow alert signals from Unusual Whales
+
+Stage 2: Meta Model (Filter)
+├── Goal: High precision - filter out false positives
+├── Input: Features + primary model's prediction
+├── Output: P(primary prediction is correct)
+└── Action: Only trade when P > threshold
+```
+
+### Meta-Label Construction
+
+For each observation where the primary model makes a prediction:
+
+| Primary Says | Actual Outcome | Meta-Label |
+|--------------|----------------|------------|
+| +1 (bullish) | Price up | 1 (true positive) |
+| +1 (bullish) | Price down | 0 (false positive) |
+| -1 (bearish) | Price down | 1 (true positive) |
+| -1 (bearish) | Price up | 0 (false positive) |
+
+The meta-model learns to distinguish reliable signals from noise.
+
+### Application to Flow Alerts
+
+Flow alerts serve as the **primary signal**:
+
+- Unusual options activity detected
+- Inherent direction from sweep/block characteristics
+- High recall by design (flags all unusual activity)
+
+The watch service provides **meta-labels**:
+
+- `TP_HIT` = primary signal was correct → meta-label 1
+- `SL_HIT` / `EXPIRED` = primary signal was wrong → meta-label 0
+
+A meta-model trained on these labels learns:
+
+- Which alert characteristics predict success
+- When market conditions favor the signal
+- Optimal filtering threshold for precision/recall
+
+### Features for Meta-Model
+
+When training a meta-model on flow alert outcomes, consider:
+
+**Alert Characteristics:**
+
+- Premium size, volume, OI ratio
+- Days to expiry, moneyness (delta)
+- Time of day, day of week
+- Sweep vs block, bid vs ask side
+
+**Market Context:**
+
+- Underlying's recent volatility
+- IV percentile, IV/RV ratio
+- Market regime (trending vs mean-reverting)
+- Sector performance
+
+**Signal Quality:**
+
+- Conviction score from UW
+- Number of similar alerts (herding)
+- Historical accuracy of similar patterns
+
+## Trading-Time Metrics
+
+Heber uses `exchange-calendars` to calculate trading-time-aware metrics:
+
+### Why Trading Time Matters
+
+Clock time includes non-trading hours (nights, weekends, holidays). A 24-hour window:
+
+- Intraday: ~6.5 trading hours
+- Overnight: ~17.5 non-trading hours
+
+Labels based on clock time conflate "how long" with "how many trading sessions."
+
+### Heber Implementation
+
+```python
+# heber/calendar/market.py
+class MarketCalendar:
+    def trading_minutes_until(self, start: datetime, end: datetime) -> int:
+        """Count only minutes when market is open."""
+
+    def add_trading_hours(self, dt: datetime, hours: float) -> datetime:
+        """Add trading hours, skipping closed periods."""
+```
+
+The `trading_minutes_to_hit` field in `WatchOutcome` measures how many trading minutes elapsed before the barrier was hit.
+
+## Point-in-Time Correctness
+
+All labeling must respect the Zero-Leakage Firewall:
+
+### Key Timestamps
+
+| Field | Meaning |
+|-------|---------|
+| `ts_event` | When the event occurred |
+| `ts_ingest` | When Heber received it |
+| `ts_available` | When it's safe to use (ts_ingest + buffer) |
+
+### As-Of Queries
+
+When training, always filter: `WHERE ts_available <= training_cutoff`
+
+This ensures you never use information that wasn't available at prediction time.
+
+### Train/Test Split
+
+```python
+# heber/firewall/splits.py
+def validate_train_test_split(train_end, test_start, label_horizon, purge_days, embargo_days):
+    """Ensure no information leakage between train and test."""
+```
+
+- **Purge**: Remove training samples whose label windows overlap test period
+- **Embargo**: Additional buffer after test period to avoid indirect leakage
+
+## References
+
+- Lopez de Prado, M. (2018). *Advances in Financial Machine Learning*. Wiley.
+- Lopez de Prado, M. (2020). "Trend-Scanning Labels." Working paper.
+- MLFinLab documentation: <https://mlfinlab.readthedocs.io/>
+
+## See Also
+
+- [Watch Service](../heber/watch/) - Implementation of barrier labeling
+- [Zero-Leakage Firewall](../heber/firewall/) - Point-in-time correctness
+- [Feature Store](../heber/feast/) - Feast integration for features
+
+
+
+================================================
+FILE: docs/schema_registry.md
+================================================
+# Schema Registry
+
+Heber includes a Confluent-compatible schema registry client in `heber/schema/registry_client.py`. This is optional and currently used by tools/services that want centralized schema evolution control.
+
+## Configuration
+
+Environment variables:
+
+- `SCHEMA_REGISTRY_URL` (default: `http://localhost:8081`)
+- `SCHEMA_REGISTRY_USER` (optional)
+- `SCHEMA_REGISTRY_PASSWORD` (optional)
+
+## Supported Schema Types
+
+- AVRO
+- JSON
+
+## Example Usage
+
+```python
+from heber.schema.registry_client import SchemaRegistryClient, SchemaType
+
+client = SchemaRegistryClient()
+schema_id = client.register_schema(
+    "silver-bars-value",
+    {"type": "record", "name": "bars", "fields": []},
+    schema_type=SchemaType.AVRO,
+)
+```
+
+## Compatibility Checks
+
+`SchemaRegistryClient.check_compatibility()` should be used in CI or deployment pipelines to prevent breaking changes. Compatibility levels are defined in `CompatibilityLevel` and can be set with `set_compatibility()`.
+
+## Current State
+
+The registry client is available, but ingestion and SDK paths do not enforce registry usage by default. You should wire it in if you want strict schema governance.
+
+
+
+================================================
 FILE: docs/sdk.md
 ================================================
 # Heber SDK
 
-The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to financial data, preventing future information from leaking into past queries.
+The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to Silver/Gold data and Catalog metadata.
 
 ## Installation
 
@@ -9345,6 +10631,13 @@ bars = client.read_asof(
 )
 ```
 
+### Local Docker Compose Note
+
+When the Catalog API is running via `docker compose`, it is exposed on port `8085` (host). Either:
+
+- Set `HEBER_API_PORT=8085` in your environment, or
+- Pass `catalog_url="http://localhost:8085/api/v1"` when constructing `HeberClient`.
+
 ## Core Features
 
 ### Zero-Leakage Data Access
@@ -9364,12 +10657,12 @@ bars = client.read_asof(
 ### Silver Layer (Market Data)
 
 ```python
-# Read raw market data
+# Read market data from local Parquet partitions
 quotes = client.read_silver(
     dataset="quotes",
     time_range=("2025-01-01", "2025-01-15"),
     instrument_keys=["equity:TSLA"],
-    columns=["ts_event", "bid", "ask", "bid_size", "ask_size"],
+    columns=["ts_event", "bid_px", "ask_px", "bid_sz", "ask_sz"],
 )
 ```
 
@@ -9393,7 +10686,7 @@ features = client.read_gold_versioned(
 
 ### Version Management
 
-Powered by lakeFS for Git-like data versioning:
+If lakeFS is configured, the SDK uses it for Git-like data versioning. If lakeFS is not reachable, it falls back to filesystem discovery.
 
 ```python
 # List all versions
@@ -9450,15 +10743,15 @@ discovery = client.discover("bars", layer="silver")
 - Adding new dataset types (options, crypto, etc.)
 - New read patterns (streaming, incremental)
 - Catalog API changes
+- Schema contract changes
 - New helper methods
 
 ### No Updates Needed
 
 - Adding new instruments (just data)
-- Schema changes (Apicurio handles evolution)
 - New Gold datasets (existing `write_gold()` works)
-- Version changes (lakeFS tags work automatically)
-- New data sources (Bronze → Silver pipeline handles it)
+- Version changes (lakeFS tags resolve automatically)
+- New data sources (Bronze -> Silver pipeline handles it)
 
 ## Architecture
 
@@ -9466,13 +10759,13 @@ The SDK is a thin wrapper over:
 
 | Layer | Implementation |
 |-------|----------------|
-| Silver reads | Apache Iceberg (via PyIceberg) |
-| Gold reads/writes | Parquet + lakeFS tags |
-| Catalog API | HTTP client to heber-catalog |
-| Versioning | lakeFS API |
-| Schema registry | Apicurio Registry |
+| Silver reads | Parquet partitions on local filesystem |
+| Gold reads/writes | Parquet partitions on local filesystem |
+| Catalog API | HTTP client to `heber-catalog` |
+| Versioning | lakeFS API (optional; fallback to filesystem) |
+| Schema registry | Confluent-compatible registry (optional, via `heber.schema`) |
 
-The OSS migration makes the SDK more stable by replacing custom implementations with well-tested open source APIs.
+Iceberg and other OSS migration components live in `heber/storage/` and are not yet wired into `HeberClient`.
 
 
 
@@ -10148,10 +11441,7 @@ docker compose up -d lakefs apicurio openmetadata
 
 ### Database Migrations
 
-```bash
-# Run Alembic migrations
-docker exec heber-catalog alembic upgrade head
-```
+Catalog tables are created automatically on `heber-catalog` startup (see `heber/catalog/api.py`). There is currently no Alembic migration configuration in this repo.
 
 ---
 
@@ -10227,15 +11517,17 @@ Guide to monitoring Heber services and responding to alerts.
 
 ## Metrics Endpoints
 
-| Service | Metrics URL |
-|---------|-------------|
-| Catalog | <http://localhost:8085/metrics> |
-| Consumer | Internal (scraped by Prometheus) |
-| Compactor | Internal (scraped by Prometheus) |
+Prometheus metrics are instrumented in code, but there is no HTTP exporter wired in the services yet. Metrics exposure needs to be added (e.g., `prometheus_client` HTTP server or FastAPI middleware).
+
+Current state:
+
+- Catalog: no `/metrics` endpoint.
+- Consumer: metrics counters exist in modules but are not exposed.
+- Compactor: logs only.
 
 ---
 
-## Key Metrics to Watch
+## Key Metrics to Watch (When Exposed)
 
 ### Data Freshness
 
@@ -10344,8 +11636,14 @@ curl -s http://localhost:8085/health | jq '.status'
 # Check for recent errors
 docker logs heber-catalog --since 24h 2>&1 | grep -c ERROR
 
-# Check DLQ size
+# Check DLQ size (if implemented in your stack)
 docker exec heber-redis redis-cli LLEN heber:dlq
+
+## Logging Signals (Available Now)
+
+- `heber-consumer` logs show per-event processing failures and flush events.
+- `heber-compactor` logs show compaction cycles and failures.
+- `heber-catalog` logs show request failures and startup.
 ```
 
 ---
@@ -11350,6 +12648,9 @@ from prometheus_client import Counter, Gauge, Histogram
 
 logger = structlog.get_logger(__name__)
 
+# Default storage root
+DEFAULT_STORAGE_ROOT = "/data/heber"
+
 
 # Prometheus metrics
 backfill_jobs_total = Counter(
@@ -11488,7 +12789,7 @@ class BackfillChunk:
 class GapDetector:
     """Detects gaps in data coverage for backfill targeting."""
 
-    def __init__(self, storage_root: str = "/data/heber"):
+    def __init__(self, storage_root: str = DEFAULT_STORAGE_ROOT):
         self.storage_root = Path(storage_root)
 
     def detect_gaps(
@@ -11575,7 +12876,7 @@ class BackfillWriter:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT,
         custom_delay_seconds: int | None = None,
     ):
@@ -11611,7 +12912,7 @@ class BackfillWriter:
         record["quality_flags"] = flags
         return record
 
-    async def write_batch(
+    def write_batch(
         self,
         job: BackfillJob,
         records: list[dict[str, Any]],
@@ -11637,7 +12938,7 @@ class BackfillWriter:
 
         # Write to temp partition per PRD §13.6
         temp_path = self._get_temp_path(job, chunk_date)
-        await self._write_parquet(processed, temp_path)
+        self._write_parquet(processed, temp_path)
 
         # Atomic merge will be handled by compactor
         logger.info(
@@ -11659,7 +12960,7 @@ class BackfillWriter:
             / f"_backfill_{job.backfill_id}"
         )
 
-    async def _write_parquet(
+    def _write_parquet(
         self,
         records: list[dict[str, Any]],
         path: Path,
@@ -11688,7 +12989,7 @@ class BackfillCoordinator:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         data_fetcher: Callable | None = None,
     ):
         self.storage_root = storage_root
@@ -11734,7 +13035,6 @@ class BackfillCoordinator:
     def _generate_chunks(
         self,
         job: BackfillJob,
-        definition: BackfillJobDefinition,
     ) -> list[BackfillChunk]:
         """Generate work chunks for a backfill job."""
         chunks = []
@@ -11779,7 +13079,7 @@ class BackfillCoordinator:
             custom_delay_seconds=definition.custom_delay_seconds,
         )
 
-        chunks = self._generate_chunks(job, definition)
+        chunks = self._generate_chunks(job)
         total_chunks = len(chunks)
 
         try:
@@ -11798,7 +13098,7 @@ class BackfillCoordinator:
                 # Write with rate limiting
                 await asyncio.sleep(1.0 / definition.rate_limit_per_second)
 
-                rows = await writer.write_batch(job, records, chunk.chunk_date)
+                rows = writer.write_batch(job, records, chunk.chunk_date)
 
                 # Update progress
                 job.rows_written += rows
@@ -11931,7 +13231,7 @@ def create_backfill_router():
         job = coordinator.create_job(definition)
 
         # Start job in background
-        asyncio.create_task(coordinator.run_job(job.backfill_id, definition))
+        _background_task = asyncio.create_task(coordinator.run_job(job.backfill_id, definition))  # noqa: F841
 
         return job.to_dict()
 
@@ -12929,7 +14229,6 @@ class RedisEventBus(EventBus):
         """Consume messages using XREADGROUP."""
         while True:
             try:
-                # Read new messages for this consumer
                 results = await self._redis.xreadgroup(
                     groupname=config.group_name,
                     consumername=config.consumer_name,
@@ -12939,36 +14238,52 @@ class RedisEventBus(EventBus):
                 )
 
                 if results:
-                    messages = []
-                    for stream_name, stream_messages in results:
-                        for msg_id, msg_data in stream_messages:
-                            # Deserialize JSON fields
-                            parsed_data = {}
-                            for key, value in msg_data.items():
-                                try:
-                                    parsed_data[key] = json.loads(value)
-                                except (json.JSONDecodeError, TypeError):
-                                    parsed_data[key] = value
-
-                            message = Message(
-                                id=msg_id,
-                                stream=stream_name,
-                                data=parsed_data,
-                            )
-                            messages.append(message)
-                            messages_received.labels(stream=stream_name).inc()
-
+                    messages = self._parse_stream_results(results)
                     if messages:
                         yield messages
 
-                # Also check for pending messages that need claiming
                 await self._claim_idle_messages(config)
 
             except asyncio.CancelledError:
-                break
+                logger.info("consumer_cancelled", stream=config.stream.value)
+                raise  # Re-raise per Python best practice
             except Exception as e:
                 logger.error("consume_error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)
+
+    def _parse_stream_results(self, results: list) -> list[Message]:
+        """Parse XREADGROUP results into Message objects."""
+        messages = []
+        for stream_name, stream_messages in results:
+            for msg_id, msg_data in stream_messages:
+                message = self._parse_single_message(msg_id, stream_name, msg_data)
+                messages.append(message)
+                messages_received.labels(stream=stream_name).inc()
+        return messages
+
+    def _parse_single_message(
+        self,
+        msg_id: str,
+        stream_name: str,
+        msg_data: dict,
+    ) -> Message:
+        """Parse a single message, deserializing JSON fields."""
+        parsed_data = {}
+        for key, value in msg_data.items():
+            parsed_data[key] = self._deserialize_value(value)
+
+        return Message(
+            id=msg_id,
+            stream=stream_name,
+            data=parsed_data,
+        )
+
+    def _deserialize_value(self, value: str) -> Any:
+        """Attempt to deserialize a JSON value, return original if not JSON."""
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
 
     async def _claim_idle_messages(self, config: ConsumerConfig) -> list[Message]:
         """Claim idle messages from other consumers (on restart/crash)."""
@@ -13108,7 +14423,8 @@ class InMemoryEventBus(EventBus):
                     await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
-                break
+                logger.info("in_memory_consumer_cancelled")
+                raise  # Re-raise per Python best practice
 
     async def ack(self, stream: StreamName, group_name: str, message_id: str) -> None:
         async with self._lock:
@@ -14319,6 +15635,407 @@ class StreamRegistry:
             "consumer_groups": self.list_consumer_groups(),
             "generated_at": datetime.now(UTC).isoformat(),
         }
+
+
+
+================================================
+FILE: heber/calendar/__init__.py
+================================================
+"""Calendar module - Market hours and trading calendar utilities."""
+
+from heber.calendar.market import MarketCalendar
+
+__all__ = ["MarketCalendar"]
+
+
+
+================================================
+FILE: heber/calendar/market.py
+================================================
+"""Market Calendar - Trading hours and holiday awareness.
+
+Uses exchange-calendars for accurate market session data.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from zoneinfo import ZoneInfo
+
+import exchange_calendars as xcals
+import pandas as pd
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+# US Eastern timezone for NYSE
+ET = ZoneInfo("America/New_York")
+
+# Default exchange for US equity options
+DEFAULT_EXCHANGE = "XNYS"  # NYSE
+
+
+class MarketCalendar:
+    """US equity options market calendar.
+
+    Wraps exchange-calendars to provide:
+    - Market open/close detection
+    - Holiday and early close awareness
+    - Trading time calculations (skip non-trading hours)
+
+    Example:
+        cal = MarketCalendar()
+        if cal.is_market_open():
+            # Safe to poll for quotes
+            ...
+
+        # Calculate window end in trading time
+        window_end = cal.add_trading_hours(alert_time, 4.0)
+    """
+
+    def __init__(
+        self,
+        exchange: str = DEFAULT_EXCHANGE,
+        include_extended: bool = False,
+    ):
+        """Initialize with exchange calendar.
+
+        Args:
+            exchange: Exchange code (ISO-10383), default XNYS (NYSE)
+            include_extended: Include extended hours (pre/post market).
+                             Default False since options liquidity is poor
+                             outside regular hours.
+        """
+        self.exchange = exchange
+        self.include_extended = include_extended
+        self._cal = xcals.get_calendar(exchange)
+
+    def is_market_open(self, dt: datetime | None = None) -> bool:
+        """Check if market is currently open.
+
+        Args:
+            dt: Datetime to check (default: now)
+
+        Returns:
+            True if market is open for trading
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        # Convert to pandas Timestamp for exchange-calendars
+        ts = pd.Timestamp(dt).tz_convert(ET)
+
+        try:
+            return self._cal.is_open_on_minute(ts)
+        except ValueError:
+            # Date out of calendar range
+            return False
+
+    def is_trading_day(self, dt: datetime | None = None) -> bool:
+        """Check if date is a trading day (not weekend/holiday).
+
+        Args:
+            dt: Datetime to check (default: now)
+
+        Returns:
+            True if the date has a trading session
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        ts = pd.Timestamp(dt).tz_convert(ET)
+        date = ts.date()
+
+        try:
+            return self._cal.is_session(pd.Timestamp(date))
+        except ValueError:
+            return False
+
+    def session_open(self, dt: datetime | None = None) -> datetime:
+        """Get market open time for the session containing dt.
+
+        Args:
+            dt: Datetime within the session (default: now)
+
+        Returns:
+            Market open time as UTC datetime
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        ts = pd.Timestamp(dt).tz_convert(ET)
+        session = self._get_session(ts)
+
+        if session is None:
+            # Not a trading day, get next session
+            session = self._next_session(ts)
+
+        open_time = self._cal.session_open(session)
+        return open_time.to_pydatetime().replace(tzinfo=UTC)
+
+    def session_close(self, dt: datetime | None = None) -> datetime:
+        """Get market close time for the session containing dt.
+
+        Handles early closes (e.g., day after Thanksgiving at 1pm).
+
+        Args:
+            dt: Datetime within the session (default: now)
+
+        Returns:
+            Market close time as UTC datetime
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        ts = pd.Timestamp(dt).tz_convert(ET)
+        session = self._get_session(ts)
+
+        if session is None:
+            # Not a trading day, get next session
+            session = self._next_session(ts)
+
+        close_time = self._cal.session_close(session)
+        return close_time.to_pydatetime().replace(tzinfo=UTC)
+
+    def next_open(self, dt: datetime | None = None) -> datetime:
+        """Get next market open time.
+
+        If market is currently open, returns the open time of the next session.
+
+        Args:
+            dt: Reference time (default: now)
+
+        Returns:
+            Next market open as UTC datetime
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        ts = pd.Timestamp(dt).tz_convert(ET)
+
+        # Find next session
+        next_session = self._next_session(ts)
+        open_time = self._cal.session_open(next_session)
+
+        return open_time.to_pydatetime().replace(tzinfo=UTC)
+
+    def next_close(self, dt: datetime | None = None) -> datetime:
+        """Get next market close time.
+
+        If market is currently open, returns close time of current session.
+        If market is closed, returns close time of next session.
+
+        Args:
+            dt: Reference time (default: now)
+
+        Returns:
+            Next market close as UTC datetime
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        ts = pd.Timestamp(dt).tz_convert(ET)
+
+        if self.is_market_open(dt):
+            # Return current session's close
+            session = self._get_session(ts)
+            if session is not None:
+                close_time = self._cal.session_close(session)
+                return close_time.to_pydatetime().replace(tzinfo=UTC)
+
+        # Return next session's close
+        next_session = self._next_session(ts)
+        close_time = self._cal.session_close(next_session)
+        return close_time.to_pydatetime().replace(tzinfo=UTC)
+
+    def add_trading_hours(self, dt: datetime, hours: float) -> datetime:
+        """Add trading hours to a timestamp, skipping non-trading time.
+
+        Essential for calculating watch window_end in *market time* rather
+        than clock time. A "4-hour intraday window" should span 4 hours of
+        actual trading, not calendar time.
+
+        Args:
+            dt: Starting datetime
+            hours: Number of trading hours to add
+
+        Returns:
+            Datetime after the specified trading hours have elapsed
+        """
+        minutes_remaining = int(hours * 60)
+        current = pd.Timestamp(dt).tz_convert(ET)
+
+        while minutes_remaining > 0:
+            # If not during trading hours, advance to next open
+            if not self._cal.is_open_on_minute(current):
+                next_session = self._next_session(current)
+                current = self._cal.session_open(next_session)
+
+            # Get close of current session
+            session = self._get_session(current)
+            if session is None:
+                next_session = self._next_session(current)
+                current = self._cal.session_open(next_session)
+                continue
+
+            session_close = self._cal.session_close(session)
+
+            # Minutes until session close
+            minutes_to_close = int((session_close - current).total_seconds() / 60)
+
+            if minutes_remaining <= minutes_to_close:
+                # Finish within this session
+                current = current + pd.Timedelta(minutes=minutes_remaining)
+                minutes_remaining = 0
+            else:
+                # Use up this session and continue to next
+                minutes_remaining -= minutes_to_close
+                next_session = self._next_session(current)
+                current = self._cal.session_open(next_session)
+
+        return current.to_pydatetime().replace(tzinfo=UTC)
+
+    def trading_minutes_until(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """Count trading minutes between two times.
+
+        Only counts minutes when the market is open. Useful for calculating
+        how long a trade actually took in *market time*.
+
+        Args:
+            start: Start datetime
+            end: End datetime
+
+        Returns:
+            Number of trading minutes between start and end
+        """
+        start_ts = pd.Timestamp(start).tz_convert(ET)
+        end_ts = pd.Timestamp(end).tz_convert(ET)
+
+        if end_ts <= start_ts:
+            return 0
+
+        total_minutes = 0
+        current = start_ts
+
+        while current < end_ts:
+            current, session_minutes = self._count_session_minutes(current, end_ts)
+            if session_minutes < 0:
+                break
+            total_minutes += session_minutes
+
+        return total_minutes
+
+    def _count_session_minutes(
+        self,
+        current: pd.Timestamp,
+        end_ts: pd.Timestamp,
+    ) -> tuple[pd.Timestamp, int]:
+        """Count trading minutes in current session and advance to next.
+
+        Returns:
+            Tuple of (next_position, minutes_counted).
+            Returns (current, -1) to signal end of iteration.
+        """
+        # Advance to next open if not during trading
+        if not self._cal.is_open_on_minute(current):
+            try:
+                next_session = self._next_session(current)
+                next_open = self._cal.session_open(next_session)
+                if next_open >= end_ts:
+                    return current, -1
+                return next_open, 0
+            except ValueError:
+                return current, -1
+
+        # Get session close
+        session = self._get_session(current)
+        if session is None:
+            return current, -1
+
+        session_close = self._cal.session_close(session)
+        effective_end = min(session_close, end_ts)
+
+        # Count minutes in this trading window
+        minutes = max(0, int((effective_end - current).total_seconds() / 60))
+
+        # Move to next session if needed
+        if session_close < end_ts:
+            try:
+                next_session = self._next_session(current)
+                return self._cal.session_open(next_session), minutes
+            except ValueError:
+                return current, -1
+
+        return end_ts, minutes
+
+    def seconds_until_open(self, dt: datetime | None = None) -> float:
+        """Get seconds until market opens.
+
+        Returns 0 if market is currently open.
+
+        Args:
+            dt: Reference time (default: now)
+
+        Returns:
+            Seconds until next market open, or 0 if already open
+        """
+        if dt is None:
+            dt = datetime.now(UTC)
+
+        if self.is_market_open(dt):
+            return 0.0
+
+        next_open = self.next_open(dt)
+        return max(0.0, (next_open - dt).total_seconds())
+
+    def _get_session(self, ts: pd.Timestamp) -> pd.Timestamp | None:
+        """Get the trading session for a timestamp."""
+        date = ts.date()
+        session = pd.Timestamp(date)
+
+        if self._cal.is_session(session):
+            return session
+        return None
+
+    def _next_session(self, ts: pd.Timestamp) -> pd.Timestamp:
+        """Get the next trading session after timestamp."""
+        date = ts.date()
+
+        # Start from today if before close, else tomorrow
+        if self._cal.is_session(pd.Timestamp(date)):
+            session_close = self._cal.session_close(pd.Timestamp(date))
+            if ts < session_close:
+                # Still in today's session window
+                return pd.Timestamp(date)
+
+        # Find next session
+        start_date = pd.Timestamp(date + timedelta(days=1))
+
+        # Search up to 10 days (covers long weekends)
+        for i in range(10):
+            check_date = start_date + pd.Timedelta(days=i)
+            if self._cal.is_session(check_date):
+                return check_date
+
+        raise ValueError(f"No trading session found within 10 days of {date}")
+
+
+@lru_cache(maxsize=4)
+def get_calendar(exchange: str = DEFAULT_EXCHANGE) -> MarketCalendar:
+    """Get cached MarketCalendar instance.
+
+    Args:
+        exchange: Exchange code (default: XNYS)
+
+    Returns:
+        Cached MarketCalendar instance
+    """
+    return MarketCalendar(exchange=exchange)
 
 
 
@@ -15868,7 +17585,6 @@ class OpenMetadataCatalog:
     def register_table(
         self,
         table: TableMetadata,
-        columns: list[ColumnMetadata] | None = None,
     ) -> str:
         """Register or update a table in the catalog.
 
@@ -17722,7 +19438,6 @@ class AlertLabelsPipeline:
         This fetches option price data from the Data Gateway and computes
         contract-level TP/SL barrier labels.
         """
-        # Get unique OCC symbols
         if "occ_symbol" not in flow_alerts.columns:
             logger.warning("No occ_symbol in flow alerts, skipping contract labels")
             return labels
@@ -17734,78 +19449,73 @@ class AlertLabelsPipeline:
 
         logger.info("Fetching option bars", contracts=len(occ_symbols))
 
-        # Fetch option bars from Data Gateway
         option_bars = asyncio.run(self._fetch_option_bars(occ_symbols, bar_start, bar_end))
 
         if option_bars.empty:
             logger.warning("No option bars returned from gateway")
-            # Add empty contract columns
-            for col in [
-                "contract_hit_tp_first",
-                "contract_mfe",
-                "contract_mae",
-                "contract_mfe_adj",
-                "contract_mae_adj",
-                "contract_bars_to_hit",
-            ]:
-                labels[col] = pd.NA
-            return labels
+            return self._add_empty_contract_columns(labels)
 
         logger.info("Fetched option bars", count=len(option_bars))
 
-        # Compute contract labels for each alert
-        contract_labels = []
+        contract_labels = [
+            self._compute_single_contract_label(row, flow_alerts, option_bars) for _, row in labels.iterrows()
+        ]
 
-        for _, row in labels.iterrows():
-            alert_id = row["alert_id"]
-            occ_symbol = (
-                flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
-                if alert_id in flow_alerts["event_id"].values
-                else None
-            )
-
-            if occ_symbol is None or pd.isna(occ_symbol):
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            # Get option bars for this contract
-            contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
-            if contract_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            # Get entry price (option price at alert time)
-            ts_alert = row["ts_alert"]
-            entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
-            if entry_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            entry_price = entry_bars.iloc[-1]["close"]
-
-            # Get forward price path
-            future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(
-                self.contract_config.max_window_bars
-            )
-
-            if future_bars.empty:
-                contract_labels.append(self._empty_contract_result())
-                continue
-
-            price_path = future_bars["close"].values
-
-            # Compute contract barrier outcome
-            outcome = _compute_contract_barrier_outcome(
-                price_path, entry_price, self.contract_config, self.slippage_model
-            )
-            contract_labels.append(outcome)
-
-        # Merge contract labels into main DataFrame
         contract_df = pd.DataFrame(contract_labels)
         for col in contract_df.columns:
             labels[col] = contract_df[col].values
 
         return labels
+
+    def _add_empty_contract_columns(self, labels: pd.DataFrame) -> pd.DataFrame:
+        """Add empty contract label columns to DataFrame."""
+        for col in [
+            "contract_hit_tp_first",
+            "contract_mfe",
+            "contract_mae",
+            "contract_mfe_adj",
+            "contract_mae_adj",
+            "contract_bars_to_hit",
+        ]:
+            labels[col] = pd.NA
+        return labels
+
+    def _compute_single_contract_label(
+        self,
+        row: pd.Series,
+        flow_alerts: pd.DataFrame,
+        option_bars: pd.DataFrame,
+    ) -> dict:
+        """Compute contract barrier label for a single alert."""
+        alert_id = row["alert_id"]
+        occ_symbol = self._get_occ_symbol_for_alert(alert_id, flow_alerts)
+
+        if occ_symbol is None or pd.isna(occ_symbol):
+            return self._empty_contract_result()
+
+        contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
+        if contract_bars.empty:
+            return self._empty_contract_result()
+
+        ts_alert = row["ts_alert"]
+        entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
+        if entry_bars.empty:
+            return self._empty_contract_result()
+
+        entry_price = entry_bars.iloc[-1]["close"]
+        future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(self.contract_config.max_window_bars)
+
+        if future_bars.empty:
+            return self._empty_contract_result()
+
+        price_path = future_bars["close"].values
+        return _compute_contract_barrier_outcome(price_path, entry_price, self.contract_config, self.slippage_model)
+
+    def _get_occ_symbol_for_alert(self, alert_id: str, flow_alerts: pd.DataFrame) -> str | None:
+        """Look up OCC symbol for an alert ID."""
+        if alert_id not in flow_alerts["event_id"].values:
+            return None
+        return flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
 
     async def _fetch_option_bars(
         self,
@@ -18464,7 +20174,6 @@ def _process_single_alert(
     # Calculate DTE
     alert_date = ts_alert.date() if hasattr(ts_alert, "date") else ts_alert
     dte = (expiry - alert_date).days if isinstance(expiry, date) else 5
-
     horizon = classify_horizon(dte)
 
     # Get underlying bars
@@ -18473,12 +20182,11 @@ def _process_single_alert(
         return _empty_result(alert_id, underlying, put_call, horizon, dte)
 
     # Get ATR and spot at alert time
-    bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
-    if bars_at_alert.empty:
+    entry_data = _get_entry_data(underlying_bars, ts_alert, alert)
+    if entry_data is None:
         return _empty_result(alert_id, underlying, put_call, horizon, dte)
 
-    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
-    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+    atr_at_alert, spot_at_alert = entry_data
 
     # Compute thresholds
     tp_threshold = config.tp_atr_mult * atr_at_alert / spot_at_alert
@@ -18495,26 +20203,12 @@ def _process_single_alert(
     # Compute barrier outcome
     outcome = _compute_barrier_outcome(price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model)
 
-    # Get VIX at alert time (regime context)
-    vix_at_alert = None
-    if vix_data is not None and len(vix_data) > 0:
-        vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
-        if not vix_before.empty:
-            vix_at_alert = float(vix_before.iloc[-1]["close"])
+    # Get VIX at alert time
+    vix_at_alert = _get_vix_at_alert(vix_data, ts_alert)
 
-    # Compute beta-neutral return (SPY-relative)
-    beta_neutral_return = None
+    # Compute beta-neutral return
     raw_return = outcome["mfe"] if outcome["hit_tp_first"] == 1 else outcome["mae"]
-
-    if spy_bars is not None and len(spy_bars) > 0:
-        spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
-        end_time = ts_alert + timedelta(days=config.max_window_bars)
-        spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
-
-        if spy_at_alert and spy_at_end and spy_at_alert > 0:
-            spy_return = (spy_at_end - spy_at_alert) / spy_at_alert
-            if not np.isnan(raw_return):
-                beta_neutral_return = _compute_beta_neutral_return(raw_return, spy_return)
+    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config.max_window_bars, raw_return)
 
     return {
         "alert_id": alert_id,
@@ -18528,23 +20222,62 @@ def _process_single_alert(
         "atr_at_alert": atr_at_alert,
         "tp_threshold": tp_threshold,
         "sl_threshold": sl_threshold,
-        # Core label
         "hit_tp_first": outcome["hit_tp_first"],
-        # Raw MFE/MAE
         "mfe": outcome["mfe"],
         "mae": outcome["mae"],
-        # Slippage-adjusted MFE/MAE
         "mfe_adj": outcome["mfe_adj"],
         "mae_adj": outcome["mae_adj"],
         "bars_to_hit": outcome["bars_to_hit"],
-        # Beta-neutral (SPY-relative) return
         "beta_neutral_return": beta_neutral_return,
-        # Regime context
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
-        # Anti-leakage
         "ts_available": ts_alert + timedelta(days=max(1, config.max_window_bars // 24)),
     }
+
+
+def _get_entry_data(
+    underlying_bars: pd.DataFrame,
+    ts_alert: pd.Timestamp,
+    alert: pd.Series,
+) -> tuple[float, float] | None:
+    """Get ATR and spot price at alert time."""
+    bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
+    if bars_at_alert.empty:
+        return None
+    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
+    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+    return atr_at_alert, spot_at_alert
+
+
+def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> float | None:
+    """Get VIX level at alert time."""
+    if vix_data is None or len(vix_data) == 0:
+        return None
+    vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
+    if vix_before.empty:
+        return None
+    return float(vix_before.iloc[-1]["close"])
+
+
+def _compute_spy_relative_return(
+    spy_bars: pd.DataFrame | None,
+    ts_alert: pd.Timestamp,
+    max_window_bars: int,
+    raw_return: float,
+) -> float | None:
+    """Compute SPY-relative beta-neutral return."""
+    if spy_bars is None or len(spy_bars) == 0 or np.isnan(raw_return):
+        return None
+
+    spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
+    end_time = ts_alert + timedelta(days=max_window_bars)
+    spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
+
+    if not spy_at_alert or not spy_at_end or spy_at_alert <= 0:
+        return None
+
+    spy_return = (spy_at_end - spy_at_alert) / spy_at_alert
+    return _compute_beta_neutral_return(raw_return, spy_return)
 
 
 def _empty_result(
@@ -21699,7 +23432,7 @@ class HotStoreClient:
             )
         return self._client
 
-    async def get_latest_quote(self, instrument_key: str) -> dict[str, Any] | None:
+    def get_latest_quote(self, instrument_key: str) -> dict[str, Any] | None:
         """Get latest quote for an instrument from Hot Store.
 
         Args:
@@ -21720,7 +23453,7 @@ class HotStoreClient:
             return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
-    async def get_latest_bar(self, instrument_key: str, timeframe: str = "1Min") -> dict[str, Any] | None:
+    def get_latest_bar(self, instrument_key: str, timeframe: str = "1Min") -> dict[str, Any] | None:
         """Get latest bar for an instrument from Hot Store.
 
         Args:
@@ -21743,7 +23476,7 @@ class HotStoreClient:
             return dict(zip(result.column_names, result.result_rows[0], strict=False))
         return None
 
-    async def get_quotes_range(
+    def get_quotes_range(
         self,
         instrument_key: str,
         start: datetime,
@@ -21770,7 +23503,7 @@ class HotStoreClient:
         result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
         return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
-    async def get_trades_range(
+    def get_trades_range(
         self,
         instrument_key: str,
         start: datetime,
@@ -21797,7 +23530,7 @@ class HotStoreClient:
         result = self.client.query(query, parameters={"key": instrument_key, "start": start, "end": end})
         return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 
-    async def get_sync_lag_seconds(self, dataset: str) -> float:
+    def get_sync_lag_seconds(self, dataset: str) -> float:
         """Get sync lag between Silver and Hot Store (PRD §12.10.1).
 
         Args:
@@ -21818,7 +23551,7 @@ class HotStoreClient:
             return float(result.result_rows[0][0])
         return float("inf")  # No recent data
 
-    async def get_row_count(self, dataset: str, days: int = 7) -> int:
+    def get_row_count(self, dataset: str, days: int = 7) -> int:
         """Get row count for a dataset in the retention window.
 
         Args:
@@ -22193,6 +23926,1140 @@ async def create_all_tables(client) -> None:
 
     for stmt in statements:
         await client.execute(stmt)
+
+
+
+================================================
+FILE: heber/ml/__init__.py
+================================================
+"""Heber ML Package - Machine learning utilities for meta-labeling.
+
+This package provides:
+- Dataset builders for training meta-models
+- Training pipelines with MLflow integration
+- Inference services for scoring alerts
+"""
+
+from heber.ml.datasets import DatasetConfig, MetaLabelDatasetBuilder
+from heber.ml.inference import AlertGate, InferenceConfig, MetaLabelScorer
+from heber.ml.trainer import MetaModelTrainer, TrainingConfig, train_meta_model
+
+__all__ = [
+    # Datasets
+    "MetaLabelDatasetBuilder",
+    "DatasetConfig",
+    # Training
+    "MetaModelTrainer",
+    "TrainingConfig",
+    "train_meta_model",
+    # Inference
+    "MetaLabelScorer",
+    "InferenceConfig",
+    "AlertGate",
+]
+
+
+
+================================================
+FILE: heber/ml/datasets.py
+================================================
+"""Meta-Label Dataset Builder.
+
+Builds training datasets by joining captured features with outcomes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import polars as pl
+import structlog
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+logger = structlog.get_logger(__name__)
+
+# Default paths
+DEFAULT_GOLD_PATH = Path("/tmp/heber/gold")
+DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "meta_labels" / "features"
+DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "labels_alert_barriers"
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for dataset building."""
+
+    # Paths
+    outcomes_path: Path = field(default_factory=lambda: DEFAULT_OUTCOMES_PATH)
+    features_path: Path = field(default_factory=lambda: DEFAULT_FEATURES_PATH)
+    output_path: Path | None = None
+
+    # Filtering
+    min_outcomes_per_symbol: int = 5
+    exclude_expired: bool = False  # Whether to exclude EXPIRED outcomes
+
+    # Train/validation split
+    train_ratio: float = 0.8
+    purge_days: int = 5  # Days to purge around split boundary
+    embargo_days: int = 2  # Additional embargo after test start
+
+
+class MetaLabelDatasetBuilder:
+    """Builds training datasets for meta-model.
+
+    Joins features captured at alert time with outcomes from the watch service.
+    """
+
+    def __init__(
+        self,
+        config: DatasetConfig | None = None,
+        redis: Redis | None = None,
+    ):
+        """Initialize dataset builder.
+
+        Args:
+            config: Dataset configuration
+            redis: Optional Redis client for feature lookup
+        """
+        self.config = config or DatasetConfig()
+        self.redis = redis
+
+    def build_from_parquet(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> pl.DataFrame:
+        """Build dataset from Parquet files.
+
+        Args:
+            start_date: Start of date range (inclusive)
+            end_date: End of date range (inclusive)
+
+        Returns:
+            DataFrame with features and meta-labels joined
+        """
+        # Load outcomes
+        outcomes = self._load_outcomes(start_date, end_date)
+        if outcomes.is_empty():
+            logger.warning("No outcomes found in date range")
+            return pl.DataFrame()
+
+        # Load features
+        features = self._load_features(start_date, end_date)
+        if features.is_empty():
+            logger.warning("No features found in date range")
+            return pl.DataFrame()
+
+        # Join on alert_id
+        dataset = self._join_features_outcomes(features, outcomes)
+
+        # Add meta-label
+        dataset = self._add_meta_label(dataset)
+
+        # Apply filters
+        dataset = self._apply_filters(dataset)
+
+        logger.info(
+            "Built meta-label dataset",
+            rows=len(dataset),
+            start_date=str(start_date),
+            end_date=str(end_date),
+        )
+
+        return dataset
+
+    async def build_from_redis(
+        self,
+        alert_ids: list[str],
+    ) -> pl.DataFrame:
+        """Build dataset from Redis feature cache and outcome lookups.
+
+        Args:
+            alert_ids: List of alert IDs to include
+
+        Returns:
+            DataFrame with features and meta-labels
+        """
+        if not self.redis:
+            raise ValueError("Redis client required for build_from_redis")
+
+        from heber.watch.features import get_features
+
+        rows = []
+        for alert_id in alert_ids:
+            features = await get_features(self.redis, alert_id)
+            if features:
+                rows.append(features.to_dict())
+
+        if not rows:
+            return pl.DataFrame()
+
+        return pl.DataFrame(rows)
+
+    def _load_outcomes(self, start_date: date, end_date: date) -> pl.DataFrame:
+        """Load outcomes from Gold layer."""
+        outcomes_path = self.config.outcomes_path
+
+        if not outcomes_path.exists():
+            logger.warning("Outcomes path does not exist", path=str(outcomes_path))
+            return pl.DataFrame()
+
+        # Scan for Parquet files in date range
+        dfs = []
+        for dt_dir in outcomes_path.glob("dt=*"):
+            dt_str = dt_dir.name.replace("dt=", "")
+            try:
+                dt = datetime.strptime(dt_str, "%Y-%m-%d").date()
+                if start_date <= dt <= end_date:
+                    for pq_file in dt_dir.glob("*.parquet"):
+                        dfs.append(pl.read_parquet(pq_file))
+            except ValueError:
+                continue
+
+        if not dfs:
+            return pl.DataFrame()
+
+        return pl.concat(dfs)
+
+    def _load_features(self, start_date: date, end_date: date) -> pl.DataFrame:
+        """Load features from Gold layer."""
+        features_path = self.config.features_path
+
+        if not features_path.exists():
+            logger.warning("Features path does not exist", path=str(features_path))
+            return pl.DataFrame()
+
+        # Scan for Parquet files in date range
+        dfs = []
+        for dt_dir in features_path.glob("dt=*"):
+            dt_str = dt_dir.name.replace("dt=", "")
+            try:
+                dt = datetime.strptime(dt_str, "%Y-%m-%d").date()
+                if start_date <= dt <= end_date:
+                    for pq_file in dt_dir.glob("*.parquet"):
+                        dfs.append(pl.read_parquet(pq_file))
+            except ValueError:
+                continue
+
+        if not dfs:
+            return pl.DataFrame()
+
+        return pl.concat(dfs)
+
+    def _join_features_outcomes(
+        self,
+        features: pl.DataFrame,
+        outcomes: pl.DataFrame,
+    ) -> pl.DataFrame:
+        """Join features with outcomes on alert_id."""
+        # Ensure alert_id column exists in both
+        if "alert_id" not in features.columns:
+            logger.error("Features missing alert_id column")
+            return pl.DataFrame()
+
+        if "alert_id" not in outcomes.columns:
+            logger.error("Outcomes missing alert_id column")
+            return pl.DataFrame()
+
+        # Inner join - only keep alerts with both features and outcomes
+        return features.join(
+            outcomes.select([
+                "alert_id",
+                "outcome",
+                "outcome_return",
+                "mfe",
+                "mae",
+                "bars_to_hit",
+                "trading_minutes_to_hit",
+                "hit_tp_first",
+            ]),
+            on="alert_id",
+            how="inner",
+        )
+
+    def _add_meta_label(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Add meta-label column (1 if TP hit, 0 otherwise)."""
+        if "outcome" not in df.columns:
+            return df
+
+        return df.with_columns(
+            pl.when(pl.col("outcome") == "HIT_TP")
+            .then(1)
+            .otherwise(0)
+            .alias("meta_label")
+        )
+
+    def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Apply configured filters to dataset."""
+        if df.is_empty():
+            return df
+
+        # Exclude expired if configured
+        if self.config.exclude_expired and "outcome" in df.columns:
+            df = df.filter(pl.col("outcome") != "EXPIRED")
+
+        # Min samples per symbol
+        if "symbol" in df.columns and self.config.min_outcomes_per_symbol > 1:
+            symbol_counts = df.group_by("symbol").count()
+            valid_symbols = symbol_counts.filter(
+                pl.col("count") >= self.config.min_outcomes_per_symbol
+            ).select("symbol")
+            df = df.join(valid_symbols, on="symbol", how="inner")
+
+        return df
+
+    def train_test_split(
+        self,
+        df: pl.DataFrame,
+        split_date: date | None = None,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Split dataset into train and test with purge/embargo.
+
+        Uses temporal split to avoid leakage.
+
+        Args:
+            df: Full dataset
+            split_date: Date to split on (train < split_date, test >= split_date)
+                       If None, uses train_ratio to determine split point.
+
+        Returns:
+            (train_df, test_df) tuple
+        """
+        if df.is_empty():
+            return pl.DataFrame(), pl.DataFrame()
+
+        if "alert_time" not in df.columns:
+            logger.error("Cannot split: missing alert_time column")
+            return df, pl.DataFrame()
+
+        # Ensure datetime type
+        df = df.with_columns(
+            pl.col("alert_time").cast(pl.Datetime).alias("alert_time")
+        )
+
+        # Determine split date
+        if split_date is None:
+            sorted_df = df.sort("alert_time")
+            split_idx = int(len(sorted_df) * self.config.train_ratio)
+            split_date = sorted_df.row(split_idx)[
+                sorted_df.columns.index("alert_time")
+            ].date()
+
+        # Calculate purge and embargo boundaries
+        from datetime import timedelta
+
+        purge_start = split_date - timedelta(days=self.config.purge_days)
+        embargo_end = split_date + timedelta(days=self.config.embargo_days)
+
+        # Train: before purge_start
+        train_df = df.filter(
+            pl.col("alert_time") < datetime.combine(purge_start, datetime.min.time())
+        )
+
+        # Test: after embargo_end
+        test_df = df.filter(
+            pl.col("alert_time") >= datetime.combine(embargo_end, datetime.min.time())
+        )
+
+        logger.info(
+            "Train/test split completed",
+            train_size=len(train_df),
+            test_size=len(test_df),
+            split_date=str(split_date),
+            purge_days=self.config.purge_days,
+            embargo_days=self.config.embargo_days,
+        )
+
+        return train_df, test_df
+
+    def get_feature_columns(self, df: pl.DataFrame) -> list[str]:
+        """Get list of feature columns (excluding identifiers and targets).
+
+        Args:
+            df: Dataset DataFrame
+
+        Returns:
+            List of feature column names
+        """
+        exclude = {
+            # Identifiers
+            "alert_id",
+            "watch_id",
+            "symbol",
+            "underlying",
+            "occ_symbol",
+            # Timestamps
+            "alert_time",
+            "outcome_time",
+            "expiry",
+            # Targets/outcomes
+            "outcome",
+            "outcome_return",
+            "meta_label",
+            "hit_tp_first",
+            "mfe",
+            "mae",
+            "bars_to_hit",
+            "trading_minutes_to_hit",
+            # Non-numeric
+            "alert_type",
+            "side",
+            "aggressor",
+            "put_call",
+        }
+
+        return [c for c in df.columns if c not in exclude]
+
+    def to_xy(
+        self,
+        df: pl.DataFrame,
+        feature_cols: list[str] | None = None,
+        target_col: str = "meta_label",
+    ) -> tuple[pl.DataFrame, pl.Series]:
+        """Convert to X (features) and y (target) for model training.
+
+        Args:
+            df: Dataset DataFrame
+            feature_cols: Specific feature columns (or auto-detect)
+            target_col: Target column name
+
+        Returns:
+            (X, y) tuple as polars DataFrame/Series
+        """
+        if feature_cols is None:
+            feature_cols = self.get_feature_columns(df)
+
+        X = df.select(feature_cols)
+        y = df.get_column(target_col)
+
+        return X, y
+
+
+def persist_features_to_gold(
+    features_df: pl.DataFrame,
+    output_path: Path,
+    partition_col: str = "alert_time",
+) -> None:
+    """Persist features DataFrame to Gold layer with date partitioning.
+
+    Args:
+        features_df: DataFrame with feature rows
+        output_path: Base path for features
+        partition_col: Column to partition by (must be datetime)
+    """
+    if features_df.is_empty():
+        return
+
+    # Add date partition column
+    df = features_df.with_columns(
+        pl.col(partition_col).dt.date().alias("dt")
+    )
+
+    # Write partitioned by date
+    for dt_val in df.get_column("dt").unique():
+        partition_df = df.filter(pl.col("dt") == dt_val).drop("dt")
+        dt_str = dt_val.strftime("%Y-%m-%d")
+        partition_path = output_path / f"dt={dt_str}"
+        partition_path.mkdir(parents=True, exist_ok=True)
+
+        # Append to existing or create new
+        out_file = partition_path / "data.parquet"
+        partition_df.write_parquet(out_file)
+
+        logger.info(
+            "Persisted features partition",
+            date=dt_str,
+            rows=len(partition_df),
+            path=str(out_file),
+        )
+
+
+
+================================================
+FILE: heber/ml/inference.py
+================================================
+"""Meta-Label Inference Service.
+
+Scores new alerts with trained meta-model to predict success probability.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import structlog
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+    from heber.ml.trainer import MetaModelTrainer
+    from heber.models.silver import FlowAlertRecord
+    from heber.watch.features import AlertFeatures
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class InferenceConfig:
+    """Configuration for inference service."""
+
+    # Model path
+    model_path: Path | None = None
+
+    # Score thresholds
+    high_confidence_threshold: float = 0.7
+    low_confidence_threshold: float = 0.3
+
+    # Cache settings
+    cache_ttl_seconds: int = 300  # 5 min cache for scores
+
+    # Feature extraction
+    gateway_url: str = "http://localhost:8000"
+
+
+class MetaLabelScorer:
+    """Scores alerts with trained meta-model.
+
+    Can be used standalone or integrated into AlertWatchConsumer
+    to filter/prioritize alerts based on predicted success probability.
+    """
+
+    def __init__(
+        self,
+        config: InferenceConfig | None = None,
+        model: MetaModelTrainer | None = None,
+        redis: Redis | None = None,
+    ):
+        """Initialize scorer.
+
+        Args:
+            config: Inference configuration
+            model: Pre-loaded model (or load from config.model_path)
+            redis: Redis client for caching
+        """
+        self.config = config or InferenceConfig()
+        self.redis = redis
+        self._model = model
+        self._feature_extractor = None
+
+    async def initialize(self) -> None:
+        """Load model and feature extractor."""
+        if self._model is None and self.config.model_path:
+            from heber.ml.trainer import MetaModelTrainer
+
+            self._model = MetaModelTrainer.load(self.config.model_path)
+            logger.info("Loaded meta-model", path=str(self.config.model_path))
+
+        # Initialize feature extractor
+        from heber.watch.features import AlertFeatureExtractor
+
+        self._feature_extractor = AlertFeatureExtractor(
+            redis=self.redis,
+            gateway_url=self.config.gateway_url,
+        )
+
+        logger.info("Inference service initialized")
+
+    async def score(self, alert: FlowAlertRecord) -> float | None:
+        """Score a single alert.
+
+        Args:
+            alert: Flow alert record to score
+
+        Returns:
+            Probability of TP hit (0-1), or None if scoring fails
+        """
+        if self._model is None:
+            logger.warning("Model not loaded, cannot score")
+            return None
+
+        try:
+            # Check cache first
+            if self.redis:
+                cached = await self._get_cached_score(alert.event_id)
+                if cached is not None:
+                    return cached
+
+            # Extract features
+            features = await self._feature_extractor.extract(alert)
+
+            # Get feature vector
+            feature_array = features.to_feature_array()
+
+            # Predict
+            import numpy as np
+
+            x = np.array([feature_array])
+            score = float(self._model.predict_proba(x)[0])
+
+            # Cache result
+            if self.redis:
+                await self._cache_score(alert.event_id, score)
+
+            logger.debug(
+                "Scored alert",
+                alert_id=alert.event_id,
+                score=score,
+                symbol=alert.underlying,
+            )
+
+            return score
+
+        except Exception as e:
+            logger.error(
+                "Failed to score alert",
+                alert_id=alert.event_id,
+                error=str(e),
+                exc_info=True,
+            )
+            return None
+
+    async def score_batch(
+        self,
+        alerts: list[FlowAlertRecord],
+    ) -> dict[str, float | None]:
+        """Score multiple alerts.
+
+        Args:
+            alerts: List of alerts to score
+
+        Returns:
+            Dict mapping alert_id to score (or None if failed)
+        """
+        results = {}
+        tasks = [self.score(alert) for alert in alerts]
+        scores = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for alert, score in zip(alerts, scores):
+            if isinstance(score, Exception):
+                results[alert.event_id] = None
+            else:
+                results[alert.event_id] = score
+
+        return results
+
+    def classify(
+        self,
+        score: float,
+    ) -> str:
+        """Classify score into confidence bucket.
+
+        Args:
+            score: Probability score
+
+        Returns:
+            "high", "medium", or "low" confidence
+        """
+        if score >= self.config.high_confidence_threshold:
+            return "high"
+        elif score >= self.config.low_confidence_threshold:
+            return "medium"
+        else:
+            return "low"
+
+    async def score_and_filter(
+        self,
+        alerts: list[FlowAlertRecord],
+        min_score: float = 0.5,
+    ) -> list[tuple[FlowAlertRecord, float]]:
+        """Score alerts and filter by minimum threshold.
+
+        Args:
+            alerts: Alerts to evaluate
+            min_score: Minimum score to include
+
+        Returns:
+            List of (alert, score) tuples above threshold, sorted by score
+        """
+        scores = await self.score_batch(alerts)
+
+        results = []
+        for alert in alerts:
+            score = scores.get(alert.event_id)
+            if score is not None and score >= min_score:
+                results.append((alert, score))
+
+        # Sort by score descending
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        logger.info(
+            "Filtered alerts by score",
+            total=len(alerts),
+            passed=len(results),
+            min_score=min_score,
+        )
+
+        return results
+
+    async def _get_cached_score(self, alert_id: str) -> float | None:
+        """Get cached score from Redis."""
+        if not self.redis:
+            return None
+
+        key = f"heber:meta_score:{alert_id}"
+        cached = await self.redis.get(key)
+
+        if cached:
+            return float(cached)
+        return None
+
+    async def _cache_score(self, alert_id: str, score: float) -> None:
+        """Cache score in Redis."""
+        if not self.redis:
+            return
+
+        key = f"heber:meta_score:{alert_id}"
+        await self.redis.set(key, str(score), ex=self.config.cache_ttl_seconds)
+
+
+class AlertGate:
+    """Gate that uses meta-model to filter alerts before watch creation.
+
+    Can be integrated into AlertWatchConsumer to only create watches
+    for high-probability alerts.
+    """
+
+    def __init__(
+        self,
+        scorer: MetaLabelScorer,
+        min_score: float = 0.5,
+        enabled: bool = True,
+    ):
+        """Initialize gate.
+
+        Args:
+            scorer: MetaLabelScorer instance
+            min_score: Minimum score to allow through gate
+            enabled: Whether gate is active (if False, all alerts pass)
+        """
+        self.scorer = scorer
+        self.min_score = min_score
+        self.enabled = enabled
+
+    async def should_create_watch(self, alert: FlowAlertRecord) -> bool:
+        """Determine if watch should be created for this alert.
+
+        Args:
+            alert: Flow alert to evaluate
+
+        Returns:
+            True if watch should be created
+        """
+        if not self.enabled:
+            return True
+
+        score = await self.scorer.score(alert)
+
+        if score is None:
+            # On failure, default to allowing (fail-open)
+            logger.warning(
+                "Gate scoring failed, allowing alert",
+                alert_id=alert.event_id,
+            )
+            return True
+
+        passed = score >= self.min_score
+        logger.info(
+            "Gate decision",
+            alert_id=alert.event_id,
+            score=score,
+            threshold=self.min_score,
+            passed=passed,
+        )
+
+        return passed
+
+
+
+================================================
+FILE: heber/ml/trainer.py
+================================================
+"""Meta-Model Training Pipeline.
+
+Trains LightGBM models to predict which flow alerts will succeed.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import polars as pl
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for model training."""
+
+    # Model hyperparameters
+    n_estimators: int = 100
+    max_depth: int = 6
+    learning_rate: float = 0.1
+    num_leaves: int = 31
+    min_child_samples: int = 20
+    subsample: float = 0.8
+    colsample_bytree: float = 0.8
+
+    # Training settings
+    early_stopping_rounds: int = 10
+    random_state: int = 42
+
+    # Evaluation thresholds
+    score_thresholds: list[float] = field(
+        default_factory=lambda: [0.5, 0.55, 0.6, 0.65, 0.7]
+    )
+
+    # Output
+    model_name: str = "meta_model"
+    experiment_name: str = "heber_meta_labeling"
+
+
+class MetaModelTrainer:
+    """Trains meta-models for alert outcome prediction.
+
+    Uses LightGBM for fast training with good tabular performance.
+    Optionally logs to MLflow for experiment tracking.
+    """
+
+    def __init__(
+        self,
+        config: TrainingConfig | None = None,
+        use_mlflow: bool = False,
+        mlflow_tracking_uri: str | None = None,
+    ):
+        """Initialize trainer.
+
+        Args:
+            config: Training configuration
+            use_mlflow: Whether to log to MLflow
+            mlflow_tracking_uri: MLflow tracking server URI
+        """
+        self.config = config or TrainingConfig()
+        self.use_mlflow = use_mlflow
+        self.mlflow_tracking_uri = mlflow_tracking_uri
+        self._model: Any = None
+
+    def train(
+        self,
+        x_train: pl.DataFrame | np.ndarray,
+        y_train: pl.Series | np.ndarray,
+        x_val: pl.DataFrame | np.ndarray | None = None,
+        y_val: pl.Series | np.ndarray | None = None,
+        feature_names: list[str] | None = None,
+    ) -> dict[str, float]:
+        """Train the meta-model.
+
+        Args:
+            x_train: Training features
+            y_train: Training labels (0/1)
+            x_val: Validation features (optional)
+            y_val: Validation labels (optional)
+            feature_names: Feature column names
+
+        Returns:
+            Dict of evaluation metrics
+        """
+        try:
+            import lightgbm as lgb
+        except ImportError:
+            logger.error("LightGBM not installed. Run: pip install lightgbm")
+            raise
+
+        # Convert to numpy if polars
+        train_features = x_train.to_numpy() if hasattr(x_train, "to_numpy") else x_train
+        train_labels = y_train.to_numpy() if hasattr(y_train, "to_numpy") else y_train
+
+        # Handle validation set
+        eval_set = None
+        callbacks = None
+        if x_val is not None and y_val is not None:
+            val_features = x_val.to_numpy() if hasattr(x_val, "to_numpy") else x_val
+            val_labels = y_val.to_numpy() if hasattr(y_val, "to_numpy") else y_val
+            eval_set = [(val_features, val_labels)]
+            callbacks = [lgb.early_stopping(self.config.early_stopping_rounds)]
+
+        # Create and train model
+        self._model = lgb.LGBMClassifier(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            num_leaves=self.config.num_leaves,
+            min_child_samples=self.config.min_child_samples,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            random_state=self.config.random_state,
+            n_jobs=-1,
+            verbose=-1,
+        )
+
+        self._model.fit(
+            train_features,
+            train_labels,
+            eval_set=eval_set,
+            callbacks=callbacks,
+        )
+
+        # Compute metrics
+        metrics = self._compute_metrics(train_features, train_labels, prefix="train")
+        if x_val is not None and y_val is not None:
+            val_metrics = self._compute_metrics(val_features, val_labels, prefix="val")
+            metrics.update(val_metrics)
+
+        # Log to MLflow if enabled
+        if self.use_mlflow:
+            self._log_to_mlflow(metrics, feature_names)
+
+        logger.info("Model training complete", **metrics)
+        return metrics
+
+    def _compute_metrics(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        prefix: str = "",
+    ) -> dict[str, float]:
+        """Compute classification metrics.
+
+        Args:
+            X: Features
+            y: True labels
+            prefix: Metric name prefix
+
+        Returns:
+            Dict of metric name to value
+        """
+        from sklearn.metrics import (
+            accuracy_score,
+            precision_score,
+            recall_score,
+            roc_auc_score,
+        )
+
+        y_pred = self._model.predict(X)
+        y_proba = self._model.predict_proba(X)[:, 1]
+
+        metrics = {
+            f"{prefix}_accuracy": accuracy_score(y, y_pred),
+            f"{prefix}_precision": precision_score(y, y_pred, zero_division=0),
+            f"{prefix}_recall": recall_score(y, y_pred, zero_division=0),
+            f"{prefix}_auc": roc_auc_score(y, y_proba) if len(np.unique(y)) > 1 else 0.5,
+        }
+
+        # Precision at various thresholds
+        for thresh in self.config.score_thresholds:
+            y_pred_thresh = (y_proba >= thresh).astype(int)
+            prec = precision_score(y, y_pred_thresh, zero_division=0)
+            metrics[f"{prefix}_precision_at_{int(thresh*100)}"] = prec
+
+        return metrics
+
+    def _log_to_mlflow(
+        self,
+        metrics: dict[str, float],
+        feature_names: list[str] | None = None,
+    ) -> None:
+        """Log training run to MLflow."""
+        try:
+            import mlflow
+            import mlflow.sklearn
+        except ImportError:
+            logger.warning("MLflow not installed, skipping logging")
+            return
+
+        if self.mlflow_tracking_uri:
+            mlflow.set_tracking_uri(self.mlflow_tracking_uri)
+
+        mlflow.set_experiment(self.config.experiment_name)
+
+        with mlflow.start_run():
+            # Log parameters
+            mlflow.log_params({
+                "n_estimators": self.config.n_estimators,
+                "max_depth": self.config.max_depth,
+                "learning_rate": self.config.learning_rate,
+                "num_leaves": self.config.num_leaves,
+            })
+
+            # Log metrics
+            mlflow.log_metrics(metrics)
+
+            # Log model
+            mlflow.sklearn.log_model(
+                self._model,
+                self.config.model_name,
+                registered_model_name=self.config.model_name,
+            )
+
+            # Log feature importance
+            if feature_names and self._model is not None:
+                importance = dict(zip(feature_names, self._model.feature_importances_))
+                mlflow.log_dict(importance, "feature_importance.json")
+
+            logger.info("Logged run to MLflow")
+
+    def predict_proba(self, X: pl.DataFrame | np.ndarray) -> np.ndarray:
+        """Predict probability of TP hit.
+
+        Args:
+            X: Features
+
+        Returns:
+            Array of probabilities [0, 1]
+        """
+        if self._model is None:
+            raise ValueError("Model not trained. Call train() first.")
+
+        features = X.to_numpy() if hasattr(X, "to_numpy") else X
+        return self._model.predict_proba(features)[:, 1]
+
+    def predict(
+        self,
+        X: pl.DataFrame | np.ndarray,
+        threshold: float = 0.5,
+    ) -> np.ndarray:
+        """Predict binary outcome.
+
+        Args:
+            X: Features
+            threshold: Probability threshold for positive class
+
+        Returns:
+            Array of 0/1 predictions
+        """
+        proba = self.predict_proba(X)
+        return (proba >= threshold).astype(int)
+
+    def save(self, path: Path) -> None:
+        """Save model to disk.
+
+        Args:
+            path: Output path (without extension)
+        """
+        if self._model is None:
+            raise ValueError("No model to save")
+
+        import joblib
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save model
+        joblib.dump(self._model, path.with_suffix(".joblib"))
+
+        # Save config
+        config_dict = {
+            "n_estimators": self.config.n_estimators,
+            "max_depth": self.config.max_depth,
+            "learning_rate": self.config.learning_rate,
+            "num_leaves": self.config.num_leaves,
+            "score_thresholds": self.config.score_thresholds,
+        }
+        with open(path.with_suffix(".json"), "w") as f:
+            json.dump(config_dict, f, indent=2)
+
+        logger.info("Model saved", path=str(path))
+
+    @classmethod
+    def load(cls, path: Path) -> MetaModelTrainer:
+        """Load model from disk.
+
+        Args:
+            path: Model path (without extension)
+
+        Returns:
+            MetaModelTrainer with loaded model
+        """
+        import joblib
+
+        path = Path(path)
+        trainer = cls()
+        trainer._model = joblib.load(path.with_suffix(".joblib"))
+
+        # Load config if exists
+        config_path = path.with_suffix(".json")
+        if config_path.exists():
+            with open(config_path) as f:
+                config_dict = json.load(f)
+            trainer.config = TrainingConfig(**config_dict)
+
+        logger.info("Model loaded", path=str(path))
+        return trainer
+
+    def get_feature_importance(
+        self,
+        feature_names: list[str],
+    ) -> dict[str, float]:
+        """Get feature importance scores.
+
+        Args:
+            feature_names: Feature column names
+
+        Returns:
+            Dict of feature name to importance score
+        """
+        if self._model is None:
+            raise ValueError("Model not trained")
+
+        return dict(zip(feature_names, self._model.feature_importances_))
+
+
+def train_meta_model(
+    start_date: date,
+    end_date: date,
+    output_path: Path | None = None,
+    use_mlflow: bool = False,
+) -> MetaModelTrainer:
+    """Convenience function to train a meta-model.
+
+    Args:
+        start_date: Start of training data
+        end_date: End of training data
+        output_path: Path to save model
+        use_mlflow: Whether to log to MLflow
+
+    Returns:
+        Trained MetaModelTrainer
+    """
+    from heber.ml.datasets import MetaLabelDatasetBuilder
+
+    # Build dataset
+    builder = MetaLabelDatasetBuilder()
+    df = builder.build_from_parquet(start_date, end_date)
+
+    if df.is_empty():
+        raise ValueError("No data found in date range")
+
+    # Split
+    train_df, val_df = builder.train_test_split(df)
+
+    # Get features
+    feature_cols = builder.get_feature_columns(df)
+    x_train, y_train = builder.to_xy(train_df, feature_cols)
+    x_val, y_val = builder.to_xy(val_df, feature_cols)
+
+    # Train
+    trainer = MetaModelTrainer(use_mlflow=use_mlflow)
+    trainer.train(x_train, y_train, x_val, y_val, feature_cols)
+
+    # Save if path provided
+    if output_path:
+        trainer.save(output_path)
+
+    return trainer
 
 
 
@@ -27423,6 +30290,9 @@ from prometheus_client import Counter, Gauge, Histogram
 
 logger = structlog.get_logger(__name__)
 
+# Default storage root
+DEFAULT_STORAGE_ROOT = "/data/heber"
+
 
 # Prometheus metrics
 partitions_deleted = Counter(
@@ -27629,7 +30499,7 @@ class Archiver:
         self.archive_root = Path(archive_root)
         self.compress_on_archive = compress_on_archive
 
-    async def archive_partition(
+    def archive_partition(
         self,
         partition: PartitionInfo,
     ) -> tuple[bool, int]:
@@ -27689,7 +30559,7 @@ class ReaperWorker:
 
     def __init__(
         self,
-        storage_root: str = "/data/heber",
+        storage_root: str = DEFAULT_STORAGE_ROOT,
         safety_checker: DeletionSafetyChecker | None = None,
         archiver: Archiver | None = None,
         dry_run: bool = False,
@@ -27786,7 +30656,7 @@ class ReaperWorker:
 
         return expired
 
-    async def delete_partition(
+    def delete_partition(
         self,
         partition: PartitionInfo,
     ) -> tuple[bool, int]:
@@ -27834,7 +30704,7 @@ class ReaperWorker:
             )
             return False, 0
 
-    async def apply_policy(
+    def apply_policy(
         self,
         partition: PartitionInfo,
         action: LifecycleAction,
@@ -27851,12 +30721,12 @@ class ReaperWorker:
             return False, 0
 
         if action == LifecycleAction.DELETE:
-            return await self.delete_partition(partition)
+            return self.delete_partition(partition)
         elif action == LifecycleAction.ARCHIVE:
             # Archive first, then delete
-            archived, _ = await self.archiver.archive_partition(partition)
+            archived, _ = self.archiver.archive_partition(partition)
             if archived:
-                return await self.delete_partition(partition)
+                return self.delete_partition(partition)
             return False, 0
         elif action == LifecycleAction.COMPRESS:
             # Recompress in place (not yet implemented)
@@ -27890,62 +30760,16 @@ class ReaperScheduler:
         """Add retention config for a dataset."""
         self.retention_configs[config.dataset] = config
 
-    async def run_once(self) -> ReaperResult:
+    def run_once(self) -> ReaperResult:
         """Run a single reaper pass per PRD §15.4 workflow."""
         result = ReaperResult(started_at=datetime.now(UTC))
 
         try:
             for dataset, config in self.retention_configs.items():
-                # Process each layer
-                for layer, policy in [
-                    (DataLayer.BRONZE, config.bronze),
-                    (DataLayer.SILVER, config.silver),
-                    (DataLayer.GOLD, config.gold),
-                ]:
-                    if policy.retention_days is None and policy.retention_versions is None:
-                        continue  # No retention policy
-
-                    partitions = self.worker.scan_partitions(dataset, layer)
-                    result.partitions_scanned += len(partitions)
-
-                    # Find expired
-                    if layer == DataLayer.GOLD and policy.retention_versions:
-                        expired = self.worker.find_expired_versions(partitions, policy, config.pinned_versions)
-                    else:
-                        expired = self.worker.find_expired_partitions(partitions, policy)
-
-                    pending_deletions.labels(
-                        dataset=dataset,
-                        layer=layer.value,
-                    ).set(len(expired))
-
-                    # Apply policy
-                    for partition in expired:
-                        success, reclaimed = await self.worker.apply_policy(partition, policy.action)
-
-                        if success:
-                            if policy.action == LifecycleAction.ARCHIVE:
-                                result.partitions_archived += 1
-                            else:
-                                result.partitions_deleted += 1
-                            result.files_deleted += partition.file_count
-                            result.bytes_reclaimed += reclaimed
-                        else:
-                            result.errors.append(f"Failed: {partition.path}")
+                self._process_dataset(dataset, config, result)
 
             result.completed_at = datetime.now(UTC)
-            reaper_runs.labels(status="success").inc()
-
-            duration = (result.completed_at - result.started_at).total_seconds()
-            reaper_duration_seconds.observe(duration)
-
-            logger.info(
-                "reaper_run_complete",
-                partitions_scanned=result.partitions_scanned,
-                partitions_deleted=result.partitions_deleted,
-                bytes_reclaimed=result.bytes_reclaimed,
-                duration_seconds=duration,
-            )
+            self._log_success(result)
 
         except Exception as e:
             result.completed_at = datetime.now(UTC)
@@ -27955,12 +30779,80 @@ class ReaperScheduler:
 
         return result
 
+    def _process_dataset(
+        self,
+        dataset: str,
+        config: DatasetRetentionConfig,
+        result: ReaperResult,
+    ) -> None:
+        """Process retention for a single dataset across all layers."""
+        layer_policies = [
+            (DataLayer.BRONZE, config.bronze),
+            (DataLayer.SILVER, config.silver),
+            (DataLayer.GOLD, config.gold),
+        ]
+        for layer, policy in layer_policies:
+            if policy.retention_days is None and policy.retention_versions is None:
+                continue
+
+            partitions = self.worker.scan_partitions(dataset, layer)
+            result.partitions_scanned += len(partitions)
+
+            expired = self._find_expired(layer, partitions, policy, config.pinned_versions)
+            pending_deletions.labels(dataset=dataset, layer=layer.value).set(len(expired))
+
+            self._apply_policies(expired, policy, result)
+
+    def _find_expired(
+        self,
+        layer: DataLayer,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        pinned_versions: list[str],
+    ) -> list[PartitionInfo]:
+        """Find expired partitions based on layer and policy."""
+        if layer == DataLayer.GOLD and policy.retention_versions:
+            return self.worker.find_expired_versions(partitions, policy, pinned_versions)
+        return self.worker.find_expired_partitions(partitions, policy)
+
+    def _apply_policies(
+        self,
+        partitions: list[PartitionInfo],
+        policy: RetentionPolicy,
+        result: ReaperResult,
+    ) -> None:
+        """Apply retention policy to expired partitions."""
+        for partition in partitions:
+            success, reclaimed = self.worker.apply_policy(partition, policy.action)
+            if success:
+                if policy.action == LifecycleAction.ARCHIVE:
+                    result.partitions_archived += 1
+                else:
+                    result.partitions_deleted += 1
+                result.files_deleted += partition.file_count
+                result.bytes_reclaimed += reclaimed
+            else:
+                result.errors.append(f"Failed: {partition.path}")
+
+    def _log_success(self, result: ReaperResult) -> None:
+        """Log successful reaper completion."""
+        reaper_runs.labels(status="success").inc()
+        duration = (result.completed_at - result.started_at).total_seconds()
+        reaper_duration_seconds.observe(duration)
+        logger.info(
+            "reaper_run_complete",
+            partitions_scanned=result.partitions_scanned,
+            partitions_deleted=result.partitions_deleted,
+            bytes_reclaimed=result.bytes_reclaimed,
+            duration_seconds=duration,
+        )
+
     async def run_scheduled(self) -> None:
         """Run reaper on schedule."""
         self._running = True
 
         while self._running:
-            await self.run_once()
+            self.run_once()
             await asyncio.sleep(self.run_interval_hours * 3600)
 
     def stop(self) -> None:
@@ -27972,7 +30864,7 @@ class ReaperScheduler:
 
 
 def create_reaper(
-    storage_root: str = "/data/heber",
+    storage_root: str = DEFAULT_STORAGE_ROOT,
     archive_root: str = "/data/heber/archive",
     dry_run: bool = False,
 ) -> ReaperScheduler:
@@ -37164,7 +40056,6 @@ class TestUniverseSnapshot:
 def run_all_survivor_bias_tests() -> dict[str, bool]:
     """Run all survivor bias tests."""
     results = {}
-
     test_classes = [
         TestInstrumentLifecycle,
         TestUniverseManager,
@@ -37173,25 +40064,42 @@ def run_all_survivor_bias_tests() -> dict[str, bool]:
     ]
 
     for test_class in test_classes:
-        instance = test_class()
+        _run_test_class(test_class, results)
+
+    _print_summary(results)
+    return results
+
+
+def _run_test_class(test_class: type, results: dict[str, bool]) -> None:
+    """Run all test methods in a test class."""
+    instance = test_class()
+    for method_name in dir(instance):
+        if method_name.startswith("test_"):
+            _run_test_method(instance, method_name, test_class.__name__, results)
+
+
+def _run_test_method(
+    instance: object,
+    method_name: str,
+    class_name: str,
+    results: dict[str, bool],
+) -> None:
+    """Run a single test method and record result."""
+    try:
         if hasattr(instance, "setup_method"):
             instance.setup_method()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    if hasattr(instance, "setup_method"):
-                        instance.setup_method()
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
+        getattr(instance, method_name)()
+        results[f"{class_name}.{method_name}"] = True
+    except Exception as e:
+        results[f"{class_name}.{method_name}"] = False
+        print(f"FAILED: {class_name}.{method_name}: {e}")
 
+
+def _print_summary(results: dict[str, bool]) -> None:
+    """Print test results summary."""
     passed = sum(1 for v in results.values() if v)
     total = len(results)
     print(f"\nSurvivor Bias Tests: {passed}/{total} passed")
-
-    return results
 
 
 if __name__ == "__main__":
@@ -37650,6 +40558,7 @@ it polls quotes in real-time to determine if TP/SL barriers are hit.
 
 from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.consumer import AlertWatchConsumer
+from heber.watch.features import AlertFeatureExtractor, AlertFeatures, get_features, store_features
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -37672,6 +40581,11 @@ __all__ = [
     "WatchHorizon",
     "WatchKeys",
     "POLL_CONFIG",
+    # Features (meta-labeling)
+    "AlertFeatures",
+    "AlertFeatureExtractor",
+    "store_features",
+    "get_features",
     # Services
     "WatchManager",
     "SnapshotPoller",
@@ -37683,6 +40597,108 @@ __all__ = [
     "outcome_to_label_row",
     "run_watch_service",
 ]
+
+
+
+================================================
+FILE: heber/watch/__main__.py
+================================================
+"""Watch Service entry point.
+
+Run with: python -m heber.watch
+
+This starts the full watch service that:
+1. Consumes flow_alerts from Redis stream
+2. Polls option quotes during market hours
+3. Checks barriers and writes labels to Gold
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import signal
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+DEFAULT_REDIS_URL = os.environ.get("HEBER_REDIS_URL", "redis://localhost:6379")
+DEFAULT_GATEWAY_URL = os.environ.get("DATA_GATEWAY_URL", "http://localhost:8000")
+DEFAULT_OUTPUT_PATH = os.environ.get(
+    "HEBER_GOLD_PATH",
+    "/Volumes/heber/data/gold/labels_alert_barriers",
+)
+
+
+def run() -> None:
+    """Run the watch service."""
+    import redis
+    from pathlib import Path
+    from heber.watch.writer import WatchService
+
+    parser = argparse.ArgumentParser(
+        description="Run the alert watch service",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Example:
+  python -m heber.watch --redis redis://localhost:6379 --gateway http://localhost:8000
+
+Environment variables:
+  HEBER_REDIS_URL      Redis connection URL
+  DATA_GATEWAY_URL     Data Gateway URL for option quotes
+  HEBER_GOLD_PATH      Gold layer output path
+""",
+    )
+    parser.add_argument(
+        "--redis",
+        default=DEFAULT_REDIS_URL,
+        help=f"Redis URL (default: {DEFAULT_REDIS_URL})",
+    )
+    parser.add_argument(
+        "--gateway",
+        default=DEFAULT_GATEWAY_URL,
+        help=f"Data Gateway URL (default: {DEFAULT_GATEWAY_URL})",
+    )
+    parser.add_argument(
+        "--output",
+        default=DEFAULT_OUTPUT_PATH,
+        help=f"Gold output path (default: {DEFAULT_OUTPUT_PATH})",
+    )
+
+    args = parser.parse_args()
+
+    logger.info(
+        "Starting watch service",
+        redis_url=args.redis,
+        gateway_url=args.gateway,
+        output_path=args.output,
+    )
+
+    r = redis.from_url(args.redis)
+    output_path = Path(args.output) if args.output else None
+
+    service = WatchService(r, gateway_url=args.gateway, output_path=output_path)
+
+    # Handle graceful shutdown
+    def shutdown_handler(sig: int, frame: object) -> None:
+        logger.info("Shutdown signal received", signal=sig)
+        service.stop()
+
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    signal.signal(signal.SIGINT, shutdown_handler)
+
+    try:
+        asyncio.run(service.run())
+    except KeyboardInterrupt:
+        service.stop()
+    finally:
+        logger.info("Watch service exited")
+
+
+if __name__ == "__main__":
+    run()
 
 
 
@@ -37699,6 +40715,7 @@ from typing import Any
 import numpy as np
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.features.templates.alert_labels import SlippageModel
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
@@ -37721,15 +40738,18 @@ class BarrierChecker:
         self,
         watch_manager: WatchManager,
         slippage_model: SlippageModel | None = None,
+        calendar: MarketCalendar | None = None,
     ):
         """Initialize the checker.
 
         Args:
             watch_manager: WatchManager instance
             slippage_model: Optional execution cost model
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.manager = watch_manager
         self.slippage = slippage_model or SlippageModel()
+        self.calendar = calendar or MarketCalendar()
 
     def check_all(self) -> list[WatchOutcome]:
         """Check all active watches for barrier hits.
@@ -37813,6 +40833,12 @@ class BarrierChecker:
         # Build outcome
         window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
 
+        # Compute trading time to hit barrier
+        trading_mins = self.calendar.trading_minutes_until(
+            watch.alert_time,
+            now,
+        )
+
         outcome = WatchOutcome(
             watch_id=watch.watch_id,
             alert_id=watch.alert_id,
@@ -37833,6 +40859,7 @@ class BarrierChecker:
             spot_at_alert=watch.spot_at_alert,
             alert_time=watch.alert_time,
             window_duration_hours=window_hours,
+            trading_minutes_to_hit=trading_mins,
         )
 
         logger.info(
@@ -37840,6 +40867,7 @@ class BarrierChecker:
             watch_id=watch.watch_id,
             status=status.value,
             hit_tp_first=outcome.hit_tp_first,
+            trading_minutes=trading_mins,
             mfe=mfe,
             mae=mae,
         )
@@ -37910,6 +40938,7 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "contract_mfe_adj": outcome.mfe_adj,
         "contract_mae_adj": outcome.mae_adj,
         "contract_bars_to_hit": outcome.bars_to_hit,
+        "trading_minutes_to_hit": outcome.trading_minutes_to_hit,
         "outcome_return": outcome.outcome_return,
         # Context
         "entry_price": outcome.entry_price,
@@ -37943,13 +40972,15 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
+from heber.watch.features import AlertFeatureExtractor, store_features
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
-# Stream configuration
-FLOW_ALERTS_STREAM = "heber:stream:flow_alerts"
+# Stream configuration - matches Data Gateway's HEBER_STREAM
+HEBER_EVENTS_STREAM = "heber:events"
+FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
 DATA_GATEWAY_URL = "http://localhost:8000"
@@ -37977,33 +41008,42 @@ class AlertWatchConsumer:
         watch_manager: WatchManager,
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
+        async_redis: redis.asyncio.Redis | None = None,
     ):
         """Initialize the consumer.
 
         Args:
-            redis_client: Redis client
+            redis_client: Redis client (sync)
             watch_manager: WatchManager instance
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
+            async_redis: Async Redis client for feature storage (optional)
         """
         self.redis = redis_client
+        self.async_redis = async_redis
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
         self._running = False
 
+        # Feature extractor for meta-labeling
+        self.feature_extractor = AlertFeatureExtractor(
+            redis=async_redis,
+            gateway_url=gateway_url,
+        )
+
     def setup_consumer_group(self) -> None:
         """Create consumer group if it doesn't exist."""
         try:
             self.redis.xgroup_create(
-                FLOW_ALERTS_STREAM,
+                HEBER_EVENTS_STREAM,
                 CONSUMER_GROUP,
                 id="0",
                 mkstream=True,
             )
             logger.info(
                 "Created consumer group",
-                stream=FLOW_ALERTS_STREAM,
+                stream=HEBER_EVENTS_STREAM,
                 group=CONSUMER_GROUP,
             )
         except redis.ResponseError as e:
@@ -38020,7 +41060,7 @@ class AlertWatchConsumer:
 
         logger.info(
             "Starting alert watch consumer",
-            stream=FLOW_ALERTS_STREAM,
+            stream=HEBER_EVENTS_STREAM,
             group=CONSUMER_GROUP,
         )
 
@@ -38030,7 +41070,7 @@ class AlertWatchConsumer:
                 messages = self.redis.xreadgroup(
                     CONSUMER_GROUP,
                     CONSUMER_NAME,
-                    {FLOW_ALERTS_STREAM: ">"},
+                    {HEBER_EVENTS_STREAM: ">"},
                     count=100,
                     block=5000,
                 )
@@ -38038,9 +41078,11 @@ class AlertWatchConsumer:
                 if messages:
                     for _stream, entries in messages:
                         for msg_id, data in entries:
-                            await self._process_alert(msg_id, data)
-                            # Acknowledge message
-                            self.redis.xack(FLOW_ALERTS_STREAM, CONSUMER_GROUP, msg_id)
+                            # Filter for flow_alerts feed only
+                            if self._is_flow_alert(data):
+                                await self._process_alert(msg_id, data)
+                            # Always acknowledge to avoid reprocessing
+                            self.redis.xack(HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
 
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
@@ -38050,6 +41092,23 @@ class AlertWatchConsumer:
         """Stop the consumer."""
         self._running = False
         logger.info("Alert watch consumer stopped")
+
+    def _is_flow_alert(self, data: dict) -> bool:
+        """Check if the event is a flow_alerts feed event.
+
+        The heber:events stream contains multiple feed types (flow_alerts,
+        darkpool, market_tide, etc.). We only process flow_alerts.
+        """
+        # The 'data' field contains JSON string with event envelope
+        if b"data" in data:
+            import json
+
+            try:
+                envelope = json.loads(data[b"data"])
+                return envelope.get("feed") == FLOW_ALERTS_FEED
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return False
 
     async def _process_alert(self, msg_id: str, data: dict) -> None:
         """Process a single alert and create a watch.
@@ -38103,6 +41162,9 @@ class AlertWatchConsumer:
                 sl_threshold=self.config.sl_pct,
             )
 
+            # Extract and store features for meta-labeling
+            await self._extract_and_store_features(alert, watch.watch_id)
+
             logger.info(
                 "Created watch from alert",
                 watch_id=watch.watch_id,
@@ -38128,64 +41190,75 @@ class AlertWatchConsumer:
             Parsed alert dict or None
         """
         try:
-            # Handle bytes keys/values
-            parsed = {}
-            for k, v in data.items():
-                key = k.decode() if isinstance(k, bytes) else k
-                val = v.decode() if isinstance(v, bytes) else v
-
-                # Try to parse JSON values
-                if isinstance(val, str) and val.startswith("{"):
-                    try:
-                        val = json.loads(val)
-                    except json.JSONDecodeError:
-                        pass
-
-                parsed[key] = val
-
-            # If data was nested JSON
-            if "data" in parsed and isinstance(parsed["data"], dict):
-                parsed = {**parsed, **parsed["data"]}
-
-            # Map common field names
-            result = {
-                "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
-                "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
-                "underlying": parsed.get("underlying") or parsed.get("ticker"),
-                "put_call": parsed.get("put_call") or parsed.get("type", "C")[0].upper(),
-                "expiry": parsed.get("expiry"),
-                "strike": float(parsed.get("strike", 0) or 0),
-                "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
-                "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
-            }
-
-            # Calculate DTE if expiry available
-            if result["expiry"]:
-                try:
-                    from datetime import date
-
-                    exp_date = datetime.strptime(str(result["expiry"])[:10], "%Y-%m-%d").date()
-                    result["dte"] = (exp_date - date.today()).days
-                except Exception:
-                    result["dte"] = 5
-
-            # Parse timestamp
-            ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
-            if ts:
-                if isinstance(ts, str):
-                    result["ts_event"] = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                elif isinstance(ts, int | float):
-                    result["ts_event"] = datetime.fromtimestamp(ts, tz=UTC)
-                else:
-                    result["ts_event"] = datetime.now(UTC)
-            else:
-                result["ts_event"] = datetime.now(UTC)
-
+            parsed = self._decode_stream_data(data)
+            result = self._map_alert_fields(parsed)
+            result["dte"] = self._calculate_dte(result.get("expiry"))
+            result["ts_event"] = self._parse_timestamp(parsed)
             return result
 
         except Exception as e:
             logger.error("Failed to parse alert", error=str(e))
             return None
+
+    def _decode_stream_data(self, data: dict) -> dict:
+        """Decode bytes and parse nested JSON from stream message."""
+        parsed = {}
+        for k, v in data.items():
+            key = k.decode() if isinstance(k, bytes) else k
+            val = v.decode() if isinstance(v, bytes) else v
+
+            if isinstance(val, str) and val.startswith("{"):
+                try:
+                    val = json.loads(val)
+                except json.JSONDecodeError:
+                    pass
+
+            parsed[key] = val
+
+        if "data" in parsed and isinstance(parsed["data"], dict):
+            parsed = {**parsed, **parsed["data"]}
+
+        return parsed
+
+    def _map_alert_fields(self, parsed: dict) -> dict:
+        """Map various field name conventions to standard fields."""
+        put_call_raw = parsed.get("put_call") or parsed.get("type", "C")
+        put_call = put_call_raw[0].upper() if put_call_raw else "C"
+
+        return {
+            "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
+            "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
+            "underlying": parsed.get("underlying") or parsed.get("ticker"),
+            "put_call": put_call,
+            "expiry": parsed.get("expiry"),
+            "strike": float(parsed.get("strike", 0) or 0),
+            "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
+            "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
+        }
+
+    def _calculate_dte(self, expiry: str | None) -> int:
+        """Calculate days to expiry from expiry string."""
+        if not expiry:
+            return 5
+        try:
+            from datetime import date
+
+            exp_date = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
+            return (exp_date - date.today()).days
+        except Exception:
+            return 5
+
+    def _parse_timestamp(self, parsed: dict) -> datetime:
+        """Parse timestamp from various field formats."""
+        ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
+        if not ts:
+            return datetime.now(UTC)
+
+        if isinstance(ts, str):
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if isinstance(ts, int | float):
+            return datetime.fromtimestamp(ts, tz=UTC)
+        return datetime.now(UTC)
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.
@@ -38222,6 +41295,643 @@ class AlertWatchConsumer:
             logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
             return None
 
+    async def _extract_and_store_features(self, alert: dict, watch_id: str) -> None:
+        """Extract features from alert and store for meta-labeling.
+
+        Args:
+            alert: Parsed alert data dict
+            watch_id: Associated watch ID
+        """
+        try:
+            # Build a FlowAlertRecord-like object for feature extraction
+            from heber.models.silver import FlowAlertRecord
+
+            # Create minimal record for feature extraction
+            record = FlowAlertRecord(
+                event_id=alert["id"],
+                ts_event=alert.get("ts_event", datetime.now(UTC)),
+                ts_ingest=datetime.now(UTC),
+                ts_available=datetime.now(UTC),
+                instrument_key=f"option:{alert.get('occ_symbol', '')}",
+                provider="unusual_whales",
+                feed="flow_alerts",
+                underlying=alert["underlying"],
+                occ_symbol=alert.get("occ_symbol"),
+                expiry=alert.get("expiry") if isinstance(alert.get("expiry"), type(None)) or hasattr(alert.get("expiry"), "year") else datetime.strptime(str(alert["expiry"])[:10], "%Y-%m-%d").date(),
+                strike=alert.get("strike", 0.0),
+                put_call=alert["put_call"],
+                premium=alert.get("premium", 0.0),
+                volume=alert.get("volume", 0.0),
+                open_interest=alert.get("open_interest"),
+                spot_px=alert.get("spot_px"),
+                contract_px=alert.get("contract_px"),
+                alert_type=alert.get("alert_type", "UNKNOWN"),
+                side=alert.get("side"),
+                aggressor=alert.get("aggressor"),
+                tags=alert.get("tags"),
+            )
+
+            # Extract features
+            features = await self.feature_extractor.extract(record)
+
+            # Store in Redis if async client available
+            if self.async_redis:
+                await store_features(self.async_redis, features)
+                logger.debug(
+                    "Stored alert features",
+                    alert_id=alert["id"],
+                    watch_id=watch_id,
+                    feature_count=len(features.numeric_feature_names()),
+                )
+            else:
+                logger.debug(
+                    "Skipping feature storage (no async redis)",
+                    alert_id=alert["id"],
+                )
+
+        except Exception as e:
+            # Don't fail watch creation if feature extraction fails
+            logger.warning(
+                "Failed to extract/store features",
+                alert_id=alert.get("id"),
+                error=str(e),
+            )
+
+
+
+================================================
+FILE: heber/watch/features.py
+================================================
+"""Alert Feature Extraction for Meta-Labeling.
+
+Captures features at alert time for training meta-models that predict
+which flow alerts will hit their target price before stop loss.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+import structlog
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+    from heber.models.silver import FlowAlertRecord
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class AlertFeatures:
+    """Features captured at alert arrival time for meta-model training.
+
+    These features must only use information available at the moment
+    the alert is received - no lookahead allowed.
+    """
+
+    # Identifiers
+    alert_id: str
+    alert_time: datetime
+    symbol: str
+
+    # Contract info
+    occ_symbol: str | None
+    underlying: str
+    strike: float
+    expiry: date
+    put_call: str  # C or P
+    days_to_expiry: int
+
+    # Alert characteristics
+    premium: float
+    volume: float
+    open_interest: float | None
+    volume_oi_ratio: float | None
+    alert_type: str  # SWEEP, BLOCK, etc
+    side: str | None  # bid/ask/mid
+    aggressor: str | None
+
+    # Prices at alert time
+    spot_price: float | None  # Underlying price
+    contract_price: float | None  # Option mid
+
+    # Moneyness (requires spot)
+    moneyness: float | None = None  # strike / spot (>1 = OTM for calls)
+    log_moneyness: float | None = None
+
+    # Greeks (if available from alert or lookup)
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    iv: float | None = None
+
+    # Market context (from underlying quotes/bars)
+    underlying_30d_return: float | None = None
+    underlying_5d_return: float | None = None
+    underlying_1d_return: float | None = None
+    realized_vol_20d: float | None = None
+    iv_rank: float | None = None  # IV percentile over past year
+
+    # Timing features
+    hour_of_day: int = 0
+    minute_of_hour: int = 0
+    day_of_week: int = 0  # 0=Monday
+    minutes_since_open: int = 0
+    minutes_to_close: int = 0
+
+    # Tags/sentiment (from UW)
+    is_bullish: int = 0
+    is_bearish: int = 0
+    is_sweep: int = 0
+    is_block: int = 0
+    is_unusual: int = 0
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for storage."""
+        result = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, datetime):
+                result[k] = v.isoformat()
+            elif isinstance(v, date):
+                result[k] = v.isoformat()
+            else:
+                result[k] = v
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AlertFeatures:
+        """Reconstruct from dictionary."""
+        # Convert date/time strings back
+        if isinstance(data.get("alert_time"), str):
+            data["alert_time"] = datetime.fromisoformat(data["alert_time"])
+        if isinstance(data.get("expiry"), str):
+            data["expiry"] = date.fromisoformat(data["expiry"])
+        return cls(**data)
+
+    def to_feature_array(self, feature_names: list[str] | None = None) -> list[float]:
+        """Convert to numeric array for model input.
+
+        Args:
+            feature_names: Specific features to include. If None, uses all numeric.
+
+        Returns:
+            List of float values for model input.
+        """
+        if feature_names is None:
+            feature_names = self.numeric_feature_names()
+
+        values = []
+        for name in feature_names:
+            val = getattr(self, name, None)
+            # Convert None to 0 or NaN handling as needed
+            if val is None:
+                values.append(0.0)
+            elif isinstance(val, bool):
+                values.append(float(val))
+            elif isinstance(val, (int, float)):
+                values.append(float(val))
+            else:
+                values.append(0.0)
+        return values
+
+    @classmethod
+    def numeric_feature_names(cls) -> list[str]:
+        """Return list of numeric feature names for model training."""
+        return [
+            "days_to_expiry",
+            "premium",
+            "volume",
+            "open_interest",
+            "volume_oi_ratio",
+            "spot_price",
+            "contract_price",
+            "moneyness",
+            "log_moneyness",
+            "delta",
+            "gamma",
+            "theta",
+            "vega",
+            "iv",
+            "underlying_30d_return",
+            "underlying_5d_return",
+            "underlying_1d_return",
+            "realized_vol_20d",
+            "iv_rank",
+            "hour_of_day",
+            "minute_of_hour",
+            "day_of_week",
+            "minutes_since_open",
+            "minutes_to_close",
+            "is_bullish",
+            "is_bearish",
+            "is_sweep",
+            "is_block",
+            "is_unusual",
+        ]
+
+
+class AlertFeatureExtractor:
+    """Extracts features from flow alerts at arrival time.
+
+    Integrates with market data sources to enrich alerts with
+    context features (returns, volatility, IV rank, etc.).
+    """
+
+    # Market hours (Eastern Time)
+    MARKET_OPEN_HOUR = 9
+    MARKET_OPEN_MIN = 30
+    MARKET_CLOSE_HOUR = 16
+    MARKET_CLOSE_MIN = 0
+
+    def __init__(
+        self,
+        redis: Redis | None = None,
+        gateway_url: str | None = None,
+    ):
+        """Initialize extractor.
+
+        Args:
+            redis: Redis client for caching/lookups.
+            gateway_url: Data Gateway URL for market data enrichment.
+        """
+        self.redis = redis
+        self.gateway_url = gateway_url
+
+    async def extract(self, alert: FlowAlertRecord) -> AlertFeatures:
+        """Extract features from a flow alert.
+
+        Args:
+            alert: The flow alert record.
+
+        Returns:
+            AlertFeatures with all available features populated.
+        """
+        import math
+
+        # Parse alert time
+        alert_time = alert.ts_event
+
+        # Compute days to expiry
+        dte = (alert.expiry - alert_time.date()).days
+
+        # Compute volume/OI ratio
+        vol_oi = None
+        if alert.open_interest and alert.open_interest > 0:
+            vol_oi = alert.volume / alert.open_interest
+
+        # Compute moneyness
+        moneyness = None
+        log_moneyness = None
+        if alert.spot_px and alert.spot_px > 0:
+            moneyness = alert.strike / alert.spot_px
+            if moneyness > 0:
+                log_moneyness = math.log(moneyness)
+
+        # Extract timing features
+        hour = alert_time.hour
+        minute = alert_time.minute
+        day_of_week = alert_time.weekday()
+
+        # Minutes since open (9:30 AM ET)
+        market_open_minutes = self.MARKET_OPEN_HOUR * 60 + self.MARKET_OPEN_MIN
+        current_minutes = hour * 60 + minute
+        mins_since_open = max(0, current_minutes - market_open_minutes)
+
+        # Minutes to close (4:00 PM ET)
+        market_close_minutes = self.MARKET_CLOSE_HOUR * 60 + self.MARKET_CLOSE_MIN
+        mins_to_close = max(0, market_close_minutes - current_minutes)
+
+        # Parse tags for sentiment/type features
+        tags = alert.tags or []
+        tags_lower = [t.lower() for t in tags]
+
+        is_bullish = 1 if "bullish" in tags_lower else 0
+        is_bearish = 1 if "bearish" in tags_lower else 0
+        is_unusual = 1 if "unusual" in tags_lower else 0
+
+        alert_type = (alert.alert_type or "").upper()
+        is_sweep = 1 if alert_type == "SWEEP" or "sweep" in tags_lower else 0
+        is_block = 1 if alert_type == "BLOCK" or "block" in tags_lower else 0
+
+        features = AlertFeatures(
+            # Identifiers
+            alert_id=alert.event_id,
+            alert_time=alert_time,
+            symbol=alert.underlying,
+            # Contract
+            occ_symbol=alert.occ_symbol,
+            underlying=alert.underlying,
+            strike=alert.strike,
+            expiry=alert.expiry,
+            put_call=alert.put_call,
+            days_to_expiry=dte,
+            # Alert chars
+            premium=alert.premium,
+            volume=alert.volume,
+            open_interest=alert.open_interest,
+            volume_oi_ratio=vol_oi,
+            alert_type=alert.alert_type,
+            side=alert.side,
+            aggressor=alert.aggressor,
+            # Prices
+            spot_price=alert.spot_px,
+            contract_price=alert.contract_px,
+            moneyness=moneyness,
+            log_moneyness=log_moneyness,
+            # Timing
+            hour_of_day=hour,
+            minute_of_hour=minute,
+            day_of_week=day_of_week,
+            minutes_since_open=mins_since_open,
+            minutes_to_close=mins_to_close,
+            # Sentiment/type
+            is_bullish=is_bullish,
+            is_bearish=is_bearish,
+            is_sweep=is_sweep,
+            is_block=is_block,
+            is_unusual=is_unusual,
+        )
+
+        # Enrich with market context (async lookups)
+        features = await self._enrich_market_context(features)
+
+        # Enrich with Greeks from Alpaca option chain
+        features = await self._enrich_greeks(features)
+
+        # Enrich with IV rank from UW
+        features = await self._enrich_iv_rank(features)
+
+        return features
+
+    async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with IV rank from Unusual Whales.
+
+        IV rank indicates where current IV is relative to the past year's range.
+        0 = lowest IV of the year, 100 = highest IV of the year.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping IV rank enrichment")
+            return features
+
+        try:
+            import httpx
+
+            url = f"{self.gateway_url}/uw/options/{features.underlying}/iv-rank"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url)
+
+                if response.status_code != 200:
+                    logger.debug(
+                        "Failed to fetch IV rank",
+                        symbol=features.underlying,
+                        status=response.status_code,
+                    )
+                    return features
+
+                data = response.json()
+
+            # Extract IV rank from response
+            iv_data = data.get("data", {})
+            if iv_data and iv_data.get("iv_rank") is not None:
+                features.iv_rank = float(iv_data["iv_rank"])
+                logger.debug(
+                    "Enriched IV rank",
+                    symbol=features.underlying,
+                    iv_rank=features.iv_rank,
+                )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich IV rank",
+                error=str(e),
+                underlying=features.underlying,
+            )
+
+        return features
+
+    async def _enrich_greeks(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with Greeks from Alpaca option chain.
+
+        Fetches option chain for the specific strike/expiry/type and extracts
+        delta, gamma, theta, vega, and IV.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping Greeks enrichment")
+            return features
+
+        try:
+            import httpx
+
+            url = f"{self.gateway_url}/alpaca/options/chain/{features.underlying}"
+            params = {
+                "expiration_date": features.expiry.isoformat(),
+                "strike_price_gte": features.strike - 0.01,
+                "strike_price_lte": features.strike + 0.01,
+                "option_type": "call" if features.put_call == "C" else "put",
+            }
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, params=params)
+
+                if response.status_code != 200:
+                    logger.debug(
+                        "Failed to fetch option chain for Greeks",
+                        symbol=features.underlying,
+                        status=response.status_code,
+                    )
+                    return features
+
+                data = response.json()
+
+            # Extract contracts from response
+            contracts = data.get("data", {}).get("contracts", [])
+            if not contracts:
+                logger.debug("No contracts found for Greeks", symbol=features.underlying)
+                return features
+
+            # Find matching contract by strike
+            contract = None
+            for c in contracts:
+                if abs(float(c.get("strike_price", 0)) - features.strike) < 0.01:
+                    contract = c
+                    break
+
+            if not contract:
+                contract = contracts[0]  # Use first if no exact match
+
+            # Extract Greeks
+            features.delta = float(contract.get("delta")) if contract.get("delta") else None
+            features.gamma = float(contract.get("gamma")) if contract.get("gamma") else None
+            features.theta = float(contract.get("theta")) if contract.get("theta") else None
+            features.vega = float(contract.get("vega")) if contract.get("vega") else None
+            features.iv = float(contract.get("implied_volatility")) if contract.get("implied_volatility") else None
+
+            logger.debug(
+                "Enriched Greeks",
+                symbol=features.underlying,
+                delta=features.delta,
+                gamma=features.gamma,
+                iv=features.iv,
+            )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich Greeks",
+                error=str(e),
+                underlying=features.underlying,
+            )
+
+        return features
+
+    async def _enrich_market_context(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with market context data from Data Gateway.
+
+        Fetches recent bars for underlying from Alpaca via Data Gateway,
+        then computes:
+        - 1d, 5d, 30d returns
+        - 20d realized volatility
+
+        Note: IV rank requires options analytics not yet available.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping market enrichment")
+            return features
+
+        try:
+            import math
+            from datetime import timedelta
+
+            import httpx
+
+            symbol = features.underlying
+            end_date = features.alert_time.date()
+            # Fetch 35 days to ensure we have 30 trading days
+            start_date = end_date - timedelta(days=50)
+
+            url = f"{self.gateway_url}/alpaca/stocks/bars"
+            params = {
+                "symbol": symbol,
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "timeframe": "1Day",
+                "limit": 50,
+            }
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, params=params)
+
+                if response.status_code != 200:
+                    logger.warning(
+                        "Failed to fetch bars for enrichment",
+                        symbol=symbol,
+                        status=response.status_code,
+                    )
+                    return features
+
+                data = response.json()
+
+            # Extract bars from response
+            bars = data.get("data", {}).get("bars", [])
+            if not bars or len(bars) < 2:
+                logger.debug("Insufficient bars for enrichment", symbol=symbol, count=len(bars))
+                return features
+
+            # Sort by timestamp descending (most recent first)
+            bars = sorted(bars, key=lambda b: b.get("t", ""), reverse=True)
+
+            # Get close prices
+            closes = [b.get("c", 0.0) for b in bars if b.get("c")]
+
+            if len(closes) < 2:
+                return features
+
+            # Compute returns
+            current_close = closes[0]
+
+            # 1-day return
+            if len(closes) >= 2:
+                features.underlying_1d_return = (current_close / closes[1]) - 1.0
+
+            # 5-day return
+            if len(closes) >= 6:
+                features.underlying_5d_return = (current_close / closes[5]) - 1.0
+
+            # 30-day return
+            if len(closes) >= 31:
+                features.underlying_30d_return = (current_close / closes[30]) - 1.0
+
+            # 20-day realized volatility (annualized)
+            if len(closes) >= 21:
+                daily_returns = []
+                for i in range(20):
+                    if closes[i] > 0 and closes[i + 1] > 0:
+                        daily_returns.append(math.log(closes[i] / closes[i + 1]))
+
+                if daily_returns:
+                    mean_return = sum(daily_returns) / len(daily_returns)
+                    variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
+                    daily_vol = math.sqrt(variance)
+                    features.realized_vol_20d = daily_vol * math.sqrt(252)  # Annualize
+
+            logger.debug(
+                "Enriched market context",
+                symbol=symbol,
+                return_1d=features.underlying_1d_return,
+                return_5d=features.underlying_5d_return,
+                return_30d=features.underlying_30d_return,
+                vol_20d=features.realized_vol_20d,
+            )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich market context",
+                error=str(e),
+                underlying=features.underlying,
+            )
+
+        return features
+
+
+# Redis key pattern for feature storage
+FEATURES_KEY = "heber:watch:features:{alert_id}"
+
+
+async def store_features(redis: Redis, features: AlertFeatures) -> None:
+    """Store extracted features in Redis.
+
+    Args:
+        redis: Redis client.
+        features: Extracted features.
+    """
+    import json
+
+    key = FEATURES_KEY.format(alert_id=features.alert_id)
+    await redis.set(key, json.dumps(features.to_dict()), ex=86400 * 7)  # 7 day TTL
+
+
+async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
+    """Retrieve stored features from Redis.
+
+    Args:
+        redis: Redis client.
+        alert_id: Alert identifier.
+
+    Returns:
+        AlertFeatures if found, None otherwise.
+    """
+    import json
+
+    key = FEATURES_KEY.format(alert_id=alert_id)
+    data = await redis.get(key)
+    if data is None:
+        return None
+    return AlertFeatures.from_dict(json.loads(data))
+
 
 
 ================================================
@@ -38237,6 +41947,7 @@ from typing import Any
 
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.watch.models import (
     POLL_CONFIG,
     AlertWatch,
@@ -38253,15 +41964,22 @@ class WatchManager:
     """Manages alert watches in Redis.
 
     Provides CRUD operations and query methods for the watch list.
+    Uses MarketCalendar for trading-hours-aware window calculations.
     """
 
-    def __init__(self, redis_client: Any):
+    def __init__(
+        self,
+        redis_client: Any,
+        calendar: MarketCalendar | None = None,
+    ):
         """Initialize with Redis client.
 
         Args:
             redis_client: Redis client (sync or async)
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.redis = redis_client
+        self.calendar = calendar or MarketCalendar()
 
     def create_watch(
         self,
@@ -38301,9 +42019,12 @@ class WatchManager:
         """
         watch_id = str(uuid.uuid4())
 
-        # Calculate window end based on horizon
+        # Calculate window end in trading time (skips non-market hours)
         config = POLL_CONFIG[horizon]
-        window_end = alert_time + timedelta(hours=config["max_duration_hours"])
+        window_end = self.calendar.add_trading_hours(
+            alert_time,
+            config["max_duration_hours"],
+        )
 
         watch = AlertWatch(
             watch_id=watch_id,
@@ -38675,6 +42396,7 @@ class WatchOutcome(BaseModel):
     spot_at_alert: float
     alert_time: datetime
     window_duration_hours: float
+    trading_minutes_to_hit: int | None = None  # Market time to barrier
 
 
 # Redis key patterns
@@ -38741,6 +42463,7 @@ from typing import Any
 import httpx
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -38752,12 +42475,15 @@ logger = structlog.get_logger(__name__)
 
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
+# Max time to sleep when waiting for market open (check hourly)
+MAX_SLEEP_SECONDS = 3600
+
 
 class SnapshotPoller:
     """Polls option quotes from Data Gateway for active watches.
 
     Runs as a background service, fetching quotes at intervals
-    appropriate for each horizon.
+    appropriate for each horizon. Only polls during market hours.
     """
 
     def __init__(
@@ -38765,6 +42491,7 @@ class SnapshotPoller:
         watch_manager: WatchManager,
         gateway_url: str = DEFAULT_GATEWAY_URL,
         batch_size: int = 100,
+        calendar: MarketCalendar | None = None,
     ):
         """Initialize the poller.
 
@@ -38772,10 +42499,12 @@ class SnapshotPoller:
             watch_manager: WatchManager instance
             gateway_url: Data Gateway API URL
             batch_size: Max symbols per API request
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.manager = watch_manager
         self.gateway_url = gateway_url
         self.batch_size = batch_size
+        self.calendar = calendar or MarketCalendar()
         self._running = False
 
     async def poll_once(self) -> dict[str, Any]:
@@ -38827,6 +42556,7 @@ class SnapshotPoller:
         """Run the poller as a continuous service.
 
         Uses the minimum interval from POLL_CONFIG (5 min for intraday).
+        Only polls during market hours to avoid wasted API calls.
         """
         self._running = True
         min_interval = min(c["interval_seconds"] for c in POLL_CONFIG.values())
@@ -38835,6 +42565,21 @@ class SnapshotPoller:
 
         while self._running:
             try:
+                # Check if market is open
+                if not self.calendar.is_market_open():
+                    seconds_until = self.calendar.seconds_until_open()
+                    sleep_time = min(seconds_until, MAX_SLEEP_SECONDS)
+
+                    logger.info(
+                        "Market closed, sleeping until open",
+                        seconds_until_open=int(seconds_until),
+                        sleep_seconds=int(sleep_time),
+                    )
+
+                    await asyncio.sleep(sleep_time)
+                    continue
+
+                # Poll for quotes
                 stats = await self.poll_once()
                 logger.info("Poll cycle complete", **stats)
 
@@ -38934,7 +42679,7 @@ FILE: heber/watch/writer.py
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38945,6 +42690,8 @@ from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.models import WatchOutcome
 
 logger = structlog.get_logger(__name__)
+
+DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
 
 class LabelWriter:
@@ -39043,7 +42790,7 @@ class LabelWriter:
             )
             partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             file_path = partition_path / f"part-{ts}.parquet"
 
             group.drop(columns=["_date"]).to_parquet(file_path, compression="snappy")
@@ -39059,7 +42806,7 @@ class WatchService:
     def __init__(
         self,
         redis_client: Any,
-        gateway_url: str = "http://localhost:8000",
+        gateway_url: str = DEFAULT_GATEWAY_URL,
         output_path: Path | None = None,
     ):
         """Initialize the watch service.
@@ -39131,7 +42878,7 @@ class WatchService:
 
 def run_watch_service(
     redis_url: str = "redis://localhost:6379",
-    gateway_url: str = "http://localhost:8000",
+    gateway_url: str = DEFAULT_GATEWAY_URL,
     output_path: str | None = None,
 ) -> None:
     """CLI entry point for watch service.
@@ -39161,7 +42908,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run alert watch service")
     parser.add_argument("--redis", default="redis://localhost:6379", help="Redis URL")
-    parser.add_argument("--gateway", default="http://localhost:8000", help="Data Gateway URL")
+    parser.add_argument("--gateway", default=DEFAULT_GATEWAY_URL, help="Data Gateway URL")
     parser.add_argument("--output", help="Gold output path")
 
     args = parser.parse_args()
@@ -39468,7 +43215,7 @@ Subscribes to the event stream from Data Gateway and routes to Bronze/Silver wri
 import asyncio
 import json
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis.asyncio as redis
 import structlog
@@ -39489,7 +43236,7 @@ class EventConsumer:
         self.bronze_writer = BronzeWriter()
         self.silver_writer = SilverWriter()
         self.running = False
-        self.consumer_name = f"consumer-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
 
     async def connect(self):
         """Connect to Redis."""
@@ -39531,7 +43278,7 @@ class EventConsumer:
 
             # Set ts_available if not present
             if envelope.ts_available is None:
-                envelope = envelope.with_ts_available(datetime.utcnow())
+                envelope = envelope.with_ts_available(datetime.now(UTC))
 
             # Write to Bronze (always)
             await self.bronze_writer.write(envelope)
@@ -39570,45 +43317,50 @@ class EventConsumer:
 
         while self.running:
             try:
-                # Read from stream with consumer group
-                messages = await self.redis.xreadgroup(
-                    groupname=settings.redis_consumer_group,
-                    consumername=self.consumer_name,
-                    streams={settings.redis_stream_name: ">"},
-                    count=100,
-                    block=1000,  # Block for 1 second
-                )
-
-                if not messages:
-                    continue
-
-                for _stream_name, stream_messages in messages:
-                    for message_id, message_data in stream_messages:
-                        success = await self.process_event(message_data)
-
-                        if success:
-                            # Acknowledge message
-                            await self.redis.xack(
-                                settings.redis_stream_name,
-                                settings.redis_consumer_group,
-                                message_id,
-                            )
-                        else:
-                            # TODO: Send to DLQ
-                            logger.warning("Event failed, needs DLQ", message_id=message_id)
-
-                # Flush writers periodically
-                await self.bronze_writer.flush_if_needed()
-                await self.silver_writer.flush_if_needed()
-
+                await self._consume_iteration()
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
-                break
+                raise  # Re-raise per best practice
             except Exception as e:
                 logger.error("Consumer error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)  # Back off on error
 
-        # Final flush
+        await self._final_flush()
+
+    async def _consume_iteration(self) -> None:
+        """Execute a single iteration of the consumer loop."""
+        messages = await self.redis.xreadgroup(
+            groupname=settings.redis_consumer_group,
+            consumername=self.consumer_name,
+            streams={settings.redis_stream_name: ">"},
+            count=100,
+            block=1000,
+        )
+
+        if not messages:
+            return
+
+        for _stream_name, stream_messages in messages:
+            for message_id, message_data in stream_messages:
+                await self._handle_message(message_id, message_data)
+
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
+
+    async def _handle_message(self, message_id: bytes, message_data: dict) -> None:
+        """Handle a single message from the stream."""
+        success = await self.process_event(message_data)
+        if success:
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                message_id,
+            )
+        else:
+            logger.warning("Event failed, needs DLQ", message_id=message_id)
+
+    async def _final_flush(self) -> None:
+        """Perform final flush when consumer stops."""
         await self.bronze_writer.flush()
         await self.silver_writer.flush()
         logger.info("Consumer stopped")
@@ -39776,7 +43528,7 @@ class HotStoreWriter:
         self._client = client
         self._sync_states: dict[str, SyncState] = {}
 
-    async def get_client(self) -> ClickHouseClient:
+    def get_client(self) -> ClickHouseClient:
         """Get or create ClickHouse client."""
         if self._client is None:
             # Lazy import to avoid hard dependency
@@ -39815,7 +43567,7 @@ class HotStoreWriter:
 
     async def ensure_table(self, table: HotStoreTable) -> None:
         """Create table if not exists with TTL."""
-        client = await self.get_client()
+        client = self.get_client()
         ttl_days = self.get_ttl_days(table)
 
         # Table creation DDL per PRD requirements
@@ -39862,7 +43614,7 @@ class HotStoreWriter:
             return 0
 
         table = self.get_table_for_dataset(dataset)
-        client = await self.get_client()
+        client = self.get_client()
 
         start_time = asyncio.get_event_loop().time()
 
@@ -39917,7 +43669,7 @@ class HotStoreWriter:
     async def get_row_count(self, dataset: str) -> int:
         """Get current row count in Hot Store."""
         table = self.get_table_for_dataset(dataset)
-        client = await self.get_client()
+        client = self.get_client()
 
         try:
             result = await client.execute(f"SELECT count() FROM {table.value}")
@@ -39982,14 +43734,14 @@ class HotStoreSyncer:
                 continue
 
             # Read and sync each partition
-            records = await self._read_partition(dt_dir)
+            records = self._read_partition(dt_dir)
             if records:
                 synced = await self.writer.write_batch(dataset, records)
                 total_synced += synced
 
         return total_synced
 
-    async def _read_partition(self, partition_path) -> list[dict[str, Any]]:
+    def _read_partition(self, partition_path) -> list[dict[str, Any]]:
         """Read records from a partition."""
         try:
             import pyarrow.parquet as pq
@@ -40096,7 +43848,7 @@ class HotStoreReader:
         """
         if query_type == QueryType.BACKTEST_RESEARCH:
             # Silver only - never use Hot Store
-            return await self._query_silver(dataset, **filters)
+            return self._query_silver(dataset, **filters)
 
         elif query_type == QueryType.REALTIME_DASHBOARD:
             # Hot Store only - accept staleness
@@ -40107,8 +43859,8 @@ class HotStoreReader:
             results = await self._query_hot_store(dataset, **filters)
 
             # Check for gaps and fallback to Silver
-            if self._has_gaps(results, **filters):
-                silver_results = await self._query_silver(dataset, **filters)
+            if self._has_gaps(results):
+                silver_results = self._query_silver(dataset, **filters)
                 results = self._merge_results(results, silver_results)
 
             return results
@@ -40141,7 +43893,7 @@ class HotStoreReader:
             logger.error("hot_store_query_failed", error=str(e))
             return []
 
-    async def _query_silver(
+    def _query_silver(
         self,
         dataset: str,
         **filters,
@@ -40173,7 +43925,7 @@ class HotStoreReader:
 
         return records
 
-    def _has_gaps(self, results: list[dict], **filters) -> bool:
+    def _has_gaps(self, results: list[dict]) -> bool:
         """Check if results have gaps that need Silver fallback."""
         if not results:
             return True
@@ -40203,7 +43955,7 @@ class MockClickHouseClient:
     def __init__(self):
         self._tables: dict[str, list[dict]] = {}
 
-    async def execute(self, query: str, params: dict | None = None) -> Any:
+    async def execute(self, query: str, params: dict | None = None) -> Any:  # noqa: ARG002
         """Execute a query."""
         if query.strip().upper().startswith("CREATE"):
             return None
@@ -43043,3 +46795,20 @@ def test_placeholder() -> None:
     """Placeholder test - replace with actual tests."""
     result = 1 + 1
     assert result == 2
+
+
+
+================================================
+FILE: .claude/settings.local.json
+================================================
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(docker logs:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

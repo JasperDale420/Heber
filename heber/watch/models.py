@@ -131,6 +131,7 @@ class WatchOutcome(BaseModel):
     spot_at_alert: float
     alert_time: datetime
     window_duration_hours: float
+    trading_minutes_to_hit: int | None = None  # Market time to barrier
 
 
 # Redis key patterns

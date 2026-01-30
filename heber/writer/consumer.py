@@ -59,8 +59,16 @@ class EventConsumer:
         Returns True if successful, False otherwise.
         """
         try:
-            # Parse envelope
-            payload_str = event_data.get(b"payload") or event_data.get("payload")
+            # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
+            payload_str = (
+                event_data.get(b"data")
+                or event_data.get("data")
+                or event_data.get(b"payload")
+                or event_data.get("payload")
+            )
+            if payload_str is None:
+                raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
+
             if isinstance(payload_str, bytes):
                 payload_str = payload_str.decode("utf-8")
 

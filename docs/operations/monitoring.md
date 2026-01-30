@@ -6,15 +6,17 @@ Guide to monitoring Heber services and responding to alerts.
 
 ## Metrics Endpoints
 
-| Service | Metrics URL |
-|---------|-------------|
-| Catalog | <http://localhost:8085/metrics> |
-| Consumer | Internal (scraped by Prometheus) |
-| Compactor | Internal (scraped by Prometheus) |
+Prometheus metrics are instrumented in code, but there is no HTTP exporter wired in the services yet. Metrics exposure needs to be added (e.g., `prometheus_client` HTTP server or FastAPI middleware).
+
+Current state:
+
+- Catalog: no `/metrics` endpoint.
+- Consumer: metrics counters exist in modules but are not exposed.
+- Compactor: logs only.
 
 ---
 
-## Key Metrics to Watch
+## Key Metrics to Watch (When Exposed)
 
 ### Data Freshness
 
@@ -123,8 +125,14 @@ curl -s http://localhost:8085/health | jq '.status'
 # Check for recent errors
 docker logs heber-catalog --since 24h 2>&1 | grep -c ERROR
 
-# Check DLQ size
+# Check DLQ size (if implemented in your stack)
 docker exec heber-redis redis-cli LLEN heber:dlq
+
+## Logging Signals (Available Now)
+
+- `heber-consumer` logs show per-event processing failures and flush events.
+- `heber-compactor` logs show compaction cycles and failures.
+- `heber-catalog` logs show request failures and startup.
 ```
 
 ---

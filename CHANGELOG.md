@@ -7,7 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed\n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
+### Added
+
+#### Documentation
+
+- Added Catalog API reference (`docs/catalog_api.md`)
+- Added data contract (`docs/data_contract.md`)
+- Added schema registry usage (`docs/schema_registry.md`)
+- Added Iceberg migration status (`docs/iceberg_migration.md`)
+- Added Hot Store guide (`docs/hot_store.md`)
+- Added architecture overview (`docs/architecture.md`)
+- Added configuration guide updates and host port mapping (`docs/configuration.md`)
+
+#### Alert Watch Service (`heber/watch/`)
+
+Real-time tracking of flow alert outcomes for ML labeling:
+
+- **Watch Models** (`models.py`) - `AlertWatch`, `WatchSnapshot`, `WatchOutcome` Pydantic models with Redis key patterns
+- **Watch Manager** (`manager.py`) - CRUD operations for active watches in Redis
+- **Snapshot Poller** (`poller.py`) - Polls option quotes from Data Gateway every 5-15 min
+- **Barrier Checker** (`checker.py`) - Detects TP/SL barrier hits and computes labels
+- **Alert Consumer** (`consumer.py`) - Listens to `flow_alerts` Redis stream, auto-creates watches
+- **Label Writer** (`writer.py`) - Writes completed outcomes to Gold layer
+- **Service Orchestrator** (`WatchService`) - Runs all components concurrently
+
+Polling strategy by horizon:
+
+- Intraday (0-2 DTE): 5 min intervals, 4h max window
+- Swing (3-21 DTE): 15 min intervals, 5 day max window
+- LEAP (22+ DTE): 1 hour intervals, 30 day max window
+
+#### Trading Calendar Integration (`heber/calendar/`)
+
+Market-hours awareness for the watch service using `exchange-calendars`:
+
+- **`MarketCalendar`** class wrapping NYSE calendar (XNYS)
+- `is_market_open()` - Check if market is open for trading
+- `add_trading_hours()` - Skip non-trading time in window calculations
+- `trading_minutes_until()` - Count trading minutes between timestamps
+- `seconds_until_open()` - Sleep until market opens
+
+Integrated into watch service:
+
+- **SnapshotPoller** - Skips polling when market closed, sleeps until open
+- **WatchManager** - Window calculations use trading hours, not clock time
+- **BarrierChecker** - Adds `trading_minutes_to_hit` metric to outcomes
+
+#### Watch Service CLI & Docker
+
+Full integration for standalone operation:
+
+- **CLI entry point**: `python -m heber.watch [--redis URL] [--gateway URL] [--output PATH]`
+
+#### Meta-Labeling Feature Capture (`heber/watch/features.py`)
+
+Feature extraction for training meta-models that predict alert success:
+
+- **`AlertFeatures` dataclass** - 30 features captured at alert time:
+  - Contract info: strike, expiry, DTE, moneyness
+  - Alert characteristics: premium, volume, OI ratio, alert type
+  - Timing: hour, day of week, minutes since open/to close
+  - Sentiment: bullish/bearish/sweep/block flags
+- **`AlertFeatureExtractor`** - Extracts features from `FlowAlertRecord`
+- **Market enrichment** - Fetches Alpaca bars via Data Gateway for returns/volatility
+- **Greeks enrichment** - Fetches delta/gamma/theta/vega/IV from Alpaca option chain
+- **IV rank enrichment** - Fetches IV rank from UW options endpoint
+- **Redis storage** - Features stored with 7-day TTL for training
+- Integrated into `AlertWatchConsumer` - auto-captures on alert arrival
+
+#### ML Dataset Builder (`heber/ml/datasets.py`)
+
+Training dataset construction for meta-models:
+
+- **`MetaLabelDatasetBuilder`** - Joins features with outcomes
+- **`DatasetConfig`** - Configurable paths, filters, split ratios
+- **Temporal train/test split** - Purge/embargo to prevent leakage
+- **`to_xy()` helper** - Converts to (X, y) for sklearn-compatible training
+- Supports both Parquet files and Redis feature cache
+
+#### ML Training Pipeline (`heber/ml/trainer.py`)
+
+LightGBM-based meta-model training with MLflow integration:
+
+- **`MetaModelTrainer`** - Trains binary classifier on meta-labels
+- **`TrainingConfig`** - Hyperparameters and thresholds
+- **MLflow logging** - Tracks experiments, params, metrics, models
+- **`train_meta_model()`** - Convenience function for end-to-end training
+- **Save/load** - Joblib serialization with config JSON
+
+#### ML Inference Service (`heber/ml/inference.py`)
+
+Real-time scoring of alerts with trained meta-model:
+
+- **`MetaLabelScorer`** - Scores alerts with probability of TP hit
+- **`AlertGate`** - Fail-open gate to filter low-probability alerts
+- **`InferenceConfig`** - Thresholds and cache settings
+- **Score caching** - Redis-backed for repeated lookups
+- **Confidence classification** - "high" / "medium" / "low" buckets
+
+- **Environment variables**: `HEBER_REDIS_URL`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
+- **Docker service**: `heber-watch` in `docker-compose.yml`
+
+#### Contract-Based Barrier Labels
+
+Enhanced `alert_labels.py` template with option contract labeling:
+
+- **`ContractBarrierConfig`** - TP/SL thresholds for options (e.g., +25%/-15%)
+- **`_compute_contract_barrier_outcome()`** - Barrier detection on option price path
+- **Dual labeling** - Primary `contract_hit_tp_first` + secondary `hit_tp_first` (underlying)
+- **Presets**: `aggressive()`, `moderate()`, `conservative()`
+
+#### Alert Labels Pipeline Enhancement
+
+Updated `heber/features/pipelines/alert_labels.py`:
+
+- Fetches option bars from Data Gateway API
+- Computes both underlying and contract barrier labels
+- New CLI flags: `--no-contract`, `--gateway-url`
+
+### Fixed
+
+\n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
 #### Code Quality Pipeline
 

@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -20,12 +21,15 @@ logger = structlog.get_logger(__name__)
 
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
+# Max time to sleep when waiting for market open (check hourly)
+MAX_SLEEP_SECONDS = 3600
+
 
 class SnapshotPoller:
     """Polls option quotes from Data Gateway for active watches.
 
     Runs as a background service, fetching quotes at intervals
-    appropriate for each horizon.
+    appropriate for each horizon. Only polls during market hours.
     """
 
     def __init__(
@@ -33,6 +37,7 @@ class SnapshotPoller:
         watch_manager: WatchManager,
         gateway_url: str = DEFAULT_GATEWAY_URL,
         batch_size: int = 100,
+        calendar: MarketCalendar | None = None,
     ):
         """Initialize the poller.
 
@@ -40,10 +45,12 @@ class SnapshotPoller:
             watch_manager: WatchManager instance
             gateway_url: Data Gateway API URL
             batch_size: Max symbols per API request
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.manager = watch_manager
         self.gateway_url = gateway_url
         self.batch_size = batch_size
+        self.calendar = calendar or MarketCalendar()
         self._running = False
 
     async def poll_once(self) -> dict[str, Any]:
@@ -95,6 +102,7 @@ class SnapshotPoller:
         """Run the poller as a continuous service.
 
         Uses the minimum interval from POLL_CONFIG (5 min for intraday).
+        Only polls during market hours to avoid wasted API calls.
         """
         self._running = True
         min_interval = min(c["interval_seconds"] for c in POLL_CONFIG.values())
@@ -103,6 +111,21 @@ class SnapshotPoller:
 
         while self._running:
             try:
+                # Check if market is open
+                if not self.calendar.is_market_open():
+                    seconds_until = self.calendar.seconds_until_open()
+                    sleep_time = min(seconds_until, MAX_SLEEP_SECONDS)
+
+                    logger.info(
+                        "Market closed, sleeping until open",
+                        seconds_until_open=int(seconds_until),
+                        sleep_seconds=int(sleep_time),
+                    )
+
+                    await asyncio.sleep(sleep_time)
+                    continue
+
+                # Poll for quotes
                 stats = await self.poll_once()
                 logger.info("Poll cycle complete", **stats)
 

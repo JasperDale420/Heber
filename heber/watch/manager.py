@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.watch.models import (
     POLL_CONFIG,
     AlertWatch,
@@ -24,15 +25,22 @@ class WatchManager:
     """Manages alert watches in Redis.
 
     Provides CRUD operations and query methods for the watch list.
+    Uses MarketCalendar for trading-hours-aware window calculations.
     """
 
-    def __init__(self, redis_client: Any):
+    def __init__(
+        self,
+        redis_client: Any,
+        calendar: MarketCalendar | None = None,
+    ):
         """Initialize with Redis client.
 
         Args:
             redis_client: Redis client (sync or async)
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.redis = redis_client
+        self.calendar = calendar or MarketCalendar()
 
     def create_watch(
         self,
@@ -72,9 +80,12 @@ class WatchManager:
         """
         watch_id = str(uuid.uuid4())
 
-        # Calculate window end based on horizon
+        # Calculate window end in trading time (skips non-market hours)
         config = POLL_CONFIG[horizon]
-        window_end = alert_time + timedelta(hours=config["max_duration_hours"])
+        window_end = self.calendar.add_trading_hours(
+            alert_time,
+            config["max_duration_hours"],
+        )
 
         watch = AlertWatch(
             watch_id=watch_id,

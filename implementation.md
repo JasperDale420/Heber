@@ -978,6 +978,80 @@ Implement in order:
 
 ---
 
+## Phase 58: Alert Watch Service ✅
+
+Real-time flow alert outcome tracking for ML labeling.
+
+### 58.1 Watch Models
+
+- [x] `AlertWatch`, `WatchSnapshot`, `WatchOutcome` Pydantic models
+- [x] Redis key patterns for watch lifecycle
+
+### 58.2 Watch Components
+
+- [x] `WatchManager` - CRUD for active watches in Redis
+- [x] `SnapshotPoller` - Polls option quotes from Data Gateway
+- [x] `BarrierChecker` - Detects TP/SL barrier hits
+- [x] `AlertWatchConsumer` - Listens to `flow_alerts` Redis stream
+- [x] `LabelWriter` - Writes outcomes to Gold layer
+
+### 58.3 Trading Calendar
+
+- [x] `MarketCalendar` wrapper using `exchange-calendars` (XNYS)
+- [x] `is_market_open()`, `add_trading_hours()`, `trading_minutes_until()`
+- [x] Poller skips non-market hours, sleeps until next open
+
+### 58.4 Integration
+
+- [x] CLI entry point: `python -m heber.watch`
+- [x] Docker service: `heber-watch` in `docker-compose.yml`
+- [x] Environment variables: `HEBER_REDIS_URL`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
+
+---
+
+## Phase 59: Meta-Labeling ML Package ✅
+
+Machine learning infrastructure for predicting flow alert success.
+
+### 59.1 Feature Capture (`heber/watch/features.py`)
+
+- [x] `AlertFeatures` dataclass with 29 numeric features
+- [x] `AlertFeatureExtractor` - extracts from `FlowAlertRecord`
+- [x] Redis storage with 7-day TTL
+- [x] Integrated into `AlertWatchConsumer` - auto-captures on alert arrival
+
+### 59.2 Dataset Builder (`heber/ml/datasets.py`)
+
+- [x] `MetaLabelDatasetBuilder` - joins features with outcomes
+- [x] `DatasetConfig` - configurable paths, filters
+- [x] Temporal train/test split with purge/embargo (anti-leakage)
+- [x] `to_xy()` helper for sklearn compatibility
+
+### 59.3 Training Pipeline (`heber/ml/trainer.py`)
+
+- [x] `MetaModelTrainer` - LightGBM classifier
+- [x] `TrainingConfig` - hyperparameters, thresholds
+- [x] MLflow integration for experiment tracking
+- [x] Save/load with joblib + config JSON
+
+### 59.4 Inference Service (`heber/ml/inference.py`)
+
+- [x] `MetaLabelScorer` - scores alerts with trained model
+- [x] `AlertGate` - fail-open filter for low-probability alerts
+- [x] Redis caching for repeated lookups
+- [x] Confidence classification (high/medium/low)
+
+### 59.5 Runtime
+
+| Component | Runs Automatically? |
+|-----------|---------------------|
+| Feature capture | ✅ Yes - triggers on every alert |
+| Dataset building | ❌ Manual - run `build_from_parquet()` |
+| Model training | ❌ Manual - run `train_meta_model()` |
+| Inference scoring | ⚙️ Optional - enable `AlertGate` |
+
+---
+
 # Progress Summary
 
 | Phase Range | Description | Estimated Tasks | Done |

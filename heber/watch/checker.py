@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import structlog
 
+from heber.calendar import MarketCalendar
 from heber.features.templates.alert_labels import SlippageModel
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
@@ -30,15 +31,18 @@ class BarrierChecker:
         self,
         watch_manager: WatchManager,
         slippage_model: SlippageModel | None = None,
+        calendar: MarketCalendar | None = None,
     ):
         """Initialize the checker.
 
         Args:
             watch_manager: WatchManager instance
             slippage_model: Optional execution cost model
+            calendar: MarketCalendar instance (created if not provided)
         """
         self.manager = watch_manager
         self.slippage = slippage_model or SlippageModel()
+        self.calendar = calendar or MarketCalendar()
 
     def check_all(self) -> list[WatchOutcome]:
         """Check all active watches for barrier hits.
@@ -122,6 +126,12 @@ class BarrierChecker:
         # Build outcome
         window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
 
+        # Compute trading time to hit barrier
+        trading_mins = self.calendar.trading_minutes_until(
+            watch.alert_time,
+            now,
+        )
+
         outcome = WatchOutcome(
             watch_id=watch.watch_id,
             alert_id=watch.alert_id,
@@ -142,6 +152,7 @@ class BarrierChecker:
             spot_at_alert=watch.spot_at_alert,
             alert_time=watch.alert_time,
             window_duration_hours=window_hours,
+            trading_minutes_to_hit=trading_mins,
         )
 
         logger.info(
@@ -149,6 +160,7 @@ class BarrierChecker:
             watch_id=watch.watch_id,
             status=status.value,
             hit_tp_first=outcome.hit_tp_first,
+            trading_minutes=trading_mins,
             mfe=mfe,
             mae=mae,
         )
@@ -219,6 +231,7 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "contract_mfe_adj": outcome.mfe_adj,
         "contract_mae_adj": outcome.mae_adj,
         "contract_bars_to_hit": outcome.bars_to_hit,
+        "trading_minutes_to_hit": outcome.trading_minutes_to_hit,
         "outcome_return": outcome.outcome_return,
         # Context
         "entry_price": outcome.entry_price,

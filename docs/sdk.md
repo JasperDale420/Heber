@@ -1,6 +1,6 @@
 # Heber SDK
 
-The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to financial data, preventing future information from leaking into past queries.
+The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to Silver/Gold data and Catalog metadata.
 
 ## Installation
 
@@ -34,6 +34,13 @@ bars = client.read_asof(
 )
 ```
 
+### Local Docker Compose Note
+
+When the Catalog API is running via `docker compose`, it is exposed on port `8085` (host). Either:
+
+- Set `HEBER_API_PORT=8085` in your environment, or
+- Pass `catalog_url="http://localhost:8085/api/v1"` when constructing `HeberClient`.
+
 ## Core Features
 
 ### Zero-Leakage Data Access
@@ -53,12 +60,12 @@ bars = client.read_asof(
 ### Silver Layer (Market Data)
 
 ```python
-# Read raw market data
+# Read market data from local Parquet partitions
 quotes = client.read_silver(
     dataset="quotes",
     time_range=("2025-01-01", "2025-01-15"),
     instrument_keys=["equity:TSLA"],
-    columns=["ts_event", "bid", "ask", "bid_size", "ask_size"],
+    columns=["ts_event", "bid_px", "ask_px", "bid_sz", "ask_sz"],
 )
 ```
 
@@ -82,7 +89,7 @@ features = client.read_gold_versioned(
 
 ### Version Management
 
-Powered by lakeFS for Git-like data versioning:
+If lakeFS is configured, the SDK uses it for Git-like data versioning. If lakeFS is not reachable, it falls back to filesystem discovery.
 
 ```python
 # List all versions
@@ -139,15 +146,15 @@ discovery = client.discover("bars", layer="silver")
 - Adding new dataset types (options, crypto, etc.)
 - New read patterns (streaming, incremental)
 - Catalog API changes
+- Schema contract changes
 - New helper methods
 
 ### No Updates Needed
 
 - Adding new instruments (just data)
-- Schema changes (Apicurio handles evolution)
 - New Gold datasets (existing `write_gold()` works)
-- Version changes (lakeFS tags work automatically)
-- New data sources (Bronze → Silver pipeline handles it)
+- Version changes (lakeFS tags resolve automatically)
+- New data sources (Bronze -> Silver pipeline handles it)
 
 ## Architecture
 
@@ -155,10 +162,10 @@ The SDK is a thin wrapper over:
 
 | Layer | Implementation |
 |-------|----------------|
-| Silver reads | Apache Iceberg (via PyIceberg) |
-| Gold reads/writes | Parquet + lakeFS tags |
-| Catalog API | HTTP client to heber-catalog |
-| Versioning | lakeFS API |
-| Schema registry | Apicurio Registry |
+| Silver reads | Parquet partitions on local filesystem |
+| Gold reads/writes | Parquet partitions on local filesystem |
+| Catalog API | HTTP client to `heber-catalog` |
+| Versioning | lakeFS API (optional; fallback to filesystem) |
+| Schema registry | Confluent-compatible registry (optional, via `heber.schema`) |
 
-The OSS migration makes the SDK more stable by replacing custom implementations with well-tested open source APIs.
+Iceberg and other OSS migration components live in `heber/storage/` and are not yet wired into `HeberClient`.

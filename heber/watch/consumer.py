@@ -19,13 +19,15 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
+from heber.watch.features import AlertFeatureExtractor, store_features
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
-# Stream configuration
-FLOW_ALERTS_STREAM = "heber:stream:flow_alerts"
+# Stream configuration - matches Data Gateway's HEBER_STREAM
+HEBER_EVENTS_STREAM = "heber:events"
+FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
 DATA_GATEWAY_URL = "http://localhost:8000"
@@ -53,33 +55,42 @@ class AlertWatchConsumer:
         watch_manager: WatchManager,
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
+        async_redis: redis.asyncio.Redis | None = None,
     ):
         """Initialize the consumer.
 
         Args:
-            redis_client: Redis client
+            redis_client: Redis client (sync)
             watch_manager: WatchManager instance
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
+            async_redis: Async Redis client for feature storage (optional)
         """
         self.redis = redis_client
+        self.async_redis = async_redis
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
         self._running = False
 
+        # Feature extractor for meta-labeling
+        self.feature_extractor = AlertFeatureExtractor(
+            redis=async_redis,
+            gateway_url=gateway_url,
+        )
+
     def setup_consumer_group(self) -> None:
         """Create consumer group if it doesn't exist."""
         try:
             self.redis.xgroup_create(
-                FLOW_ALERTS_STREAM,
+                HEBER_EVENTS_STREAM,
                 CONSUMER_GROUP,
                 id="0",
                 mkstream=True,
             )
             logger.info(
                 "Created consumer group",
-                stream=FLOW_ALERTS_STREAM,
+                stream=HEBER_EVENTS_STREAM,
                 group=CONSUMER_GROUP,
             )
         except redis.ResponseError as e:
@@ -96,7 +107,7 @@ class AlertWatchConsumer:
 
         logger.info(
             "Starting alert watch consumer",
-            stream=FLOW_ALERTS_STREAM,
+            stream=HEBER_EVENTS_STREAM,
             group=CONSUMER_GROUP,
         )
 
@@ -106,7 +117,7 @@ class AlertWatchConsumer:
                 messages = self.redis.xreadgroup(
                     CONSUMER_GROUP,
                     CONSUMER_NAME,
-                    {FLOW_ALERTS_STREAM: ">"},
+                    {HEBER_EVENTS_STREAM: ">"},
                     count=100,
                     block=5000,
                 )
@@ -114,9 +125,11 @@ class AlertWatchConsumer:
                 if messages:
                     for _stream, entries in messages:
                         for msg_id, data in entries:
-                            await self._process_alert(msg_id, data)
-                            # Acknowledge message
-                            self.redis.xack(FLOW_ALERTS_STREAM, CONSUMER_GROUP, msg_id)
+                            # Filter for flow_alerts feed only
+                            if self._is_flow_alert(data):
+                                await self._process_alert(msg_id, data)
+                            # Always acknowledge to avoid reprocessing
+                            self.redis.xack(HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
 
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
@@ -126,6 +139,23 @@ class AlertWatchConsumer:
         """Stop the consumer."""
         self._running = False
         logger.info("Alert watch consumer stopped")
+
+    def _is_flow_alert(self, data: dict) -> bool:
+        """Check if the event is a flow_alerts feed event.
+
+        The heber:events stream contains multiple feed types (flow_alerts,
+        darkpool, market_tide, etc.). We only process flow_alerts.
+        """
+        # The 'data' field contains JSON string with event envelope
+        if b"data" in data:
+            import json
+
+            try:
+                envelope = json.loads(data[b"data"])
+                return envelope.get("feed") == FLOW_ALERTS_FEED
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return False
 
     async def _process_alert(self, msg_id: str, data: dict) -> None:
         """Process a single alert and create a watch.
@@ -178,6 +208,9 @@ class AlertWatchConsumer:
                 tp_threshold=self.config.tp_pct,
                 sl_threshold=self.config.sl_pct,
             )
+
+            # Extract and store features for meta-labeling
+            await self._extract_and_store_features(alert, watch.watch_id)
 
             logger.info(
                 "Created watch from alert",
@@ -308,3 +341,67 @@ class AlertWatchConsumer:
         except Exception as e:
             logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
             return None
+
+    async def _extract_and_store_features(self, alert: dict, watch_id: str) -> None:
+        """Extract features from alert and store for meta-labeling.
+
+        Args:
+            alert: Parsed alert data dict
+            watch_id: Associated watch ID
+        """
+        try:
+            # Build a FlowAlertRecord-like object for feature extraction
+            from heber.models.silver import FlowAlertRecord
+
+            # Create minimal record for feature extraction
+            record = FlowAlertRecord(
+                event_id=alert["id"],
+                ts_event=alert.get("ts_event", datetime.now(UTC)),
+                ts_ingest=datetime.now(UTC),
+                ts_available=datetime.now(UTC),
+                instrument_key=f"option:{alert.get('occ_symbol', '')}",
+                provider="unusual_whales",
+                feed="flow_alerts",
+                underlying=alert["underlying"],
+                occ_symbol=alert.get("occ_symbol"),
+                expiry=alert.get("expiry")
+                if isinstance(alert.get("expiry"), type(None)) or hasattr(alert.get("expiry"), "year")
+                else datetime.strptime(str(alert["expiry"])[:10], "%Y-%m-%d").date(),
+                strike=alert.get("strike", 0.0),
+                put_call=alert["put_call"],
+                premium=alert.get("premium", 0.0),
+                volume=alert.get("volume", 0.0),
+                open_interest=alert.get("open_interest"),
+                spot_px=alert.get("spot_px"),
+                contract_px=alert.get("contract_px"),
+                alert_type=alert.get("alert_type", "UNKNOWN"),
+                side=alert.get("side"),
+                aggressor=alert.get("aggressor"),
+                tags=alert.get("tags"),
+            )
+
+            # Extract features
+            features = await self.feature_extractor.extract(record)
+
+            # Store in Redis if async client available
+            if self.async_redis:
+                await store_features(self.async_redis, features)
+                logger.debug(
+                    "Stored alert features",
+                    alert_id=alert["id"],
+                    watch_id=watch_id,
+                    feature_count=len(features.numeric_feature_names()),
+                )
+            else:
+                logger.debug(
+                    "Skipping feature storage (no async redis)",
+                    alert_id=alert["id"],
+                )
+
+        except Exception as e:
+            # Don't fail watch creation if feature extraction fails
+            logger.warning(
+                "Failed to extract/store features",
+                alert_id=alert.get("id"),
+                error=str(e),
+            )
