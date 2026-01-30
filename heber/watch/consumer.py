@@ -262,8 +262,13 @@ class AlertWatchConsumer:
 
             parsed[key] = val
 
+        # Flatten 'data' envelope
         if "data" in parsed and isinstance(parsed["data"], dict):
             parsed = {**parsed, **parsed["data"]}
+
+        # Flatten 'payload' - this is where UW alert fields like option_chain live
+        if "payload" in parsed and isinstance(parsed["payload"], dict):
+            parsed = {**parsed, **parsed["payload"]}
 
         return parsed
 
@@ -275,7 +280,7 @@ class AlertWatchConsumer:
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
             "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
-            "underlying": parsed.get("underlying") or parsed.get("ticker"),
+            "underlying": parsed.get("underlying") or parsed.get("ticker") or parsed.get("symbol"),
             "put_call": put_call,
             "expiry": parsed.get("expiry"),
             "strike": float(parsed.get("strike", 0) or 0),
