@@ -1,8 +1,12 @@
 services:
   # Infrastructure
+  # Note: user directives skip the entrypoint's find/chown step, avoiding
+  # "Operation not permitted" errors from macOS ._* resource fork files on
+  # the external drive (exFAT/NTFS).
   postgres:
     image: postgres:16-alpine
     container_name: heber-postgres
+    user: "70:70" # postgres:postgres — skips root chown on startup
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-heber}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heber_dev_password}
@@ -21,6 +25,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: heber-redis
+    user: "999:1000" # redis:redis — skips root chown on startup
     command: redis-server --appendonly yes
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/redis/data:/data
@@ -36,6 +41,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.1
     container_name: heber-clickhouse
+    user: "101:101" # clickhouse:clickhouse — skips root chown on startup
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/data:/var/lib/clickhouse
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/logs:/var/log/clickhouse-server

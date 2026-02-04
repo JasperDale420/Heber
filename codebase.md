@@ -1,6 +1,6 @@
 # Heber Codebase
 
-*Generated: 2026-01-30T00:03:44*
+*Generated: 2026-02-04T14:40:09*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Heber
 Files analyzed: 206
 
-Estimated tokens: 339.3k
+Estimated tokens: 339.8k
 
 ---
 
@@ -1018,9 +1018,13 @@ FILE: docker-compose.yml
 ================================================
 services:
   # Infrastructure
+  # Note: user directives skip the entrypoint's find/chown step, avoiding
+  # "Operation not permitted" errors from macOS ._* resource fork files on
+  # the external drive (exFAT/NTFS).
   postgres:
     image: postgres:16-alpine
     container_name: heber-postgres
+    user: "70:70" # postgres:postgres — skips root chown on startup
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-heber}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heber_dev_password}
@@ -1039,6 +1043,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: heber-redis
+    user: "999:1000" # redis:redis — skips root chown on startup
     command: redis-server --appendonly yes
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/redis/data:/data
@@ -1054,6 +1059,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.1
     container_name: heber-clickhouse
+    user: "101:101" # clickhouse:clickhouse — skips root chown on startup
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/data:/var/lib/clickhouse
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/logs:/var/log/clickhouse-server
@@ -24167,16 +24173,18 @@ class MetaLabelDatasetBuilder:
 
         # Inner join - only keep alerts with both features and outcomes
         return features.join(
-            outcomes.select([
-                "alert_id",
-                "outcome",
-                "outcome_return",
-                "mfe",
-                "mae",
-                "bars_to_hit",
-                "trading_minutes_to_hit",
-                "hit_tp_first",
-            ]),
+            outcomes.select(
+                [
+                    "alert_id",
+                    "outcome",
+                    "outcome_return",
+                    "mfe",
+                    "mae",
+                    "bars_to_hit",
+                    "trading_minutes_to_hit",
+                    "hit_tp_first",
+                ]
+            ),
             on="alert_id",
             how="inner",
         )
@@ -24186,12 +24194,7 @@ class MetaLabelDatasetBuilder:
         if "outcome" not in df.columns:
             return df
 
-        return df.with_columns(
-            pl.when(pl.col("outcome") == "HIT_TP")
-            .then(1)
-            .otherwise(0)
-            .alias("meta_label")
-        )
+        return df.with_columns(pl.when(pl.col("outcome") == "HIT_TP").then(1).otherwise(0).alias("meta_label"))
 
     def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
         """Apply configured filters to dataset."""
@@ -24205,9 +24208,9 @@ class MetaLabelDatasetBuilder:
         # Min samples per symbol
         if "symbol" in df.columns and self.config.min_outcomes_per_symbol > 1:
             symbol_counts = df.group_by("symbol").count()
-            valid_symbols = symbol_counts.filter(
-                pl.col("count") >= self.config.min_outcomes_per_symbol
-            ).select("symbol")
+            valid_symbols = symbol_counts.filter(pl.col("count") >= self.config.min_outcomes_per_symbol).select(
+                "symbol"
+            )
             df = df.join(valid_symbols, on="symbol", how="inner")
 
         return df
@@ -24237,17 +24240,13 @@ class MetaLabelDatasetBuilder:
             return df, pl.DataFrame()
 
         # Ensure datetime type
-        df = df.with_columns(
-            pl.col("alert_time").cast(pl.Datetime).alias("alert_time")
-        )
+        df = df.with_columns(pl.col("alert_time").cast(pl.Datetime).alias("alert_time"))
 
         # Determine split date
         if split_date is None:
             sorted_df = df.sort("alert_time")
             split_idx = int(len(sorted_df) * self.config.train_ratio)
-            split_date = sorted_df.row(split_idx)[
-                sorted_df.columns.index("alert_time")
-            ].date()
+            split_date = sorted_df.row(split_idx)[sorted_df.columns.index("alert_time")].date()
 
         # Calculate purge and embargo boundaries
         from datetime import timedelta
@@ -24256,14 +24255,10 @@ class MetaLabelDatasetBuilder:
         embargo_end = split_date + timedelta(days=self.config.embargo_days)
 
         # Train: before purge_start
-        train_df = df.filter(
-            pl.col("alert_time") < datetime.combine(purge_start, datetime.min.time())
-        )
+        train_df = df.filter(pl.col("alert_time") < datetime.combine(purge_start, datetime.min.time()))
 
         # Test: after embargo_end
-        test_df = df.filter(
-            pl.col("alert_time") >= datetime.combine(embargo_end, datetime.min.time())
-        )
+        test_df = df.filter(pl.col("alert_time") >= datetime.combine(embargo_end, datetime.min.time()))
 
         logger.info(
             "Train/test split completed",
@@ -24355,9 +24350,7 @@ def persist_features_to_gold(
         return
 
     # Add date partition column
-    df = features_df.with_columns(
-        pl.col(partition_col).dt.date().alias("dt")
-    )
+    df = features_df.with_columns(pl.col(partition_col).dt.date().alias("dt"))
 
     # Write partitioned by date
     for dt_val in df.get_column("dt").unique():
@@ -24401,7 +24394,6 @@ if TYPE_CHECKING:
 
     from heber.ml.trainer import MetaModelTrainer
     from heber.models.silver import FlowAlertRecord
-    from heber.watch.features import AlertFeatures
 
 logger = structlog.get_logger(__name__)
 
@@ -24537,7 +24529,7 @@ class MetaLabelScorer:
         tasks = [self.score(alert) for alert in alerts]
         scores = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for alert, score in zip(alerts, scores):
+        for alert, score in zip(alerts, scores, strict=False):
             if isinstance(score, Exception):
                 results[alert.event_id] = None
             else:
@@ -24719,9 +24711,7 @@ class TrainingConfig:
     random_state: int = 42
 
     # Evaluation thresholds
-    score_thresholds: list[float] = field(
-        default_factory=lambda: [0.5, 0.55, 0.6, 0.65, 0.7]
-    )
+    score_thresholds: list[float] = field(default_factory=lambda: [0.5, 0.55, 0.6, 0.65, 0.7])
 
     # Output
     model_name: str = "meta_model"
@@ -24863,7 +24853,7 @@ class MetaModelTrainer:
         for thresh in self.config.score_thresholds:
             y_pred_thresh = (y_proba >= thresh).astype(int)
             prec = precision_score(y, y_pred_thresh, zero_division=0)
-            metrics[f"{prefix}_precision_at_{int(thresh*100)}"] = prec
+            metrics[f"{prefix}_precision_at_{int(thresh * 100)}"] = prec
 
         return metrics
 
@@ -24887,12 +24877,14 @@ class MetaModelTrainer:
 
         with mlflow.start_run():
             # Log parameters
-            mlflow.log_params({
-                "n_estimators": self.config.n_estimators,
-                "max_depth": self.config.max_depth,
-                "learning_rate": self.config.learning_rate,
-                "num_leaves": self.config.num_leaves,
-            })
+            mlflow.log_params(
+                {
+                    "n_estimators": self.config.n_estimators,
+                    "max_depth": self.config.max_depth,
+                    "learning_rate": self.config.learning_rate,
+                    "num_leaves": self.config.num_leaves,
+                }
+            )
 
             # Log metrics
             mlflow.log_metrics(metrics)
@@ -24906,7 +24898,7 @@ class MetaModelTrainer:
 
             # Log feature importance
             if feature_names and self._model is not None:
-                importance = dict(zip(feature_names, self._model.feature_importances_))
+                importance = dict(zip(feature_names, self._model.feature_importances_, strict=False))
                 mlflow.log_dict(importance, "feature_importance.json")
 
             logger.info("Logged run to MLflow")
@@ -25014,7 +25006,7 @@ class MetaModelTrainer:
         if self._model is None:
             raise ValueError("Model not trained")
 
-        return dict(zip(feature_names, self._model.feature_importances_))
+        return dict(zip(feature_names, self._model.feature_importances_, strict=False))
 
 
 def train_meta_model(
@@ -40634,8 +40626,10 @@ DEFAULT_OUTPUT_PATH = os.environ.get(
 
 def run() -> None:
     """Run the watch service."""
-    import redis
     from pathlib import Path
+
+    import redis
+
     from heber.watch.writer import WatchService
 
     parser = argparse.ArgumentParser(
@@ -41215,8 +41209,13 @@ class AlertWatchConsumer:
 
             parsed[key] = val
 
+        # Flatten 'data' envelope
         if "data" in parsed and isinstance(parsed["data"], dict):
             parsed = {**parsed, **parsed["data"]}
+
+        # Flatten 'payload' - this is where UW alert fields like option_chain live
+        if "payload" in parsed and isinstance(parsed["payload"], dict):
+            parsed = {**parsed, **parsed["payload"]}
 
         return parsed
 
@@ -41228,7 +41227,7 @@ class AlertWatchConsumer:
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
             "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
-            "underlying": parsed.get("underlying") or parsed.get("ticker"),
+            "underlying": parsed.get("underlying") or parsed.get("ticker") or parsed.get("symbol"),
             "put_call": put_call,
             "expiry": parsed.get("expiry"),
             "strike": float(parsed.get("strike", 0) or 0),
@@ -41317,7 +41316,9 @@ class AlertWatchConsumer:
                 feed="flow_alerts",
                 underlying=alert["underlying"],
                 occ_symbol=alert.get("occ_symbol"),
-                expiry=alert.get("expiry") if isinstance(alert.get("expiry"), type(None)) or hasattr(alert.get("expiry"), "year") else datetime.strptime(str(alert["expiry"])[:10], "%Y-%m-%d").date(),
+                expiry=alert.get("expiry")
+                if isinstance(alert.get("expiry"), type(None)) or hasattr(alert.get("expiry"), "year")
+                else datetime.strptime(str(alert["expiry"])[:10], "%Y-%m-%d").date(),
                 strike=alert.get("strike", 0.0),
                 put_call=alert["put_call"],
                 premium=alert.get("premium", 0.0),
@@ -41370,7 +41371,7 @@ which flow alerts will hit their target price before stop loss.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
@@ -41492,7 +41493,7 @@ class AlertFeatures:
                 values.append(0.0)
             elif isinstance(val, bool):
                 values.append(float(val))
-            elif isinstance(val, (int, float)):
+            elif isinstance(val, int | float):
                 values.append(float(val))
             else:
                 values.append(0.0)
@@ -41942,7 +41943,7 @@ FILE: heber/watch/manager.py
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -43268,8 +43269,16 @@ class EventConsumer:
         Returns True if successful, False otherwise.
         """
         try:
-            # Parse envelope
-            payload_str = event_data.get(b"payload") or event_data.get("payload")
+            # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
+            payload_str = (
+                event_data.get(b"data")
+                or event_data.get("data")
+                or event_data.get(b"payload")
+                or event_data.get("payload")
+            )
+            if payload_str is None:
+                raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
+
             if isinstance(payload_str, bytes):
                 payload_str = payload_str.decode("utf-8")
 
@@ -43328,7 +43337,12 @@ class EventConsumer:
         await self._final_flush()
 
     async def _consume_iteration(self) -> None:
-        """Execute a single iteration of the consumer loop."""
+        """Execute a single iteration of the consumer loop.
+
+        Flow: read batch → process all → flush to disk → ACK all.
+        This ensures data is persisted before we acknowledge to Redis,
+        preventing data loss on crash.
+        """
         messages = await self.redis.xreadgroup(
             groupname=settings.redis_consumer_group,
             consumername=self.consumer_name,
@@ -43336,28 +43350,38 @@ class EventConsumer:
             count=100,
             block=1000,
         )
+        # Always check for flush even with no messages (handles idle periods)
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
 
         if not messages:
             return
 
+        # Collect successfully processed message IDs
+        processed_ids: list[bytes] = []
+        failed_ids: list[bytes] = []
+
         for _stream_name, stream_messages in messages:
             for message_id, message_data in stream_messages:
-                await self._handle_message(message_id, message_data)
+                success = await self.process_event(message_data)
+                if success:
+                    processed_ids.append(message_id)
+                else:
+                    failed_ids.append(message_id)
+                    logger.warning("Event failed, needs DLQ", message_id=message_id)
 
+        # Flush to disk BEFORE acknowledging
         await self.bronze_writer.flush_if_needed()
         await self.silver_writer.flush_if_needed()
 
-    async def _handle_message(self, message_id: bytes, message_data: dict) -> None:
-        """Handle a single message from the stream."""
-        success = await self.process_event(message_data)
-        if success:
+        # Only ACK after successful flush
+        if processed_ids:
             await self.redis.xack(
                 settings.redis_stream_name,
                 settings.redis_consumer_group,
-                message_id,
+                *processed_ids,
             )
-        else:
-            logger.warning("Event failed, needs DLQ", message_id=message_id)
+            logger.debug("Acknowledged batch", count=len(processed_ids))
 
     async def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""
@@ -45970,6 +45994,8 @@ directories=(
     "clickhouse/data"
     "clickhouse/logs"
     "redis/data"
+    "elasticsearch/data"
+    "minio/data"
     "logs"
 )
 
@@ -45990,14 +46016,19 @@ chmod -R 700 "$VOLUME_ROOT/postgres"
 chmod -R 755 "$VOLUME_ROOT/clickhouse"
 chmod -R 755 "$VOLUME_ROOT/redis"
 
+# Clean macOS ._* resource fork files (AppleDouble) from volume directories.
+# External drives (NTFS/exFAT) store extended attributes as ._* sidecar files.
+# These cause "Operation not permitted" errors that crash postgres, redis, and
+# clickhouse on startup. This MUST run after chmod since chmod itself creates
+# ._* files on non-HFS+ filesystems.
+echo "Cleaning macOS resource fork files..."
+for dir in postgres redis clickhouse elasticsearch minio data; do
+    dot_clean -m "$VOLUME_ROOT/$dir" 2>/dev/null || true
+done
+echo "Resource fork cleanup complete"
+
 echo ""
-echo "✓ Heber storage initialized at $VOLUME_ROOT"
-echo ""
-echo "Directory structure:"
-ls -la "$VOLUME_ROOT"
-echo ""
-echo "Data directories:"
-ls -la "$VOLUME_ROOT/data"
+echo "Heber storage initialized at $VOLUME_ROOT"
 
 
 
@@ -46808,7 +46839,17 @@ FILE: .claude/settings.local.json
       "Bash(curl:*)",
       "Bash(docker logs:*)",
       "Bash(ls:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker start:*)",
+      "Bash(docker run:*)",
+      "Bash(dot_clean:*)",
+      "Bash(echo:*)",
+      "Bash(bash:*)",
+      "Bash(docker rm:*)"
     ]
   }
 }

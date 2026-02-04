@@ -127,6 +127,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
 
 ### Fixed
 
+- **Silver Writer Type Coercion** (`heber/writer/silver.py`)
+  - Added `_coerce_value()` method for automatic type conversion to Arrow types
+  - Added field name mapping for UW flow_alerts: `price`→`contract_px`, `underlying_price`→`spot_px`, `option_chain`→`occ_symbol`, `alert_rule`→`alert_type`
+  - Fixes `ArrowTypeError: object of type <class 'str'> cannot be converted to int` when processing UW flow alerts with string numeric values
+
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
 #### Code Quality Pipeline

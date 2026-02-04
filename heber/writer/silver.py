@@ -187,10 +187,33 @@ class SilverWriter:
         # Add payload fields
         payload = envelope.payload
         if envelope.feed in SILVER_SCHEMAS:
-            # Map payload fields to schema columns
-            for field in SILVER_SCHEMAS[envelope.feed]:
-                if field.name not in row:
-                    row[field.name] = payload.get(field.name)
+            # Field name mappings for UW flow_alerts
+            field_mappings = {
+                "flow_alerts": {
+                    "price": "contract_px",
+                    "underlying_price": "spot_px",
+                    "option_chain": "occ_symbol",
+                    "symbol": "underlying",  # symbol in payload is the underlying
+                    "alert_rule": "alert_type",
+                }
+            }
+            mappings = field_mappings.get(envelope.feed, {})
+
+            # Map payload fields to schema columns with type coercion
+            schema = SILVER_SCHEMAS[envelope.feed]
+            for field in schema:
+                if field.name in row:
+                    continue  # Already set from envelope
+
+                # Try mapped name first, then direct name
+                source_name = next((k for k, v in mappings.items() if v == field.name), field.name)
+                value = payload.get(source_name)
+
+                # Type coercion based on Arrow type
+                if value is not None:
+                    value = self._coerce_value(value, field.type)
+
+                row[field.name] = value
         else:
             # Store payload as JSON for unknown feeds
             import json
@@ -198,6 +221,44 @@ class SilverWriter:
             row["payload_json"] = json.dumps(payload, default=str)
 
         return row
+
+    def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
+        """Coerce a value to match the expected Arrow type."""
+        if value is None:
+            return None
+
+        try:
+            if pa.types.is_floating(arrow_type):
+                return float(value) if value != "" else None
+            elif pa.types.is_integer(arrow_type):
+                return int(float(value)) if value != "" else None
+            elif pa.types.is_date(arrow_type):
+                from datetime import date, datetime
+
+                if isinstance(value, date):
+                    return value
+                if isinstance(value, datetime):
+                    return value.date()
+                if isinstance(value, str):
+                    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+            elif pa.types.is_timestamp(arrow_type):
+                from datetime import datetime
+
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    # Handle ISO format with timezone
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            # For strings and other types, return as-is
+            return value
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                "Type coercion failed",
+                value=str(value)[:50],
+                target_type=str(arrow_type),
+                error=str(e),
+            )
+            return None
 
     def _get_file_path(self, partition_key: str) -> Path:
         """Get file path for a partition."""
