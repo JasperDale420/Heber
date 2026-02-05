@@ -4,6 +4,15 @@ Date: 2026-02-05
 
 This plan converts high-severity audit items into ticket-ready tasks with clear scope and acceptance criteria. It references the audit IDs in `docs/technical_debt_audit.md`.
 
+## Implementation Status
+
+Updated: 2026-02-05
+
+- `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
+- `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
+- `T-03` complete (`TD-034`): feature templates derive `ts_available` from source availability.
+- `T-04` complete (`TD-033`): Feast feature views now align with template outputs and Gold `dataset/project/version/dt` layout, with schema/path regression tests.
+
 ## Prioritization Approach
 
 P0 = data loss or leakage risk, pipeline correctness, or critical deploy blockers.

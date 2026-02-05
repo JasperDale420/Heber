@@ -6,11 +6,12 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for volatility features
 volatility_source = FileSource(
     name="volatility_source",
-    path="/data/gold/dataset=volatility_features/",
+    path=gold_dataset_glob("volatility_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -21,15 +22,17 @@ volatility_features = FeatureView(
     entities=[equity],
     ttl=timedelta(days=90),
     schema=[
-        Field(name="volatility_5d", dtype=Float32),
-        Field(name="volatility_10d", dtype=Float32),
-        Field(name="volatility_20d", dtype=Float32),
-        Field(name="volatility_60d", dtype=Float32),
+        Field(name="vol_5d", dtype=Float32),
+        Field(name="vol_20d", dtype=Float32),
+        Field(name="vol_60d", dtype=Float32),
+        Field(name="vol_ratio_5_20", dtype=Float32),
+        Field(name="vol_ratio_20_60", dtype=Float32),
+        Field(name="parkinson_vol_20d", dtype=Float32),
         Field(name="atr_14", dtype=Float32),
         Field(name="atr_20", dtype=Float32),
-        Field(name="bollinger_upper", dtype=Float32),
-        Field(name="bollinger_lower", dtype=Float32),
-        Field(name="bollinger_width", dtype=Float32),
+        Field(name="bb_width_20", dtype=Float32),
+        Field(name="price_zscore_20d", dtype=Float32),
+        Field(name="price_zscore_60d", dtype=Float32),
     ],
     source=volatility_source,
     online=True,

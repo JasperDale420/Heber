@@ -6,11 +6,12 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32, Int64
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for microstructure features
 microstructure_source = FileSource(
     name="microstructure_source",
-    path="/data/gold/dataset=microstructure_features/",
+    path=gold_dataset_glob("microstructure_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -22,14 +23,12 @@ microstructure_features = FeatureView(
     ttl=timedelta(days=30),
     schema=[
         Field(name="bid_ask_spread", dtype=Float32),
-        Field(name="bid_ask_spread_pct", dtype=Float32),
-        Field(name="quoted_depth_bid", dtype=Int64),
-        Field(name="quoted_depth_ask", dtype=Int64),
-        Field(name="trade_imbalance", dtype=Float32),
-        Field(name="vwap", dtype=Float32),
-        Field(name="twap", dtype=Float32),
-        Field(name="kyle_lambda", dtype=Float32),
-        Field(name="amihud_illiquidity", dtype=Float32),
+        Field(name="spread_bps", dtype=Float32),
+        Field(name="mid_px", dtype=Float32),
+        Field(name="bid_depth", dtype=Int64),
+        Field(name="ask_depth", dtype=Int64),
+        Field(name="depth_imbalance", dtype=Float32),
+        Field(name="total_depth", dtype=Int64),
     ],
     source=microstructure_source,
     online=True,

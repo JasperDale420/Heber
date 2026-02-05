@@ -3,15 +3,16 @@
 from datetime import timedelta
 
 from feast import FeatureView, Field, FileSource
-from feast.types import Float32
+from feast.types import Float32, Int64
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for return labels
 returns_5d_source = FileSource(
     name="returns_5d_source",
-    path="/data/gold/dataset=labels_returns_5d/type=label/",
-    timestamp_field="ts_label",
+    path=gold_dataset_glob("labels_returns_5d"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -22,8 +23,9 @@ returns_5d = FeatureView(
     ttl=timedelta(days=365),
     schema=[
         Field(name="return_5d", dtype=Float32),
-        Field(name="return_5d_excess", dtype=Float32),
-        Field(name="return_5d_rank", dtype=Float32),
+        Field(name="direction_5d", dtype=Int64),
+        Field(name="is_up_5d", dtype=Int64),
+        Field(name="is_down_5d", dtype=Int64),
     ],
     source=returns_5d_source,
     online=False,
@@ -38,8 +40,8 @@ returns_5d = FeatureView(
 # Source: Gold Parquet files for 1-day return labels
 returns_1d_source = FileSource(
     name="returns_1d_source",
-    path="/data/gold/dataset=labels_returns_1d/type=label/",
-    timestamp_field="ts_label",
+    path=gold_dataset_glob("labels_returns_1d"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -50,8 +52,9 @@ returns_1d = FeatureView(
     ttl=timedelta(days=365),
     schema=[
         Field(name="return_1d", dtype=Float32),
-        Field(name="return_1d_excess", dtype=Float32),
-        Field(name="direction_1d", dtype=Float32),
+        Field(name="direction_1d", dtype=Int64),
+        Field(name="is_up_1d", dtype=Int64),
+        Field(name="is_down_1d", dtype=Int64),
     ],
     source=returns_1d_source,
     online=False,

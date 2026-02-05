@@ -10,6 +10,7 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32, Int64, String
 
 from features.entities import alert
+from features.feature_views._paths import gold_dataset_glob
 
 # =============================================================================
 # All Horizons Combined
@@ -17,8 +18,8 @@ from features.entities import alert
 
 alert_barrier_labels_source = FileSource(
     name="alert_barrier_labels_source",
-    path="/data/gold/dataset=labels_alert_barriers/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_barriers"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -47,6 +48,13 @@ alert_barrier_labels = FeatureView(
         Field(name="mfe_adj", dtype=Float32),
         Field(name="mae_adj", dtype=Float32),
         Field(name="bars_to_hit", dtype=Float32),
+        # Option contract outcomes
+        Field(name="contract_hit_tp_first", dtype=Int64),
+        Field(name="contract_mfe", dtype=Float32),
+        Field(name="contract_mae", dtype=Float32),
+        Field(name="contract_mfe_adj", dtype=Float32),
+        Field(name="contract_mae_adj", dtype=Float32),
+        Field(name="contract_bars_to_hit", dtype=Float32),
         # Beta-neutral (SPY-relative) return
         Field(name="beta_neutral_return", dtype=Float32),
         # Regime context
@@ -71,8 +79,8 @@ alert_barrier_labels = FeatureView(
 
 alert_intraday_labels_source = FileSource(
     name="alert_intraday_labels_source",
-    path="/data/gold/dataset=labels_alert_intraday/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_intraday"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -113,8 +121,8 @@ alert_intraday_labels = FeatureView(
 
 alert_swing_labels_source = FileSource(
     name="alert_swing_labels_source",
-    path="/data/gold/dataset=labels_alert_swing/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_swing"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 

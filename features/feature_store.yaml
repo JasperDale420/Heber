@@ -6,7 +6,7 @@ provider: local
 # In production, this would be the Heber Catalog (Postgres)
 registry:
   registry_type: file
-  path: /data/feast/registry.pb
+  path: registry.pb
 
 # Offline Store: historical feature storage (Gold Parquet)
 offline_store:
@@ -16,7 +16,7 @@ offline_store:
 # Note: Using SQLite for local dev, switch to ClickHouse for production
 online_store:
   type: sqlite
-  path: /data/feast/online.db
+  path: online.db
 
 # For production, use:
 # online_store:

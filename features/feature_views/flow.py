@@ -3,14 +3,15 @@
 from datetime import timedelta
 
 from feast import FeatureView, Field, FileSource
-from feast.types import Float32, Int64
+from feast.types import Float32
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for flow features
 flow_source = FileSource(
     name="flow_source",
-    path="/data/gold/dataset=flow_features/",
+    path=gold_dataset_glob("flow_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -21,14 +22,12 @@ flow_features = FeatureView(
     entities=[equity],
     ttl=timedelta(days=30),
     schema=[
-        Field(name="net_call_premium", dtype=Float32),
-        Field(name="net_put_premium", dtype=Float32),
-        Field(name="put_call_ratio", dtype=Float32),
-        Field(name="unusual_activity_score", dtype=Float32),
-        Field(name="whale_net_premium", dtype=Float32),
-        Field(name="smart_money_divergence", dtype=Float32),
-        Field(name="total_volume", dtype=Int64),
-        Field(name="open_interest_change", dtype=Int64),
+        Field(name="total_premium_24h", dtype=Float32),
+        Field(name="call_premium_24h", dtype=Float32),
+        Field(name="put_premium_24h", dtype=Float32),
+        Field(name="call_put_premium_ratio", dtype=Float32),
+        Field(name="net_premium_24h", dtype=Float32),
+        Field(name="sweep_count_24h", dtype=Float32),
     ],
     source=flow_source,
     online=True,
