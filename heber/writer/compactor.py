@@ -5,6 +5,7 @@ Runs periodically to prevent "small file problem."
 """
 
 import asyncio
+import os
 import signal
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,14 +27,40 @@ class Compactor:
     def __init__(self):
         self.running = False
 
+    def _acquire_partition_lock(self, partition_path: Path) -> Path | None:
+        """Acquire an exclusive per-partition lock file."""
+        lock_path = partition_path / ".compaction.lock"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                lock_file.write(f"pid={os.getpid()} ts={datetime.now(UTC).isoformat()}\n")
+            return lock_path
+        except FileExistsError:
+            logger.info("Skipping partition compaction; lock already present", partition=str(partition_path))
+            return None
+
+    def _release_partition_lock(self, lock_path: Path | None) -> None:
+        """Release a previously acquired partition lock file."""
+        if not lock_path:
+            return
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("Failed to release compaction lock", lock_path=str(lock_path), error=str(e))
+
     async def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
         Returns number of files merged.
         """
+        lock_path = self._acquire_partition_lock(partition_path)
+        if lock_path is None:
+            return 0
+
         parquet_files = sorted(partition_path.glob("*.parquet"))
 
         if len(parquet_files) <= 1:
+            self._release_partition_lock(lock_path)
             return 0
 
         # Check total size
@@ -43,6 +70,7 @@ class Compactor:
         small_files = [f for f in parquet_files if f.stat().st_size < TARGET_FILE_SIZE]
 
         if len(small_files) <= 1:
+            self._release_partition_lock(lock_path)
             return 0
 
         logger.info(
@@ -53,29 +81,31 @@ class Compactor:
         )
 
         try:
-            # Read all small files
-            tables = []
-            for f in small_files:
-                table = pq.read_table(f)
-                tables.append(table)
-
-            # Concatenate
-            import pyarrow as pa
-
-            merged_table = pa.concat_tables(tables)
-
-            # Write merged file
+            # Stream files into a single temp parquet, then atomically promote.
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-            merged_path = partition_path / f"compacted-{ts}.parquet"
+            merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
+            temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
+            writer = None
+            merged_rows = 0
+            try:
+                for source_file in small_files:
+                    table = pq.read_table(source_file)
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            temp_path,
+                            table.schema,
+                            compression="snappy",
+                        )
+                    writer.write_table(table, row_group_size=250_000)
+                    merged_rows += table.num_rows
+            finally:
+                if writer is not None:
+                    writer.close()
 
-            pq.write_table(
-                merged_table,
-                merged_path,
-                compression="snappy",
-                row_group_size=250_000,
-            )
+            # Atomic file promotion once the merge succeeds.
+            temp_path.replace(merged_path)
 
-            # Delete original small files
+            # Delete source files only after merged output is durable.
             for f in small_files:
                 f.unlink()
 
@@ -84,12 +114,15 @@ class Compactor:
                 partition=str(partition_path),
                 merged_files=len(small_files),
                 output_file=str(merged_path),
-                rows=merged_table.num_rows,
+                rows=merged_rows,
             )
 
             return len(small_files)
 
         except Exception as e:
+            # Best-effort cleanup: never delete source files on failed compaction.
+            for stale_temp in partition_path.glob(".compacted-*.tmp"):
+                stale_temp.unlink(missing_ok=True)
             logger.error(
                 "Compaction failed",
                 partition=str(partition_path),
@@ -97,6 +130,8 @@ class Compactor:
                 exc_info=True,
             )
             return 0
+        finally:
+            self._release_partition_lock(lock_path)
 
     async def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""

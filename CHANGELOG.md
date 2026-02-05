@@ -192,6 +192,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Replaced remaining naive `datetime.utcnow()` calls with timezone-aware `datetime.now(UTC)` across runtime modules
   - Updated Silver flush timing tests for aware UTC datetimes
   - Added regression guard to block new `datetime.utcnow()` usage in `heber/` sources (`tests/test_utcnow_regression.py`)
+- **Compactor Atomic Merge Hardening** (`heber/writer/compactor.py`)
+  - Switched compaction from all-in-memory concatenate to streamed writes via `ParquetWriter`
+  - Compaction now writes to temp files and promotes merged output atomically before removing source files
+  - Added per-partition lock-file handling and failure cleanup so failed compactions keep source files intact
+  - Added regression tests for successful merge cleanup and failure safety (`tests/test_compactor_safety.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

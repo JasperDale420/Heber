@@ -20,6 +20,7 @@ Updated: 2026-02-05
 - `T-10` complete (`TD-008`): writer consumer now retries failures, claims idle pending messages on startup, and dead-letters unrecoverable messages to a Redis DLQ stream.
 - `T-11` complete (`TD-005`): Silver writer flush cadence now correctly uses `silver_max_flush_time_seconds` instead of Bronze flush settings, with regression tests.
 - `T-12` complete (`TD-006`): replaced naive `datetime.utcnow()` usage across `heber/` runtime modules with timezone-aware `datetime.now(UTC)`, with regression coverage to prevent reintroduction.
+- `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
 
 ## Prioritization Approach
 
@@ -188,6 +189,24 @@ Acceptance Criteria:
 
 Estimate: 3-5 days
 
+### T-13: Harden Compactor Atomic Merge Flow (TD-007)
+
+Priority: P2
+
+Description: Compaction previously loaded all small files into memory and deleted source files directly after writing output. Harden compaction with streamed writes, atomic promotion, and safer cleanup semantics.
+
+Scope:
+- `heber/writer/compactor.py`
+- `tests/test_compactor_safety.py`
+
+Acceptance Criteria:
+- Compaction writes merged output to a temp file first and atomically promotes to final `.parquet`.
+- Source small files are deleted only after merged output promotion succeeds.
+- Failure during merge/write keeps source files intact and does not leave lock/temp artifacts.
+- Regression tests cover successful compaction and failure recovery behavior.
+
+Estimate: 1-2 days
+
 ## Suggested Execution Order
 
 1. T-01 (Event bus claim handling)
@@ -202,3 +221,4 @@ Estimate: 3-5 days
 10. T-10 (Consumer DLQ + pending recovery)
 11. T-11 (Silver flush config alignment)
 12. T-12 (Timezone-aware UTC normalization)
+13. T-13 (Compactor atomic merge hardening)
