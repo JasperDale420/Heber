@@ -22,10 +22,12 @@ class TestMomentumFeatures:
         from heber.features.templates.momentum import compute_momentum_features
 
         rng = np.random.default_rng(42)
+        ts_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC"),
+                "ts_available": ts_available,
                 "open": rng.standard_normal(100).cumsum() + 100,
                 "high": rng.standard_normal(100).cumsum() + 101,
                 "low": rng.standard_normal(100).cumsum() + 99,
@@ -40,6 +42,32 @@ class TestMomentumFeatures:
         assert "rsi_14" in features.columns
         assert "macd" in features.columns
         assert len(features) == len(bars)
+        assert features["ts_available"].reset_index(drop=True).equals(pd.Series(ts_available).reset_index(drop=True))
+
+    def test_momentum_ts_available_rolls_forward(self):
+        from heber.features.templates.momentum import compute_momentum_features
+
+        bars = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"] * 3,
+                "bar_start_ts": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC"),
+                "ts_available": [
+                    pd.Timestamp("2024-01-03", tz="UTC"),
+                    pd.Timestamp("2024-01-02", tz="UTC"),
+                    pd.Timestamp("2024-01-04", tz="UTC"),
+                ],
+                "open": [1, 2, 3],
+                "high": [1, 2, 3],
+                "low": [1, 2, 3],
+                "close": [1, 2, 3],
+                "volume": [100, 200, 300],
+            }
+        )
+
+        features = compute_momentum_features(bars)
+        ts_available = features["ts_available"].reset_index(drop=True)
+
+        assert ts_available.iloc[1] == pd.Timestamp("2024-01-03", tz="UTC")
 
 
 class TestVolatilityFeatures:
@@ -62,10 +90,12 @@ class TestVolatilityFeatures:
         from heber.features.templates.volatility import compute_volatility_features
 
         rng = np.random.default_rng(42)
+        ts_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC"),
+                "ts_available": ts_available,
                 "open": rng.standard_normal(100).cumsum() + 100,
                 "high": rng.standard_normal(100).cumsum() + 101,
                 "low": rng.standard_normal(100).cumsum() + 99,
@@ -79,6 +109,7 @@ class TestVolatilityFeatures:
         assert "vol_20d" in features.columns
         assert "atr_14" in features.columns
         assert "bb_width_20" in features.columns
+        assert features["ts_available"].reset_index(drop=True).equals(pd.Series(ts_available).reset_index(drop=True))
 
 
 class TestCrossAssetFeatures:
@@ -88,7 +119,9 @@ class TestCrossAssetFeatures:
         from heber.features.templates.cross_asset import compute_relative_features
 
         rng = np.random.default_rng(42)
-        dates = pd.date_range("2024-01-01", periods=100, freq="D")
+        dates = pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC")
+        aapl_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
+        spy_available = pd.date_range("2024-01-03", periods=100, freq="D", tz="UTC")
 
         bars = pd.concat(
             [
@@ -96,6 +129,7 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:AAPL"] * 100,
                         "bar_start_ts": dates,
+                        "ts_available": aapl_available,
                         "close": rng.standard_normal(100).cumsum() + 150,
                     }
                 ),
@@ -103,6 +137,7 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:SPY"] * 100,
                         "bar_start_ts": dates,
+                        "ts_available": spy_available,
                         "close": rng.standard_normal(100).cumsum() + 500,
                     }
                 ),
@@ -115,6 +150,57 @@ class TestCrossAssetFeatures:
         assert (features["instrument_key"] == "equity:AAPL").all()
         assert "beta_60d" in features.columns
         assert "alpha_20d" in features.columns
+        assert features["ts_available"].iloc[0] == spy_available[0]
+
+
+class TestFlowFeatures:
+    """Test flow feature computation."""
+
+    def test_flow_ts_available_rolls_forward(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        base = pd.Timestamp("2024-01-01 09:30", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL"] * 3,
+                "ts_event": [base, base + pd.Timedelta(hours=1), base + pd.Timedelta(hours=2)],
+                "ts_available": [
+                    base + pd.Timedelta(hours=2),
+                    base + pd.Timedelta(hours=1),
+                    base + pd.Timedelta(hours=3),
+                ],
+                "premium": [100.0, 110.0, 120.0],
+                "put_call": ["C", "C", "P"],
+                "alert_type": ["SWEEP", "BLOCK", "SWEEP"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+        ts_available = features["ts_available"].reset_index(drop=True)
+
+        assert ts_available.iloc[1] == base + pd.Timedelta(hours=2)
+
+
+class TestMicrostructureFeatures:
+    """Test microstructure feature computation."""
+
+    def test_microstructure_ts_available_uses_source(self):
+        from heber.features.templates.microstructure import compute_microstructure_features
+
+        quotes = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"] * 3,
+                "ts_event": pd.date_range("2024-01-01", periods=3, freq="min", tz="UTC"),
+                "ts_available": pd.date_range("2024-01-01 00:01", periods=3, freq="min", tz="UTC"),
+                "bid_px": [100.0, 100.5, 101.0],
+                "ask_px": [100.2, 100.7, 101.2],
+                "bid_sz": [10, 12, 14],
+                "ask_sz": [11, 13, 15],
+            }
+        )
+
+        features = compute_microstructure_features(quotes)
+        assert features["ts_available"].reset_index(drop=True).equals(quotes["ts_available"].reset_index(drop=True))
 
 
 class TestLabelFeatures:

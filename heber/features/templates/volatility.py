@@ -10,6 +10,15 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(df: pd.DataFrame, time_col: str, max_window: int) -> pd.Series:
+    source = df["ts_available"] if "ts_available" in df.columns else df[time_col]
+    source = pd.to_datetime(source, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=df.index).rolling(window=max_window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_parkinson_vol(high: pd.Series, low: pd.Series, window: int) -> pd.Series:
     """Compute Parkinson volatility (uses high/low range).
 
@@ -59,12 +68,13 @@ def compute_volatility_features(bars_df: pd.DataFrame) -> pd.DataFrame:
         high = df["high"]
         low = df["low"]
         returns = close.pct_change()
+        ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
 
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Realized volatility (annualized)
                 "vol_5d": returns.rolling(5).std() * np.sqrt(252),
                 "vol_20d": returns.rolling(20).std() * np.sqrt(252),

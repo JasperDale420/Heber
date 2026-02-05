@@ -10,6 +10,15 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(df: pd.DataFrame, time_col: str, max_window: int) -> pd.Series:
+    source = df["ts_available"] if "ts_available" in df.columns else df[time_col]
+    source = pd.to_datetime(source, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=df.index).rolling(window=max_window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     """Compute Relative Strength Index (RSI).
 
@@ -31,7 +40,7 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
     """Compute momentum features for each instrument.
 
     Input: Silver bars with columns [instrument_key, bar_start_ts, open, high, low, close, volume]
-    Output: Gold features with ts_available set to computation time
+    Output: Gold features with ts_available derived from source availability
 
     Args:
         bars_df: DataFrame with OHLCV bar data
@@ -42,11 +51,12 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
 
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
+        ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Price momentum (returns over lookback)
                 "momentum_1d": close.pct_change(1),
                 "momentum_5d": close / close.shift(5) - 1,

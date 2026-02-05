@@ -10,6 +10,14 @@ import numpy as np
 import pandas as pd
 
 
+def _rolling_max_datetime(series: pd.Series, window: int) -> pd.Series:
+    source = pd.to_datetime(series, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=series.index).rolling(window=window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_relative_features(
     bars_df: pd.DataFrame,
     benchmark_key: str = "equity:SPY",
@@ -24,22 +32,39 @@ def compute_relative_features(
         DataFrame with relative features
     """
     # Get benchmark data
-    benchmark = bars_df[bars_df["instrument_key"] == benchmark_key][["bar_start_ts", "close"]].rename(
-        columns={"close": "benchmark_close"}
+    benchmark_cols = ["bar_start_ts", "close"]
+    if "ts_available" in bars_df.columns:
+        benchmark_cols.append("ts_available")
+
+    benchmark = bars_df[bars_df["instrument_key"] == benchmark_key][benchmark_cols].rename(
+        columns={"close": "benchmark_close", "ts_available": "benchmark_ts_available"}
     )
 
     # Merge with all instruments
     merged = bars_df.merge(benchmark, on="bar_start_ts", how="left")
 
+    if "ts_available" in merged.columns:
+        base_available = pd.to_datetime(merged["ts_available"], utc=True, errors="coerce")
+    else:
+        base_available = pd.to_datetime(merged["bar_start_ts"], utc=True, errors="coerce")
+
+    if "benchmark_ts_available" in merged.columns:
+        bench_available = pd.to_datetime(merged["benchmark_ts_available"], utc=True, errors="coerce")
+        base_available = pd.concat([base_available, bench_available], axis=1).max(axis=1)
+
+    merged["_ts_available_source"] = base_available
+
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.sort_values("bar_start_ts")
         returns = df["close"].pct_change()
         bench_returns = df["benchmark_close"].pct_change()
+        ts_available = _rolling_max_datetime(df["_ts_available_source"], window=60)
 
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Relative strength
                 "rel_strength_20d": (
                     (df["close"] / df["close"].shift(20)) / (df["benchmark_close"] / df["benchmark_close"].shift(20))

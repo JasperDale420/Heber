@@ -10,6 +10,11 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(group: pd.DataFrame) -> pd.Series:
+    source = group["ts_available"] if "ts_available" in group.columns else group["ts_event"]
+    return pd.to_datetime(source, utc=True, errors="coerce")
+
+
 def compute_microstructure_features(
     quotes_df: pd.DataFrame,
     _trades_df: pd.DataFrame | None = None,  # Reserved for trade-based metrics
@@ -29,11 +34,12 @@ def compute_microstructure_features(
     df["mid_px"] = (df["bid_px"] + df["ask_px"]) / 2
 
     def calc_features(group: pd.DataFrame) -> pd.DataFrame:
+        ts_available = _derive_ts_available(group)
         return pd.DataFrame(
             {
                 "instrument_key": group["instrument_key"],
                 "ts_event": group["ts_event"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Spread metrics
                 "bid_ask_spread": group["ask_px"] - group["bid_px"],
                 "spread_bps": (group["ask_px"] - group["bid_px"]) / group["mid_px"] * 10000,
