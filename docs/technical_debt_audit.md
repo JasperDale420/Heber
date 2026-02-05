@@ -104,11 +104,24 @@ Audit Pass 3 (2026-02-05, files reviewed directly):
 - heber/features/templates/tests.py
 - heber/features/templates/volatility.py
 
+Audit Pass 4 (2026-02-05, files reviewed directly):
+- heber/ops/__init__.py
+- heber/ops/alerting.py
+- heber/ops/circuit_breaker.py
+- heber/ops/gap_resolutions.py
+- heber/ops/health.py
+- heber/ops/lifecycle.py
+- heber/ops/logging.py
+- heber/ops/metrics.py
+- heber/ops/reliability.py
+- heber/ops/slices.py
+- heber/ops/tests_remaining.py
+- heber/ops/tracing.py
+
 Not yet audited in this run (recommend a future pass):
 - docs/ (all other files not listed above)
 - infrastructure/ and k8s/
 - scripts/ (including init and data tooling)
-- heber/ops/
 - heber/firewall/ (scd.py, validation.py, tests.py)
 - heber/gold/
 - heber/hotstore/tables.py
@@ -122,7 +135,7 @@ Not yet audited in this run (recommend a future pass):
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -168,6 +181,12 @@ Severity key: High, Medium, Low
 | TD-036 | Medium | Label Pipeline | Pipeline references `bars_5min` dataset that is not defined in Silver schemas. |
 | TD-037 | Medium | Label Pipeline | Intraday labeling uses day-based windows for availability and SPY returns. |
 | TD-038 | Medium | Flow Features | Time-window rolling uses `on=ts_event` on Series and lacks datetime normalization. |
+| TD-039 | Medium | Tracing | Tracing decorator crashes when OpenTelemetry is not installed, despite intended noop behavior. |
+| TD-040 | Medium | Lifecycle | Async shutdown wait can hang if shutdown happens before the async event is created. |
+| TD-041 | Low | Lifecycle | Shutdown timeouts are logged but still reported as success in metrics. |
+| TD-042 | Low | Logging | `configure_logging()` accepts a log level but does not apply it. |
+| TD-043 | Medium | Reliability | Bloom filter dedupe has no TTL/rotation, causing rising false positives and potential drops without a backing store. |
+| TD-044 | Low | Reliability | In-memory DLQ is non-persistent; failures are lost on restart. |
 
 ## Detailed Findings
 
@@ -323,18 +342,42 @@ Recommendation: Track bar duration explicitly and compute windows in minutes/hou
 Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
 Recommendation: Convert `ts_event` to datetime and use DataFrame-level rolling with `on=ts_event`, or set a DatetimeIndex for correct time-window rolling.
 
+**TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
+Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
+Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
+
+**TD-040: Async shutdown wait can hang if shutdown is signaled early.**
+Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
+Recommendation: In `async_wait_for_shutdown()`, return immediately if `self._shutdown_event.is_set()` or create `_async_shutdown_event` and set it when shutdown is already in progress.
+
+**TD-041: Shutdown timeouts are logged but still reported as success.**
+Evidence: `execute_shutdown()` logs `drain_timeout` when the deadline passes but still increments `shutdown_completed` with status `success` and returns True.
+Recommendation: Increment `shutdown_completed` with `status="timeout"` and return False (or a distinct status) when draining exceeds the configured deadline.
+
+**TD-042: `configure_logging()` accepts a log level but does not apply it.**
+Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
+Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
+
+**TD-043: Bloom filter deduplication has no TTL/rotation.**
+Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
+Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
+
+**TD-044: In-memory DLQ is non-persistent.**
+Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
+Recommendation: Back the DLQ with Redis/stream storage or write to disk and implement a replay path.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032.
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
