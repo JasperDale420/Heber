@@ -231,6 +231,7 @@ Updated: 2026-02-05
 - `TD-010` addressed via `T-16`: host defaults now align with docker-compose exposed ports (`HEBER_POSTGRES_URL` on `localhost:5433`, `HEBER_REDIS_URL` on `localhost:6380`) across settings, docs, and `.env.example`.
 - `TD-012` addressed via `T-17`: Catalog startup now runs SQLAlchemy `create_all` only in `dev`, and Alembic migration scaffolding with an initial baseline revision is included for non-dev schema management.
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
+- `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
 
 ## Executive Summary
 
@@ -677,7 +678,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

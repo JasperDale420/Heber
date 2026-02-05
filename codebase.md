@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T13:47:58*
+*Generated: 2026-02-05T14:48:18*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 230
+Files analyzed: 235
 
-Estimated tokens: 388.1k
+Estimated tokens: 393.1k
 
 ---
 
@@ -19,6 +19,7 @@ Estimated tokens: 388.1k
 Directory structure:
 └── Heber/
     ├── README.md
+    ├── alembic.ini
     ├── CHANGELOG.md
     ├── CLAUDE.md
     ├── docker-compose.yml
@@ -31,6 +32,10 @@ Directory structure:
     ├── .pre-commit-config.yaml
     ├── .secrets.baseline
     ├── .trivy.yaml
+    ├── alembic/
+    │   ├── env.py
+    │   └── versions/
+    │       └── 20260205_0001_catalog_initial.py
     ├── docs/
     │   ├── Alpaca_market_data_endpoints.md
     │   ├── Alpaca_trading_endpoints.md
@@ -294,6 +299,7 @@ Directory structure:
     │       └── quotes.yaml
     ├── tests/
     │   ├── __init__.py
+    │   ├── test_catalog_migrations.py
     │   ├── test_compactor_safety.py
     │   ├── test_edge_cases.py
     │   ├── test_event_bus_claim.py
@@ -307,6 +313,7 @@ Directory structure:
     │   ├── test_silver_schema_source.py
     │   ├── test_terraform_module_sources.py
     │   ├── test_utcnow_regression.py
+    │   ├── test_watch_async_redis.py
     │   └── test_writer_consumer_reliability.py
     └── .claude/
         └── settings.local.json
@@ -396,7 +403,7 @@ docker compose up heber-watch
 
 Environment variables:
 
-- `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6379`)
+- `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6380`)
 - `DATA_GATEWAY_URL` - Data Gateway for option quotes (default: `http://localhost:8000`)
 - `HEBER_GOLD_PATH` - Gold layer output path
 
@@ -524,6 +531,48 @@ GitHub Actions workflow (`.github/workflows/ci.yaml`) runs:
 **Dependabot** auto-creates PRs for dependency updates weekly.
 
 **SonarQube** expects `coverage.xml` at repo root (configure `sonar-project.properties` with your project key).
+
+
+
+================================================
+FILE: alembic.ini
+================================================
+[alembic]
+script_location = alembic
+prepend_sys_path = .
+sqlalchemy.url = postgresql://localhost/heber_catalog
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
 
 
 
@@ -738,6 +787,21 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Replaced one-insert-per-event sync path with threshold-based batched inserts
   - Added best-effort buffer flush on sync loop exit and explicit stop shutdown
   - Added regression tests for threshold-triggered batch inserts and stop-time flush (`tests/test_hotstore_unification.py`)
+- **Local Port Default Alignment** (`heber/config.py`, `README.md`, `docs/configuration.md`, `.env.example`)
+  - Updated host runtime defaults to match docker-compose exposure (`Postgres: 5433`, `Redis: 6380`)
+  - Synced configuration docs and environment template with the same host defaults
+  - Extended settings regression coverage for Postgres/Redis defaults (`tests/test_sdk_catalog_defaults.py`)
+- **Catalog Migration Baseline + Startup Guard** (`heber/catalog/api.py`, `alembic/*`)
+  - Added Alembic migration scaffolding with an initial Catalog baseline revision
+  - Catalog API lifespan now applies `Base.metadata.create_all` only in `dev` environment
+  - Non-dev environments now skip runtime schema auto-create and are expected to run Alembic migrations
+  - Added regression tests for dev/non-dev startup behavior and migration assets (`tests/test_catalog_migrations.py`)
+- **Watch Async Redis Non-Blocking Refactor** (`heber/watch/*.py`)
+  - Added async wrappers in `WatchManager` for Redis-backed CRUD/update operations used from async loops
+  - Watch consumer stream read/ack and watch creation now offload sync Redis/manager calls via `asyncio.to_thread`
+  - Snapshot poller now uses async manager wrappers for active-watch fetches, snapshot writes, and price updates
+  - Check/write loop now offloads synchronous barrier checks from async context
+  - Added regression tests to verify non-blocking async paths (`tests/test_watch_async_redis.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -8989,10 +9053,10 @@ HEBER_VOLUME_ROOT=/Volumes/HeberDocker
 POSTGRES_USER=heber
 POSTGRES_PASSWORD=heber_dev_password
 POSTGRES_DB=heber_catalog
-HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog
 
 # Redis (Event Bus)
-HEBER_REDIS_URL=redis://redis:6379
+HEBER_REDIS_URL=redis://localhost:6380
 HEBER_REDIS_STREAM_NAME=heber:events
 HEBER_REDIS_CONSUMER_GROUP=heber-writers
 HEBER_REDIS_DLQ_STREAM_NAME=heber:events:dlq
@@ -9466,6 +9530,109 @@ vulnerability:
   ignore:
     # Example: - CVE-2024-XXXXX
     []
+
+
+
+================================================
+FILE: alembic/env.py
+================================================
+"""Alembic environment configuration for Catalog DB migrations."""
+
+from __future__ import annotations
+
+import os
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+
+from alembic import context
+from heber.catalog.db import Base
+
+config = context.config
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+
+def _resolve_sqlalchemy_url() -> str:
+    """Resolve DB URL for migrations using env override when provided."""
+    configured_url = os.getenv("HEBER_POSTGRES_URL") or config.get_main_option("sqlalchemy.url")
+    # Alembic migration engine should be synchronous.
+    return configured_url.replace("+asyncpg", "")
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode."""
+    url = _resolve_sqlalchemy_url()
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        compare_type=True,
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode."""
+    alembic_section = config.get_section(config.config_ini_section, {})
+    alembic_section["sqlalchemy.url"] = _resolve_sqlalchemy_url()
+
+    connectable = engine_from_config(
+        alembic_section,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+
+
+================================================
+FILE: alembic/versions/20260205_0001_catalog_initial.py
+================================================
+"""Initial Catalog schema baseline."""
+
+from __future__ import annotations
+
+from alembic import op
+
+# revision identifiers, used by Alembic.
+revision = "20260205_0001"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    """Apply initial Catalog schema."""
+    from heber.catalog.db import Base
+
+    bind = op.get_bind()
+    Base.metadata.create_all(bind=bind)
+
+
+def downgrade() -> None:
+    """Drop initial Catalog schema."""
+    from heber.catalog.db import Base
+
+    bind = op.get_bind()
+    Base.metadata.drop_all(bind=bind)
 
 
 
@@ -10217,8 +10384,8 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 |---|---|---|
 | `HEBER_DATA_ROOT` | `/Volumes/heber/data` | Root path for Bronze/Silver/Gold data |
 | `HEBER_VOLUME_ROOT` | `/Volumes/heber` | External volume root used by scripts/docker |
-| `HEBER_POSTGRES_URL` | `postgresql+asyncpg://heber:heber_dev_password@localhost:5432/heber_catalog` | Catalog DB connection string |
-| `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis Streams endpoint |
+| `HEBER_POSTGRES_URL` | `postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog` | Catalog DB connection string |
+| `HEBER_REDIS_URL` | `redis://localhost:6380` | Redis Streams endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Redis stream name |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Redis consumer group |
 | `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed consumer messages |
@@ -11489,6 +11656,9 @@ Updated: 2026-02-05
 - `TD-007` addressed via `T-13`: compactor now streams small-file merges into a temp parquet, atomically promotes the merged file, and only deletes source files after successful promotion, with regression tests for failure safety.
 - `TD-009` addressed via `T-14`: Silver Arrow schemas now live in shared `heber.schemas.silver` instead of inline writer constants; writer/transformer import the shared module with regression tests guarding against schema re-duplication.
 - `TD-011` addressed via `T-15`: Hot Store event sync now buffers quote/trade/bar writes and flushes by row/time thresholds instead of one insert per event, with shutdown flush and regression tests.
+- `TD-010` addressed via `T-16`: host defaults now align with docker-compose exposed ports (`HEBER_POSTGRES_URL` on `localhost:5433`, `HEBER_REDIS_URL` on `localhost:6380`) across settings, docs, and `.env.example`.
+- `TD-012` addressed via `T-17`: Catalog startup now runs SQLAlchemy `create_all` only in `dev`, and Alembic migration scaffolding with an initial baseline revision is included for non-dev schema management.
+- `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
 
 ## Executive Summary
 
@@ -11935,7 +12105,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-010, TD-011, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
@@ -11978,6 +12148,9 @@ Updated: 2026-02-05
 - `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
 - `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
 - `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
+- `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
+- `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
+- `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 
 ## Prioritization Approach
 
@@ -12125,6 +12298,69 @@ Acceptance Criteria:
 
 Estimate: 0.5-1 day
 
+### T-16: Align Local Service Port Defaults (TD-010)
+
+Priority: P1
+
+Description: Local host defaults for Postgres and Redis diverged from docker-compose host-exposed ports. Align defaults and docs/templates so host-run SDK/services work without manual overrides.
+
+Scope:
+- `heber/config.py`
+- `tests/test_sdk_catalog_defaults.py`
+- `docs/configuration.md`
+- `README.md`
+- `.env.example`
+
+Acceptance Criteria:
+- `Settings` defaults use `localhost:5433` for Postgres and `localhost:6380` for Redis.
+- Regression tests validate the new defaults.
+- Configuration docs and environment template reflect the same host defaults.
+
+Estimate: 0.5 day
+
+### T-17: Add Catalog Migration Baseline and Non-Dev Guard (TD-012)
+
+Priority: P1
+
+Description: Catalog API previously called `Base.metadata.create_all` at startup in all environments with no migration path. Add Alembic baseline and restrict startup auto-create behavior to local dev only.
+
+Scope:
+- `heber/catalog/api.py`
+- `alembic.ini`
+- `alembic/env.py`
+- `alembic/versions/*`
+- `tests/test_catalog_migrations.py`
+- `docs/operations/deployment.md`
+
+Acceptance Criteria:
+- Catalog startup applies `create_all` only in `HEBER_ENVIRONMENT=dev`.
+- Non-dev environments skip runtime table creation and rely on migrations.
+- Alembic configuration and an initial Catalog revision exist in-repo.
+- Regression tests verify dev/non-dev startup behavior and migration asset presence.
+
+Estimate: 1 day
+
+### T-18: Remove Blocking Redis Calls from Watch Async Loops (TD-017)
+
+Priority: P1
+
+Description: Watch consumer and poller async loops previously called sync Redis / manager methods directly, risking event-loop stalls. Move these calls behind async wrappers that offload blocking work.
+
+Scope:
+- `heber/watch/manager.py`
+- `heber/watch/consumer.py`
+- `heber/watch/poller.py`
+- `heber/watch/writer.py`
+- `tests/test_watch_async_redis.py`
+
+Acceptance Criteria:
+- Consumer stream read/ack and watch creation in async paths no longer perform direct blocking sync calls.
+- Poller quote update loop uses async manager wrappers for watch/snapshot updates.
+- Check/write loop offloads synchronous barrier checks from the event loop.
+- Regression tests verify async paths are used and event loop remains responsive while reading stream messages.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -12218,6 +12454,9 @@ Estimate: 1 day
 13. T-13 (Compactor atomic merge hardening)
 14. T-14 (Silver schema centralization)
 15. T-15 (Hot Store event batching)
+16. T-16 (Local service port alignment)
+17. T-17 (Catalog migration baseline + non-dev startup guard)
+18. T-18 (Watch async Redis non-blocking refactor)
 
 
 
@@ -12893,7 +13132,17 @@ docker compose up -d lakefs apicurio openmetadata
 
 ### Database Migrations
 
-Catalog tables are created automatically on `heber-catalog` startup (see `heber/catalog/api.py`). There is currently no Alembic migration configuration in this repo.
+Catalog schema migrations are managed with Alembic:
+
+```bash
+# Run latest catalog migrations
+alembic upgrade head
+```
+
+Behavior by environment:
+
+- `HEBER_ENVIRONMENT=dev`: `heber-catalog` still applies `Base.metadata.create_all` on startup for local convenience.
+- `HEBER_ENVIRONMENT=staging|prod`: startup does not auto-create tables; run Alembic migrations during deploy.
 
 ---
 
@@ -14078,13 +14327,13 @@ class Settings(BaseSettings):
 
     # Postgres (Catalog)
     postgres_url: str = Field(
-        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5432/heber_catalog",
+        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog",
         description="PostgreSQL connection URL for Catalog DB",
     )
 
     # Redis (Event Bus)
     redis_url: str = Field(
-        default="redis://localhost:6379",
+        default="redis://localhost:6380",
         description="Redis connection URL for event streams",
     )
     redis_stream_name: str = Field(
@@ -17913,6 +18162,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -17921,16 +18171,30 @@ from heber.catalog.db import Base
 from heber.catalog.service import CatalogService
 from heber.config import settings
 
+logger = structlog.get_logger(__name__)
+
 # Database setup
 engine = create_async_engine(settings.postgres_url, echo=settings.environment == "dev")
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
+def _should_auto_create_catalog_tables() -> bool:
+    """Keep SQLAlchemy create_all for local dev only.
+
+    Non-dev environments should use Alembic migrations instead.
+    """
+    return settings.environment == "dev"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler - create tables on startup."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Application lifespan handler."""
+    if _should_auto_create_catalog_tables():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("catalog_schema_bootstrap_applied", mode="sqlalchemy_create_all", environment=settings.environment)
+    else:
+        logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)
     yield
 
 
@@ -44643,11 +44907,13 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import redis
 import structlog
 
+from heber.config import settings
 from heber.features.templates.alert_labels import (
     AlertHorizon,
     ContractBarrierConfig,
@@ -44690,6 +44956,9 @@ class AlertWatchConsumer:
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
         async_redis: redis.asyncio.Redis | None = None,
+        dlq_stream_name: str | None = None,
+        max_process_retries: int | None = None,
+        retry_backoff_seconds: float | None = None,
     ):
         """Initialize the consumer.
 
@@ -44699,12 +44968,18 @@ class AlertWatchConsumer:
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
             async_redis: Async Redis client for feature storage (optional)
+            dlq_stream_name: Redis stream for watch processing failures
+            max_process_retries: Retry attempts before dead-lettering
+            retry_backoff_seconds: Base retry backoff delay in seconds
         """
         self.redis = redis_client
         self.async_redis = async_redis
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
+        self.max_process_retries = max_process_retries or settings.redis_process_max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds or settings.redis_retry_backoff_seconds
         self._running = False
 
         # Feature extractor for meta-labeling
@@ -44734,10 +45009,92 @@ class AlertWatchConsumer:
             else:
                 raise
 
+    async def _setup_consumer_group_async(self) -> None:
+        """Async wrapper for consumer group setup."""
+        await asyncio.to_thread(self.setup_consumer_group)
+
+    async def _read_messages(self):
+        """Read stream messages without blocking the event loop."""
+        return await asyncio.to_thread(
+            self.redis.xreadgroup,
+            CONSUMER_GROUP,
+            CONSUMER_NAME,
+            {HEBER_EVENTS_STREAM: ">"},
+            count=100,
+            block=5000,
+        )
+
+    async def _ack_message(self, msg_id: str) -> None:
+        """Acknowledge stream message without blocking the event loop."""
+        await asyncio.to_thread(self.redis.xack, HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+
+    @staticmethod
+    def _normalize_stream_data(data: dict[Any, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in data.items():
+            key_str = key.decode() if isinstance(key, bytes) else str(key)
+            if isinstance(value, bytes):
+                normalized[key_str] = value.decode()
+            else:
+                normalized[key_str] = value
+        return normalized
+
+    async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
+        """Write failed message to DLQ stream."""
+        dlq_payload = {
+            "origin_stream": HEBER_EVENTS_STREAM,
+            "origin_message_id": msg_id,
+            "attempts": str(attempts),
+            "error": error,
+            "failed_at": datetime.now(UTC).isoformat(),
+            "payload": json.dumps(self._normalize_stream_data(data), default=str),
+        }
+        try:
+            await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+            logger.error(
+                "Watch message dead-lettered",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                attempts=attempts,
+                error=error,
+            )
+            return True
+        except Exception as dlq_error:
+            logger.error(
+                "Failed to dead-letter watch message",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                attempts=attempts,
+                error=str(dlq_error),
+            )
+            return False
+
+    async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
+        """Process one flow alert with retry + DLQ behavior."""
+        msg_id_text = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+        for attempt in range(1, self.max_process_retries + 1):
+            if await self._process_alert(msg_id_text, data):
+                return True
+            if attempt < self.max_process_retries:
+                await asyncio.sleep(self.retry_backoff_seconds * attempt)
+
+        return await self._dead_letter_message(
+            msg_id=msg_id_text,
+            data=data,
+            attempts=self.max_process_retries,
+            error="processing_failed_after_retries",
+        )
+
+    async def _handle_message(self, msg_id: str, data: dict) -> bool:
+        """Handle one stream entry and indicate whether it should be ACKed."""
+        if not self._is_flow_alert(data):
+            return True
+        return await self._process_flow_alert_with_retries(msg_id, data)
+
     async def run(self) -> None:
         """Run the consumer as a continuous service."""
         self._running = True
-        self.setup_consumer_group()
+        await self._setup_consumer_group_async()
 
         logger.info(
             "Starting alert watch consumer",
@@ -44748,22 +45105,14 @@ class AlertWatchConsumer:
         while self._running:
             try:
                 # Read new messages from stream
-                messages = self.redis.xreadgroup(
-                    CONSUMER_GROUP,
-                    CONSUMER_NAME,
-                    {HEBER_EVENTS_STREAM: ">"},
-                    count=100,
-                    block=5000,
-                )
+                messages = await self._read_messages()
 
                 if messages:
                     for _stream, entries in messages:
                         for msg_id, data in entries:
-                            # Filter for flow_alerts feed only
-                            if self._is_flow_alert(data):
-                                await self._process_alert(msg_id, data)
-                            # Always acknowledge to avoid reprocessing
-                            self.redis.xack(HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+                            should_ack = await self._handle_message(msg_id, data)
+                            if should_ack:
+                                await self._ack_message(msg_id)
 
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
@@ -44791,7 +45140,7 @@ class AlertWatchConsumer:
                 pass
         return False
 
-    async def _process_alert(self, msg_id: str, data: dict) -> None:
+    async def _process_alert(self, msg_id: str, data: dict) -> bool:
         """Process a single alert and create a watch.
 
         Args:
@@ -44804,12 +45153,12 @@ class AlertWatchConsumer:
 
             if not alert:
                 logger.warning("Could not parse alert", msg_id=msg_id)
-                return
+                return False
 
             # Skip if no OCC symbol
             if not alert.get("occ_symbol"):
                 logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
-                return
+                return True
 
             # Determine horizon based on DTE
             dte = alert.get("dte", 5)
@@ -44828,7 +45177,7 @@ class AlertWatchConsumer:
                 entry_price = alert.get("contract_px", 1.0)
 
             # Create watch
-            watch = self.manager.create_watch(
+            watch = await self.manager.create_watch_async(
                 alert_id=alert["id"],
                 occ_symbol=alert["occ_symbol"],
                 underlying=alert["underlying"],
@@ -44853,6 +45202,7 @@ class AlertWatchConsumer:
                 occ_symbol=alert["occ_symbol"],
                 horizon=watch_horizon.value,
             )
+            return True
 
         except Exception as e:
             logger.error(
@@ -44860,6 +45210,7 @@ class AlertWatchConsumer:
                 msg_id=msg_id,
                 error=str(e),
             )
+            return False
 
     def _parse_alert(self, data: dict) -> dict | None:
         """Parse alert data from stream message.
@@ -45629,6 +45980,7 @@ FILE: heber/watch/manager.py
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -45747,6 +46099,40 @@ class WatchManager:
 
         return watch
 
+    async def create_watch_async(
+        self,
+        alert_id: str,
+        occ_symbol: str,
+        underlying: str,
+        put_call: str,
+        expiry: str,
+        strike: float,
+        entry_price: float,
+        spot_at_alert: float,
+        alert_time: datetime,
+        horizon: WatchHorizon,
+        tp_threshold: float,
+        sl_threshold: float,
+        atr_at_alert: float | None = None,
+    ) -> AlertWatch:
+        """Async wrapper for create_watch to avoid blocking event loops."""
+        return await asyncio.to_thread(
+            self.create_watch,
+            alert_id,
+            occ_symbol,
+            underlying,
+            put_call,
+            expiry,
+            strike,
+            entry_price,
+            spot_at_alert,
+            alert_time,
+            horizon,
+            tp_threshold,
+            sl_threshold,
+            atr_at_alert,
+        )
+
     def get_watch(self, watch_id: str) -> AlertWatch | None:
         """Get a watch by ID."""
         key = WatchKeys.watch_key(watch_id)
@@ -45768,6 +46154,10 @@ class WatchManager:
                 watches.append(watch)
 
         return watches
+
+    async def get_active_watches_async(self) -> list[AlertWatch]:
+        """Async wrapper for get_active_watches."""
+        return await asyncio.to_thread(self.get_active_watches)
 
     def get_watches_for_symbol(self, occ_symbol: str) -> list[AlertWatch]:
         """Get all watches for a specific contract."""
@@ -45821,6 +46211,15 @@ class WatchManager:
 
         return watch
 
+    async def update_watch_price_async(
+        self,
+        watch_id: str,
+        current_price: float,
+        timestamp: datetime,
+    ) -> AlertWatch | None:
+        """Async wrapper for update_watch_price."""
+        return await asyncio.to_thread(self.update_watch_price, watch_id, current_price, timestamp)
+
     def complete_watch(
         self,
         watch_id: str,
@@ -45868,6 +46267,10 @@ class WatchManager:
         key = WatchKeys.snapshots_key(snapshot.watch_id)
         self.redis.rpush(key, snapshot.model_dump_json())
 
+    async def add_snapshot_async(self, snapshot: WatchSnapshot) -> None:
+        """Async wrapper for add_snapshot."""
+        await asyncio.to_thread(self.add_snapshot, snapshot)
+
     def get_snapshots(self, watch_id: str) -> list[WatchSnapshot]:
         """Get all snapshots for a watch."""
         key = WatchKeys.snapshots_key(watch_id)
@@ -45902,6 +46305,10 @@ class WatchManager:
         logger.info("Cleaned up expired watches", count=len(expired))
 
         return len(expired)
+
+    async def cleanup_expired_async(self) -> int:
+        """Async wrapper for cleanup_expired."""
+        return await asyncio.to_thread(self.cleanup_expired)
 
     def delete_watch(self, watch_id: str) -> bool:
         """Delete a watch and its snapshots."""
@@ -46202,7 +46609,7 @@ class SnapshotPoller:
             Stats from the poll cycle
         """
         # Get active watches grouped by symbol
-        active = self.manager.get_active_watches()
+        active = await self.manager.get_active_watches_async()
 
         if not active:
             return {"watches": 0, "quotes": 0, "errors": 0}
@@ -46226,8 +46633,8 @@ class SnapshotPoller:
         for symbol, quote in quotes.items():
             for watch in symbol_to_watches.get(symbol, []):
                 snapshot = self._create_snapshot(watch, quote)
-                self.manager.add_snapshot(snapshot)
-                self.manager.update_watch_price(
+                await self.manager.add_snapshot_async(snapshot)
+                await self.manager.update_watch_price_async(
                     watch.watch_id,
                     snapshot.mid_px or snapshot.last_px,
                     snapshot.timestamp,
@@ -46272,7 +46679,7 @@ class SnapshotPoller:
                 logger.info("Poll cycle complete", **stats)
 
                 # Cleanup expired watches
-                expired = self.manager.cleanup_expired()
+                expired = await self.manager.cleanup_expired_async()
                 if expired:
                     logger.info("Expired watches cleaned", count=expired)
 
@@ -46537,7 +46944,7 @@ class WatchService:
 
         while self._running:
             try:
-                outcomes = self.checker.check_all()
+                outcomes = await asyncio.to_thread(self.checker.check_all)
 
                 if outcomes:
                     self.writer.write_outcomes(outcomes)
@@ -50450,6 +50857,91 @@ FILE: tests/__init__.py
 
 
 ================================================
+FILE: tests/test_catalog_migrations.py
+================================================
+"""Regression tests for Catalog migration strategy and startup behavior."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from heber.catalog import api as catalog_api
+
+
+class _StubConnection:
+    def __init__(self) -> None:
+        self.run_sync_calls: list[object] = []
+
+    async def run_sync(self, fn) -> None:  # noqa: ANN001
+        self.run_sync_calls.append(fn)
+
+
+class _StubBeginContext:
+    def __init__(self, connection: _StubConnection) -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> _StubConnection:
+        return self._connection
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+        return False
+
+
+class _StubEngine:
+    def __init__(self) -> None:
+        self.connection = _StubConnection()
+        self.begin_calls = 0
+
+    def begin(self) -> _StubBeginContext:
+        self.begin_calls += 1
+        return _StubBeginContext(self.connection)
+
+
+@pytest.mark.asyncio
+async def test_catalog_lifespan_auto_creates_tables_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_engine = _StubEngine()
+    monkeypatch.setattr(catalog_api, "engine", stub_engine)
+    monkeypatch.setattr(catalog_api.settings, "environment", "dev")
+
+    assert catalog_api._should_auto_create_catalog_tables() is True
+
+    async with catalog_api.lifespan(catalog_api.app):
+        pass
+
+    assert stub_engine.begin_calls == 1
+    assert stub_engine.connection.run_sync_calls == [catalog_api.Base.metadata.create_all]
+
+
+@pytest.mark.asyncio
+async def test_catalog_lifespan_skips_auto_create_tables_outside_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_engine = _StubEngine()
+    monkeypatch.setattr(catalog_api, "engine", stub_engine)
+    monkeypatch.setattr(catalog_api.settings, "environment", "prod")
+
+    assert catalog_api._should_auto_create_catalog_tables() is False
+
+    async with catalog_api.lifespan(catalog_api.app):
+        pass
+
+    assert stub_engine.begin_calls == 0
+    assert stub_engine.connection.run_sync_calls == []
+
+
+def test_alembic_catalog_baseline_assets_exist() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    assert (repo_root / "alembic.ini").exists()
+    assert (repo_root / "alembic" / "env.py").exists()
+
+    versions_dir = repo_root / "alembic" / "versions"
+    revision_files = list(versions_dir.glob("*.py"))
+    assert revision_files, "Expected at least one Alembic revision file"
+    assert any("catalog_initial" in path.name for path in revision_files)
+
+
+
+================================================
 FILE: tests/test_compactor_safety.py
 ================================================
 """Regression tests for compactor safety and atomicity."""
@@ -51436,10 +51928,16 @@ from heber.sdk import client as sdk_client
 def test_settings_defaults_for_api_and_catalog_url(monkeypatch) -> None:
     monkeypatch.delenv("HEBER_API_PORT", raising=False)
     monkeypatch.delenv("HEBER_CATALOG_URL", raising=False)
+    monkeypatch.delenv("HEBER_POSTGRES_URL", raising=False)
+    monkeypatch.delenv("HEBER_REDIS_URL", raising=False)
 
     settings = Settings(_env_file=None)
     assert settings.api_port == 8080
     assert settings.catalog_url == "http://localhost:8085/api/v1"
+    assert settings.postgres_url == (
+        "postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog"  # pragma: allowlist secret
+    )
+    assert settings.redis_url == "redis://localhost:6380"
 
 
 def test_heber_client_uses_settings_catalog_url_by_default(monkeypatch) -> None:
@@ -51590,6 +52088,137 @@ def test_heber_sources_do_not_use_datetime_utcnow() -> None:
             offenders.append(str(path.relative_to(repo_root)))
 
     assert offenders == [], f"Found naive datetime.utcnow usage in: {offenders}"
+
+
+
+================================================
+FILE: tests/test_watch_async_redis.py
+================================================
+"""Regression tests for non-blocking watch-service Redis integration."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from heber.watch.consumer import AlertWatchConsumer
+from heber.watch.models import WatchHorizon
+from heber.watch.poller import SnapshotPoller
+
+
+class _SlowRedis:
+    def xgroup_create(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    def xreadgroup(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        time.sleep(0.2)
+        return []
+
+    def xack(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return 1
+
+
+class _AsyncOnlyManager:
+    def __init__(self) -> None:
+        self.created = 0
+        self.snapshots = 0
+        self.updated = 0
+
+    def create_watch(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("sync create_watch should not be called in async flow")
+
+    async def create_watch_async(self, **kwargs):  # noqa: ANN003
+        self.created += 1
+        return SimpleNamespace(watch_id="watch-1", horizon=kwargs.get("horizon", WatchHorizon.SWING))
+
+    def get_active_watches(self):
+        raise AssertionError("sync get_active_watches should not be called in async flow")
+
+    async def get_active_watches_async(self):
+        return [SimpleNamespace(watch_id="watch-1", occ_symbol="AAPL260220C00100000", entry_price=1.0)]
+
+    def add_snapshot(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("sync add_snapshot should not be called in async flow")
+
+    async def add_snapshot_async(self, _snapshot):  # noqa: ANN001
+        self.snapshots += 1
+
+    def update_watch_price(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("sync update_watch_price should not be called in async flow")
+
+    async def update_watch_price_async(self, _watch_id, _price, _timestamp):  # noqa: ANN001
+        self.updated += 1
+        return None
+
+
+@pytest.mark.asyncio
+async def test_consumer_read_messages_does_not_block_event_loop() -> None:
+    manager = _AsyncOnlyManager()
+    consumer = AlertWatchConsumer(_SlowRedis(), manager)
+
+    start = time.perf_counter()
+    read_task = asyncio.create_task(consumer._read_messages())
+    await asyncio.sleep(0.02)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.1
+    await read_task
+
+
+@pytest.mark.asyncio
+async def test_consumer_process_alert_uses_async_watch_creation() -> None:
+    manager = _AsyncOnlyManager()
+    consumer = AlertWatchConsumer(_SlowRedis(), manager)
+
+    consumer._get_entry_price = AsyncMock(return_value=1.5)  # type: ignore[method-assign]
+    consumer._extract_and_store_features = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    payload = {
+        "feed": "flow_alerts",
+        "payload": {
+            "id": "alert-1",
+            "occ_symbol": "AAPL260220C00100000",
+            "underlying": "AAPL",
+            "put_call": "C",
+            "expiry": "2026-02-20",
+            "strike": 100,
+            "spot_px": 200,
+            "contract_px": 1.5,
+        },
+    }
+    stream_data = {b"data": json.dumps(payload).encode()}
+
+    await consumer._process_alert("1-0", stream_data)
+
+    assert manager.created == 1
+
+
+@pytest.mark.asyncio
+async def test_poller_uses_async_manager_methods() -> None:
+    manager = _AsyncOnlyManager()
+    poller = SnapshotPoller(manager)
+
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": 1.0,
+                "ap": 1.2,
+                "last_price": 1.1,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["watches"] == 1
+    assert stats["updated"] == 1
+    assert manager.snapshots == 1
+    assert manager.updated == 1
 
 
 

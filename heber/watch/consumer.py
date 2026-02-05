@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import redis
 import structlog
 
+from heber.config import settings
 from heber.features.templates.alert_labels import (
     AlertHorizon,
     ContractBarrierConfig,
@@ -56,6 +58,9 @@ class AlertWatchConsumer:
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
         async_redis: redis.asyncio.Redis | None = None,
+        dlq_stream_name: str | None = None,
+        max_process_retries: int | None = None,
+        retry_backoff_seconds: float | None = None,
     ):
         """Initialize the consumer.
 
@@ -65,12 +70,18 @@ class AlertWatchConsumer:
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
             async_redis: Async Redis client for feature storage (optional)
+            dlq_stream_name: Redis stream for watch processing failures
+            max_process_retries: Retry attempts before dead-lettering
+            retry_backoff_seconds: Base retry backoff delay in seconds
         """
         self.redis = redis_client
         self.async_redis = async_redis
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
+        self.max_process_retries = max_process_retries or settings.redis_process_max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds or settings.redis_retry_backoff_seconds
         self._running = False
 
         # Feature extractor for meta-labeling
@@ -119,6 +130,69 @@ class AlertWatchConsumer:
         """Acknowledge stream message without blocking the event loop."""
         await asyncio.to_thread(self.redis.xack, HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
 
+    @staticmethod
+    def _normalize_stream_data(data: dict[Any, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in data.items():
+            key_str = key.decode() if isinstance(key, bytes) else str(key)
+            if isinstance(value, bytes):
+                normalized[key_str] = value.decode()
+            else:
+                normalized[key_str] = value
+        return normalized
+
+    async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
+        """Write failed message to DLQ stream."""
+        dlq_payload = {
+            "origin_stream": HEBER_EVENTS_STREAM,
+            "origin_message_id": msg_id,
+            "attempts": str(attempts),
+            "error": error,
+            "failed_at": datetime.now(UTC).isoformat(),
+            "payload": json.dumps(self._normalize_stream_data(data), default=str),
+        }
+        try:
+            await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+            logger.error(
+                "Watch message dead-lettered",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                attempts=attempts,
+                error=error,
+            )
+            return True
+        except Exception as dlq_error:
+            logger.error(
+                "Failed to dead-letter watch message",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                attempts=attempts,
+                error=str(dlq_error),
+            )
+            return False
+
+    async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
+        """Process one flow alert with retry + DLQ behavior."""
+        msg_id_text = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+        for attempt in range(1, self.max_process_retries + 1):
+            if await self._process_alert(msg_id_text, data):
+                return True
+            if attempt < self.max_process_retries:
+                await asyncio.sleep(self.retry_backoff_seconds * attempt)
+
+        return await self._dead_letter_message(
+            msg_id=msg_id_text,
+            data=data,
+            attempts=self.max_process_retries,
+            error="processing_failed_after_retries",
+        )
+
+    async def _handle_message(self, msg_id: str, data: dict) -> bool:
+        """Handle one stream entry and indicate whether it should be ACKed."""
+        if not self._is_flow_alert(data):
+            return True
+        return await self._process_flow_alert_with_retries(msg_id, data)
+
     async def run(self) -> None:
         """Run the consumer as a continuous service."""
         self._running = True
@@ -138,11 +212,9 @@ class AlertWatchConsumer:
                 if messages:
                     for _stream, entries in messages:
                         for msg_id, data in entries:
-                            # Filter for flow_alerts feed only
-                            if self._is_flow_alert(data):
-                                await self._process_alert(msg_id, data)
-                            # Always acknowledge to avoid reprocessing
-                            await self._ack_message(msg_id)
+                            should_ack = await self._handle_message(msg_id, data)
+                            if should_ack:
+                                await self._ack_message(msg_id)
 
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
@@ -170,7 +242,7 @@ class AlertWatchConsumer:
                 pass
         return False
 
-    async def _process_alert(self, msg_id: str, data: dict) -> None:
+    async def _process_alert(self, msg_id: str, data: dict) -> bool:
         """Process a single alert and create a watch.
 
         Args:
@@ -183,12 +255,12 @@ class AlertWatchConsumer:
 
             if not alert:
                 logger.warning("Could not parse alert", msg_id=msg_id)
-                return
+                return False
 
             # Skip if no OCC symbol
             if not alert.get("occ_symbol"):
                 logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
-                return
+                return True
 
             # Determine horizon based on DTE
             dte = alert.get("dte", 5)
@@ -232,6 +304,7 @@ class AlertWatchConsumer:
                 occ_symbol=alert["occ_symbol"],
                 horizon=watch_horizon.value,
             )
+            return True
 
         except Exception as e:
             logger.error(
@@ -239,6 +312,7 @@ class AlertWatchConsumer:
                 msg_id=msg_id,
                 error=str(e),
             )
+            return False
 
     def _parse_alert(self, data: dict) -> dict | None:
         """Parse alert data from stream message.

@@ -26,6 +26,7 @@ Updated: 2026-02-05
 - `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
 - `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
+- `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
 
 ## Prioritization Approach
 
@@ -236,6 +237,25 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-19: Add Watch Consumer Retry + DLQ Policy (TD-018)
+
+Priority: P1
+
+Description: Watch consumer previously acknowledged stream messages even when processing failed, causing silent drops with no DLQ trace. Add retry/backoff and dead-letter handling with ACK policy tied to processing outcome.
+
+Scope:
+- `heber/watch/consumer.py`
+- `tests/test_watch_consumer_reliability.py`
+
+Acceptance Criteria:
+- Flow-alert messages are retried with bounded attempts and backoff.
+- Terminal failures are written to Redis DLQ stream with context metadata.
+- Messages are ACKed only after successful processing or successful DLQ write.
+- If DLQ write fails, message remains pending (not ACKed) for later recovery.
+- Regression tests verify retry count, DLQ routing, and ACK decision behavior.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -332,3 +352,4 @@ Estimate: 1 day
 16. T-16 (Local service port alignment)
 17. T-17 (Catalog migration baseline + non-dev startup guard)
 18. T-18 (Watch async Redis non-blocking refactor)
+19. T-19 (Watch consumer retry + DLQ policy)
