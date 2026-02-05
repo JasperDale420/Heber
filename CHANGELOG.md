@@ -210,6 +210,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Updated host runtime defaults to match docker-compose exposure (`Postgres: 5433`, `Redis: 6380`)
   - Synced configuration docs and environment template with the same host defaults
   - Extended settings regression coverage for Postgres/Redis defaults (`tests/test_sdk_catalog_defaults.py`)
+- **Catalog Migration Baseline + Startup Guard** (`heber/catalog/api.py`, `alembic/*`)
+  - Added Alembic migration scaffolding with an initial Catalog baseline revision
+  - Catalog API lifespan now applies `Base.metadata.create_all` only in `dev` environment
+  - Non-dev environments now skip runtime schema auto-create and are expected to run Alembic migrations
+  - Added regression tests for dev/non-dev startup behavior and migration assets (`tests/test_catalog_migrations.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

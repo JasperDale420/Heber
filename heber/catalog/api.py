@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -15,16 +16,30 @@ from heber.catalog.db import Base
 from heber.catalog.service import CatalogService
 from heber.config import settings
 
+logger = structlog.get_logger(__name__)
+
 # Database setup
 engine = create_async_engine(settings.postgres_url, echo=settings.environment == "dev")
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
+def _should_auto_create_catalog_tables() -> bool:
+    """Keep SQLAlchemy create_all for local dev only.
+
+    Non-dev environments should use Alembic migrations instead.
+    """
+    return settings.environment == "dev"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler - create tables on startup."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Application lifespan handler."""
+    if _should_auto_create_catalog_tables():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("catalog_schema_bootstrap_applied", mode="sqlalchemy_create_all", environment=settings.environment)
+    else:
+        logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)
     yield
 
 

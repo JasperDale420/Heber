@@ -77,7 +77,17 @@ docker compose up -d lakefs apicurio openmetadata
 
 ### Database Migrations
 
-Catalog tables are created automatically on `heber-catalog` startup (see `heber/catalog/api.py`). There is currently no Alembic migration configuration in this repo.
+Catalog schema migrations are managed with Alembic:
+
+```bash
+# Run latest catalog migrations
+alembic upgrade head
+```
+
+Behavior by environment:
+
+- `HEBER_ENVIRONMENT=dev`: `heber-catalog` still applies `Base.metadata.create_all` on startup for local convenience.
+- `HEBER_ENVIRONMENT=staging|prod`: startup does not auto-create tables; run Alembic migrations during deploy.
 
 ---
 

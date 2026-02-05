@@ -24,6 +24,7 @@ Updated: 2026-02-05
 - `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
 - `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
 - `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
+- `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
 
 ## Prioritization Approach
 
@@ -191,6 +192,28 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-17: Add Catalog Migration Baseline and Non-Dev Guard (TD-012)
+
+Priority: P1
+
+Description: Catalog API previously called `Base.metadata.create_all` at startup in all environments with no migration path. Add Alembic baseline and restrict startup auto-create behavior to local dev only.
+
+Scope:
+- `heber/catalog/api.py`
+- `alembic.ini`
+- `alembic/env.py`
+- `alembic/versions/*`
+- `tests/test_catalog_migrations.py`
+- `docs/operations/deployment.md`
+
+Acceptance Criteria:
+- Catalog startup applies `create_all` only in `HEBER_ENVIRONMENT=dev`.
+- Non-dev environments skip runtime table creation and rely on migrations.
+- Alembic configuration and an initial Catalog revision exist in-repo.
+- Regression tests verify dev/non-dev startup behavior and migration asset presence.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -285,3 +308,4 @@ Estimate: 1 day
 14. T-14 (Silver schema centralization)
 15. T-15 (Hot Store event batching)
 16. T-16 (Local service port alignment)
+17. T-17 (Catalog migration baseline + non-dev startup guard)
