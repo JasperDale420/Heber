@@ -120,6 +120,18 @@ SILVER_SCHEMAS = {
             ("alert_type", pa.string()),
             ("side", pa.string()),
             ("aggressor", pa.string()),
+            # UW additional fields (P1)
+            ("is_sweep", pa.bool_()),
+            ("is_unusual", pa.bool_()),
+            ("sentiment", pa.string()),
+            ("trade_count", pa.int64()),
+            ("volume_oi_ratio", pa.float64()),
+            ("total_ask_side_prem", pa.float64()),
+            ("total_bid_side_prem", pa.float64()),
+            ("has_floor", pa.bool_()),
+            ("has_multileg", pa.bool_()),
+            ("has_singleleg", pa.bool_()),
+            ("all_opening_trades", pa.bool_()),
         ]
     ),
     "darkpool": pa.schema(
@@ -146,6 +158,7 @@ SILVER_SCHEMAS = {
             ("nbbo_bid", pa.float64()),
             ("nbbo_ask", pa.float64()),
             ("ext_hours", pa.string()),
+            ("trade_settlement", pa.string()),
             ("canceled", pa.bool_()),
         ]
     ),

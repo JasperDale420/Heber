@@ -110,6 +110,19 @@ class FlowAlertRecord(SilverBase):
     aggressor: str | None = None
     tags: list[str] | None = None
 
+    # UW additional flags (P1)
+    is_sweep: bool | None = None
+    is_unusual: bool | None = None
+    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    trade_count: int | None = None
+    volume_oi_ratio: float | None = None
+    total_ask_side_prem: float | None = None
+    total_bid_side_prem: float | None = None
+    has_floor: bool | None = None
+    has_multileg: bool | None = None
+    has_singleleg: bool | None = None
+    all_opening_trades: bool | None = None
+
 
 class DarkpoolTradeRecord(SilverBase):
     """Silver darkpool_trades schema (PRD §8.7.6, Unusual Whales).
@@ -124,6 +137,13 @@ class DarkpoolTradeRecord(SilverBase):
     venue: str | None = None
     print_id: str | None = None
     conditions: list[str] | None = None
+
+    # UW additional fields (P1)
+    nbbo_bid: float | None = None
+    nbbo_ask: float | None = None
+    ext_hours: str | None = None
+    trade_settlement: str | None = None
+    canceled: bool | None = None
 
 
 # ==============================================================================
@@ -251,6 +271,9 @@ class MarketTideRecord(SilverBase):
     # Sector/index data (if provided)
     sector_data: dict[str, Any] | None = None
     index_data: dict[str, Any] | None = None
+
+    # UW sentiment field (P1)
+    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
 
 
 class SectorTideRecord(SilverBase):
