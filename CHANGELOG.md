@@ -158,6 +158,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Gold offline source paths now follow `dataset/project/version/dt/*.parquet` layout with configurable roots/project/version globs
   - Feast local registry/online paths no longer hardcode `/data/feast`
   - Added regression coverage for schema/path alignment (`tests/test_feature_view_alignment.py`)
+- **Pytest Discovery Expansion** (`pyproject.toml`)
+  - Test discovery now includes both `tests/` and `heber/`
+  - Added support for in-package test files named `tests.py` and `tests_*.py`
+  - Default `pytest --collect-only` now sees in-package coverage that was previously skipped
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

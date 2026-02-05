@@ -12,6 +12,7 @@ Updated: 2026-02-05
 - `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
 - `T-03` complete (`TD-034`): feature templates derive `ts_available` from source availability.
 - `T-04` complete (`TD-033`): Feast feature views now align with template outputs and Gold `dataset/project/version/dt` layout, with schema/path regression tests.
+- `T-05` complete (`TD-001`): pytest now discovers tests under both `tests/` and `heber/`, including files named `tests.py` and `tests_*.py`.
 
 ## Prioritization Approach
 

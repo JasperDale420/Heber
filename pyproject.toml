@@ -108,7 +108,8 @@ ignore = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "heber"]
+python_files = ["test_*.py", "*_test.py", "tests.py", "tests_*.py"]
 
 [tool.mypy]
 python_version = "3.11"
