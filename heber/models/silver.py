@@ -253,6 +253,25 @@ class MarketTideRecord(SilverBase):
     index_data: dict[str, Any] | None = None
 
 
+class SectorTideRecord(SilverBase):
+    """Silver sector_tide schema (UW periodic sector sentiment snapshot).
+
+    Primary key: (ts_event, sector)
+    Per-sector tide data from Unusual Whales GICS sector endpoint.
+    """
+
+    sector: str = Field(..., description="GICS sector name")
+
+    # Premium aggregates
+    net_call_premium: float | None = None
+    net_put_premium: float | None = None
+    call_put_ratio: float | None = None
+
+    # Volume and sentiment
+    net_volume: float | None = None
+    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+
+
 # ==============================================================================
 # V2 Schemas - News and Filing Data (PRD §9, §58, §59)
 # ==============================================================================

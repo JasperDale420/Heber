@@ -122,6 +122,78 @@ SILVER_SCHEMAS = {
             ("aggressor", pa.string()),
         ]
     ),
+    "darkpool": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Darkpool-specific
+            ("underlying", pa.string()),
+            ("price", pa.float64()),
+            ("size", pa.float64()),
+            ("notional", pa.float64()),
+            ("venue", pa.string()),
+            ("print_id", pa.string()),
+            ("nbbo_bid", pa.float64()),
+            ("nbbo_ask", pa.float64()),
+            ("ext_hours", pa.string()),
+            ("canceled", pa.bool_()),
+        ]
+    ),
+    "sector_tide": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Sector tide-specific
+            ("sector", pa.string()),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            ("net_volume", pa.float64()),
+            ("sentiment", pa.string()),
+            ("call_put_ratio", pa.float64()),
+        ]
+    ),
+    "market_tide": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Market tide-specific
+            ("total_call_premium", pa.float64()),
+            ("total_put_premium", pa.float64()),
+            ("net_volume", pa.float64()),
+            ("sentiment", pa.string()),
+            ("call_put_ratio", pa.float64()),
+        ]
+    ),
 }
 
 # Default schema for unknown feeds
@@ -187,7 +259,7 @@ class SilverWriter:
         # Add payload fields
         payload = envelope.payload
         if envelope.feed in SILVER_SCHEMAS:
-            # Field name mappings for UW flow_alerts
+            # Field name mappings for UW feeds (payload field -> Silver schema field)
             field_mappings = {
                 "flow_alerts": {
                     "price": "contract_px",
@@ -195,7 +267,19 @@ class SilverWriter:
                     "option_chain": "occ_symbol",
                     "symbol": "underlying",  # symbol in payload is the underlying
                     "alert_rule": "alert_type",
-                }
+                },
+                "darkpool": {
+                    "symbol": "underlying",  # symbol in payload is the underlying
+                    "exchange": "venue",
+                    "tracking_id": "print_id",
+                },
+                "market_tide": {
+                    "net_call_premium": "total_call_premium",
+                    "net_put_premium": "total_put_premium",
+                },
+                "sector_tide": {
+                    # sector_tide uses same field names, but we include for consistency
+                },
             }
             mappings = field_mappings.get(envelope.feed, {})
 
