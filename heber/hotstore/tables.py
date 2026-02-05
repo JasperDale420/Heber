@@ -8,6 +8,10 @@ Tables:
 Retention is managed by ClickHouse TTL, not Heber.
 """
 
+from __future__ import annotations
+
+import inspect
+
 # Quotes Hot Table (PRD §12.10)
 QUOTES_HOT_DDL = """
 CREATE TABLE IF NOT EXISTS quotes_hot (
@@ -146,12 +150,17 @@ GROUP BY instrument_key, timeframe;
 """
 
 
-async def create_all_tables(client) -> None:
-    """Create all Hot Store tables and views.
+def _execute_statement(client, statement: str):
+    """Execute DDL statement against sync or async client interfaces."""
+    for method_name in ("command", "execute", "query"):
+        method = getattr(client, method_name, None)
+        if callable(method):
+            return method(statement)
+    raise AttributeError("Hot Store client must expose command(), execute(), or query()")
 
-    Args:
-        client: ClickHouse client (clickhouse-connect or similar)
-    """
+
+def create_all_tables(client) -> None:
+    """Create all Hot Store tables and views using a synchronous client."""
     statements = [
         QUOTES_HOT_DDL,
         TRADES_HOT_DDL,
@@ -161,4 +170,22 @@ async def create_all_tables(client) -> None:
     ]
 
     for stmt in statements:
-        await client.execute(stmt)
+        result = _execute_statement(client, stmt)
+        if inspect.isawaitable(result):
+            raise TypeError("create_all_tables() received an async client result. Use create_all_tables_async().")
+
+
+async def create_all_tables_async(client) -> None:
+    """Create all Hot Store tables and views using an async-capable client."""
+    statements = [
+        QUOTES_HOT_DDL,
+        TRADES_HOT_DDL,
+        BARS_HOT_DDL,
+        LATEST_QUOTES_VIEW_DDL,
+        LATEST_BARS_VIEW_DDL,
+    ]
+
+    for stmt in statements:
+        result = _execute_statement(client, stmt)
+        if inspect.isawaitable(result):
+            await result

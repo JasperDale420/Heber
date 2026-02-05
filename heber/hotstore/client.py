@@ -10,8 +10,13 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from clickhouse_connect import get_client
-from clickhouse_connect.driver.client import Client
+
+try:
+    from clickhouse_connect import get_client
+    from clickhouse_connect.driver.client import Client
+except ImportError:  # pragma: no cover - optional dependency in some test envs
+    get_client = None
+    Client = Any
 
 from heber.config import settings
 
@@ -34,6 +39,11 @@ class HotStoreClient:
     def client(self) -> Client:
         """Lazy-initialize ClickHouse client."""
         if self._client is None:
+            if get_client is None:
+                raise ImportError(
+                    "clickhouse_connect is required for HotStoreClient runtime usage. "
+                    "Install project dependencies including clickhouse-connect."
+                )
             self._client = get_client(
                 host=settings.clickhouse_host,
                 port=settings.clickhouse_port,

@@ -1,0 +1,85 @@
+"""Regression tests for unified Hot Store implementation."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+
+from heber.hotstore.sync import HotStoreSync
+from heber.hotstore.tables import create_all_tables
+
+
+@dataclass
+class _QueryResult:
+    result_rows: list[tuple]
+    column_names: list[str]
+
+
+class _StubClickHouseClient:
+    def __init__(self):
+        self.commands: list[str] = []
+        self.inserts: list[tuple[str, list[tuple], list[str]]] = []
+
+    def command(self, statement: str) -> None:
+        self.commands.append(statement)
+
+    def insert(self, table: str, rows: list[tuple], column_names: list[str]) -> int:
+        self.inserts.append((table, rows, column_names))
+        return len(rows)
+
+    def query(self, _query: str, parameters=None):  # noqa: ARG002
+        return _QueryResult(result_rows=[(1,)], column_names=["count"])
+
+
+class _StubHotStoreClient:
+    def __init__(self):
+        self.client = _StubClickHouseClient()
+
+    def get_sync_lag_seconds(self, _dataset: str) -> float:
+        return 12.5
+
+    def get_row_count(self, _dataset: str, days: int = 7) -> int:  # noqa: ARG002
+        return 42
+
+
+def test_create_all_tables_uses_sync_client_command() -> None:
+    stub = _StubClickHouseClient()
+    create_all_tables(stub)
+    assert len(stub.commands) == 5
+
+
+def test_hotstore_sync_write_batch_uses_unified_insert_path() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+
+    rows_written = syncer.write_batch(
+        "quotes",
+        [
+            {
+                "event_id": "evt-1",
+                "provider": "alpaca",
+                "feed": "quotes",
+                "instrument_type": "equity",
+                "instrument_key": "equity:AAPL",
+                "symbol": "AAPL",
+                "payload": {"bid_px": 180.0, "ask_px": 180.1},
+            }
+        ],
+    )
+
+    assert rows_written == 1
+    assert len(client.client.inserts) == 1
+    table, rows, columns = client.client.inserts[0]
+    assert table == "quotes_hot"
+    assert len(rows) == 1
+    assert "bid_px" in columns
+    assert "ask_px" in columns
+
+
+def test_hotstore_sync_metrics_no_await_mismatch() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+    metrics = asyncio.run(syncer.get_metrics())
+    assert metrics["quotes_lag_seconds"] == 12.5
+    assert metrics["trades_lag_seconds"] == 12.5
+    assert metrics["bars_lag_seconds"] == 12.5
