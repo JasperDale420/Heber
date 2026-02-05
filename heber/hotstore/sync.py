@@ -8,6 +8,7 @@ wrappers for event-driven callers.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -52,6 +53,8 @@ class HotStoreSyncConfig:
     max_lag_seconds: float = 300.0
     sync_interval_seconds: float = 30.0
     silver_base_path: str = str(settings.silver_path)
+    event_batch_max_rows: int = 250
+    event_batch_max_wait_seconds: float = 1.0
 
 
 @dataclass
@@ -81,6 +84,8 @@ class HotStoreSync:
         self.config = config or HotStoreSyncConfig()
         self._running = False
         self._sync_state: dict[str, SyncState] = {}
+        self._event_buffers: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._event_buffer_started_at: dict[str, datetime] = {}
 
     @staticmethod
     def get_table_for_dataset(dataset: str) -> HotStoreTable:
@@ -226,6 +231,47 @@ class HotStoreSync:
         state.rows_synced += rows_written
         return rows_written
 
+    def _flush_event_buffer(self, dataset: str) -> int:
+        records = self._event_buffers.get(dataset, [])
+        if not records:
+            return 0
+
+        rows_written = self.write_batch(dataset, records)
+        self._event_buffers[dataset] = []
+        self._event_buffer_started_at.pop(dataset, None)
+        return rows_written
+
+    def _flush_due_event_buffers(self) -> int:
+        now = datetime.now(UTC)
+        total_flushed = 0
+        for dataset, records in list(self._event_buffers.items()):
+            if not records:
+                continue
+            started_at = self._event_buffer_started_at.get(dataset, now)
+            elapsed_seconds = (now - started_at).total_seconds()
+            if elapsed_seconds >= self.config.event_batch_max_wait_seconds:
+                total_flushed += self._flush_event_buffer(dataset)
+        return total_flushed
+
+    def flush(self) -> int:
+        """Flush all buffered event writes."""
+        total_flushed = 0
+        for dataset in list(self._event_buffers):
+            total_flushed += self._flush_event_buffer(dataset)
+        return total_flushed
+
+    def _buffer_event(self, dataset: str, event: dict[str, Any]) -> int:
+        if dataset not in self._event_buffer_started_at:
+            self._event_buffer_started_at[dataset] = datetime.now(UTC)
+
+        buffered = self._event_buffers[dataset]
+        buffered.append(event)
+
+        if len(buffered) >= self.config.event_batch_max_rows:
+            return self._flush_event_buffer(dataset)
+
+        return self._flush_due_event_buffers()
+
     def get_row_count(self, dataset: str) -> int:
         """Get row count from Hot Store for a dataset."""
         table = self.get_table_for_dataset(dataset)
@@ -284,19 +330,33 @@ class HotStoreSync:
                 except Exception as exc:
                     _metrics["sync_failures_total"] += 1
                     logger.error("hot_store_sync_failed", dataset=dataset, error=str(exc))
+            self._flush_due_event_buffers()
             await asyncio.sleep(self.config.sync_interval_seconds)
+
+        # Best-effort flush of any event-buffered rows when loop exits.
+        try:
+            self.flush()
+        except Exception as exc:
+            _metrics["sync_failures_total"] += 1
+            logger.error("hot_store_buffer_flush_failed", error=str(exc))
 
     def stop(self) -> None:
         self._running = False
+        # Stop can be called without a running loop; flush buffered events now.
+        try:
+            self.flush()
+        except Exception as exc:
+            _metrics["sync_failures_total"] += 1
+            logger.error("hot_store_buffer_flush_failed", error=str(exc))
 
     async def sync_quote(self, event: dict[str, Any]) -> None:
-        self.write_batch("quotes", [event])
+        self._buffer_event("quotes", event)
 
     async def sync_trade(self, event: dict[str, Any]) -> None:
-        self.write_batch("trades", [event])
+        self._buffer_event("trades", event)
 
     async def sync_bar(self, event: dict[str, Any]) -> None:
-        self.write_batch("bars", [event])
+        self._buffer_event("bars", event)
 
     async def sync_event(self, event: dict[str, Any]) -> None:
         feed = str(event.get("feed", "")).lower()

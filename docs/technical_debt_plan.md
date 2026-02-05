@@ -22,6 +22,7 @@ Updated: 2026-02-05
 - `T-12` complete (`TD-006`): replaced naive `datetime.utcnow()` usage across `heber/` runtime modules with timezone-aware `datetime.now(UTC)`, with regression coverage to prevent reintroduction.
 - `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
 - `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
+- `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
 
 ## Prioritization Approach
 
@@ -227,6 +228,24 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-15: Batch Hot Store Event Inserts (TD-011)
+
+Priority: P2
+
+Description: Event sync paths in `HotStoreSync` previously called `write_batch(..., [event])`, causing one ClickHouse insert per event. Add buffering and threshold-based flushing to reduce insert overhead.
+
+Scope:
+- `heber/hotstore/sync.py`
+- `tests/test_hotstore_unification.py`
+
+Acceptance Criteria:
+- `sync_quote`, `sync_trade`, and `sync_bar` buffer events and insert in batches.
+- Buffer flushes when row threshold is hit or max wait time elapses.
+- Pending buffered rows are flushed during shutdown/stop.
+- Regression tests verify threshold batching and stop-time flush behavior.
+
+Estimate: 1 day
+
 ## Suggested Execution Order
 
 1. T-01 (Event bus claim handling)
@@ -243,3 +262,4 @@ Estimate: 1 day
 12. T-12 (Timezone-aware UTC normalization)
 13. T-13 (Compactor atomic merge hardening)
 14. T-14 (Silver schema centralization)
+15. T-15 (Hot Store event batching)

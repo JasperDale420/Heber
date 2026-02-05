@@ -201,6 +201,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Moved canonical Silver Arrow schema definitions out of `heber.writer.silver` into shared `heber.schemas.silver`
   - Updated writer and Bronze-to-Silver transformer to consume the shared schema module
   - Added regression tests to enforce single-source schema ownership and block inline schema constant reintroduction (`tests/test_silver_schema_source.py`)
+- **Hot Store Event Batching** (`heber/hotstore/sync.py`)
+  - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
+  - Replaced one-insert-per-event sync path with threshold-based batched inserts
+  - Added best-effort buffer flush on sync loop exit and explicit stop shutdown
+  - Added regression tests for threshold-triggered batch inserts and stop-time flush (`tests/test_hotstore_unification.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

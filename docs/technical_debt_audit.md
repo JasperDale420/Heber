@@ -227,6 +227,7 @@ Updated: 2026-02-05
 - `TD-006` addressed via `T-12`: all `heber/` runtime modules now use timezone-aware UTC timestamps (`datetime.now(UTC)`) in place of naive `datetime.utcnow()`, with a regression test guarding against reintroduction.
 - `TD-007` addressed via `T-13`: compactor now streams small-file merges into a temp parquet, atomically promotes the merged file, and only deletes source files after successful promotion, with regression tests for failure safety.
 - `TD-009` addressed via `T-14`: Silver Arrow schemas now live in shared `heber.schemas.silver` instead of inline writer constants; writer/transformer import the shared module with regression tests guarding against schema re-duplication.
+- `TD-011` addressed via `T-15`: Hot Store event sync now buffers quote/trade/bar writes and flushes by row/time thresholds instead of one insert per event, with shutdown flush and regression tests.
 
 ## Executive Summary
 
@@ -673,11 +674,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-010, TD-011, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

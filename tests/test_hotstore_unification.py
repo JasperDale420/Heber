@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from heber.hotstore.sync import HotStoreSync
+from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
 from heber.hotstore.tables import create_all_tables
 
 
@@ -83,3 +83,34 @@ def test_hotstore_sync_metrics_no_await_mismatch() -> None:
     assert metrics["quotes_lag_seconds"] == 12.5
     assert metrics["trades_lag_seconds"] == 12.5
     assert metrics["bars_lag_seconds"] == 12.5
+
+
+def test_hotstore_event_sync_batches_before_insert() -> None:
+    client = _StubHotStoreClient()
+    config = HotStoreSyncConfig(event_batch_max_rows=3, event_batch_max_wait_seconds=60.0)
+    syncer = HotStoreSync(client=client, config=config)
+
+    asyncio.run(syncer.sync_quote({"event_id": "evt-1", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    asyncio.run(syncer.sync_quote({"event_id": "evt-2", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    assert len(client.client.inserts) == 0
+
+    asyncio.run(syncer.sync_quote({"event_id": "evt-3", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    assert len(client.client.inserts) == 1
+    table, rows, _ = client.client.inserts[0]
+    assert table == "quotes_hot"
+    assert len(rows) == 3
+
+
+def test_hotstore_event_sync_stop_flushes_pending_buffer() -> None:
+    client = _StubHotStoreClient()
+    config = HotStoreSyncConfig(event_batch_max_rows=100, event_batch_max_wait_seconds=60.0)
+    syncer = HotStoreSync(client=client, config=config)
+
+    asyncio.run(syncer.sync_trade({"event_id": "evt-1", "feed": "trades", "instrument_key": "equity:MSFT"}))
+    assert len(client.client.inserts) == 0
+
+    syncer.stop()
+    assert len(client.client.inserts) == 1
+    table, rows, _ = client.client.inserts[0]
+    assert table == "trades_hot"
+    assert len(rows) == 1
