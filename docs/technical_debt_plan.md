@@ -13,6 +13,7 @@ Updated: 2026-02-05
 - `T-03` complete (`TD-034`): feature templates derive `ts_available` from source availability.
 - `T-04` complete (`TD-033`): Feast feature views now align with template outputs and Gold `dataset/project/version/dt` layout, with schema/path regression tests.
 - `T-05` complete (`TD-001`): pytest now discovers tests under both `tests/` and `heber/`, including files named `tests.py` and `tests_*.py`.
+- `T-06` complete (`TD-003`, `TD-074`): Docker and Kubernetes entrypoints now reference existing runtime modules (`heber.writer.consumer`, `heber.writer.compactor`), with regression checks.
 
 ## Prioritization Approach
 

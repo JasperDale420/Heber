@@ -162,6 +162,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Test discovery now includes both `tests/` and `heber/`
   - Added support for in-package test files named `tests.py` and `tests_*.py`
   - Default `pytest --collect-only` now sees in-package coverage that was previously skipped
+- **Runtime Entrypoint Alignment** (`Dockerfile`, `k8s/base/deployments/*.yaml`)
+  - Replaced stale module paths (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`) with existing runtime modules
+  - Docker consumer/writer now run `heber.writer.consumer`; compactor runs `heber.writer.compactor`
+  - Kubernetes consumer/writer/compactor deployments now use matching module entrypoints
+  - Added regression coverage for runtime module references (`tests/test_runtime_entrypoints.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

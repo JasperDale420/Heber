@@ -37,7 +37,7 @@ spec:
         - name: consumer
           image: heber:consumer-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.bus.consumer"]
+          command: ["python", "-m", "heber.writer.consumer"]
           ports:
             - name: metrics
               containerPort: 9090

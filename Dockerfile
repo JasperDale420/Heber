@@ -79,19 +79,19 @@ CMD ["python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "-
 # Stage 3 (optional): Consumer service
 # -----------------------------------------------------------------------------
 FROM runtime AS consumer
-CMD ["python", "-m", "heber.bus.consumer"]
+CMD ["python", "-m", "heber.writer.consumer"]
 
 # -----------------------------------------------------------------------------
 # Stage 4 (optional): Writer service
 # -----------------------------------------------------------------------------
 FROM runtime AS writer
-CMD ["python", "-m", "heber.writer.service"]
+CMD ["python", "-m", "heber.writer.consumer"]
 
 # -----------------------------------------------------------------------------
 # Stage 5 (optional): Compactor service
 # -----------------------------------------------------------------------------
 FROM runtime AS compactor
-CMD ["python", "-m", "heber.writer.compaction"]
+CMD ["python", "-m", "heber.writer.compactor"]
 
 # -----------------------------------------------------------------------------
 # Stage 6 (optional): Catalog API service

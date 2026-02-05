@@ -218,6 +218,7 @@ Updated: 2026-02-05
 - `TD-034` addressed via `T-03`: template `ts_available` values are source-derived.
 - `TD-033` addressed via `T-04`: feature view schemas and offline paths align with Gold outputs and include schema/path regression coverage.
 - `TD-001` addressed via `T-05`: pytest discovery now includes in-package tests under `heber/` and legacy test file names (`tests.py`, `tests_*.py`).
+- `TD-003` and `TD-074` addressed via `T-06`: Docker/Kubernetes runtime commands now point to existing modules, replacing stale references to missing paths.
 
 ## Executive Summary
 

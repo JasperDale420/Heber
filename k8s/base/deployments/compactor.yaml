@@ -39,7 +39,7 @@ spec:
         - name: compactor
           image: heber:compactor-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.writer.compaction"]
+          command: ["python", "-m", "heber.writer.compactor"]
           ports:
             - name: metrics
               containerPort: 9090

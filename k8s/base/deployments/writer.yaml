@@ -37,7 +37,7 @@ spec:
         - name: writer
           image: heber:writer-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.writer.service"]
+          command: ["python", "-m", "heber.writer.consumer"]
           ports:
             - name: metrics
               containerPort: 9090
