@@ -126,13 +126,20 @@ Audit Pass 5 (2026-02-05, files reviewed directly):
 - heber/models/__init__.py
 - heber/models/silver.py
 
+Audit Pass 6 (2026-02-05, files reviewed directly):
+- heber/gold/__init__.py
+- heber/gold/label_tests.py
+- heber/gold/labels.py
+- heber/gold/split_tests.py
+- heber/gold/splits.py
+- heber/gold/tests.py
+- heber/retention/__init__.py
+
 Not yet audited in this run (recommend a future pass):
 - docs/ (all other files not listed above)
 - infrastructure/ and k8s/
 - scripts/ (including init and data tooling)
-- heber/gold/
 - heber/hotstore/tables.py
-- heber/retention/
 - heber/feast/
 - heber/backfill/ and heber/backtest/
 - heber/versioning/
@@ -141,7 +148,7 @@ Not yet audited in this run (recommend a future pass):
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -198,6 +205,12 @@ Severity key: High, Medium, Low
 | TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
 | TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
 | TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
+| TD-050 | Low | Gold Labels | `read_label()` chooses the “latest” version lexicographically, which can pick the wrong semantic version. |
+| TD-051 | Medium | Retention | Retention scanning assumes `dt=` partitions under `<layer>/<dataset>` and does not align with Gold layout/versioning, so Gold retention and version pruning are ineffective. |
+| TD-052 | Low | Retention | Retention policies for Hot Store and DLQ are defined but never executed by the reaper. |
+| TD-053 | Low | Retention | Retention defaults are hardcoded to `/data/heber` and ignore configured data roots. |
+| TD-054 | Medium | Gold Labels | `read_label()` allows datasets without `ts_available` and returns all rows, bypassing point-in-time guards. |
+| TD-055 | Low | Retention | Version pruning sorts versions lexicographically instead of semver or creation time. |
 
 ## Detailed Findings
 
@@ -397,18 +410,42 @@ Recommendation: Set per-dataset defaults in each model or enforce schema_version
 Evidence: Some models use `date` (e.g., `expiry` in options), while others use `str` for dates (e.g., `expiry` in `MaxPainRecord`, `HottestChainRecord`, `IVTermStructureRecord`). This leads to inconsistent parsing and schema drift across datasets.
 Recommendation: Standardize date representation (prefer `date`/`datetime`) and enforce normalization in ingestion.
 
+**TD-050: `read_label()` picks latest version by lexicographic sort.**
+Evidence: `read_label()` sorts `version=` directories by name and picks the highest string. Versions like `v1.10.0` will sort before `v1.2.0`, yielding an older dataset as “latest.”
+Recommendation: Parse semantic versions or use metadata (created_at) to choose the newest version.
+
+**TD-051: Retention scanning does not match Gold layout.**
+Evidence: `ReaperWorker.scan_partitions()` expects partitions under `<storage_root>/<layer>/<dataset>/dt=*` and never populates `PartitionInfo.version`. Gold datasets are written as `dataset=.../type=.../version=...` (and labels have no `dt=`), so Gold partitions are never discovered and version pruning cannot work.
+Recommendation: Implement Gold-specific scanning that walks `dataset=.../type=.../version=...` and records version identifiers and optional `dt` partitions.
+
+**TD-052: Hot Store and DLQ retention policies are never applied.**
+Evidence: `ReaperScheduler._process_dataset()` only evaluates Bronze, Silver, and Gold layers; `HOT_STORE` and `DLQ` are defined but ignored.
+Recommendation: Include Hot Store and DLQ layers in the reaper or remove the unused policies to avoid false safety assumptions.
+
+**TD-053: Retention uses hardcoded storage root defaults.**
+Evidence: `DEFAULT_STORAGE_ROOT = "/data/heber"` and `create_reaper()` default paths do not reference `Settings` or `HEBER_DATA_ROOT`, while other parts of the system use `/Volumes/heber/data`.
+Recommendation: Wire retention defaults to the shared configuration and document expected paths.
+
+**TD-054: `read_label()` bypasses ts_available guard if column is missing.**
+Evidence: `read_label()` only filters by `ts_available` when the column exists. A malformed or externally-written label dataset without `ts_available` will return all rows, including future data.
+Recommendation: Require `ts_available` for label datasets (raise or warn) and fail closed in training contexts.
+
+**TD-055: Retention version pruning uses lexicographic ordering.**
+Evidence: `find_expired_versions()` sorts version keys as strings. This can delete or keep the wrong versions for semver patterns.
+Recommendation: Parse semantic versions or use explicit creation timestamps to decide which versions to retain.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-054.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044.
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
