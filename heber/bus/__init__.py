@@ -295,6 +295,11 @@ class RedisEventBus(EventBus):
         """Consume messages using XREADGROUP."""
         while True:
             try:
+                claimed = await self._claim_idle_messages(config)
+                if claimed:
+                    yield claimed
+                    continue
+
                 results = await self._redis.xreadgroup(
                     groupname=config.group_name,
                     consumername=config.consumer_name,
@@ -307,8 +312,6 @@ class RedisEventBus(EventBus):
                     messages = self._parse_stream_results(results)
                     if messages:
                         yield messages
-
-                await self._claim_idle_messages(config)
 
             except asyncio.CancelledError:
                 logger.info("consumer_cancelled", stream=config.stream.value)
@@ -376,12 +379,13 @@ class RedisEventBus(EventBus):
                     )
                     for msg_id, msg_data in claimed:
                         if msg_data:
-                            message = Message(
-                                id=msg_id,
-                                stream=config.stream.value,
-                                data=msg_data,
+                            message = self._parse_single_message(
+                                msg_id=msg_id,
+                                stream_name=config.stream.value,
+                                msg_data=msg_data,
                             )
                             claimed_messages.append(message)
+                            messages_received.labels(stream=config.stream.value).inc()
                             logger.info(
                                 "message_claimed",
                                 stream=config.stream.value,
