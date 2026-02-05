@@ -510,6 +510,272 @@ class OrderbookRecord(SilverBase):
 # ==============================================================================
 
 
+# ==============================================================================
+# V3 Schemas - Alternative Data (Congress, Insider, Institution, Politician)
+# ==============================================================================
+
+
+class CongressTradeRecord(SilverBase):
+    """Congressional trading activity."""
+
+    trade_id: str = Field(..., description="Unique trade identifier")
+    politician_name: str
+    politician_party: str | None = None
+    politician_state: str | None = None
+    politician_chamber: str | None = Field(None, description="House or Senate")
+    trade_type: str = Field(..., description="buy, sell, exchange")
+    trade_date: date
+    disclosure_date: date | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    asset_type: str | None = None
+    is_late: bool = False
+
+
+class InsiderTradeRecord(SilverBase):
+    """SEC Form 4 insider trading data."""
+
+    filing_id: str = Field(..., description="SEC filing identifier")
+    insider_name: str
+    insider_title: str | None = None
+    insider_relationship: str | None = Field(None, description="Officer, Director, 10% Owner")
+    trade_type: str = Field(..., description="P (purchase), S (sale), A (award)")
+    trade_date: date
+    shares: float
+    price: float | None = None
+    value: float | None = None
+    shares_owned_after: float | None = None
+    filing_date: date | None = None
+
+
+class InsiderFlowRecord(SilverBase):
+    """Aggregated insider flow by sector or ticker."""
+
+    period: str = Field(..., description="daily, weekly, monthly")
+    period_start: date
+    period_end: date
+    sector: str | None = None
+    total_buys: int
+    total_sells: int
+    buy_value: float
+    sell_value: float
+    net_value: float
+    top_buyers_json: str | None = Field(None, description="JSON array of top buyers")
+    top_sellers_json: str | None = Field(None, description="JSON array of top sellers")
+
+
+class InstitutionHoldingRecord(SilverBase):
+    """13F institutional holdings data."""
+
+    filing_id: str = Field(..., description="SEC 13F filing identifier")
+    institution_name: str
+    institution_cik: str | None = None
+    holding_symbol: str
+    shares: float
+    value: float
+    quarter_end: date
+    change_shares: float | None = None
+    change_pct: float | None = None
+    portfolio_pct: float | None = None
+    filing_date: date | None = None
+
+
+class InstitutionActivityRecord(SilverBase):
+    """Institutional activity and 13F filing metadata."""
+
+    filing_id: str
+    institution_name: str
+    institution_cik: str | None = None
+    filing_date: date
+    quarter_end: date
+    total_value: float | None = None
+    holdings_count: int | None = None
+    new_positions: int | None = None
+    closed_positions: int | None = None
+    increased_positions: int | None = None
+    decreased_positions: int | None = None
+
+
+class PoliticianTradeRecord(SilverBase):
+    """Politician portfolio trades (superset of congress)."""
+
+    trade_id: str
+    politician_id: str
+    politician_name: str
+    politician_party: str | None = None
+    trade_type: str
+    trade_date: date
+    disclosure_date: date | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    asset_description: str | None = None
+    comment: str | None = None
+
+
+# ==============================================================================
+# V4 Schemas - Market Analytics (Analyst, Fundamentals, Events, Indicators)
+# ==============================================================================
+
+
+class AnalystRatingRecord(SilverBase):
+    """Analyst ratings and price targets."""
+
+    rating_id: str = Field(..., description="Unique rating identifier")
+    analyst_name: str | None = None
+    analyst_firm: str | None = None
+    rating: str = Field(..., description="Buy, Hold, Sell, etc.")
+    rating_prior: str | None = None
+    price_target: float | None = None
+    price_target_prior: float | None = None
+    rating_date: date
+    action: str | None = Field(None, description="upgrade, downgrade, initiate, reiterate")
+
+
+class StockFundamentalsRecord(SilverBase):
+    """Stock fundamentals and company info snapshot."""
+
+    snapshot_date: date
+    company_name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    market_cap: float | None = None
+    pe_ratio: float | None = None
+    eps: float | None = None
+    dividend_yield: float | None = None
+    beta: float | None = None
+    shares_outstanding: float | None = None
+    float_shares: float | None = None
+    avg_volume: float | None = None
+    price: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+
+
+class EconomicEventRecord(SilverBase):
+    """Economic calendar events (FOMC, CPI, GDP, etc.)."""
+
+    event_name: str
+    event_type: str = Field(..., description="FOMC, CPI, GDP, NFP, etc.")
+    event_date: date
+    event_time: str | None = None
+    country: str | None = Field(None, description="US, UK, etc.")
+    importance: str | None = Field(None, description="high, medium, low")
+    actual: str | None = None
+    forecast: str | None = None
+    previous: str | None = None
+    source_url: str | None = None
+
+
+class MarketIndicatorRecord(SilverBase):
+    """Market-wide indicators (SPIKE, correlations, VIX, etc.)."""
+
+    indicator_name: str = Field(..., description="SPIKE, VIX, correlation, etc.")
+    indicator_date: date
+    indicator_time: str | None = None
+    value: float
+    value_prior: float | None = None
+    change: float | None = None
+    change_pct: float | None = None
+    percentile: float | None = None
+    metadata_json: str | None = Field(None, description="Additional indicator-specific data")
+
+
+# ==============================================================================
+# V5 Schemas - Options Deep Data (History, Chains, Volume Profile, Group Flow)
+# ==============================================================================
+
+
+class OptionHistoryRecord(SilverBase):
+    """Historical option contract data."""
+
+    occ_symbol: str
+    history_date: date
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    open_interest: float | None = None
+    implied_volatility: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+
+class OptionChainSnapshotRecord(SilverBase):
+    """Point-in-time snapshot of option chain."""
+
+    snapshot_ts: datetime
+    underlying: str
+    expiry: date
+    chain_json: str = Field(..., description="JSON of full chain data")
+    total_call_volume: float | None = None
+    total_put_volume: float | None = None
+    total_call_oi: float | None = None
+    total_put_oi: float | None = None
+    atm_iv: float | None = None
+
+
+class VolumeProfileRecord(SilverBase):
+    """Volume profile data for option contracts."""
+
+    occ_symbol: str
+    profile_date: date
+    price_level: float
+    volume: float
+    cumulative_volume: float | None = None
+    pct_of_total: float | None = None
+
+
+class GroupFlowRecord(SilverBase):
+    """Greek flow aggregated by group (sector, index, etc.)."""
+
+    group_name: str = Field(..., description="SPY, QQQ, sector name, etc.")
+    group_type: str = Field(..., description="etf, sector, index")
+    flow_date: date
+    expiry: date | None = None
+    call_gex: float | None = None
+    put_gex: float | None = None
+    net_gex: float | None = None
+    call_dex: float | None = None
+    put_dex: float | None = None
+    net_premium: float | None = None
+
+
+# ==============================================================================
+# V6 Schemas - ETF Deep Data (Metadata, Sector Weights)
+# ==============================================================================
+
+
+class ETFMetadataRecord(SilverBase):
+    """ETF metadata and exposure details."""
+
+    etf_symbol: str
+    snapshot_date: date
+    fund_name: str | None = None
+    issuer: str | None = None
+    expense_ratio: float | None = None
+    aum: float | None = None
+    avg_volume: float | None = None
+    inception_date: date | None = None
+    asset_class: str | None = None
+    category: str | None = None
+    index_tracked: str | None = None
+    leverage_factor: float | None = None
+
+
+class ETFSectorWeightsRecord(SilverBase):
+    """ETF sector and country weight breakdown."""
+
+    etf_symbol: str
+    weight_date: date
+    weight_type: str = Field(..., description="sector or country")
+    weight_name: str = Field(..., description="Technology, Healthcare, USA, etc.")
+    weight_pct: float
+    change_pct: float | None = None
+
+
 class NewsArticleRecord(SilverBase):
     """Silver news_articles schema (PRD §9.1).
 

@@ -1,6 +1,6 @@
 # Heber Codebase
 
-*Generated: 2026-02-04T16:40:53*
+*Generated: 2026-02-04T17:41:17*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Heber
 Files analyzed: 207
 
-Estimated tokens: 345.9k
+Estimated tokens: 353.8k
 
 ---
 
@@ -25884,8 +25884,392 @@ class SectorTideRecord(SilverBase):
 
 
 # ==============================================================================
+# Phase 1: Core Analytics Schemas (High Value)
+# ==============================================================================
+
+
+class GreekExposureRecord(SilverBase):
+    """GEX/DEX/VEX exposure data from UW greek_exposure endpoint."""
+
+    gamma_exposure: float
+    delta_exposure: float | None = None
+    vanna_exposure: float | None = None
+    charm_exposure: float | None = None
+    strike: float | None = None
+    expiry: date | None = None
+
+
+class MaxPainRecord(SilverBase):
+    """Max pain strike data."""
+
+    expiry: str  # YYYY-MM-DD
+    max_pain_strike: float
+    call_oi: int | None = None
+    put_oi: int | None = None
+
+
+class NetPremiumTickRecord(SilverBase):
+    """Net premium tick data (intraday premium flow)."""
+
+    net_call_premium: float
+    net_put_premium: float
+    call_volume: int
+    put_volume: int
+
+
+class HottestChainRecord(SilverBase):
+    """Hottest options chain/contract (high activity)."""
+
+    contract_symbol: str
+    underlying: str
+    strike: float
+    expiry: str  # YYYY-MM-DD
+    option_type: str = Field(..., description="call or put")
+    volume: int
+    open_interest: int
+    premium: float
+    iv: float | None = None
+
+
+# ==============================================================================
+# Phase 2: Reference Data Schemas
+# ==============================================================================
+
+
+class EarningsRecord(SilverBase):
+    """Earnings calendar entry."""
+
+    earnings_date: str  # YYYY-MM-DD
+    time: str = Field(..., description="premarket, afterhours, unknown")
+    eps_estimate: float | None = None
+    eps_actual: float | None = None
+    revenue_estimate: float | None = None
+    revenue_actual: float | None = None
+
+
+class CorporateActionRecord(SilverBase):
+    """Corporate action (splits, dividends, mergers)."""
+
+    action_type: str = Field(..., description="split, dividend, merger, spinoff")
+    ex_date: str  # YYYY-MM-DD
+    record_date: str | None = None
+    payable_date: str | None = None
+    amount: float | None = None
+    ratio: str | None = Field(None, description="For splits: 4:1, 2:1")
+
+
+# ==============================================================================
+# Phase 3: Market Screener Schemas
+# ==============================================================================
+
+
+class MostActiveRecord(SilverBase):
+    """Most active stock data."""
+
+    volume: int
+    trade_count: int
+
+
+class MoverRecord(SilverBase):
+    """Top gainer/loser data."""
+
+    price: float
+    change: float
+    percent_change: float
+    direction: str = Field(..., description="gainer or loser")
+
+
+class ScreenerResultRecord(SilverBase):
+    """Stock screener result."""
+
+    price: float | None = None
+    volume: int | None = None
+    market_cap: float | None = None
+    sector: str | None = None
+    call_volume: int | None = None
+    put_volume: int | None = None
+    iv_rank: float | None = None
+
+
+# ==============================================================================
+# Phase 4: Advanced Analytics Schemas
+# ==============================================================================
+
+
+class IVRankRecord(SilverBase):
+    """IV rank/percentile data."""
+
+    iv_rank: float
+    iv_percentile: float | None = None
+    current_iv: float | None = None
+    one_year_high: float | None = None
+    one_year_low: float | None = None
+
+
+class IVTermStructureRecord(SilverBase):
+    """IV term structure data point."""
+
+    expiry: str  # YYYY-MM-DD
+    iv: float
+    days_to_expiry: int
+    call_iv: float | None = None
+    put_iv: float | None = None
+
+
+class VolatilityStatsRecord(SilverBase):
+    """Volatility statistics."""
+
+    realized_vol_30d: float | None = None
+    realized_vol_60d: float | None = None
+    realized_vol_90d: float | None = None
+    iv_30d: float | None = None
+    iv_percentile: float | None = None
+    hv_iv_ratio: float | None = None
+
+
+class OIChangeRecord(SilverBase):
+    """Open interest change data."""
+
+    oi_date: str  # YYYY-MM-DD
+    call_oi: int
+    put_oi: int
+    call_oi_change: int
+    put_oi_change: int
+
+
+class ETFHoldingRecord(SilverBase):
+    """ETF holding data."""
+
+    etf_symbol: str
+    holding_symbol: str
+    weight: float
+    shares: int | None = None
+    market_value: float | None = None
+
+
+class ETFFlowRecord(SilverBase):
+    """ETF inflow/outflow data."""
+
+    flow_date: str  # YYYY-MM-DD
+    inflow: float
+    outflow: float
+    net_flow: float
+
+
+class ShortDataRecord(SilverBase):
+    """Short interest data."""
+
+    short_date: str  # YYYY-MM-DD
+    short_interest: int
+    days_to_cover: float | None = None
+    short_percent_float: float | None = None
+    short_percent_outstanding: float | None = None
+
+
+class FTDRecord(SilverBase):
+    """Failure to deliver data."""
+
+    ftd_date: str  # YYYY-MM-DD
+    quantity: int
+    price: float | None = None
+    value: float | None = None
+
+
+class SeasonalityRecord(SilverBase):
+    """Seasonality data."""
+
+    month: int
+    avg_return: float
+    median_return: float | None = None
+    win_rate: float
+    sample_years: int | None = None
+
+
+class OrderbookRecord(SilverBase):
+    """Orderbook snapshot (crypto markets)."""
+
+    bids_json: str = Field(..., description="JSON array of [price, size] tuples")
+    asks_json: str = Field(..., description="JSON array of [price, size] tuples")
+    depth: int | None = None
+
+
+# ==============================================================================
 # V2 Schemas - News and Filing Data (PRD §9, §58, §59)
 # ==============================================================================
+
+
+# ==============================================================================
+# V3 Schemas - Alternative Data (Congress, Insider, Institution, Politician)
+# ==============================================================================
+
+
+class CongressTradeRecord(SilverBase):
+    """Congressional trading activity."""
+
+    trade_id: str = Field(..., description="Unique trade identifier")
+    politician_name: str
+    politician_party: str | None = None
+    politician_state: str | None = None
+    politician_chamber: str | None = Field(None, description="House or Senate")
+    trade_type: str = Field(..., description="buy, sell, exchange")
+    trade_date: date
+    disclosure_date: date | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    asset_type: str | None = None
+    is_late: bool = False
+
+
+class InsiderTradeRecord(SilverBase):
+    """SEC Form 4 insider trading data."""
+
+    filing_id: str = Field(..., description="SEC filing identifier")
+    insider_name: str
+    insider_title: str | None = None
+    insider_relationship: str | None = Field(None, description="Officer, Director, 10% Owner")
+    trade_type: str = Field(..., description="P (purchase), S (sale), A (award)")
+    trade_date: date
+    shares: float
+    price: float | None = None
+    value: float | None = None
+    shares_owned_after: float | None = None
+    filing_date: date | None = None
+
+
+class InsiderFlowRecord(SilverBase):
+    """Aggregated insider flow by sector or ticker."""
+
+    period: str = Field(..., description="daily, weekly, monthly")
+    period_start: date
+    period_end: date
+    sector: str | None = None
+    total_buys: int
+    total_sells: int
+    buy_value: float
+    sell_value: float
+    net_value: float
+    top_buyers_json: str | None = Field(None, description="JSON array of top buyers")
+    top_sellers_json: str | None = Field(None, description="JSON array of top sellers")
+
+
+class InstitutionHoldingRecord(SilverBase):
+    """13F institutional holdings data."""
+
+    filing_id: str = Field(..., description="SEC 13F filing identifier")
+    institution_name: str
+    institution_cik: str | None = None
+    holding_symbol: str
+    shares: float
+    value: float
+    quarter_end: date
+    change_shares: float | None = None
+    change_pct: float | None = None
+    portfolio_pct: float | None = None
+    filing_date: date | None = None
+
+
+class InstitutionActivityRecord(SilverBase):
+    """Institutional activity and 13F filing metadata."""
+
+    filing_id: str
+    institution_name: str
+    institution_cik: str | None = None
+    filing_date: date
+    quarter_end: date
+    total_value: float | None = None
+    holdings_count: int | None = None
+    new_positions: int | None = None
+    closed_positions: int | None = None
+    increased_positions: int | None = None
+    decreased_positions: int | None = None
+
+
+class PoliticianTradeRecord(SilverBase):
+    """Politician portfolio trades (superset of congress)."""
+
+    trade_id: str
+    politician_id: str
+    politician_name: str
+    politician_party: str | None = None
+    trade_type: str
+    trade_date: date
+    disclosure_date: date | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    asset_description: str | None = None
+    comment: str | None = None
+
+
+
+# ==============================================================================
+# V4 Schemas - Market Analytics (Analyst, Fundamentals, Events, Indicators)
+# ==============================================================================
+
+
+class AnalystRatingRecord(SilverBase):
+    """Analyst ratings and price targets."""
+
+    rating_id: str = Field(..., description="Unique rating identifier")
+    analyst_name: str | None = None
+    analyst_firm: str | None = None
+    rating: str = Field(..., description="Buy, Hold, Sell, etc.")
+    rating_prior: str | None = None
+    price_target: float | None = None
+    price_target_prior: float | None = None
+    rating_date: date
+    action: str | None = Field(None, description="upgrade, downgrade, initiate, reiterate")
+
+
+class StockFundamentalsRecord(SilverBase):
+    """Stock fundamentals and company info snapshot."""
+
+    snapshot_date: date
+    company_name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    market_cap: float | None = None
+    pe_ratio: float | None = None
+    eps: float | None = None
+    dividend_yield: float | None = None
+    beta: float | None = None
+    shares_outstanding: float | None = None
+    float_shares: float | None = None
+    avg_volume: float | None = None
+    price: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+
+
+class EconomicEventRecord(SilverBase):
+    """Economic calendar events (FOMC, CPI, GDP, etc.)."""
+
+    event_name: str
+    event_type: str = Field(..., description="FOMC, CPI, GDP, NFP, etc.")
+    event_date: date
+    event_time: str | None = None
+    country: str | None = Field(None, description="US, UK, etc.")
+    importance: str | None = Field(None, description="high, medium, low")
+    actual: str | None = None
+    forecast: str | None = None
+    previous: str | None = None
+    source_url: str | None = None
+
+
+class MarketIndicatorRecord(SilverBase):
+    """Market-wide indicators (SPIKE, correlations, VIX, etc.)."""
+
+    indicator_name: str = Field(..., description="SPIKE, VIX, correlation, etc.")
+    indicator_date: date
+    indicator_time: str | None = None
+    value: float
+    value_prior: float | None = None
+    change: float | None = None
+    change_pct: float | None = None
+    percentile: float | None = None
+    metadata_json: str | None = Field(None, description="Additional indicator-specific data")
+
+
+
 
 
 class NewsArticleRecord(SilverBase):
@@ -44722,7 +45106,630 @@ SILVER_SCHEMAS = {
             ("call_put_ratio", pa.float64()),
         ]
     ),
+    # Phase 1: Core Analytics
+    "greek_exposure": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("gamma_exposure", pa.float64()),
+            ("delta_exposure", pa.float64()),
+            ("vanna_exposure", pa.float64()),
+            ("charm_exposure", pa.float64()),
+            ("strike", pa.float64()),
+            ("expiry", pa.date32()),
+        ]
+    ),
+    "max_pain": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("expiry", pa.string()),
+            ("max_pain_strike", pa.float64()),
+            ("call_oi", pa.int64()),
+            ("put_oi", pa.int64()),
+        ]
+    ),
+    "net_premium_tick": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            ("call_volume", pa.int64()),
+            ("put_volume", pa.int64()),
+        ]
+    ),
+    "hottest_chain": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("contract_symbol", pa.string()),
+            ("underlying", pa.string()),
+            ("strike", pa.float64()),
+            ("expiry", pa.string()),
+            ("option_type", pa.string()),
+            ("volume", pa.int64()),
+            ("open_interest", pa.int64()),
+            ("premium", pa.float64()),
+            ("iv", pa.float64()),
+        ]
+    ),
+    # Phase 2: Reference Data
+    "earnings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("earnings_date", pa.string()),
+            ("time", pa.string()),
+            ("eps_estimate", pa.float64()),
+            ("eps_actual", pa.float64()),
+            ("revenue_estimate", pa.float64()),
+            ("revenue_actual", pa.float64()),
+        ]
+    ),
+    "corporate_action": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("action_type", pa.string()),
+            ("ex_date", pa.string()),
+            ("record_date", pa.string()),
+            ("payable_date", pa.string()),
+            ("amount", pa.float64()),
+            ("ratio", pa.string()),
+        ]
+    ),
+    # Phase 3: Screeners
+    "most_active": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("volume", pa.int64()),
+            ("trade_count", pa.int64()),
+        ]
+    ),
+    "mover": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("price", pa.float64()),
+            ("change", pa.float64()),
+            ("percent_change", pa.float64()),
+            ("direction", pa.string()),
+        ]
+    ),
+    "screener_result": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("price", pa.float64()),
+            ("volume", pa.int64()),
+            ("market_cap", pa.float64()),
+            ("sector", pa.string()),
+            ("call_volume", pa.int64()),
+            ("put_volume", pa.int64()),
+            ("iv_rank", pa.float64()),
+        ]
+    ),
+    # Phase 4: Advanced Analytics
+    "iv_rank": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("iv_rank", pa.float64()),
+            ("iv_percentile", pa.float64()),
+            ("current_iv", pa.float64()),
+            ("one_year_high", pa.float64()),
+            ("one_year_low", pa.float64()),
+        ]
+    ),
+    "iv_term_structure": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("expiry", pa.string()),
+            ("iv", pa.float64()),
+            ("days_to_expiry", pa.int64()),
+            ("call_iv", pa.float64()),
+            ("put_iv", pa.float64()),
+        ]
+    ),
+    "volatility_stats": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("realized_vol_30d", pa.float64()),
+            ("realized_vol_60d", pa.float64()),
+            ("realized_vol_90d", pa.float64()),
+            ("iv_30d", pa.float64()),
+            ("iv_percentile", pa.float64()),
+            ("hv_iv_ratio", pa.float64()),
+        ]
+    ),
+    "oi_change": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("oi_date", pa.string()),
+            ("call_oi", pa.int64()),
+            ("put_oi", pa.int64()),
+            ("call_oi_change", pa.int64()),
+            ("put_oi_change", pa.int64()),
+        ]
+    ),
+    "etf_holding": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("holding_symbol", pa.string()),
+            ("weight", pa.float64()),
+            ("shares", pa.int64()),
+            ("market_value", pa.float64()),
+        ]
+    ),
+    "etf_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("flow_date", pa.string()),
+            ("inflow", pa.float64()),
+            ("outflow", pa.float64()),
+            ("net_flow", pa.float64()),
+        ]
+    ),
+    "short_data": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("short_date", pa.string()),
+            ("short_interest", pa.int64()),
+            ("days_to_cover", pa.float64()),
+            ("short_percent_float", pa.float64()),
+            ("short_percent_outstanding", pa.float64()),
+        ]
+    ),
+    "ftd": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("ftd_date", pa.string()),
+            ("quantity", pa.int64()),
+            ("price", pa.float64()),
+            ("value", pa.float64()),
+        ]
+    ),
+    "seasonality": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("month", pa.int64()),
+            ("avg_return", pa.float64()),
+            ("median_return", pa.float64()),
+            ("win_rate", pa.float64()),
+            ("sample_years", pa.int64()),
+        ]
+    ),
+    # Reference Data
+    "option_contract": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("underlying", pa.string()),
+            ("occ_symbol", pa.string()),
+            ("expiry", pa.date32()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("multiplier", pa.int64()),
+            ("style", pa.string()),
+            ("exchange", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "news": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("news_id", pa.string()),
+            ("ts_published", pa.timestamp("us", tz="UTC")),
+            ("headline", pa.string()),
+            ("summary", pa.string()),
+            ("body", pa.string()),
+            ("url", pa.string()),
+            ("source_name", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "orderbook": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("bids_json", pa.string()),  # JSON array of [price, size]
+            ("asks_json", pa.string()),  # JSON array of [price, size]
+            ("depth", pa.int64()),
+        ]
+    ),
+    # V3: Alternative Data (Congress, Insider, Institution, Politician)
+    "congress_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("trade_id", pa.string()),
+            ("politician_name", pa.string()),
+            ("politician_party", pa.string()),
+            ("politician_state", pa.string()),
+            ("politician_chamber", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("disclosure_date", pa.date32()),
+            ("amount_min", pa.float64()),
+            ("amount_max", pa.float64()),
+            ("asset_type", pa.string()),
+            ("is_late", pa.bool_()),
+        ]
+    ),
+    "insider_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("insider_name", pa.string()),
+            ("insider_title", pa.string()),
+            ("insider_relationship", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("shares", pa.float64()),
+            ("price", pa.float64()),
+            ("value", pa.float64()),
+            ("shares_owned_after", pa.float64()),
+            ("filing_date", pa.date32()),
+        ]
+    ),
+    "insider_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("period", pa.string()),
+            ("period_start", pa.date32()),
+            ("period_end", pa.date32()),
+            ("sector", pa.string()),
+            ("total_buys", pa.int64()),
+            ("total_sells", pa.int64()),
+            ("buy_value", pa.float64()),
+            ("sell_value", pa.float64()),
+            ("net_value", pa.float64()),
+            ("top_buyers_json", pa.string()),
+            ("top_sellers_json", pa.string()),
+        ]
+    ),
+    "institution_holdings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("institution_name", pa.string()),
+            ("institution_cik", pa.string()),
+            ("holding_symbol", pa.string()),
+            ("shares", pa.float64()),
+            ("value", pa.float64()),
+            ("quarter_end", pa.date32()),
+            ("change_shares", pa.float64()),
+            ("change_pct", pa.float64()),
+            ("portfolio_pct", pa.float64()),
+            ("filing_date", pa.date32()),
+        ]
+    ),
+    "institution_activity": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("institution_name", pa.string()),
+            ("institution_cik", pa.string()),
+            ("filing_date", pa.date32()),
+            ("quarter_end", pa.date32()),
+            ("total_value", pa.float64()),
+            ("holdings_count", pa.int64()),
+            ("new_positions", pa.int64()),
+            ("closed_positions", pa.int64()),
+            ("increased_positions", pa.int64()),
+            ("decreased_positions", pa.int64()),
+        ]
+    ),
+    "politician_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("trade_id", pa.string()),
+            ("politician_id", pa.string()),
+            ("politician_name", pa.string()),
+            ("politician_party", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("disclosure_date", pa.date32()),
+            ("amount_min", pa.float64()),
+            ("amount_max", pa.float64()),
+            ("asset_description", pa.string()),
+            ("comment", pa.string()),
+        ]
+    ),
 }
+
+
 
 # Default schema for unknown feeds
 DEFAULT_SCHEMA = pa.schema(
