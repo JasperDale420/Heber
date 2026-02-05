@@ -591,7 +591,81 @@ SILVER_SCHEMAS = {
             ("sample_years", pa.int64()),
         ]
     ),
+    # Reference Data
+    "option_contract": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("underlying", pa.string()),
+            ("occ_symbol", pa.string()),
+            ("expiry", pa.date32()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("multiplier", pa.int64()),
+            ("style", pa.string()),
+            ("exchange", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "news": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("news_id", pa.string()),
+            ("ts_published", pa.timestamp("us", tz="UTC")),
+            ("headline", pa.string()),
+            ("summary", pa.string()),
+            ("body", pa.string()),
+            ("url", pa.string()),
+            ("source_name", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "orderbook": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("bids_json", pa.string()),  # JSON array of [price, size]
+            ("asks_json", pa.string()),  # JSON array of [price, size]
+            ("depth", pa.int64()),
+        ]
+    ),
 }
+
 
 # Default schema for unknown feeds
 DEFAULT_SCHEMA = pa.schema(

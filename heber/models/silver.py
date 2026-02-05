@@ -497,6 +497,14 @@ class SeasonalityRecord(SilverBase):
     sample_years: int | None = None
 
 
+class OrderbookRecord(SilverBase):
+    """Orderbook snapshot (crypto markets)."""
+
+    bids_json: str = Field(..., description="JSON array of [price, size] tuples")
+    asks_json: str = Field(..., description="JSON array of [price, size] tuples")
+    depth: int | None = None
+
+
 # ==============================================================================
 # V2 Schemas - News and Filing Data (PRD §9, §58, §59)
 # ==============================================================================
