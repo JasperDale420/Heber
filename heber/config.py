@@ -30,13 +30,13 @@ class Settings(BaseSettings):
 
     # Postgres (Catalog)
     postgres_url: str = Field(
-        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5432/heber_catalog",
+        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog",
         description="PostgreSQL connection URL for Catalog DB",
     )
 
     # Redis (Event Bus)
     redis_url: str = Field(
-        default="redis://localhost:6379",
+        default="redis://localhost:6380",
         description="Redis connection URL for event streams",
     )
     redis_stream_name: str = Field(

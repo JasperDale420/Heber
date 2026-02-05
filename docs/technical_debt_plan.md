@@ -23,6 +23,7 @@ Updated: 2026-02-05
 - `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
 - `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
 - `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
+- `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
 
 ## Prioritization Approach
 
@@ -170,6 +171,26 @@ Acceptance Criteria:
 
 Estimate: 0.5-1 day
 
+### T-16: Align Local Service Port Defaults (TD-010)
+
+Priority: P1
+
+Description: Local host defaults for Postgres and Redis diverged from docker-compose host-exposed ports. Align defaults and docs/templates so host-run SDK/services work without manual overrides.
+
+Scope:
+- `heber/config.py`
+- `tests/test_sdk_catalog_defaults.py`
+- `docs/configuration.md`
+- `README.md`
+- `.env.example`
+
+Acceptance Criteria:
+- `Settings` defaults use `localhost:5433` for Postgres and `localhost:6380` for Redis.
+- Regression tests validate the new defaults.
+- Configuration docs and environment template reflect the same host defaults.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -263,3 +284,4 @@ Estimate: 1 day
 13. T-13 (Compactor atomic merge hardening)
 14. T-14 (Silver schema centralization)
 15. T-15 (Hot Store event batching)
+16. T-16 (Local service port alignment)

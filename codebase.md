@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T12:47:37*
+*Generated: 2026-02-05T13:47:58*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 221
+Files analyzed: 230
 
-Estimated tokens: 378.1k
+Estimated tokens: 388.1k
 
 ---
 
@@ -166,6 +166,7 @@ Directory structure:
     │   │   └── registry_client.py
     │   ├── schemas/
     │   │   ├── additional.py
+    │   │   ├── silver.py
     │   │   └── tests_additional.py
     │   ├── sdk/
     │   │   ├── __init__.py
@@ -217,7 +218,8 @@ Directory structure:
     │       ├── compactor.py
     │       ├── consumer.py
     │       ├── hotstore.py
-    │       └── silver.py
+    │       ├── silver.py
+    │       └── transformer.py
     ├── infrastructure/
     │   └── terraform/
     │       ├── main.tf
@@ -292,13 +294,20 @@ Directory structure:
     │       └── quotes.yaml
     ├── tests/
     │   ├── __init__.py
+    │   ├── test_compactor_safety.py
     │   ├── test_edge_cases.py
     │   ├── test_event_bus_claim.py
     │   ├── test_feature_view_alignment.py
+    │   ├── test_hotstore_unification.py
     │   ├── test_meta_label_alignment.py
     │   ├── test_placeholder.py
     │   ├── test_runtime_entrypoints.py
-    │   └── test_terraform_module_sources.py
+    │   ├── test_sdk_catalog_defaults.py
+    │   ├── test_silver_flush_config.py
+    │   ├── test_silver_schema_source.py
+    │   ├── test_terraform_module_sources.py
+    │   ├── test_utcnow_regression.py
+    │   └── test_writer_consumer_reliability.py
     └── .claude/
         └── settings.local.json
 
@@ -694,6 +703,41 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added local Terraform module scaffolds for `vpc`, `s3`, `rds`, `elasticache`, `ecr`, and `eks` so root module sources resolve
   - Preserved existing root module inputs/outputs wiring while unblocking initialization from missing-module failures
   - Added regression checks for module-source path resolution (`tests/test_terraform_module_sources.py`)
+- **SDK Catalog URL Alignment** (`heber/config.py`, `heber/sdk/client.py`)
+  - Added `HEBER_CATALOG_URL` defaulting to `http://localhost:8085/api/v1` for SDK clients
+  - `HeberClient` now defaults to `settings.catalog_url` instead of deriving URL from API service bind port
+  - Updated SDK/config docs and added regression checks (`tests/test_sdk_catalog_defaults.py`)
+- **Hot Store Unification** (`heber/hotstore/*`, `heber/writer/hotstore.py`)
+  - Consolidated Hot Store sync/write logic into `heber.hotstore.sync` using the existing `clickhouse-connect` client path
+  - Replaced legacy duplicate `heber.writer.hotstore` implementation with a compatibility re-export facade
+  - Fixed async/sync mismatch points by using sync-safe table creation (`create_all_tables`) plus optional async helper (`create_all_tables_async`)
+  - Added regression coverage for unified table creation, batch writes, and metrics (`tests/test_hotstore_unification.py`)
+- **Consumer DLQ + Pending Recovery** (`heber/writer/consumer.py`)
+  - Added startup recovery for idle pending Redis stream entries via `XPENDING`/`XCLAIM`
+  - Added per-message retry with configurable backoff before dead-lettering
+  - Added Redis DLQ routing for unrecoverable messages (`HEBER_REDIS_DLQ_STREAM_NAME`)
+  - Added regression coverage for pending recovery and DLQ behavior (`tests/test_writer_consumer_reliability.py`)
+- **Silver Flush Timing Fix** (`heber/writer/silver.py`)
+  - Silver flush checks now use `silver_max_flush_time_seconds` instead of Bronze flush interval settings
+  - Added regression tests to ensure Silver timing is independent from Bronze config (`tests/test_silver_flush_config.py`)
+- **UTC Time Handling Standardization** (`heber/writer/*.py`, `heber/catalog/*.py`, `heber/sdk/client.py`)
+  - Replaced remaining naive `datetime.utcnow()` calls with timezone-aware `datetime.now(UTC)` across runtime modules
+  - Updated Silver flush timing tests for aware UTC datetimes
+  - Added regression guard to block new `datetime.utcnow()` usage in `heber/` sources (`tests/test_utcnow_regression.py`)
+- **Compactor Atomic Merge Hardening** (`heber/writer/compactor.py`)
+  - Switched compaction from all-in-memory concatenate to streamed writes via `ParquetWriter`
+  - Compaction now writes to temp files and promotes merged output atomically before removing source files
+  - Added per-partition lock-file handling and failure cleanup so failed compactions keep source files intact
+  - Added regression tests for successful merge cleanup and failure safety (`tests/test_compactor_safety.py`)
+- **Silver Schema Source Consolidation** (`heber/schemas/silver.py`, `heber/writer/silver.py`, `heber/writer/transformer.py`)
+  - Moved canonical Silver Arrow schema definitions out of `heber.writer.silver` into shared `heber.schemas.silver`
+  - Updated writer and Bronze-to-Silver transformer to consume the shared schema module
+  - Added regression tests to enforce single-source schema ownership and block inline schema constant reintroduction (`tests/test_silver_schema_source.py`)
+- **Hot Store Event Batching** (`heber/hotstore/sync.py`)
+  - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
+  - Replaced one-insert-per-event sync path with threshold-based batched inserts
+  - Added best-effort buffer flush on sync loop exit and explicit stop shutdown
+  - Added regression tests for threshold-triggered batch inserts and stop-time flush (`tests/test_hotstore_unification.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -8949,6 +8993,13 @@ HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/h
 
 # Redis (Event Bus)
 HEBER_REDIS_URL=redis://redis:6379
+HEBER_REDIS_STREAM_NAME=heber:events
+HEBER_REDIS_CONSUMER_GROUP=heber-writers
+HEBER_REDIS_DLQ_STREAM_NAME=heber:events:dlq
+HEBER_REDIS_CLAIM_IDLE_MS=60000
+HEBER_REDIS_CLAIM_BATCH_SIZE=100
+HEBER_REDIS_PROCESS_MAX_RETRIES=3
+HEBER_REDIS_RETRY_BACKOFF_SECONDS=0.25
 
 # ClickHouse (Hot Store)
 HEBER_CLICKHOUSE_HOST=clickhouse
@@ -10170,6 +10221,11 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis Streams endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Redis stream name |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Redis consumer group |
+| `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed consumer messages |
+| `HEBER_REDIS_CLAIM_IDLE_MS` | `60000` | Idle threshold before claiming pending messages |
+| `HEBER_REDIS_CLAIM_BATCH_SIZE` | `100` | Max pending messages claimed per recovery cycle |
+| `HEBER_REDIS_PROCESS_MAX_RETRIES` | `3` | Processing retries before DLQ |
+| `HEBER_REDIS_RETRY_BACKOFF_SECONDS` | `0.25` | Base retry backoff delay |
 | `HEBER_CLICKHOUSE_HOST` | `localhost` | ClickHouse hostname |
 | `HEBER_CLICKHOUSE_PORT` | `9000` | ClickHouse native port |
 | `HEBER_CLICKHOUSE_USER` | `default` | ClickHouse user |
@@ -10177,6 +10233,7 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_CLICKHOUSE_DATABASE` | `heber` | ClickHouse database |
 | `HEBER_API_HOST` | `0.0.0.0` | Catalog API bind host |
 | `HEBER_API_PORT` | `8080` | Catalog API port |
+| `HEBER_CATALOG_URL` | `http://localhost:8085/api/v1` | SDK Catalog API base URL |
 | `HEBER_ENVIRONMENT` | `dev` | `dev`, `staging`, or `prod` |
 
 ## Writer Tuning
@@ -11061,10 +11118,12 @@ bars = client.read_asof(
 
 ### Local Docker Compose Note
 
-When the Catalog API is running via `docker compose`, it is exposed on port `8085` (host). Either:
+By default, `HeberClient()` now uses `http://localhost:8085/api/v1`, which matches the host port exposed by `docker compose`.
 
-- Set `HEBER_API_PORT=8085` in your environment, or
-- Pass `catalog_url="http://localhost:8085/api/v1"` when constructing `HeberClient`.
+If you need a different endpoint:
+
+- Set `HEBER_CATALOG_URL`, or
+- Pass `catalog_url="http://<host>:<port>/api/v1"` when constructing `HeberClient`.
 
 ## Core Features
 
@@ -11422,6 +11481,14 @@ Updated: 2026-02-05
 - `TD-001` addressed via `T-05`: pytest discovery now includes in-package tests under `heber/` and legacy test file names (`tests.py`, `tests_*.py`).
 - `TD-003` and `TD-074` addressed via `T-06`: Docker/Kubernetes runtime commands now point to existing modules, replacing stale references to missing paths.
 - `TD-073` addressed via `T-07`: Terraform local module paths now exist under `infrastructure/terraform/modules/*`, with tests that assert module source paths resolve.
+- `TD-002` addressed via `T-08`: SDK default catalog URL now uses `HEBER_CATALOG_URL` (`http://localhost:8085/api/v1`) to match docker-compose host routing.
+- `TD-004` and `TD-071` addressed via `T-09`: Hot Store sync/write implementation is unified under `heber.hotstore.sync` with a single `clickhouse-connect` client path and sync-safe table creation helpers.
+- `TD-008` addressed via `T-10`: writer consumer now retries processing failures, claims idle pending messages at startup, and routes unrecoverable records to a Redis DLQ stream.
+- `TD-005` addressed via `T-11`: Silver writer flush interval now respects `silver_max_flush_time_seconds` rather than Bronze flush configuration.
+- `TD-006` addressed via `T-12`: all `heber/` runtime modules now use timezone-aware UTC timestamps (`datetime.now(UTC)`) in place of naive `datetime.utcnow()`, with a regression test guarding against reintroduction.
+- `TD-007` addressed via `T-13`: compactor now streams small-file merges into a temp parquet, atomically promotes the merged file, and only deletes source files after successful promotion, with regression tests for failure safety.
+- `TD-009` addressed via `T-14`: Silver Arrow schemas now live in shared `heber.schemas.silver` instead of inline writer constants; writer/transformer import the shared module with regression tests guarding against schema re-duplication.
+- `TD-011` addressed via `T-15`: Hot Store event sync now buffers quote/trade/bar writes and flushes by row/time thresholds instead of one insert per event, with shutdown flush and regression tests.
 
 ## Executive Summary
 
@@ -11868,11 +11935,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-010, TD-011, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
@@ -11903,6 +11970,14 @@ Updated: 2026-02-05
 - `T-05` complete (`TD-001`): pytest now discovers tests under both `tests/` and `heber/`, including files named `tests.py` and `tests_*.py`.
 - `T-06` complete (`TD-003`, `TD-074`): Docker and Kubernetes entrypoints now reference existing runtime modules (`heber.writer.consumer`, `heber.writer.compactor`), with regression checks.
 - `T-07` complete (`TD-073`): added local Terraform module scaffolds (`vpc`, `s3`, `rds`, `elasticache`, `ecr`, `eks`) so root references resolve; added regression checks for module sources.
+- `T-08` complete (`TD-002`): SDK now defaults to `HEBER_CATALOG_URL` (`http://localhost:8085/api/v1`) to match docker-compose host exposure; docs and regression tests updated.
+- `T-09` complete (`TD-004`, `TD-071`): unified Hot Store sync/write logic under `heber.hotstore.sync` with `clickhouse-connect`; legacy `heber.writer.hotstore` now re-exports the unified path.
+- `T-10` complete (`TD-008`): writer consumer now retries failures, claims idle pending messages on startup, and dead-letters unrecoverable messages to a Redis DLQ stream.
+- `T-11` complete (`TD-005`): Silver writer flush cadence now correctly uses `silver_max_flush_time_seconds` instead of Bronze flush settings, with regression tests.
+- `T-12` complete (`TD-006`): replaced naive `datetime.utcnow()` usage across `heber/` runtime modules with timezone-aware `datetime.now(UTC)`, with regression coverage to prevent reintroduction.
+- `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
+- `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
+- `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
 
 ## Prioritization Approach
 
@@ -12071,6 +12146,61 @@ Acceptance Criteria:
 
 Estimate: 3-5 days
 
+### T-13: Harden Compactor Atomic Merge Flow (TD-007)
+
+Priority: P2
+
+Description: Compaction previously loaded all small files into memory and deleted source files directly after writing output. Harden compaction with streamed writes, atomic promotion, and safer cleanup semantics.
+
+Scope:
+- `heber/writer/compactor.py`
+- `tests/test_compactor_safety.py`
+
+Acceptance Criteria:
+- Compaction writes merged output to a temp file first and atomically promotes to final `.parquet`.
+- Source small files are deleted only after merged output promotion succeeds.
+- Failure during merge/write keeps source files intact and does not leave lock/temp artifacts.
+- Regression tests cover successful compaction and failure recovery behavior.
+
+Estimate: 1-2 days
+
+### T-14: Centralize Silver Schema Definitions (TD-009)
+
+Priority: P2
+
+Description: Silver schema constants were defined inline in `heber.writer.silver`, causing drift risk and duplicated ownership. Centralize schema definitions into a shared schema module and keep runtime writers/transforms consuming that source.
+
+Scope:
+- `heber/schemas/silver.py`
+- `heber/writer/silver.py`
+- `heber/writer/transformer.py`
+- `tests/test_silver_schema_source.py`
+
+Acceptance Criteria:
+- Canonical Silver Arrow schemas live in one shared module.
+- Writer and transformer import schemas from shared module, not from duplicated inline constants.
+- Regression tests verify writer behavior still resolves known/default schemas and guard against reintroducing inline schema constants.
+
+Estimate: 1 day
+
+### T-15: Batch Hot Store Event Inserts (TD-011)
+
+Priority: P2
+
+Description: Event sync paths in `HotStoreSync` previously called `write_batch(..., [event])`, causing one ClickHouse insert per event. Add buffering and threshold-based flushing to reduce insert overhead.
+
+Scope:
+- `heber/hotstore/sync.py`
+- `tests/test_hotstore_unification.py`
+
+Acceptance Criteria:
+- `sync_quote`, `sync_trade`, and `sync_bar` buffer events and insert in batches.
+- Buffer flushes when row threshold is hit or max wait time elapses.
+- Pending buffered rows are flushed during shutdown/stop.
+- Regression tests verify threshold batching and stop-time flush behavior.
+
+Estimate: 1 day
+
 ## Suggested Execution Order
 
 1. T-01 (Event bus claim handling)
@@ -12082,6 +12212,12 @@ Estimate: 3-5 days
 7. T-07 (Terraform modules)
 8. T-08 (SDK port alignment)
 9. T-09 (Hot Store unification)
+10. T-10 (Consumer DLQ + pending recovery)
+11. T-11 (Silver flush config alignment)
+12. T-12 (Timezone-aware UTC normalization)
+13. T-13 (Compactor atomic merge hardening)
+14. T-14 (Silver schema centralization)
+15. T-15 (Hot Store event batching)
 
 
 
@@ -13831,6 +13967,12 @@ def main() -> int:
     versions_parser = subparsers.add_parser("versions", help="List Gold versions")
     versions_parser.add_argument("dataset", help="Dataset name")
 
+    # Backfill command
+    backfill_parser = subparsers.add_parser("backfill", help="Backfill Silver from Bronze")
+    backfill_parser.add_argument("--feed", help="Specific feed to backfill")
+    backfill_parser.add_argument("--since", help="Start date (YYYY-MM-DD)")
+    backfill_parser.add_argument("--until", help="End date (YYYY-MM-DD)")
+
     args = parser.parse_args()
 
     if args.command == "info":
@@ -13867,6 +14009,28 @@ def main() -> int:
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
+        return 0
+
+    elif args.command == "backfill":
+        import asyncio
+        from datetime import datetime
+
+        from heber.writer.transformer import BronzeToSilverTransformer
+
+        since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
+        until = datetime.strptime(args.until, "%Y-%m-%d") if args.until else None
+
+        transformer = BronzeToSilverTransformer()
+
+        if args.feed:
+            print(f"Backfilling feed: {args.feed}")
+            count = asyncio.run(transformer.transform(args.feed))
+            print(f"Transformed {count} records")
+        else:
+            print("Backfilling all feeds from Bronze to Silver...")
+            stats = asyncio.run(transformer.transform_all(since=since, until=until))
+            for feed, count in sorted(stats.items()):
+                print(f"  {feed}: {count} records")
         return 0
 
     else:
@@ -13931,6 +14095,26 @@ class Settings(BaseSettings):
         default="heber-writers",
         description="Redis consumer group name",
     )
+    redis_dlq_stream_name: str = Field(
+        default="heber:events:dlq",
+        description="Redis stream for failed consumer messages",
+    )
+    redis_claim_idle_ms: int = Field(
+        default=60_000,
+        description="Minimum idle time before claiming pending stream messages",
+    )
+    redis_claim_batch_size: int = Field(
+        default=100,
+        description="Max pending messages to claim per recovery cycle",
+    )
+    redis_process_max_retries: int = Field(
+        default=3,
+        description="Retry attempts for a stream message before DLQ",
+    )
+    redis_retry_backoff_seconds: float = Field(
+        default=0.25,
+        description="Base backoff delay between processing retries",
+    )
 
     # ClickHouse (Hot Store)
     clickhouse_host: str = Field(default="localhost")
@@ -13942,6 +14126,10 @@ class Settings(BaseSettings):
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)
+    catalog_url: str = Field(
+        default="http://localhost:8085/api/v1",
+        description="Catalog API base URL used by SDK clients",
+    )
 
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
@@ -17722,7 +17910,7 @@ See PRD Section 11.7 for API contract.
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -17850,7 +18038,7 @@ async def list_datasets(
             )
             for d in datasets
         ],
-        meta=MetaResponse(ts=datetime.utcnow()),
+        meta=MetaResponse(ts=datetime.now(UTC)),
     )
 
 
@@ -17870,7 +18058,7 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
             partition_cols=dataset.partition_cols,
             is_active=dataset.is_active,
         ),
-        meta=MetaResponse(ts=datetime.utcnow()),
+        meta=MetaResponse(ts=datetime.now(UTC)),
     )
 
 
@@ -17887,7 +18075,7 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
             }
             for v in versions
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -17904,7 +18092,7 @@ async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_
             }
             for c in coverage
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -17925,7 +18113,7 @@ async def get_instrument(key: str, service: CatalogService = Depends(get_service
             strike=instrument.strike,
             put_call=instrument.put_call,
         ),
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -17949,7 +18137,7 @@ async def lookup_instruments(
             )
             for i in instruments
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -17979,7 +18167,7 @@ async def search_instruments(
             )
             for i in instruments
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -17996,7 +18184,7 @@ async def list_feeds(service: CatalogService = Depends(get_service)):
             )
             for m in mappings
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18014,7 +18202,7 @@ async def resolve_feed(
         )
     return {
         "data": {"silver_dataset_name": silver_dataset},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18040,7 +18228,7 @@ async def get_dataset_version(
             "is_current": target.is_current,
             "created_at": target.created_at,
         },
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18075,7 +18263,7 @@ async def create_dataset(
     )
     return {
         "data": {"dataset_name": dataset.dataset_name},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18111,7 +18299,7 @@ async def upsert_instrument(
     )
     return {
         "data": {"instrument_key": instrument.instrument_key},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18146,11 +18334,11 @@ async def create_backfill(request: BackfillRequest):
         "end_date": request.end_date,
         "project": request.project,
         "status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     return {
         "data": {"backfill_id": job_id, "status": "pending"},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18162,7 +18350,7 @@ async def get_backfill(id: str):
         raise HTTPException(status_code=404, detail=f"Backfill job '{id}' not found")
     return {
         "data": job,
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -18177,7 +18365,7 @@ async def list_backfills(
         jobs = [j for j in jobs if j["status"] == status]
     return {
         "data": jobs[:limit],
-        "meta": {"ts": datetime.utcnow(), "count": len(jobs)},
+        "meta": {"ts": datetime.now(UTC), "count": len(jobs)},
     }
 
 
@@ -18206,7 +18394,7 @@ async def http_exception_handler(request, exc: HTTPException):
                 "code": code,
                 "message": str(exc.detail),
             },
-            "meta": {"ts": datetime.utcnow().isoformat()},
+            "meta": {"ts": datetime.now(UTC).isoformat()},
         },
     )
 
@@ -19217,7 +19405,7 @@ FILE: heber/catalog/service.py
 ================================================
 """Catalog service business logic."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19336,7 +19524,7 @@ class CatalogService:
             for key, value in kwargs.items():
                 if hasattr(existing, key) and value is not None:
                     setattr(existing, key, value)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(UTC)
         else:
             existing = InstrumentRegistry(
                 instrument_key=instrument_key,
@@ -19393,7 +19581,7 @@ class CatalogService:
             coverage.dt_max = max(coverage.dt_max, dt_max)
             if approx_row_count:
                 coverage.approx_row_count = (coverage.approx_row_count or 0) + approx_row_count
-            coverage.last_updated_ts = datetime.utcnow()
+            coverage.last_updated_ts = datetime.now(UTC)
         else:
             coverage = DataCoverage(
                 dataset_name=dataset_name,
@@ -24877,22 +25065,38 @@ Silver is always the source of truth. Hot Store is read-only for queries.
 """
 
 from heber.hotstore.client import HotStoreClient, get_hotstore_client
-from heber.hotstore.sync import HotStoreSync
+from heber.hotstore.sync import (
+    HotStoreReader,
+    HotStoreSync,
+    HotStoreSyncConfig,
+    HotStoreTable,
+    QueryType,
+    SyncState,
+    create_hot_store_syncer,
+)
 from heber.hotstore.tables import (
     BARS_HOT_DDL,
     QUOTES_HOT_DDL,
     TRADES_HOT_DDL,
     create_all_tables,
+    create_all_tables_async,
 )
 
 __all__ = [
     "HotStoreClient",
     "get_hotstore_client",
     "HotStoreSync",
+    "HotStoreReader",
+    "HotStoreSyncConfig",
+    "HotStoreTable",
+    "QueryType",
+    "SyncState",
+    "create_hot_store_syncer",
     "QUOTES_HOT_DDL",
     "TRADES_HOT_DDL",
     "BARS_HOT_DDL",
     "create_all_tables",
+    "create_all_tables_async",
 ]
 
 
@@ -24912,8 +25116,13 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from clickhouse_connect import get_client
-from clickhouse_connect.driver.client import Client
+
+try:
+    from clickhouse_connect import get_client
+    from clickhouse_connect.driver.client import Client
+except ImportError:  # pragma: no cover - optional dependency in some test envs
+    get_client = None
+    Client = Any
 
 from heber.config import settings
 
@@ -24936,6 +25145,11 @@ class HotStoreClient:
     def client(self) -> Client:
         """Lazy-initialize ClickHouse client."""
         if self._client is None:
+            if get_client is None:
+                raise ImportError(
+                    "clickhouse_connect is required for HotStoreClient runtime usage. "
+                    "Install project dependencies including clickhouse-connect."
+                )
             self._client = get_client(
                 host=settings.clickhouse_host,
                 port=settings.clickhouse_port,
@@ -25093,182 +25307,456 @@ def get_hotstore_client() -> HotStoreClient:
 ================================================
 FILE: heber/hotstore/sync.py
 ================================================
-"""Hot Store sync service per PRD §12.10.
+"""Hot Store sync/service utilities.
 
-Syncs data from event bus or Silver to Hot Store (ClickHouse).
-Maintains ≤5 minute lag SLA under normal operation.
+This module is the single Hot Store write/sync implementation. It uses
+`clickhouse-connect` through `HotStoreClient` and offers async-compatible
+wrappers for event-driven callers.
 """
 
-from datetime import UTC, datetime
+from __future__ import annotations
+
+import asyncio
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import structlog
 
+from heber.config import settings
 from heber.hotstore.client import HotStoreClient, get_hotstore_client
+from heber.hotstore.tables import create_all_tables
 
 logger = structlog.get_logger(__name__)
 
-# Metrics counters (will be replaced with Prometheus metrics)
 _metrics = {
     "rows_synced_total": 0,
     "sync_failures_total": 0,
 }
 
 
-class HotStoreSync:
-    """Syncs data from event bus to Hot Store.
+class QueryType(str, Enum):
+    """Query behavior profile per PRD §12.10.1."""
 
-    Per PRD §12.10:
-    - Source: event bus (preferred) or recently written Silver partitions
-    - Window: rolling last N days per dataset
-    - Correctness: Hot Store is read-only for queries
+    REALTIME_DASHBOARD = "realtime_dashboard"
+    STRATEGY_SIGNALS = "strategy_signals"
+    BACKTEST_RESEARCH = "backtest_research"
+
+
+class HotStoreTable(str, Enum):
+    """Canonical Hot Store table names."""
+
+    QUOTES = "quotes_hot"
+    TRADES = "trades_hot"
+    BARS = "bars_hot"
+
+
+@dataclass
+class HotStoreSyncConfig:
+    """Sync configuration for Hot Store workflows."""
+
+    rolling_window_days: int = 7
+    max_lag_seconds: float = 300.0
+    sync_interval_seconds: float = 30.0
+    silver_base_path: str = str(settings.silver_path)
+    event_batch_max_rows: int = 250
+    event_batch_max_wait_seconds: float = 1.0
+
+
+@dataclass
+class SyncState:
+    """Sync state for a dataset."""
+
+    dataset: str
+    last_sync: datetime | None = None
+    rows_synced: int = 0
+
+
+class HotStoreSync:
+    """Hot Store writer/sync service.
+
+    Supports:
+    - Event-based writes (quote/trade/bar payloads)
+    - Batch writes from flat or payload-style records
+    - Silver catch-up sync loops
     """
 
-    def __init__(self, client: HotStoreClient | None = None):
+    def __init__(
+        self,
+        client: HotStoreClient | None = None,
+        config: HotStoreSyncConfig | None = None,
+    ):
         self.client = client or get_hotstore_client()
-        self._last_sync: dict[str, datetime] = {}
+        self.config = config or HotStoreSyncConfig()
+        self._running = False
+        self._sync_state: dict[str, SyncState] = {}
+        self._event_buffers: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._event_buffer_started_at: dict[str, datetime] = {}
+
+    @staticmethod
+    def get_table_for_dataset(dataset: str) -> HotStoreTable:
+        name = dataset.lower()
+        if "quote" in name:
+            return HotStoreTable.QUOTES
+        if "trade" in name:
+            return HotStoreTable.TRADES
+        return HotStoreTable.BARS
+
+    @staticmethod
+    def _dataset_name_for_table(table: HotStoreTable) -> str:
+        if table == HotStoreTable.QUOTES:
+            return "quotes"
+        if table == HotStoreTable.TRADES:
+            return "trades"
+        return "bars"
+
+    @staticmethod
+    def _to_utc_datetime(value: Any, fallback: datetime | None = None) -> datetime:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+        if isinstance(value, str):
+            normalized = value.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(normalized)
+                if dt.tzinfo is None:
+                    return dt.replace(tzinfo=UTC)
+                return dt.astimezone(UTC)
+            except ValueError:
+                pass
+        if fallback is not None:
+            return fallback
+        return datetime.now(UTC)
+
+    @staticmethod
+    def _columns_for_table(table: HotStoreTable) -> list[str]:
+        common = [
+            "event_id",
+            "provider",
+            "feed",
+            "instrument_type",
+            "instrument_key",
+            "symbol",
+            "ts_event",
+            "ts_ingest",
+            "ts_available",
+            "source",
+            "schema_version",
+        ]
+        if table == HotStoreTable.QUOTES:
+            return common + ["bid_px", "bid_sz", "ask_px", "ask_sz", "bid_exchange", "ask_exchange"]
+        if table == HotStoreTable.TRADES:
+            return common + ["price", "size", "trade_id", "exchange", "tape"]
+        return common + ["timeframe", "bar_start_ts", "open", "high", "low", "close", "volume", "trade_count", "vwap"]
+
+    def _build_row(self, table: HotStoreTable, record: dict[str, Any]) -> tuple[Any, ...]:
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        ts_event = self._to_utc_datetime(record.get("ts_event"), datetime.now(UTC))
+        ts_ingest = self._to_utc_datetime(record.get("ts_ingest"), ts_event)
+        ts_available = self._to_utc_datetime(record.get("ts_available"), ts_ingest)
+
+        instrument_key = record.get("instrument_key") or payload.get("instrument_key") or ""
+        symbol = record.get("symbol") or payload.get("symbol") or record.get("underlying") or ""
+        provider = record.get("provider") or payload.get("provider") or ""
+        feed = record.get("feed") or payload.get("feed") or self._dataset_name_for_table(table)
+        instrument_type = record.get("instrument_type") or payload.get("instrument_type") or "equity"
+        source = record.get("source") or payload.get("source") or "unknown"
+        schema_version = record.get("schema_version") or payload.get("schema_version") or "v1"
+        event_id = record.get("event_id") or payload.get("event_id") or ""
+
+        common = (
+            event_id,
+            provider,
+            feed,
+            instrument_type,
+            instrument_key,
+            symbol,
+            ts_event,
+            ts_ingest,
+            ts_available,
+            source,
+            schema_version,
+        )
+
+        if table == HotStoreTable.QUOTES:
+            return common + (
+                payload.get("bid_px", record.get("bid_px", 0.0)),
+                payload.get("bid_sz", record.get("bid_sz", 0.0)),
+                payload.get("ask_px", record.get("ask_px", 0.0)),
+                payload.get("ask_sz", record.get("ask_sz", 0.0)),
+                payload.get("bid_exchange", record.get("bid_exchange")),
+                payload.get("ask_exchange", record.get("ask_exchange")),
+            )
+
+        if table == HotStoreTable.TRADES:
+            return common + (
+                payload.get("price", record.get("price", 0.0)),
+                payload.get("size", record.get("size", 0.0)),
+                payload.get("trade_id", record.get("trade_id")),
+                payload.get("exchange", record.get("exchange")),
+                payload.get("tape", record.get("tape")),
+            )
+
+        bar_start = payload.get("bar_start_ts", record.get("bar_start_ts")) or ts_event
+        return common + (
+            payload.get("timeframe", record.get("timeframe", "1Min")),
+            self._to_utc_datetime(bar_start, ts_event),
+            payload.get("open", record.get("open", 0.0)),
+            payload.get("high", record.get("high", 0.0)),
+            payload.get("low", record.get("low", 0.0)),
+            payload.get("close", record.get("close", 0.0)),
+            payload.get("volume", record.get("volume", 0.0)),
+            payload.get("trade_count", record.get("trade_count")),
+            payload.get("vwap", record.get("vwap")),
+        )
+
+    def ensure_tables(self) -> None:
+        """Ensure Hot Store tables/views exist."""
+        create_all_tables(self.client.client)
+
+    def ensure_table(self, _table: HotStoreTable | None = None) -> None:
+        """Backwards-compatible alias used by legacy call sites."""
+        self.ensure_tables()
+
+    def write_batch(self, dataset: str, records: list[dict[str, Any]]) -> int:
+        """Write batch records to the matching Hot Store table."""
+        if not records:
+            return 0
+
+        table = self.get_table_for_dataset(dataset)
+        columns = self._columns_for_table(table)
+        rows = [self._build_row(table, record) for record in records]
+
+        self.client.client.insert(table.value, rows, column_names=columns)
+        rows_written = len(rows)
+        _metrics["rows_synced_total"] += rows_written
+
+        state = self._sync_state.setdefault(dataset, SyncState(dataset=dataset))
+        state.last_sync = datetime.now(UTC)
+        state.rows_synced += rows_written
+        return rows_written
+
+    def _flush_event_buffer(self, dataset: str) -> int:
+        records = self._event_buffers.get(dataset, [])
+        if not records:
+            return 0
+
+        rows_written = self.write_batch(dataset, records)
+        self._event_buffers[dataset] = []
+        self._event_buffer_started_at.pop(dataset, None)
+        return rows_written
+
+    def _flush_due_event_buffers(self) -> int:
+        now = datetime.now(UTC)
+        total_flushed = 0
+        for dataset, records in list(self._event_buffers.items()):
+            if not records:
+                continue
+            started_at = self._event_buffer_started_at.get(dataset, now)
+            elapsed_seconds = (now - started_at).total_seconds()
+            if elapsed_seconds >= self.config.event_batch_max_wait_seconds:
+                total_flushed += self._flush_event_buffer(dataset)
+        return total_flushed
+
+    def flush(self) -> int:
+        """Flush all buffered event writes."""
+        total_flushed = 0
+        for dataset in list(self._event_buffers):
+            total_flushed += self._flush_event_buffer(dataset)
+        return total_flushed
+
+    def _buffer_event(self, dataset: str, event: dict[str, Any]) -> int:
+        if dataset not in self._event_buffer_started_at:
+            self._event_buffer_started_at[dataset] = datetime.now(UTC)
+
+        buffered = self._event_buffers[dataset]
+        buffered.append(event)
+
+        if len(buffered) >= self.config.event_batch_max_rows:
+            return self._flush_event_buffer(dataset)
+
+        return self._flush_due_event_buffers()
+
+    def get_row_count(self, dataset: str) -> int:
+        """Get row count from Hot Store for a dataset."""
+        table = self.get_table_for_dataset(dataset)
+        return self.client.get_row_count(self._dataset_name_for_table(table))
+
+    def sync_from_silver(
+        self,
+        dataset: str,
+        silver_path: str | None = None,
+        since: datetime | None = None,
+    ) -> int:
+        """Sync records from Silver parquet partitions into Hot Store."""
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            logger.warning("pyarrow_not_available")
+            return 0
+
+        silver_root = Path(silver_path or self.config.silver_base_path)
+        dataset_dir = silver_root / f"feed={dataset}"
+        if not dataset_dir.exists():
+            logger.warning("silver_path_not_found", path=str(dataset_dir))
+            return 0
+
+        if since is None:
+            since = datetime.now(UTC) - timedelta(days=self.config.rolling_window_days)
+
+        total = 0
+        for part in sorted(dataset_dir.glob("dt=*")):
+            for pq_file in sorted(part.rglob("*.parquet")):
+                table = pq.read_table(pq_file)
+                records = table.to_pylist()
+                filtered: list[dict[str, Any]] = []
+                for record in records:
+                    ts_event = self._to_utc_datetime(record.get("ts_event"))
+                    if ts_event >= since:
+                        filtered.append(record)
+                total += self.write_batch(dataset, filtered)
+        return total
+
+    async def run_sync_loop(
+        self,
+        datasets: list[str],
+        silver_base_path: str | None = None,
+    ) -> None:
+        """Continuously sync configured datasets from Silver."""
+        self._running = True
+        self.ensure_tables()
+
+        while self._running:
+            for dataset in datasets:
+                try:
+                    state = self._sync_state.get(dataset)
+                    last_sync = state.last_sync if state else None
+                    self.sync_from_silver(dataset, silver_base_path, last_sync)
+                except Exception as exc:
+                    _metrics["sync_failures_total"] += 1
+                    logger.error("hot_store_sync_failed", dataset=dataset, error=str(exc))
+            self._flush_due_event_buffers()
+            await asyncio.sleep(self.config.sync_interval_seconds)
+
+        # Best-effort flush of any event-buffered rows when loop exits.
+        try:
+            self.flush()
+        except Exception as exc:
+            _metrics["sync_failures_total"] += 1
+            logger.error("hot_store_buffer_flush_failed", error=str(exc))
+
+    def stop(self) -> None:
+        self._running = False
+        # Stop can be called without a running loop; flush buffered events now.
+        try:
+            self.flush()
+        except Exception as exc:
+            _metrics["sync_failures_total"] += 1
+            logger.error("hot_store_buffer_flush_failed", error=str(exc))
 
     async def sync_quote(self, event: dict[str, Any]) -> None:
-        """Sync a quote event to Hot Store.
-
-        Args:
-            event: EventEnvelope dict containing quote data
-        """
-        try:
-            payload = event.get("payload", {})
-            values = (
-                event["event_id"],
-                event["provider"],
-                event["feed"],
-                event["instrument_type"],
-                event["instrument_key"],
-                event["symbol"],
-                event["ts_event"],
-                event["ts_ingest"],
-                event.get("ts_available") or datetime.now(UTC),
-                event["source"],
-                event.get("schema_version", "v1"),
-                payload.get("bid_px", 0),
-                payload.get("bid_sz", 0),
-                payload.get("ask_px", 0),
-                payload.get("ask_sz", 0),
-                payload.get("bid_exchange"),
-                payload.get("ask_exchange"),
-            )
-
-            self.client.client.insert("quotes_hot", [values])
-            _metrics["rows_synced_total"] += 1
-
-        except Exception as e:
-            _metrics["sync_failures_total"] += 1
-            logger.error("hot_store_sync_failed", dataset="quotes", error=str(e))
-            raise
+        self._buffer_event("quotes", event)
 
     async def sync_trade(self, event: dict[str, Any]) -> None:
-        """Sync a trade event to Hot Store.
-
-        Args:
-            event: EventEnvelope dict containing trade data
-        """
-        try:
-            payload = event.get("payload", {})
-            values = (
-                event["event_id"],
-                event["provider"],
-                event["feed"],
-                event["instrument_type"],
-                event["instrument_key"],
-                event["symbol"],
-                event["ts_event"],
-                event["ts_ingest"],
-                event.get("ts_available") or datetime.now(UTC),
-                event["source"],
-                event.get("schema_version", "v1"),
-                payload.get("price", 0),
-                payload.get("size", 0),
-                payload.get("trade_id"),
-                payload.get("exchange"),
-                payload.get("tape"),
-            )
-
-            self.client.client.insert("trades_hot", [values])
-            _metrics["rows_synced_total"] += 1
-
-        except Exception as e:
-            _metrics["sync_failures_total"] += 1
-            logger.error("hot_store_sync_failed", dataset="trades", error=str(e))
-            raise
+        self._buffer_event("trades", event)
 
     async def sync_bar(self, event: dict[str, Any]) -> None:
-        """Sync a bar event to Hot Store.
-
-        Args:
-            event: EventEnvelope dict containing bar data
-        """
-        try:
-            payload = event.get("payload", {})
-            values = (
-                event["event_id"],
-                event["provider"],
-                event["feed"],
-                event["instrument_type"],
-                event["instrument_key"],
-                event["symbol"],
-                event["ts_event"],
-                event["ts_ingest"],
-                event.get("ts_available") or datetime.now(UTC),
-                event["source"],
-                event.get("schema_version", "v1"),
-                payload.get("timeframe", "1Min"),
-                payload.get("bar_start_ts") or event["ts_event"],
-                payload.get("open", 0),
-                payload.get("high", 0),
-                payload.get("low", 0),
-                payload.get("close", 0),
-                payload.get("volume", 0),
-                payload.get("trade_count"),
-                payload.get("vwap"),
-            )
-
-            self.client.client.insert("bars_hot", [values])
-            _metrics["rows_synced_total"] += 1
-
-        except Exception as e:
-            _metrics["sync_failures_total"] += 1
-            logger.error("hot_store_sync_failed", dataset="bars", error=str(e))
-            raise
+        self._buffer_event("bars", event)
 
     async def sync_event(self, event: dict[str, Any]) -> None:
-        """Route an event to the appropriate sync method.
-
-        Args:
-            event: EventEnvelope dict
-        """
-        feed = event.get("feed", "")
-
-        if feed == "quotes":
+        feed = str(event.get("feed", "")).lower()
+        if "quote" in feed:
             await self.sync_quote(event)
-        elif feed == "trades":
+        elif "trade" in feed:
             await self.sync_trade(event)
-        elif feed == "bars":
+        elif "bar" in feed:
             await self.sync_bar(event)
         else:
-            # Flow alerts, darkpool, etc. stay lake-only per PRD §7.6
             logger.debug("hot_store_skip", feed=feed, reason="lake-only dataset")
 
-    async def get_metrics(self) -> dict[str, Any]:
-        """Get sync metrics per PRD §12.10.1.
-
-        Returns:
-            Dict with lag, row counts, and failure stats
-        """
+    def get_metrics_snapshot(self) -> dict[str, Any]:
+        """Return sync counters and lag metrics."""
         return {
             "rows_synced_total": _metrics["rows_synced_total"],
             "sync_failures_total": _metrics["sync_failures_total"],
-            "quotes_lag_seconds": await self.client.get_sync_lag_seconds("quotes"),
-            "trades_lag_seconds": await self.client.get_sync_lag_seconds("trades"),
-            "bars_lag_seconds": await self.client.get_sync_lag_seconds("bars"),
+            "quotes_lag_seconds": self.client.get_sync_lag_seconds("quotes"),
+            "trades_lag_seconds": self.client.get_sync_lag_seconds("trades"),
+            "bars_lag_seconds": self.client.get_sync_lag_seconds("bars"),
         }
+
+    async def get_metrics(self) -> dict[str, Any]:
+        return self.get_metrics_snapshot()
+
+
+class HotStoreReader:
+    """Read helper with Hot Store/Silver fallback behavior."""
+
+    def __init__(
+        self,
+        syncer: HotStoreSync | None = None,
+        silver_base_path: str | None = None,
+    ):
+        self.syncer = syncer or HotStoreSync()
+        self.silver_base_path = silver_base_path or self.syncer.config.silver_base_path
+
+    async def query(self, dataset: str, query_type: QueryType, **filters) -> list[dict[str, Any]]:
+        if query_type == QueryType.BACKTEST_RESEARCH:
+            return self._query_silver(dataset, **filters)
+
+        hot = self._query_hot_store(dataset, **filters)
+        if query_type == QueryType.REALTIME_DASHBOARD:
+            return hot
+
+        if hot:
+            return hot
+        return self._query_silver(dataset, **filters)
+
+    def _query_hot_store(self, dataset: str, **filters) -> list[dict[str, Any]]:
+        table = self.syncer.get_table_for_dataset(dataset).value
+        where = ["1=1"]
+        params: dict[str, Any] = {}
+        if "instrument_key" in filters:
+            where.append("instrument_key = %(instrument_key)s")
+            params["instrument_key"] = filters["instrument_key"]
+        query = f"SELECT * FROM {table} WHERE {' AND '.join(where)} ORDER BY ts_event"
+        result = self.syncer.client.client.query(query, parameters=params)
+        return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
+
+    def _query_silver(self, dataset: str, **filters) -> list[dict[str, Any]]:
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            logger.warning("pyarrow_not_available")
+            return []
+
+        dataset_dir = Path(self.silver_base_path) / f"feed={dataset}"
+        if not dataset_dir.exists():
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for part in sorted(dataset_dir.glob("dt=*")):
+            for pq_file in sorted(part.rglob("*.parquet")):
+                rows.extend(pq.read_table(pq_file).to_pylist())
+        if "instrument_key" in filters:
+            key = filters["instrument_key"]
+            rows = [row for row in rows if row.get("instrument_key") == key]
+        return rows
+
+
+def create_hot_store_syncer(
+    silver_base_path: str | None = None,
+    config: HotStoreSyncConfig | None = None,
+    client: HotStoreClient | None = None,
+) -> HotStoreSync:
+    """Factory for compatibility with legacy writer.hotstore imports."""
+    merged = config or HotStoreSyncConfig()
+    if silver_base_path:
+        merged.silver_base_path = silver_base_path
+    return HotStoreSync(client=client, config=merged)
 
 
 
@@ -25284,6 +25772,10 @@ Tables:
 
 Retention is managed by ClickHouse TTL, not Heber.
 """
+
+from __future__ import annotations
+
+import inspect
 
 # Quotes Hot Table (PRD §12.10)
 QUOTES_HOT_DDL = """
@@ -25423,12 +25915,17 @@ GROUP BY instrument_key, timeframe;
 """
 
 
-async def create_all_tables(client) -> None:
-    """Create all Hot Store tables and views.
+def _execute_statement(client, statement: str):
+    """Execute DDL statement against sync or async client interfaces."""
+    for method_name in ("command", "execute", "query"):
+        method = getattr(client, method_name, None)
+        if callable(method):
+            return method(statement)
+    raise AttributeError("Hot Store client must expose command(), execute(), or query()")
 
-    Args:
-        client: ClickHouse client (clickhouse-connect or similar)
-    """
+
+def create_all_tables(client) -> None:
+    """Create all Hot Store tables and views using a synchronous client."""
     statements = [
         QUOTES_HOT_DDL,
         TRADES_HOT_DDL,
@@ -25438,7 +25935,25 @@ async def create_all_tables(client) -> None:
     ]
 
     for stmt in statements:
-        await client.execute(stmt)
+        result = _execute_statement(client, stmt)
+        if inspect.isawaitable(result):
+            raise TypeError("create_all_tables() received an async client result. Use create_all_tables_async().")
+
+
+async def create_all_tables_async(client) -> None:
+    """Create all Hot Store tables and views using an async-capable client."""
+    statements = [
+        QUOTES_HOT_DDL,
+        TRADES_HOT_DDL,
+        BARS_HOT_DDL,
+        LATEST_QUOTES_VIEW_DDL,
+        LATEST_BARS_VIEW_DDL,
+    ]
+
+    for stmt in statements:
+        result = _execute_statement(client, stmt)
+        if inspect.isawaitable(result):
+            await result
 
 
 
@@ -33989,6 +34504,1118 @@ def list_additional_schemas() -> list[str]:
 
 
 ================================================
+FILE: heber/schemas/silver.py
+================================================
+"""Canonical Silver Arrow schemas shared across writers and transforms."""
+
+from __future__ import annotations
+
+import pyarrow as pa
+
+# Dataset-specific schemas (per PRD Section 8.7)
+SILVER_SCHEMAS = {
+    "bars": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Bars-specific
+            ("timeframe", pa.string()),
+            ("bar_start_ts", pa.timestamp("us", tz="UTC")),
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("volume", pa.float64()),
+            ("trade_count", pa.int64()),
+            ("vwap", pa.float64()),
+        ]
+    ),
+    "quotes": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Quotes-specific
+            ("bid_px", pa.float64()),
+            ("bid_sz", pa.float64()),
+            ("ask_px", pa.float64()),
+            ("ask_sz", pa.float64()),
+            ("bid_exchange", pa.string()),
+            ("ask_exchange", pa.string()),
+        ]
+    ),
+    "trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Trades-specific
+            ("trade_id", pa.string()),
+            ("price", pa.float64()),
+            ("size", pa.float64()),
+            ("exchange", pa.string()),
+            ("tape", pa.string()),
+        ]
+    ),
+    "flow_alerts": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Flow-specific
+            ("underlying", pa.string()),
+            ("occ_symbol", pa.string()),
+            ("expiry", pa.date32()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("premium", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("spot_px", pa.float64()),
+            ("contract_px", pa.float64()),
+            ("alert_type", pa.string()),
+            ("side", pa.string()),
+            ("aggressor", pa.string()),
+            # UW additional fields (P1)
+            ("is_sweep", pa.bool_()),
+            ("is_unusual", pa.bool_()),
+            ("sentiment", pa.string()),
+            ("trade_count", pa.int64()),
+            ("volume_oi_ratio", pa.float64()),
+            ("total_ask_side_prem", pa.float64()),
+            ("total_bid_side_prem", pa.float64()),
+            ("has_floor", pa.bool_()),
+            ("has_multileg", pa.bool_()),
+            ("has_singleleg", pa.bool_()),
+            ("all_opening_trades", pa.bool_()),
+        ]
+    ),
+    "darkpool": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Darkpool-specific
+            ("underlying", pa.string()),
+            ("price", pa.float64()),
+            ("size", pa.float64()),
+            ("notional", pa.float64()),
+            ("venue", pa.string()),
+            ("print_id", pa.string()),
+            ("nbbo_bid", pa.float64()),
+            ("nbbo_ask", pa.float64()),
+            ("ext_hours", pa.string()),
+            ("trade_settlement", pa.string()),
+            ("canceled", pa.bool_()),
+        ]
+    ),
+    "sector_tide": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Sector tide-specific
+            ("sector", pa.string()),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            ("net_volume", pa.float64()),
+            ("sentiment", pa.string()),
+            ("call_put_ratio", pa.float64()),
+        ]
+    ),
+    "market_tide": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Market tide-specific
+            ("total_call_premium", pa.float64()),
+            ("total_put_premium", pa.float64()),
+            ("net_volume", pa.float64()),
+            ("sentiment", pa.string()),
+            ("call_put_ratio", pa.float64()),
+        ]
+    ),
+    # Phase 1: Core Analytics
+    "greek_exposure": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("gamma_exposure", pa.float64()),
+            ("delta_exposure", pa.float64()),
+            ("vanna_exposure", pa.float64()),
+            ("charm_exposure", pa.float64()),
+            ("strike", pa.float64()),
+            ("expiry", pa.date32()),
+        ]
+    ),
+    "max_pain": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("expiry", pa.string()),
+            ("max_pain_strike", pa.float64()),
+            ("call_oi", pa.int64()),
+            ("put_oi", pa.int64()),
+        ]
+    ),
+    "net_premium_tick": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            ("call_volume", pa.int64()),
+            ("put_volume", pa.int64()),
+        ]
+    ),
+    "hottest_chain": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("contract_symbol", pa.string()),
+            ("underlying", pa.string()),
+            ("strike", pa.float64()),
+            ("expiry", pa.string()),
+            ("option_type", pa.string()),
+            ("volume", pa.int64()),
+            ("open_interest", pa.int64()),
+            ("premium", pa.float64()),
+            ("iv", pa.float64()),
+        ]
+    ),
+    # Phase 2: Reference Data
+    "earnings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("earnings_date", pa.string()),
+            ("time", pa.string()),
+            ("eps_estimate", pa.float64()),
+            ("eps_actual", pa.float64()),
+            ("revenue_estimate", pa.float64()),
+            ("revenue_actual", pa.float64()),
+        ]
+    ),
+    "corporate_action": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("action_type", pa.string()),
+            ("ex_date", pa.string()),
+            ("record_date", pa.string()),
+            ("payable_date", pa.string()),
+            ("amount", pa.float64()),
+            ("ratio", pa.string()),
+        ]
+    ),
+    # Phase 3: Screeners
+    "most_active": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("volume", pa.int64()),
+            ("trade_count", pa.int64()),
+        ]
+    ),
+    "mover": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("price", pa.float64()),
+            ("change", pa.float64()),
+            ("percent_change", pa.float64()),
+            ("direction", pa.string()),
+        ]
+    ),
+    "screener_result": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("price", pa.float64()),
+            ("volume", pa.int64()),
+            ("market_cap", pa.float64()),
+            ("sector", pa.string()),
+            ("call_volume", pa.int64()),
+            ("put_volume", pa.int64()),
+            ("iv_rank", pa.float64()),
+        ]
+    ),
+    # Phase 4: Advanced Analytics
+    "iv_rank": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("iv_rank", pa.float64()),
+            ("iv_percentile", pa.float64()),
+            ("current_iv", pa.float64()),
+            ("one_year_high", pa.float64()),
+            ("one_year_low", pa.float64()),
+        ]
+    ),
+    "iv_term_structure": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("expiry", pa.string()),
+            ("iv", pa.float64()),
+            ("days_to_expiry", pa.int64()),
+            ("call_iv", pa.float64()),
+            ("put_iv", pa.float64()),
+        ]
+    ),
+    "volatility_stats": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("realized_vol_30d", pa.float64()),
+            ("realized_vol_60d", pa.float64()),
+            ("realized_vol_90d", pa.float64()),
+            ("iv_30d", pa.float64()),
+            ("iv_percentile", pa.float64()),
+            ("hv_iv_ratio", pa.float64()),
+        ]
+    ),
+    "oi_change": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("oi_date", pa.string()),
+            ("call_oi", pa.int64()),
+            ("put_oi", pa.int64()),
+            ("call_oi_change", pa.int64()),
+            ("put_oi_change", pa.int64()),
+        ]
+    ),
+    "etf_holding": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("holding_symbol", pa.string()),
+            ("weight", pa.float64()),
+            ("shares", pa.int64()),
+            ("market_value", pa.float64()),
+        ]
+    ),
+    "etf_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("flow_date", pa.string()),
+            ("inflow", pa.float64()),
+            ("outflow", pa.float64()),
+            ("net_flow", pa.float64()),
+        ]
+    ),
+    "short_data": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("short_date", pa.string()),
+            ("short_interest", pa.int64()),
+            ("days_to_cover", pa.float64()),
+            ("short_percent_float", pa.float64()),
+            ("short_percent_outstanding", pa.float64()),
+        ]
+    ),
+    "ftd": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("ftd_date", pa.string()),
+            ("quantity", pa.int64()),
+            ("price", pa.float64()),
+            ("value", pa.float64()),
+        ]
+    ),
+    "seasonality": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("month", pa.int64()),
+            ("avg_return", pa.float64()),
+            ("median_return", pa.float64()),
+            ("win_rate", pa.float64()),
+            ("sample_years", pa.int64()),
+        ]
+    ),
+    # Reference Data
+    "option_contract": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("underlying", pa.string()),
+            ("occ_symbol", pa.string()),
+            ("expiry", pa.date32()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("multiplier", pa.int64()),
+            ("style", pa.string()),
+            ("exchange", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "news": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("news_id", pa.string()),
+            ("ts_published", pa.timestamp("us", tz="UTC")),
+            ("headline", pa.string()),
+            ("summary", pa.string()),
+            ("body", pa.string()),
+            ("url", pa.string()),
+            ("source_name", pa.string()),
+            ("valid_from", pa.timestamp("us", tz="UTC")),
+            ("valid_to", pa.timestamp("us", tz="UTC")),
+            ("revision_id", pa.string()),
+        ]
+    ),
+    "orderbook": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("bids_json", pa.string()),  # JSON array of [price, size]
+            ("asks_json", pa.string()),  # JSON array of [price, size]
+            ("depth", pa.int64()),
+        ]
+    ),
+    # V3: Alternative Data (Congress, Insider, Institution, Politician)
+    "congress_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("trade_id", pa.string()),
+            ("politician_name", pa.string()),
+            ("politician_party", pa.string()),
+            ("politician_state", pa.string()),
+            ("politician_chamber", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("disclosure_date", pa.date32()),
+            ("amount_min", pa.float64()),
+            ("amount_max", pa.float64()),
+            ("asset_type", pa.string()),
+            ("is_late", pa.bool_()),
+        ]
+    ),
+    "insider_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("insider_name", pa.string()),
+            ("insider_title", pa.string()),
+            ("insider_relationship", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("shares", pa.float64()),
+            ("price", pa.float64()),
+            ("value", pa.float64()),
+            ("shares_owned_after", pa.float64()),
+            ("filing_date", pa.date32()),
+        ]
+    ),
+    "insider_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("period", pa.string()),
+            ("period_start", pa.date32()),
+            ("period_end", pa.date32()),
+            ("sector", pa.string()),
+            ("total_buys", pa.int64()),
+            ("total_sells", pa.int64()),
+            ("buy_value", pa.float64()),
+            ("sell_value", pa.float64()),
+            ("net_value", pa.float64()),
+            ("top_buyers_json", pa.string()),
+            ("top_sellers_json", pa.string()),
+        ]
+    ),
+    "institution_holdings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("institution_name", pa.string()),
+            ("institution_cik", pa.string()),
+            ("holding_symbol", pa.string()),
+            ("shares", pa.float64()),
+            ("value", pa.float64()),
+            ("quarter_end", pa.date32()),
+            ("change_shares", pa.float64()),
+            ("change_pct", pa.float64()),
+            ("portfolio_pct", pa.float64()),
+            ("filing_date", pa.date32()),
+        ]
+    ),
+    "institution_activity": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("filing_id", pa.string()),
+            ("institution_name", pa.string()),
+            ("institution_cik", pa.string()),
+            ("filing_date", pa.date32()),
+            ("quarter_end", pa.date32()),
+            ("total_value", pa.float64()),
+            ("holdings_count", pa.int64()),
+            ("new_positions", pa.int64()),
+            ("closed_positions", pa.int64()),
+            ("increased_positions", pa.int64()),
+            ("decreased_positions", pa.int64()),
+        ]
+    ),
+    "politician_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("trade_id", pa.string()),
+            ("politician_id", pa.string()),
+            ("politician_name", pa.string()),
+            ("politician_party", pa.string()),
+            ("trade_type", pa.string()),
+            ("trade_date", pa.date32()),
+            ("disclosure_date", pa.date32()),
+            ("amount_min", pa.float64()),
+            ("amount_max", pa.float64()),
+            ("asset_description", pa.string()),
+            ("comment", pa.string()),
+        ]
+    ),
+    # V4: Market Analytics (Analyst, Fundamentals, Events, Indicators)
+    "analyst_ratings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("rating_id", pa.string()),
+            ("analyst_name", pa.string()),
+            ("analyst_firm", pa.string()),
+            ("rating", pa.string()),
+            ("rating_prior", pa.string()),
+            ("price_target", pa.float64()),
+            ("price_target_prior", pa.float64()),
+            ("rating_date", pa.date32()),
+            ("action", pa.string()),
+        ]
+    ),
+    "stock_fundamentals": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("snapshot_date", pa.date32()),
+            ("company_name", pa.string()),
+            ("sector", pa.string()),
+            ("industry", pa.string()),
+            ("market_cap", pa.float64()),
+            ("pe_ratio", pa.float64()),
+            ("eps", pa.float64()),
+            ("dividend_yield", pa.float64()),
+            ("beta", pa.float64()),
+            ("shares_outstanding", pa.float64()),
+            ("float_shares", pa.float64()),
+            ("avg_volume", pa.float64()),
+            ("price", pa.float64()),
+            ("high_52w", pa.float64()),
+            ("low_52w", pa.float64()),
+        ]
+    ),
+    "economic_events": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("event_name", pa.string()),
+            ("event_type", pa.string()),
+            ("event_date", pa.date32()),
+            ("event_time", pa.string()),
+            ("country", pa.string()),
+            ("importance", pa.string()),
+            ("actual", pa.string()),
+            ("forecast", pa.string()),
+            ("previous", pa.string()),
+            ("source_url", pa.string()),
+        ]
+    ),
+    "market_indicators": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("indicator_name", pa.string()),
+            ("indicator_date", pa.date32()),
+            ("indicator_time", pa.string()),
+            ("value", pa.float64()),
+            ("value_prior", pa.float64()),
+            ("change", pa.float64()),
+            ("change_pct", pa.float64()),
+            ("percentile", pa.float64()),
+            ("metadata_json", pa.string()),
+        ]
+    ),
+    # V5: Options Deep Data
+    "option_history": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("occ_symbol", pa.string()),
+            ("history_date", pa.date32()),
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("implied_volatility", pa.float64()),
+            ("delta", pa.float64()),
+            ("gamma", pa.float64()),
+            ("theta", pa.float64()),
+            ("vega", pa.float64()),
+        ]
+    ),
+    "option_chain_snapshot": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("snapshot_ts", pa.timestamp("us", tz="UTC")),
+            ("underlying", pa.string()),
+            ("expiry", pa.date32()),
+            ("chain_json", pa.string()),
+            ("total_call_volume", pa.float64()),
+            ("total_put_volume", pa.float64()),
+            ("total_call_oi", pa.float64()),
+            ("total_put_oi", pa.float64()),
+            ("atm_iv", pa.float64()),
+        ]
+    ),
+    "volume_profile": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("occ_symbol", pa.string()),
+            ("profile_date", pa.date32()),
+            ("price_level", pa.float64()),
+            ("volume", pa.float64()),
+            ("cumulative_volume", pa.float64()),
+            ("pct_of_total", pa.float64()),
+        ]
+    ),
+    "group_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("group_name", pa.string()),
+            ("group_type", pa.string()),
+            ("flow_date", pa.date32()),
+            ("expiry", pa.date32()),
+            ("call_gex", pa.float64()),
+            ("put_gex", pa.float64()),
+            ("net_gex", pa.float64()),
+            ("call_dex", pa.float64()),
+            ("put_dex", pa.float64()),
+            ("net_premium", pa.float64()),
+        ]
+    ),
+    # V6: ETF Deep Data
+    "etf_metadata": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("snapshot_date", pa.date32()),
+            ("fund_name", pa.string()),
+            ("issuer", pa.string()),
+            ("expense_ratio", pa.float64()),
+            ("aum", pa.float64()),
+            ("avg_volume", pa.float64()),
+            ("inception_date", pa.date32()),
+            ("asset_class", pa.string()),
+            ("category", pa.string()),
+            ("index_tracked", pa.string()),
+            ("leverage_factor", pa.float64()),
+        ]
+    ),
+    "etf_sector_weights": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("weight_date", pa.date32()),
+            ("weight_type", pa.string()),
+            ("weight_name", pa.string()),
+            ("weight_pct", pa.float64()),
+            ("change_pct", pa.float64()),
+        ]
+    ),
+}
+
+
+# Default schema for unknown feeds
+DEFAULT_SCHEMA = pa.schema(
+    [
+        ("event_id", pa.string()),
+        ("provider", pa.string()),
+        ("feed", pa.string()),
+        ("instrument_type", pa.string()),
+        ("instrument_key", pa.string()),
+        ("symbol", pa.string()),
+        ("ts_event", pa.timestamp("us", tz="UTC")),
+        ("ts_ingest", pa.timestamp("us", tz="UTC")),
+        ("ts_available", pa.timestamp("us", tz="UTC")),
+        ("source", pa.string()),
+        ("schema_version", pa.string()),
+        ("quality_flags", pa.list_(pa.string())),
+        ("payload_json", pa.string()),  # Store payload as JSON string
+    ]
+)
+
+
+def get_silver_schema(feed: str) -> pa.Schema:
+    """Get the canonical Silver schema for a feed."""
+    return SILVER_SCHEMAS.get(feed, DEFAULT_SCHEMA)
+
+
+__all__ = ["DEFAULT_SCHEMA", "SILVER_SCHEMAS", "get_silver_schema"]
+
+
+
+================================================
 FILE: heber/schemas/tests_additional.py
 ================================================
 """Tests for Additional Dataset Schemas (PRD §57)."""
@@ -34319,7 +35946,7 @@ FILE: heber/sdk/client.py
 Provides safe, point-in-time correct access to Silver and Gold datasets.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34367,11 +35994,11 @@ class HeberClient:
         """Initialize HeberClient.
 
         Args:
-            catalog_url: URL of the Catalog API. Defaults to settings.
+            catalog_url: URL of the Catalog API. Defaults to settings.catalog_url.
             data_root: Root path for data. Defaults to settings.
             api_key: API key for authentication.
         """
-        self.catalog_url = catalog_url or f"http://localhost:{settings.api_port}/api/v1"
+        self.catalog_url = catalog_url or settings.catalog_url
         self.data_root = data_root or settings.data_root
         self.api_key = api_key
         self._http_client: httpx.Client | None = None
@@ -34771,7 +36398,7 @@ class HeberClient:
             )
             partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             file_path = partition_path / f"part-{ts}.parquet"
 
             # Drop temporary dt column
@@ -45002,7 +46629,7 @@ Path: bronze/provider={}/feed={}/dt={}/hour={}/
 import gzip
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -45019,7 +46646,7 @@ class BronzeWriter:
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
         self.buffer_counts: dict[str, int] = defaultdict(int)
-        self.last_flush: datetime = datetime.utcnow()
+        self.last_flush: datetime = datetime.now(UTC)
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -45033,7 +46660,7 @@ class BronzeWriter:
         base.mkdir(parents=True, exist_ok=True)
 
         # Use timestamp-based filename for uniqueness
-        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"events-{ts}.jsonl.gz"
 
     async def write(self, envelope: EventEnvelope) -> None:
@@ -45047,7 +46674,7 @@ class BronzeWriter:
 
     async def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         for partition_key, events in list(self.buffers.items()):
@@ -45104,8 +46731,9 @@ Runs periodically to prevent "small file problem."
 """
 
 import asyncio
+import os
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -45125,14 +46753,40 @@ class Compactor:
     def __init__(self):
         self.running = False
 
+    def _acquire_partition_lock(self, partition_path: Path) -> Path | None:
+        """Acquire an exclusive per-partition lock file."""
+        lock_path = partition_path / ".compaction.lock"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                lock_file.write(f"pid={os.getpid()} ts={datetime.now(UTC).isoformat()}\n")
+            return lock_path
+        except FileExistsError:
+            logger.info("Skipping partition compaction; lock already present", partition=str(partition_path))
+            return None
+
+    def _release_partition_lock(self, lock_path: Path | None) -> None:
+        """Release a previously acquired partition lock file."""
+        if not lock_path:
+            return
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("Failed to release compaction lock", lock_path=str(lock_path), error=str(e))
+
     async def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
         Returns number of files merged.
         """
+        lock_path = self._acquire_partition_lock(partition_path)
+        if lock_path is None:
+            return 0
+
         parquet_files = sorted(partition_path.glob("*.parquet"))
 
         if len(parquet_files) <= 1:
+            self._release_partition_lock(lock_path)
             return 0
 
         # Check total size
@@ -45142,6 +46796,7 @@ class Compactor:
         small_files = [f for f in parquet_files if f.stat().st_size < TARGET_FILE_SIZE]
 
         if len(small_files) <= 1:
+            self._release_partition_lock(lock_path)
             return 0
 
         logger.info(
@@ -45152,29 +46807,31 @@ class Compactor:
         )
 
         try:
-            # Read all small files
-            tables = []
-            for f in small_files:
-                table = pq.read_table(f)
-                tables.append(table)
+            # Stream files into a single temp parquet, then atomically promote.
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+            merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
+            temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
+            writer = None
+            merged_rows = 0
+            try:
+                for source_file in small_files:
+                    table = pq.read_table(source_file)
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            temp_path,
+                            table.schema,
+                            compression="snappy",
+                        )
+                    writer.write_table(table, row_group_size=250_000)
+                    merged_rows += table.num_rows
+            finally:
+                if writer is not None:
+                    writer.close()
 
-            # Concatenate
-            import pyarrow as pa
+            # Atomic file promotion once the merge succeeds.
+            temp_path.replace(merged_path)
 
-            merged_table = pa.concat_tables(tables)
-
-            # Write merged file
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            merged_path = partition_path / f"compacted-{ts}.parquet"
-
-            pq.write_table(
-                merged_table,
-                merged_path,
-                compression="snappy",
-                row_group_size=250_000,
-            )
-
-            # Delete original small files
+            # Delete source files only after merged output is durable.
             for f in small_files:
                 f.unlink()
 
@@ -45183,12 +46840,15 @@ class Compactor:
                 partition=str(partition_path),
                 merged_files=len(small_files),
                 output_file=str(merged_path),
-                rows=merged_table.num_rows,
+                rows=merged_rows,
             )
 
             return len(small_files)
 
         except Exception as e:
+            # Best-effort cleanup: never delete source files on failed compaction.
+            for stale_temp in partition_path.glob(".compacted-*.tmp"):
+                stale_temp.unlink(missing_ok=True)
             logger.error(
                 "Compaction failed",
                 partition=str(partition_path),
@@ -45196,6 +46856,8 @@ class Compactor:
                 exc_info=True,
             )
             return 0
+        finally:
+            self._release_partition_lock(lock_path)
 
     async def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
@@ -45277,6 +46939,7 @@ import asyncio
 import json
 import signal
 from datetime import UTC, datetime
+from typing import Any
 
 import redis.asyncio as redis
 import structlog
@@ -45375,11 +47038,72 @@ class EventConsumer:
             else:
                 raise
 
-    async def process_event(self, event_data: dict) -> bool:
-        """Process a single event through Bronze and Silver layers.
+        recovered = await self._recover_pending_messages()
+        if recovered > 0:
+            logger.info(
+                "Recovered pending messages",
+                recovered=recovered,
+                stream=settings.redis_stream_name,
+                group=settings.redis_consumer_group,
+            )
 
-        Returns True if successful, False otherwise.
-        """
+    @staticmethod
+    def _decode_string(value: Any) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def _serialize_message_data(self, message_data: dict) -> str:
+        """Serialize Redis stream payload for DLQ auditing."""
+        normalized: dict[str, str] = {}
+        for key, value in message_data.items():
+            key_str = self._decode_string(key)
+            if isinstance(value, bytes):
+                normalized[key_str] = value.decode("utf-8", errors="replace")
+            elif isinstance(value, dict | list):
+                normalized[key_str] = json.dumps(value, default=str)
+            else:
+                normalized[key_str] = str(value)
+        return json.dumps(normalized, default=str)
+
+    async def _send_to_dlq(
+        self,
+        message_id: str | bytes,
+        message_data: dict,
+        error: str,
+        attempts: int,
+    ) -> bool:
+        """Write failed message details to DLQ stream."""
+        try:
+            dlq_event = {
+                "source_stream": settings.redis_stream_name,
+                "source_group": settings.redis_consumer_group,
+                "source_message_id": self._decode_string(message_id),
+                "consumer_name": self.consumer_name,
+                "attempts": str(attempts),
+                "error": error,
+                "failed_at": datetime.now(UTC).isoformat(),
+                "payload": self._serialize_message_data(message_data),
+            }
+            dlq_id = await self.redis.xadd(settings.redis_dlq_stream_name, dlq_event)
+            logger.warning(
+                "Message sent to DLQ",
+                dlq_stream=settings.redis_dlq_stream_name,
+                source_message_id=dlq_event["source_message_id"],
+                dlq_message_id=self._decode_string(dlq_id),
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "Failed to write message to DLQ",
+                source_message_id=self._decode_string(message_id),
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+
+    async def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
+        """Process an event one time and return `(success, error)`."""
         try:
             # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
             payload_str = (
@@ -45415,7 +47139,7 @@ class EventConsumer:
                 feed=envelope.feed,
                 instrument_key=envelope.instrument_key,
             )
-            return True
+            return True, None
 
         except Exception as e:
             logger.error(
@@ -45424,7 +47148,115 @@ class EventConsumer:
                 event_data=str(event_data)[:200],
                 exc_info=True,
             )
-            return False
+            return False, str(e)
+
+    async def process_event(self, event_data: dict) -> bool:
+        """Process a single event through Bronze and Silver layers.
+
+        Returns True if successful, False otherwise.
+        """
+        success, _ = await self._process_event_once(event_data)
+        return success
+
+    async def _process_with_retry(self, event_data: dict) -> tuple[bool, str, int]:
+        """Process message with retry/backoff before DLQ."""
+        max_retries = max(1, settings.redis_process_max_retries)
+        backoff = max(0.0, settings.redis_retry_backoff_seconds)
+        last_error = "unknown_error"
+
+        for attempt in range(1, max_retries + 1):
+            success, error = await self._process_event_once(event_data)
+            if success:
+                return True, "", attempt
+
+            if error:
+                last_error = error
+
+            if attempt < max_retries and backoff > 0:
+                await asyncio.sleep(backoff * attempt)
+
+        return False, last_error, max_retries
+
+    async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
+        """Process a list of stream messages and return `(acked_ids, failed_ids)`."""
+        processed_ids: list[str] = []
+        failed_ids: list[str] = []
+
+        for message_id, message_data in stream_messages:
+            success, error, attempts = await self._process_with_retry(message_data)
+            message_id_str = self._decode_string(message_id)
+            if success:
+                processed_ids.append(message_id_str)
+                continue
+
+            moved_to_dlq = await self._send_to_dlq(
+                message_id=message_id,
+                message_data=message_data,
+                error=error,
+                attempts=attempts,
+            )
+            if moved_to_dlq:
+                # Ack after durable DLQ write so poison messages don't block group progress.
+                processed_ids.append(message_id_str)
+            else:
+                failed_ids.append(message_id_str)
+
+        return processed_ids, failed_ids
+
+    async def _recover_pending_messages(self) -> int:
+        """Claim and process idle pending messages for this consumer group."""
+        pending = await self.redis.xpending_range(
+            settings.redis_stream_name,
+            settings.redis_consumer_group,
+            "-",
+            "+",
+            settings.redis_claim_batch_size,
+            idle=settings.redis_claim_idle_ms,
+        )
+        if not pending:
+            return 0
+
+        message_ids: list[str] = []
+        for entry in pending:
+            if isinstance(entry, dict):
+                msg_id = entry.get("message_id") or entry.get(b"message_id")
+                if msg_id is not None:
+                    message_ids.append(self._decode_string(msg_id))
+
+        if not message_ids:
+            return 0
+
+        claimed = await self.redis.xclaim(
+            settings.redis_stream_name,
+            settings.redis_consumer_group,
+            self.consumer_name,
+            settings.redis_claim_idle_ms,
+            message_ids,
+        )
+        if not claimed:
+            return 0
+
+        ack_ids, failed_ids = await self._process_stream_messages(claimed)
+
+        # Flush to disk before acking claimed messages.
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
+
+        if ack_ids:
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                *ack_ids,
+            )
+
+        if failed_ids:
+            logger.warning(
+                "Pending messages could not be recovered",
+                failed_count=len(failed_ids),
+                failed_ids=failed_ids[:10],
+            )
+
+        return len(ack_ids)
 
     def _validate_payload_schema(self, envelope: EventEnvelope) -> None:
         """Warn on missing/unknown payload keys for selected feeds."""
@@ -45497,17 +47329,13 @@ class EventConsumer:
             return
 
         # Collect successfully processed message IDs
-        processed_ids: list[bytes] = []
-        failed_ids: list[bytes] = []
+        processed_ids: list[str] = []
+        failed_ids: list[str] = []
 
         for _stream_name, stream_messages in messages:
-            for message_id, message_data in stream_messages:
-                success = await self.process_event(message_data)
-                if success:
-                    processed_ids.append(message_id)
-                else:
-                    failed_ids.append(message_id)
-                    logger.warning("Event failed, needs DLQ", message_id=message_id)
+            ack_ids, stream_failed_ids = await self._process_stream_messages(stream_messages)
+            processed_ids.extend(ack_ids)
+            failed_ids.extend(stream_failed_ids)
 
         # Flush to disk BEFORE acknowledging
         await self.bronze_writer.flush_if_needed()
@@ -45521,6 +47349,13 @@ class EventConsumer:
                 *processed_ids,
             )
             logger.debug("Acknowledged batch", count=len(processed_ids))
+
+        if failed_ids:
+            logger.warning(
+                "Messages left pending after DLQ failures",
+                failed_count=len(failed_ids),
+                failed_ids=failed_ids[:10],
+            )
 
     async def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""
@@ -45555,616 +47390,40 @@ if __name__ == "__main__":
 ================================================
 FILE: heber/writer/hotstore.py
 ================================================
-"""Hot Store sync strategy for Heber per PRD §12.10.
+"""Compatibility facade for legacy writer.hotstore imports.
 
-Provides:
-- ClickHouse integration for low-latency queries
-- Sync from event bus or Silver partitions
-- Rolling window retention (TTL managed by ClickHouse)
-- Lag monitoring and alerting
-- Silver fallback for missing data
+Hot Store sync/read/write logic now lives in `heber.hotstore.sync`.
+This module preserves the prior import path while using the unified
+implementation and `clickhouse-connect` client stack.
 """
 
-import asyncio
-import os
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from enum import Enum
-from typing import Any, Protocol
+from __future__ import annotations
 
-import structlog
-from prometheus_client import Counter, Gauge, Histogram
-
-logger = structlog.get_logger(__name__)
-
-
-# Prometheus metrics per PRD §12.10.1
-hot_store_lag_seconds = Gauge(
-    "heber_hot_store_lag_seconds",
-    "Hot Store lag behind Silver in seconds",
-    ["dataset"],
+from heber.hotstore.sync import (
+    HotStoreReader,
+    HotStoreSync,
+    HotStoreSyncConfig,
+    HotStoreTable,
+    QueryType,
+    SyncState,
+    create_hot_store_syncer,
 )
 
-hot_store_sync_failures = Counter(
-    "heber_hot_store_sync_failures_total",
-    "Hot Store sync failure count",
-    ["dataset", "error_type"],
-)
-
-hot_store_sync_success = Counter(
-    "heber_hot_store_sync_success_total",
-    "Hot Store sync success count",
-    ["dataset"],
-)
-
-hot_store_row_count = Gauge(
-    "heber_hot_store_row_count",
-    "Row count in Hot Store",
-    ["dataset"],
-)
-
-silver_row_count = Gauge(
-    "heber_silver_row_count",
-    "Row count in Silver for comparison",
-    ["dataset"],
-)
-
-hot_store_sync_duration = Histogram(
-    "heber_hot_store_sync_duration_seconds",
-    "Time to sync batch to Hot Store",
-    ["dataset"],
-    buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60],
-)
-
-
-class QueryType(str, Enum):
-    """Query types with different Hot Store behavior per PRD §12.10.1."""
-
-    REALTIME_DASHBOARD = "realtime_dashboard"  # Hot Store only
-    STRATEGY_SIGNALS = "strategy_signals"  # Hot Store + Silver fallback
-    BACKTEST_RESEARCH = "backtest_research"  # Silver only
-
-
-class HotStoreTable(str, Enum):
-    """ClickHouse Hot Store tables per PRD §12.10."""
-
-    QUOTES = "quotes_hot"
-    TRADES = "trades_hot"
-    BARS = "bars_hot"
-
-
-@dataclass
-class HotStoreSyncConfig:
-    """Hot Store sync configuration per PRD §12.10."""
-
-    # ClickHouse connection
-    clickhouse_host: str = "localhost"
-    clickhouse_port: int = 9000
-    clickhouse_database: str = "heber"
-    clickhouse_user: str = "default"
-    clickhouse_password: str = ""
-
-    # Sync settings
-    source: str = "event_bus"  # "event_bus" or "silver"
-    rolling_window_days: int = 7  # Default retention window
-
-    # TTL per PRD §12.10.1
-    quotes_ttl_days: int = 7
-    trades_ttl_days: int = 7
-    bars_ttl_days: int = 30
-
-    # Lag SLA
-    max_lag_seconds: float = 300.0  # 5 minutes per PRD
-
-    # Sync batching
-    batch_size: int = 10000
-    sync_interval_seconds: float = 30.0
-
-
-@dataclass
-class SyncState:
-    """Tracks sync state per dataset."""
-
-    dataset: str
-    last_sync: datetime | None = None
-    last_event_ts: datetime | None = None
-    rows_synced: int = 0
-    errors: int = 0
-
-
-class ClickHouseClient(Protocol):
-    """Protocol for ClickHouse client."""
-
-    async def execute(self, query: str, params: dict | None = None) -> Any: ...
-    async def insert(self, table: str, data: list[dict]) -> int: ...
-
-
-class HotStoreWriter:
-    """Writes data to Hot Store (ClickHouse) per PRD §12.10."""
-
-    def __init__(
-        self,
-        config: HotStoreSyncConfig | None = None,
-        client: ClickHouseClient | None = None,
-    ):
-        self.config = config or HotStoreSyncConfig()
-        self._client = client
-        self._sync_states: dict[str, SyncState] = {}
-
-    def get_client(self) -> ClickHouseClient:
-        """Get or create ClickHouse client."""
-        if self._client is None:
-            # Lazy import to avoid hard dependency
-            try:
-                from clickhouse_driver import Client as CHClient
-
-                self._client = CHClient(
-                    host=self.config.clickhouse_host,
-                    port=self.config.clickhouse_port,
-                    database=self.config.clickhouse_database,
-                    user=self.config.clickhouse_user,
-                    password=self.config.clickhouse_password,
-                )
-            except ImportError:
-                logger.warning("clickhouse_driver not available, using mock")
-                self._client = MockClickHouseClient()
-        return self._client
-
-    def get_table_for_dataset(self, dataset: str) -> HotStoreTable:
-        """Map dataset name to Hot Store table."""
-        if "quote" in dataset.lower():
-            return HotStoreTable.QUOTES
-        elif "trade" in dataset.lower():
-            return HotStoreTable.TRADES
-        else:
-            return HotStoreTable.BARS
-
-    def get_ttl_days(self, table: HotStoreTable) -> int:
-        """Get TTL days for table per PRD §12.10.1."""
-        if table == HotStoreTable.QUOTES:
-            return self.config.quotes_ttl_days
-        elif table == HotStoreTable.TRADES:
-            return self.config.trades_ttl_days
-        else:
-            return self.config.bars_ttl_days
-
-    async def ensure_table(self, table: HotStoreTable) -> None:
-        """Create table if not exists with TTL."""
-        client = self.get_client()
-        ttl_days = self.get_ttl_days(table)
-
-        # Table creation DDL per PRD requirements
-        ddl = f"""
-        CREATE TABLE IF NOT EXISTS {table.value} (
-            event_id String,
-            symbol String,
-            ts_event DateTime64(9, 'UTC'),
-            ts_ingest DateTime64(9, 'UTC'),
-            ts_available DateTime64(9, 'UTC'),
-            provider String,
-            data String,  -- JSON payload
-            dt Date MATERIALIZED toDate(ts_event)
-        )
-        ENGINE = ReplacingMergeTree()
-        PARTITION BY dt
-        ORDER BY (symbol, ts_event, event_id)
-        TTL dt + INTERVAL {ttl_days} DAY DELETE
-        SETTINGS index_granularity = 8192
-        """
-
-        try:
-            await client.execute(ddl)
-            logger.info("table_ensured", table=table.value, ttl_days=ttl_days)
-        except Exception as e:
-            logger.error("table_creation_failed", table=table.value, error=str(e))
-            raise
-
-    async def write_batch(
-        self,
-        dataset: str,
-        records: list[dict[str, Any]],
-    ) -> int:
-        """Write a batch of records to Hot Store.
-
-        Args:
-            dataset: Dataset name
-            records: Records to write
-
-        Returns:
-            Number of records written
-        """
-        if not records:
-            return 0
-
-        table = self.get_table_for_dataset(dataset)
-        client = self.get_client()
-
-        start_time = asyncio.get_event_loop().time()
-
-        try:
-            # Prepare records for ClickHouse
-            prepared = []
-            for record in records:
-                prepared.append(
-                    {
-                        "event_id": record.get("event_id", ""),
-                        "symbol": record.get("symbol", ""),
-                        "ts_event": record.get("ts_event"),
-                        "ts_ingest": record.get("ts_ingest"),
-                        "ts_available": record.get("ts_available"),
-                        "provider": record.get("provider", ""),
-                        "data": str(record.get("data", {})),
-                    }
-                )
-
-            # Insert batch
-            rows_written = await client.insert(table.value, prepared)
-
-            # Update metrics
-            duration = asyncio.get_event_loop().time() - start_time
-            hot_store_sync_duration.labels(dataset=dataset).observe(duration)
-            hot_store_sync_success.labels(dataset=dataset).inc()
-
-            # Update sync state
-            if dataset not in self._sync_states:
-                self._sync_states[dataset] = SyncState(dataset=dataset)
-            state = self._sync_states[dataset]
-            state.last_sync = datetime.now(UTC)
-            state.rows_synced += rows_written
-
-            logger.info(
-                "batch_written",
-                dataset=dataset,
-                rows=rows_written,
-                duration_ms=duration * 1000,
-            )
-
-            return rows_written
-
-        except Exception as e:
-            hot_store_sync_failures.labels(
-                dataset=dataset,
-                error_type=type(e).__name__,
-            ).inc()
-            logger.error("write_failed", dataset=dataset, error=str(e))
-            raise
-
-    async def get_row_count(self, dataset: str) -> int:
-        """Get current row count in Hot Store."""
-        table = self.get_table_for_dataset(dataset)
-        client = self.get_client()
-
-        try:
-            result = await client.execute(f"SELECT count() FROM {table.value}")
-            count = result[0][0] if result else 0
-            hot_store_row_count.labels(dataset=dataset).set(count)
-            return count
-        except Exception as e:
-            logger.error("row_count_failed", dataset=dataset, error=str(e))
-            return 0
-
-
-class HotStoreSyncer:
-    """Syncs data to Hot Store from event bus or Silver per PRD §12.10."""
-
-    def __init__(
-        self,
-        writer: HotStoreWriter,
-        config: HotStoreSyncConfig | None = None,
-    ):
-        self.writer = writer
-        self.config = config or HotStoreSyncConfig()
-        self._running = False
-        self._last_sync_time: dict[str, datetime] = {}
-
-    async def sync_from_silver(
-        self,
-        dataset: str,
-        silver_path: str,
-        since: datetime | None = None,
-    ) -> int:
-        """Sync data from Silver partitions to Hot Store.
-
-        Args:
-            dataset: Dataset name
-            silver_path: Path to Silver directory
-            since: Only sync records after this timestamp
-
-        Returns:
-            Number of records synced
-        """
-        from pathlib import Path
-
-        silver_dir = Path(silver_path) / dataset
-        if not silver_dir.exists():
-            logger.warning("silver_path_not_found", path=str(silver_dir))
-            return 0
-
-        # Calculate window
-        if since is None:
-            since = datetime.now(UTC) - timedelta(days=self.config.rolling_window_days)
-
-        total_synced = 0
-
-        # Find partitions within window
-        for dt_dir in silver_dir.glob("dt=*"):
-            dt_str = dt_dir.name.replace("dt=", "")
-            try:
-                partition_date = datetime.fromisoformat(dt_str)
-                if partition_date.replace(tzinfo=UTC) < since:
-                    continue
-            except ValueError:
-                continue
-
-            # Read and sync each partition
-            records = self._read_partition(dt_dir)
-            if records:
-                synced = await self.writer.write_batch(dataset, records)
-                total_synced += synced
-
-        return total_synced
-
-    def _read_partition(self, partition_path) -> list[dict[str, Any]]:
-        """Read records from a partition."""
-        try:
-            import pyarrow.parquet as pq
-
-            records = []
-            for pq_file in partition_path.glob("*.parquet"):
-                table = pq.read_table(str(pq_file))
-                records.extend(table.to_pylist())
-            return records
-        except ImportError:
-            logger.warning("pyarrow_not_available")
-            return []
-        except Exception as e:
-            logger.error("partition_read_failed", path=str(partition_path), error=str(e))
-            return []
-
-    def calculate_lag(self, dataset: str, latest_event_ts: datetime) -> float:
-        """Calculate lag in seconds.
-
-        Per PRD §12.10.1: Hot Store lags Silver by ≤5 minutes
-        """
-        now = datetime.now(UTC)
-        lag = (now - latest_event_ts).total_seconds()
-        hot_store_lag_seconds.labels(dataset=dataset).set(lag)
-
-        if lag > self.config.max_lag_seconds:
-            logger.warning(
-                "hot_store_lag_exceeded",
-                dataset=dataset,
-                lag_seconds=lag,
-                max_lag=self.config.max_lag_seconds,
-            )
-
-        return lag
-
-    async def run_sync_loop(
-        self,
-        datasets: list[str],
-        silver_base_path: str,
-    ) -> None:
-        """Run continuous sync loop.
-
-        Args:
-            datasets: List of datasets to sync
-            silver_base_path: Base path to Silver storage
-        """
-        self._running = True
-
-        # Ensure tables exist
-        for dataset in datasets:
-            table = self.writer.get_table_for_dataset(dataset)
-            await self.writer.ensure_table(table)
-
-        while self._running:
-            for dataset in datasets:
-                try:
-                    # Get last sync time
-                    since = self._last_sync_time.get(dataset)
-
-                    # Sync from Silver
-                    synced = await self.sync_from_silver(
-                        dataset,
-                        silver_base_path,
-                        since,
-                    )
-
-                    if synced > 0:
-                        self._last_sync_time[dataset] = datetime.now(UTC)
-                        logger.info("sync_complete", dataset=dataset, rows=synced)
-
-                except Exception as e:
-                    logger.error("sync_failed", dataset=dataset, error=str(e))
-
-            await asyncio.sleep(self.config.sync_interval_seconds)
-
-    def stop(self) -> None:
-        """Stop the sync loop."""
-        self._running = False
-
-
-class HotStoreReader:
-    """Reads from Hot Store with Silver fallback per PRD §12.10.1."""
-
-    def __init__(
-        self,
-        writer: HotStoreWriter,
-        silver_base_path: str,
-    ):
-        self.writer = writer
-        self.silver_base_path = silver_base_path
-
-    async def query(
-        self,
-        dataset: str,
-        query_type: QueryType,
-        **filters,
-    ) -> list[dict[str, Any]]:
-        """Query data based on query type per PRD §12.10.1.
-
-        Staleness Handling:
-        - REALTIME_DASHBOARD: Hot Store only (accepts staleness)
-        - STRATEGY_SIGNALS: Hot Store with Silver fallback
-        - BACKTEST_RESEARCH: Silver only (never Hot Store)
-        """
-        if query_type == QueryType.BACKTEST_RESEARCH:
-            # Silver only - never use Hot Store
-            return self._query_silver(dataset, **filters)
-
-        elif query_type == QueryType.REALTIME_DASHBOARD:
-            # Hot Store only - accept staleness
-            return await self._query_hot_store(dataset, **filters)
-
-        else:  # STRATEGY_SIGNALS
-            # Hot Store with Silver fallback
-            results = await self._query_hot_store(dataset, **filters)
-
-            # Check for gaps and fallback to Silver
-            if self._has_gaps(results):
-                silver_results = self._query_silver(dataset, **filters)
-                results = self._merge_results(results, silver_results)
-
-            return results
-
-    async def _query_hot_store(
-        self,
-        dataset: str,
-        **filters,
-    ) -> list[dict[str, Any]]:
-        """Query Hot Store (ClickHouse)."""
-        table = self.writer.get_table_for_dataset(dataset)
-        client = await self.writer.get_client()
-
-        # Build query
-        where_clauses = []
-        if "symbol" in filters:
-            where_clauses.append(f"symbol = '{filters['symbol']}'")
-        if "start_ts" in filters:
-            where_clauses.append(f"ts_event >= '{filters['start_ts']}'")
-        if "end_ts" in filters:
-            where_clauses.append(f"ts_event <= '{filters['end_ts']}'")
-
-        where = " AND ".join(where_clauses) if where_clauses else "1=1"
-        query = f"SELECT * FROM {table.value} WHERE {where} ORDER BY ts_event"
-
-        try:
-            result = await client.execute(query)
-            return [dict(row) for row in result] if result else []
-        except Exception as e:
-            logger.error("hot_store_query_failed", error=str(e))
-            return []
-
-    def _query_silver(
-        self,
-        dataset: str,
-        **filters,
-    ) -> list[dict[str, Any]]:
-        """Query Silver (Parquet files)."""
-        # Read from Silver partitions
-        from pathlib import Path
-
-        silver_dir = Path(self.silver_base_path) / dataset
-        records = []
-
-        for dt_dir in silver_dir.glob("dt=*"):
-            try:
-                import pyarrow.parquet as pq
-
-                for pq_file in dt_dir.glob("**/*.parquet"):
-                    table = pq.read_table(str(pq_file))
-                    records.extend(table.to_pylist())
-            except Exception:
-                pass
-
-        # Apply filters
-        if "symbol" in filters:
-            records = [r for r in records if r.get("symbol") == filters["symbol"]]
-        if "start_ts" in filters:
-            records = [r for r in records if r.get("ts_event") >= filters["start_ts"]]
-        if "end_ts" in filters:
-            records = [r for r in records if r.get("ts_event") <= filters["end_ts"]]
-
-        return records
-
-    def _has_gaps(self, results: list[dict]) -> bool:
-        """Check if results have gaps that need Silver fallback."""
-        if not results:
-            return True
-        # Simple gap detection - could be enhanced
-        return len(results) == 0
-
-    def _merge_results(
-        self,
-        hot_results: list[dict],
-        silver_results: list[dict],
-    ) -> list[dict]:
-        """Merge Hot Store and Silver results, deduping by event_id."""
-        seen_ids = {r.get("event_id") for r in hot_results}
-        merged = list(hot_results)
-
-        for record in silver_results:
-            if record.get("event_id") not in seen_ids:
-                merged.append(record)
-                seen_ids.add(record.get("event_id"))
-
-        return sorted(merged, key=lambda r: r.get("ts_event", ""))
-
-
-class MockClickHouseClient:
-    """Mock ClickHouse client for development without ClickHouse."""
-
-    def __init__(self):
-        self._tables: dict[str, list[dict]] = {}
-
-    async def execute(self, query: str, params: dict | None = None) -> Any:  # noqa: ARG002
-        """Execute a query."""
-        if query.strip().upper().startswith("CREATE"):
-            return None
-        if query.strip().upper().startswith("SELECT COUNT"):
-            table = query.split("FROM")[1].strip().split()[0]
-            return [[len(self._tables.get(table, []))]]
-        if query.strip().upper().startswith("SELECT"):
-            table = query.split("FROM")[1].strip().split()[0]
-            return self._tables.get(table, [])
-        return None
-
-    async def insert(self, table: str, data: list[dict]) -> int:
-        """Insert data."""
-        if table not in self._tables:
-            self._tables[table] = []
-        self._tables[table].extend(data)
-        return len(data)
-
-
-# Factory functions
-
-
-def create_hot_store_syncer(
-    silver_base_path: str = "/data/heber/silver",
-    config: HotStoreSyncConfig | None = None,
-) -> HotStoreSyncer:
-    """Create a Hot Store syncer.
-
-    Reads configuration from environment:
-    - CLICKHOUSE_HOST
-    - CLICKHOUSE_PORT
-    - CLICKHOUSE_DATABASE
-    - CLICKHOUSE_USER
-    - CLICKHOUSE_PASSWORD
-    """
-    if config is None:
-        config = HotStoreSyncConfig(
-            clickhouse_host=os.environ.get("CLICKHOUSE_HOST", "localhost"),
-            clickhouse_port=int(os.environ.get("CLICKHOUSE_PORT", "9000")),
-            clickhouse_database=os.environ.get("CLICKHOUSE_DATABASE", "heber"),
-            clickhouse_user=os.environ.get("CLICKHOUSE_USER", "default"),
-            clickhouse_password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
-        )
-
-    writer = HotStoreWriter(config)
-    return HotStoreSyncer(writer, config)
+# Backward-compatible aliases
+HotStoreWriter = HotStoreSync
+HotStoreSyncer = HotStoreSync
+
+__all__ = [
+    "QueryType",
+    "HotStoreTable",
+    "HotStoreSyncConfig",
+    "SyncState",
+    "HotStoreSync",
+    "HotStoreWriter",
+    "HotStoreSyncer",
+    "HotStoreReader",
+    "create_hot_store_syncer",
+]
 
 
 
@@ -46179,7 +47438,7 @@ Path: silver/feed={}/instrument_type={}/dt={}/[hour={}]/
 """
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -46189,1101 +47448,9 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.schemas.silver import DEFAULT_SCHEMA, SILVER_SCHEMAS
 
 logger = structlog.get_logger(__name__)
-
-# Dataset-specific schemas (per PRD Section 8.7)
-SILVER_SCHEMAS = {
-    "bars": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Bars-specific
-            ("timeframe", pa.string()),
-            ("bar_start_ts", pa.timestamp("us", tz="UTC")),
-            ("open", pa.float64()),
-            ("high", pa.float64()),
-            ("low", pa.float64()),
-            ("close", pa.float64()),
-            ("volume", pa.float64()),
-            ("trade_count", pa.int64()),
-            ("vwap", pa.float64()),
-        ]
-    ),
-    "quotes": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Quotes-specific
-            ("bid_px", pa.float64()),
-            ("bid_sz", pa.float64()),
-            ("ask_px", pa.float64()),
-            ("ask_sz", pa.float64()),
-            ("bid_exchange", pa.string()),
-            ("ask_exchange", pa.string()),
-        ]
-    ),
-    "trades": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Trades-specific
-            ("trade_id", pa.string()),
-            ("price", pa.float64()),
-            ("size", pa.float64()),
-            ("exchange", pa.string()),
-            ("tape", pa.string()),
-        ]
-    ),
-    "flow_alerts": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Flow-specific
-            ("underlying", pa.string()),
-            ("occ_symbol", pa.string()),
-            ("expiry", pa.date32()),
-            ("strike", pa.float64()),
-            ("put_call", pa.string()),
-            ("premium", pa.float64()),
-            ("volume", pa.float64()),
-            ("open_interest", pa.float64()),
-            ("spot_px", pa.float64()),
-            ("contract_px", pa.float64()),
-            ("alert_type", pa.string()),
-            ("side", pa.string()),
-            ("aggressor", pa.string()),
-            # UW additional fields (P1)
-            ("is_sweep", pa.bool_()),
-            ("is_unusual", pa.bool_()),
-            ("sentiment", pa.string()),
-            ("trade_count", pa.int64()),
-            ("volume_oi_ratio", pa.float64()),
-            ("total_ask_side_prem", pa.float64()),
-            ("total_bid_side_prem", pa.float64()),
-            ("has_floor", pa.bool_()),
-            ("has_multileg", pa.bool_()),
-            ("has_singleleg", pa.bool_()),
-            ("all_opening_trades", pa.bool_()),
-        ]
-    ),
-    "darkpool": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Darkpool-specific
-            ("underlying", pa.string()),
-            ("price", pa.float64()),
-            ("size", pa.float64()),
-            ("notional", pa.float64()),
-            ("venue", pa.string()),
-            ("print_id", pa.string()),
-            ("nbbo_bid", pa.float64()),
-            ("nbbo_ask", pa.float64()),
-            ("ext_hours", pa.string()),
-            ("trade_settlement", pa.string()),
-            ("canceled", pa.bool_()),
-        ]
-    ),
-    "sector_tide": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Sector tide-specific
-            ("sector", pa.string()),
-            ("net_call_premium", pa.float64()),
-            ("net_put_premium", pa.float64()),
-            ("net_volume", pa.float64()),
-            ("sentiment", pa.string()),
-            ("call_put_ratio", pa.float64()),
-        ]
-    ),
-    "market_tide": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            # Market tide-specific
-            ("total_call_premium", pa.float64()),
-            ("total_put_premium", pa.float64()),
-            ("net_volume", pa.float64()),
-            ("sentiment", pa.string()),
-            ("call_put_ratio", pa.float64()),
-        ]
-    ),
-    # Phase 1: Core Analytics
-    "greek_exposure": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("gamma_exposure", pa.float64()),
-            ("delta_exposure", pa.float64()),
-            ("vanna_exposure", pa.float64()),
-            ("charm_exposure", pa.float64()),
-            ("strike", pa.float64()),
-            ("expiry", pa.date32()),
-        ]
-    ),
-    "max_pain": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("expiry", pa.string()),
-            ("max_pain_strike", pa.float64()),
-            ("call_oi", pa.int64()),
-            ("put_oi", pa.int64()),
-        ]
-    ),
-    "net_premium_tick": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("net_call_premium", pa.float64()),
-            ("net_put_premium", pa.float64()),
-            ("call_volume", pa.int64()),
-            ("put_volume", pa.int64()),
-        ]
-    ),
-    "hottest_chain": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("contract_symbol", pa.string()),
-            ("underlying", pa.string()),
-            ("strike", pa.float64()),
-            ("expiry", pa.string()),
-            ("option_type", pa.string()),
-            ("volume", pa.int64()),
-            ("open_interest", pa.int64()),
-            ("premium", pa.float64()),
-            ("iv", pa.float64()),
-        ]
-    ),
-    # Phase 2: Reference Data
-    "earnings": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("earnings_date", pa.string()),
-            ("time", pa.string()),
-            ("eps_estimate", pa.float64()),
-            ("eps_actual", pa.float64()),
-            ("revenue_estimate", pa.float64()),
-            ("revenue_actual", pa.float64()),
-        ]
-    ),
-    "corporate_action": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("action_type", pa.string()),
-            ("ex_date", pa.string()),
-            ("record_date", pa.string()),
-            ("payable_date", pa.string()),
-            ("amount", pa.float64()),
-            ("ratio", pa.string()),
-        ]
-    ),
-    # Phase 3: Screeners
-    "most_active": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("volume", pa.int64()),
-            ("trade_count", pa.int64()),
-        ]
-    ),
-    "mover": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("price", pa.float64()),
-            ("change", pa.float64()),
-            ("percent_change", pa.float64()),
-            ("direction", pa.string()),
-        ]
-    ),
-    "screener_result": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("price", pa.float64()),
-            ("volume", pa.int64()),
-            ("market_cap", pa.float64()),
-            ("sector", pa.string()),
-            ("call_volume", pa.int64()),
-            ("put_volume", pa.int64()),
-            ("iv_rank", pa.float64()),
-        ]
-    ),
-    # Phase 4: Advanced Analytics
-    "iv_rank": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("iv_rank", pa.float64()),
-            ("iv_percentile", pa.float64()),
-            ("current_iv", pa.float64()),
-            ("one_year_high", pa.float64()),
-            ("one_year_low", pa.float64()),
-        ]
-    ),
-    "iv_term_structure": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("expiry", pa.string()),
-            ("iv", pa.float64()),
-            ("days_to_expiry", pa.int64()),
-            ("call_iv", pa.float64()),
-            ("put_iv", pa.float64()),
-        ]
-    ),
-    "volatility_stats": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("realized_vol_30d", pa.float64()),
-            ("realized_vol_60d", pa.float64()),
-            ("realized_vol_90d", pa.float64()),
-            ("iv_30d", pa.float64()),
-            ("iv_percentile", pa.float64()),
-            ("hv_iv_ratio", pa.float64()),
-        ]
-    ),
-    "oi_change": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("oi_date", pa.string()),
-            ("call_oi", pa.int64()),
-            ("put_oi", pa.int64()),
-            ("call_oi_change", pa.int64()),
-            ("put_oi_change", pa.int64()),
-        ]
-    ),
-    "etf_holding": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("etf_symbol", pa.string()),
-            ("holding_symbol", pa.string()),
-            ("weight", pa.float64()),
-            ("shares", pa.int64()),
-            ("market_value", pa.float64()),
-        ]
-    ),
-    "etf_flow": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("flow_date", pa.string()),
-            ("inflow", pa.float64()),
-            ("outflow", pa.float64()),
-            ("net_flow", pa.float64()),
-        ]
-    ),
-    "short_data": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("short_date", pa.string()),
-            ("short_interest", pa.int64()),
-            ("days_to_cover", pa.float64()),
-            ("short_percent_float", pa.float64()),
-            ("short_percent_outstanding", pa.float64()),
-        ]
-    ),
-    "ftd": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("ftd_date", pa.string()),
-            ("quantity", pa.int64()),
-            ("price", pa.float64()),
-            ("value", pa.float64()),
-        ]
-    ),
-    "seasonality": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("month", pa.int64()),
-            ("avg_return", pa.float64()),
-            ("median_return", pa.float64()),
-            ("win_rate", pa.float64()),
-            ("sample_years", pa.int64()),
-        ]
-    ),
-    # Reference Data
-    "option_contract": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("underlying", pa.string()),
-            ("occ_symbol", pa.string()),
-            ("expiry", pa.date32()),
-            ("strike", pa.float64()),
-            ("put_call", pa.string()),
-            ("multiplier", pa.int64()),
-            ("style", pa.string()),
-            ("exchange", pa.string()),
-            ("valid_from", pa.timestamp("us", tz="UTC")),
-            ("valid_to", pa.timestamp("us", tz="UTC")),
-            ("revision_id", pa.string()),
-        ]
-    ),
-    "news": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("news_id", pa.string()),
-            ("ts_published", pa.timestamp("us", tz="UTC")),
-            ("headline", pa.string()),
-            ("summary", pa.string()),
-            ("body", pa.string()),
-            ("url", pa.string()),
-            ("source_name", pa.string()),
-            ("valid_from", pa.timestamp("us", tz="UTC")),
-            ("valid_to", pa.timestamp("us", tz="UTC")),
-            ("revision_id", pa.string()),
-        ]
-    ),
-    "orderbook": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("bids_json", pa.string()),  # JSON array of [price, size]
-            ("asks_json", pa.string()),  # JSON array of [price, size]
-            ("depth", pa.int64()),
-        ]
-    ),
-    # V3: Alternative Data (Congress, Insider, Institution, Politician)
-    "congress_trades": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("trade_id", pa.string()),
-            ("politician_name", pa.string()),
-            ("politician_party", pa.string()),
-            ("politician_state", pa.string()),
-            ("politician_chamber", pa.string()),
-            ("trade_type", pa.string()),
-            ("trade_date", pa.date32()),
-            ("disclosure_date", pa.date32()),
-            ("amount_min", pa.float64()),
-            ("amount_max", pa.float64()),
-            ("asset_type", pa.string()),
-            ("is_late", pa.bool_()),
-        ]
-    ),
-    "insider_trades": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("filing_id", pa.string()),
-            ("insider_name", pa.string()),
-            ("insider_title", pa.string()),
-            ("insider_relationship", pa.string()),
-            ("trade_type", pa.string()),
-            ("trade_date", pa.date32()),
-            ("shares", pa.float64()),
-            ("price", pa.float64()),
-            ("value", pa.float64()),
-            ("shares_owned_after", pa.float64()),
-            ("filing_date", pa.date32()),
-        ]
-    ),
-    "insider_flow": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("period", pa.string()),
-            ("period_start", pa.date32()),
-            ("period_end", pa.date32()),
-            ("sector", pa.string()),
-            ("total_buys", pa.int64()),
-            ("total_sells", pa.int64()),
-            ("buy_value", pa.float64()),
-            ("sell_value", pa.float64()),
-            ("net_value", pa.float64()),
-            ("top_buyers_json", pa.string()),
-            ("top_sellers_json", pa.string()),
-        ]
-    ),
-    "institution_holdings": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("filing_id", pa.string()),
-            ("institution_name", pa.string()),
-            ("institution_cik", pa.string()),
-            ("holding_symbol", pa.string()),
-            ("shares", pa.float64()),
-            ("value", pa.float64()),
-            ("quarter_end", pa.date32()),
-            ("change_shares", pa.float64()),
-            ("change_pct", pa.float64()),
-            ("portfolio_pct", pa.float64()),
-            ("filing_date", pa.date32()),
-        ]
-    ),
-    "institution_activity": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("filing_id", pa.string()),
-            ("institution_name", pa.string()),
-            ("institution_cik", pa.string()),
-            ("filing_date", pa.date32()),
-            ("quarter_end", pa.date32()),
-            ("total_value", pa.float64()),
-            ("holdings_count", pa.int64()),
-            ("new_positions", pa.int64()),
-            ("closed_positions", pa.int64()),
-            ("increased_positions", pa.int64()),
-            ("decreased_positions", pa.int64()),
-        ]
-    ),
-    "politician_trades": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("trade_id", pa.string()),
-            ("politician_id", pa.string()),
-            ("politician_name", pa.string()),
-            ("politician_party", pa.string()),
-            ("trade_type", pa.string()),
-            ("trade_date", pa.date32()),
-            ("disclosure_date", pa.date32()),
-            ("amount_min", pa.float64()),
-            ("amount_max", pa.float64()),
-            ("asset_description", pa.string()),
-            ("comment", pa.string()),
-        ]
-    ),
-    # V4: Market Analytics (Analyst, Fundamentals, Events, Indicators)
-    "analyst_ratings": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("rating_id", pa.string()),
-            ("analyst_name", pa.string()),
-            ("analyst_firm", pa.string()),
-            ("rating", pa.string()),
-            ("rating_prior", pa.string()),
-            ("price_target", pa.float64()),
-            ("price_target_prior", pa.float64()),
-            ("rating_date", pa.date32()),
-            ("action", pa.string()),
-        ]
-    ),
-    "stock_fundamentals": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("snapshot_date", pa.date32()),
-            ("company_name", pa.string()),
-            ("sector", pa.string()),
-            ("industry", pa.string()),
-            ("market_cap", pa.float64()),
-            ("pe_ratio", pa.float64()),
-            ("eps", pa.float64()),
-            ("dividend_yield", pa.float64()),
-            ("beta", pa.float64()),
-            ("shares_outstanding", pa.float64()),
-            ("float_shares", pa.float64()),
-            ("avg_volume", pa.float64()),
-            ("price", pa.float64()),
-            ("high_52w", pa.float64()),
-            ("low_52w", pa.float64()),
-        ]
-    ),
-    "economic_events": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("event_name", pa.string()),
-            ("event_type", pa.string()),
-            ("event_date", pa.date32()),
-            ("event_time", pa.string()),
-            ("country", pa.string()),
-            ("importance", pa.string()),
-            ("actual", pa.string()),
-            ("forecast", pa.string()),
-            ("previous", pa.string()),
-            ("source_url", pa.string()),
-        ]
-    ),
-    "market_indicators": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("indicator_name", pa.string()),
-            ("indicator_date", pa.date32()),
-            ("indicator_time", pa.string()),
-            ("value", pa.float64()),
-            ("value_prior", pa.float64()),
-            ("change", pa.float64()),
-            ("change_pct", pa.float64()),
-            ("percentile", pa.float64()),
-            ("metadata_json", pa.string()),
-        ]
-    ),
-    # V5: Options Deep Data
-    "option_history": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("occ_symbol", pa.string()),
-            ("history_date", pa.date32()),
-            ("open", pa.float64()),
-            ("high", pa.float64()),
-            ("low", pa.float64()),
-            ("close", pa.float64()),
-            ("volume", pa.float64()),
-            ("open_interest", pa.float64()),
-            ("implied_volatility", pa.float64()),
-            ("delta", pa.float64()),
-            ("gamma", pa.float64()),
-            ("theta", pa.float64()),
-            ("vega", pa.float64()),
-        ]
-    ),
-    "option_chain_snapshot": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("snapshot_ts", pa.timestamp("us", tz="UTC")),
-            ("underlying", pa.string()),
-            ("expiry", pa.date32()),
-            ("chain_json", pa.string()),
-            ("total_call_volume", pa.float64()),
-            ("total_put_volume", pa.float64()),
-            ("total_call_oi", pa.float64()),
-            ("total_put_oi", pa.float64()),
-            ("atm_iv", pa.float64()),
-        ]
-    ),
-    "volume_profile": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("occ_symbol", pa.string()),
-            ("profile_date", pa.date32()),
-            ("price_level", pa.float64()),
-            ("volume", pa.float64()),
-            ("cumulative_volume", pa.float64()),
-            ("pct_of_total", pa.float64()),
-        ]
-    ),
-    "group_flow": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("group_name", pa.string()),
-            ("group_type", pa.string()),
-            ("flow_date", pa.date32()),
-            ("expiry", pa.date32()),
-            ("call_gex", pa.float64()),
-            ("put_gex", pa.float64()),
-            ("net_gex", pa.float64()),
-            ("call_dex", pa.float64()),
-            ("put_dex", pa.float64()),
-            ("net_premium", pa.float64()),
-        ]
-    ),
-    # V6: ETF Deep Data
-    "etf_metadata": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("etf_symbol", pa.string()),
-            ("snapshot_date", pa.date32()),
-            ("fund_name", pa.string()),
-            ("issuer", pa.string()),
-            ("expense_ratio", pa.float64()),
-            ("aum", pa.float64()),
-            ("avg_volume", pa.float64()),
-            ("inception_date", pa.date32()),
-            ("asset_class", pa.string()),
-            ("category", pa.string()),
-            ("index_tracked", pa.string()),
-            ("leverage_factor", pa.float64()),
-        ]
-    ),
-    "etf_sector_weights": pa.schema(
-        [
-            ("event_id", pa.string()),
-            ("provider", pa.string()),
-            ("feed", pa.string()),
-            ("instrument_type", pa.string()),
-            ("instrument_key", pa.string()),
-            ("symbol", pa.string()),
-            ("ts_event", pa.timestamp("us", tz="UTC")),
-            ("ts_ingest", pa.timestamp("us", tz="UTC")),
-            ("ts_available", pa.timestamp("us", tz="UTC")),
-            ("source", pa.string()),
-            ("schema_version", pa.string()),
-            ("quality_flags", pa.list_(pa.string())),
-            ("etf_symbol", pa.string()),
-            ("weight_date", pa.date32()),
-            ("weight_type", pa.string()),
-            ("weight_name", pa.string()),
-            ("weight_pct", pa.float64()),
-            ("change_pct", pa.float64()),
-        ]
-    ),
-}
-
-
-# Default schema for unknown feeds
-DEFAULT_SCHEMA = pa.schema(
-    [
-        ("event_id", pa.string()),
-        ("provider", pa.string()),
-        ("feed", pa.string()),
-        ("instrument_type", pa.string()),
-        ("instrument_key", pa.string()),
-        ("symbol", pa.string()),
-        ("ts_event", pa.timestamp("us", tz="UTC")),
-        ("ts_ingest", pa.timestamp("us", tz="UTC")),
-        ("ts_available", pa.timestamp("us", tz="UTC")),
-        ("source", pa.string()),
-        ("schema_version", pa.string()),
-        ("quality_flags", pa.list_(pa.string())),
-        ("payload_json", pa.string()),  # Store payload as JSON string
-    ]
-)
 
 
 class SilverWriter:
@@ -47291,7 +47458,7 @@ class SilverWriter:
 
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
-        self.last_flush: datetime = datetime.utcnow()
+        self.last_flush: datetime = datetime.now(UTC)
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -47419,7 +47586,7 @@ class SilverWriter:
         base = settings.silver_path / partition_key
         base.mkdir(parents=True, exist_ok=True)
 
-        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"part-{ts}.parquet"
 
     async def write(self, envelope: EventEnvelope) -> None:
@@ -47430,12 +47597,12 @@ class SilverWriter:
 
     async def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         for partition_key, rows in list(self.buffers.items()):
             should_flush = (
-                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.bronze_flush_interval_seconds
+                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
             )
             if should_flush and rows:
                 await self._flush_partition(partition_key, rows)
@@ -47486,6 +47653,454 @@ class SilverWriter:
                 exc_info=True,
             )
             raise
+
+
+
+================================================
+FILE: heber/writer/transformer.py
+================================================
+"""Bronze to Silver Transformer - Batch processing for medallion architecture.
+
+Reads raw EventEnvelope data from Bronze layer and writes normalized
+typed Parquet to Silver layer. This enables:
+- Backfill Silver from historical Bronze data
+- Reprocess after schema changes
+- Fix Silver bugs without re-ingestion from source
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+from collections import defaultdict
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import structlog
+
+from heber.config import settings
+from heber.models.envelope import EventEnvelope
+from heber.schemas.silver import SILVER_SCHEMAS
+
+logger = structlog.get_logger(__name__)
+
+
+# Field mappings: payload field -> Silver schema field
+# These handle naming differences between provider payloads and our schema
+FIELD_MAPPINGS: dict[str, dict[str, str]] = {
+    # Options Flow
+    "flow_alerts": {
+        "price": "contract_px",
+        "underlying_price": "spot_px",
+        "option_chain": "occ_symbol",
+        "symbol": "underlying",
+        "alert_rule": "alert_type",
+        "ticker": "underlying",
+    },
+    # Darkpool
+    "darkpool": {
+        "symbol": "underlying",
+        "exchange": "venue",
+        "tracking_id": "print_id",
+        "ask": "nbbo_ask",
+        "bid": "nbbo_bid",
+    },
+    # Market Tide
+    "market_tide": {
+        "net_call_premium": "total_call_premium",
+        "net_put_premium": "total_put_premium",
+    },
+    # Bars (Alpaca)
+    "bars": {
+        "t": "bar_start_ts",
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+        "n": "trade_count",
+        "vw": "vwap",
+    },
+    # Quotes (Alpaca)
+    "quotes": {
+        "bp": "bid_px",
+        "bs": "bid_sz",
+        "ap": "ask_px",
+        "as": "ask_sz",
+        "bx": "bid_exchange",
+        "ax": "ask_exchange",
+    },
+    # Trades (Alpaca)
+    "trades": {
+        "p": "price",
+        "s": "size",
+        "x": "exchange",
+        "i": "trade_id",
+        "z": "tape",
+    },
+    # Insider Trades
+    "insider_trades": {
+        "transaction_date": "ts_event",
+        "name": "insider_name",
+        "title": "insider_title",
+        "type": "transaction_type",
+        "shares": "shares",
+        "price_per_share": "price",
+        "total_value": "value",
+    },
+    # Institution Holdings
+    "institution_holdings": {
+        "institution": "institution_name",
+        "cik": "institution_id",
+        "shares": "shares",
+        "value": "market_value",
+        "percent_portfolio": "portfolio_pct",
+        "percent_outstanding": "outstanding_pct",
+    },
+    # Politician Trades
+    "politician_trades": {
+        "politician": "politician_name",
+        "transaction_date": "ts_event",
+        "type": "transaction_type",
+        "amount": "amount_range",
+        "asset": "asset_type",
+    },
+    # Congress Trades
+    "congress_trades": {
+        "representative": "representative_name",
+        "transaction_date": "ts_event",
+        "type": "transaction_type",
+        "amount": "amount_range",
+        "asset": "asset_type",
+    },
+    # Stock Fundamentals
+    "stock_fundamentals": {
+        "market_cap": "market_cap",
+        "pe_ratio": "pe_ratio",
+        "dividend_yield": "dividend_yield",
+    },
+    # News
+    "news": {
+        "headline": "headline",
+        "summary": "summary",
+        "url": "url",
+        "author": "author",
+        "published_at": "ts_event",
+    },
+    # Earnings
+    "earnings": {
+        "report_date": "ts_event",
+        "quarter": "fiscal_quarter",
+        "year": "fiscal_year",
+        "eps_estimate": "eps_estimate",
+        "eps_actual": "eps_actual",
+        "revenue_estimate": "revenue_estimate",
+        "revenue_actual": "revenue_actual",
+    },
+}
+
+
+class BronzeToSilverTransformer:
+    """Transforms Bronze JSONL.gz files to Silver Parquet.
+
+    Usage:
+        transformer = BronzeToSilverTransformer()
+        stats = await transformer.transform_all()
+        # Or transform specific feed/date:
+        stats = await transformer.transform(feed="flow_alerts", dt="2026-02-05")
+    """
+
+    def __init__(
+        self,
+        bronze_path: Path | None = None,
+        silver_path: Path | None = None,
+        batch_size: int = 10_000,
+    ):
+        self.bronze_path = bronze_path or settings.bronze_path
+        self.silver_path = silver_path or settings.silver_path
+        self.batch_size = batch_size
+
+    async def transform_all(
+        self,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        """Transform all Bronze data to Silver.
+
+        Args:
+            since: Only process files after this datetime
+            until: Only process files before this datetime
+
+        Returns:
+            Dict of feed -> records transformed
+        """
+        stats: dict[str, int] = defaultdict(int)
+
+        if not self.bronze_path.exists():
+            logger.warning("Bronze path does not exist", path=str(self.bronze_path))
+            return dict(stats)
+
+        # Find all Bronze provider/feed directories
+        for provider_dir in self.bronze_path.iterdir():
+            if not provider_dir.is_dir() or not provider_dir.name.startswith("provider="):
+                continue
+
+            for feed_dir in provider_dir.iterdir():
+                if not feed_dir.is_dir() or not feed_dir.name.startswith("feed="):
+                    continue
+
+                feed = feed_dir.name.split("=")[1]
+                feed_stats = await self._transform_feed(feed_dir, feed, since, until)
+                stats[feed] += feed_stats
+
+        logger.info("Transformation complete", stats=dict(stats))
+        return dict(stats)
+
+    async def transform(
+        self,
+        feed: str,
+        dt: str | None = None,
+        provider: str = "unusual_whales",
+    ) -> int:
+        """Transform a specific feed (optionally for a specific date).
+
+        Args:
+            feed: Feed name (e.g., "flow_alerts")
+            dt: Optional date string "YYYY-MM-DD"
+            provider: Provider name
+
+        Returns:
+            Number of records transformed
+        """
+        feed_dir = self.bronze_path / f"provider={provider}" / f"feed={feed}"
+
+        if not feed_dir.exists():
+            logger.warning("Feed directory not found", path=str(feed_dir))
+            return 0
+
+        if dt:
+            # Transform specific date
+            return await self._transform_date_partition(feed_dir, feed, dt)
+        else:
+            # Transform entire feed
+            return await self._transform_feed(feed_dir, feed)
+
+    async def _transform_feed(
+        self,
+        feed_dir: Path,
+        feed: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        """Transform all data for a single feed."""
+        total = 0
+
+        for dt_dir in feed_dir.iterdir():
+            if not dt_dir.is_dir() or not dt_dir.name.startswith("dt="):
+                continue
+
+            dt_str = dt_dir.name.split("=")[1]
+
+            # Date filtering
+            if since or until:
+                dt_date = datetime.strptime(dt_str, "%Y-%m-%d")
+                if since and dt_date < since:
+                    continue
+                if until and dt_date > until:
+                    continue
+
+            total += await self._transform_date_partition(feed_dir, feed, dt_str)
+
+        return total
+
+    async def _transform_date_partition(
+        self,
+        feed_dir: Path,
+        feed: str,
+        dt: str,
+    ) -> int:
+        """Transform a single date partition."""
+        dt_dir = feed_dir / f"dt={dt}"
+        if not dt_dir.exists():
+            return 0
+
+        records: list[dict] = []
+        files_processed = 0
+
+        # Process all hour directories and files
+        for item in dt_dir.rglob("*.jsonl.gz"):
+            records.extend(self._read_bronze_file(item, feed))
+            files_processed += 1
+
+            # Flush in batches
+            if len(records) >= self.batch_size:
+                await self._write_silver_batch(records, feed, dt)
+                records = []
+
+        # Final flush
+        if records:
+            await self._write_silver_batch(records, feed, dt)
+
+        logger.info(
+            "Transformed partition",
+            feed=feed,
+            dt=dt,
+            files=files_processed,
+            records=len(records),
+        )
+        return len(records)
+
+    def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict]:
+        """Read and transform a single Bronze JSONL.gz file."""
+        records = []
+
+        try:
+            with gzip.open(file_path, "rt", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        event_dict = json.loads(line.strip())
+                        envelope = EventEnvelope.model_validate(event_dict)
+                        row = self._envelope_to_silver_row(envelope, feed)
+                        if row:
+                            records.append(row)
+                    except Exception as e:
+                        logger.debug("Failed to parse line", error=str(e))
+                        continue
+
+        except Exception as e:
+            logger.error("Failed to read Bronze file", path=str(file_path), error=str(e))
+
+        return records
+
+    def _envelope_to_silver_row(self, envelope: EventEnvelope, feed: str) -> dict[str, Any] | None:
+        """Convert EventEnvelope to Silver row format."""
+        if feed not in SILVER_SCHEMAS:
+            logger.debug("No schema for feed, skipping", feed=feed)
+            return None
+
+        # Base columns from envelope
+        row = {
+            "event_id": envelope.event_id,
+            "provider": envelope.provider,
+            "feed": envelope.feed,
+            "instrument_type": envelope.instrument_type,
+            "instrument_key": envelope.instrument_key,
+            "symbol": envelope.symbol,
+            "ts_event": envelope.ts_event,
+            "ts_ingest": envelope.ts_ingest,
+            "ts_available": envelope.ts_available or envelope.ts_ingest,
+            "source": envelope.source,
+            "schema_version": envelope.schema_version,
+            "quality_flags": envelope.quality_flags,
+        }
+
+        # Map payload fields using field mappings
+        payload = envelope.payload
+        mappings = FIELD_MAPPINGS.get(feed, {})
+        schema = SILVER_SCHEMAS[feed]
+
+        for field in schema:
+            if field.name in row:
+                continue  # Already set from envelope
+
+            # Try mapped name first, then direct name
+            source_name = next((k for k, v in mappings.items() if v == field.name), field.name)
+            value = payload.get(source_name)
+
+            # Type coercion
+            if value is not None:
+                value = self._coerce_value(value, field.type)
+
+            row[field.name] = value
+
+        return row
+
+    def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
+        """Coerce a value to match the expected Arrow type."""
+        if value is None:
+            return None
+
+        try:
+            if pa.types.is_floating(arrow_type):
+                return float(value) if value != "" else None
+            elif pa.types.is_integer(arrow_type):
+                return int(float(value)) if value != "" else None
+            elif pa.types.is_date(arrow_type):
+                if isinstance(value, datetime):
+                    return value.date()
+                if isinstance(value, str):
+                    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+                return value
+            elif pa.types.is_timestamp(arrow_type):
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if isinstance(value, int | float):
+                    return datetime.fromtimestamp(value)
+                return value
+            elif pa.types.is_boolean(arrow_type):
+                return bool(value)
+            elif pa.types.is_list(arrow_type):
+                return list(value) if value else []
+            else:
+                return str(value) if value is not None else None
+        except Exception:
+            return None
+
+    async def _write_silver_batch(
+        self,
+        records: list[dict],
+        feed: str,
+        dt: str,
+    ) -> None:
+        """Write a batch of records to Silver Parquet."""
+        if not records:
+            return
+
+        schema = SILVER_SCHEMAS.get(feed)
+        if not schema:
+            logger.warning("No schema for feed", feed=feed)
+            return
+
+        # Build partition path
+        instrument_type = records[0].get("instrument_type", "unknown")
+        partition_path = self.silver_path / f"feed={feed}" / f"instrument_type={instrument_type}" / f"dt={dt}"
+        partition_path.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique filename
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+        file_path = partition_path / f"part-{ts}.parquet"
+
+        try:
+            table = pa.Table.from_pylist(records, schema=schema)
+            pq.write_table(
+                table,
+                file_path,
+                compression="snappy",
+                row_group_size=100_000,
+            )
+            logger.debug("Wrote Silver batch", path=str(file_path), records=len(records))
+        except Exception as e:
+            logger.error("Failed to write Silver batch", error=str(e), exc_info=True)
+            raise
+
+
+async def backfill_silver(
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, int]:
+    """Convenience function to backfill Silver from Bronze.
+
+    Usage:
+        from heber.writer.transformer import backfill_silver
+        stats = await backfill_silver(since=datetime(2026, 1, 1))
+    """
+    transformer = BronzeToSilverTransformer()
+    return await transformer.transform_all(since=since, until=until)
 
 
 
@@ -49835,6 +50450,89 @@ FILE: tests/__init__.py
 
 
 ================================================
+FILE: tests/test_compactor_safety.py
+================================================
+"""Regression tests for compactor safety and atomicity."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from heber.writer import compactor as compactor_module
+from heber.writer.compactor import Compactor
+
+
+def _write_parquet(path: Path, rows: list[dict]) -> None:
+    table = pa.Table.from_pylist(rows)
+    pq.write_table(table, path, compression="snappy")
+
+
+@pytest.mark.asyncio
+async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
+    partition.mkdir(parents=True)
+
+    source_files = [
+        partition / "part-1.parquet",
+        partition / "part-2.parquet",
+        partition / "part-3.parquet",
+    ]
+    for i, source in enumerate(source_files, start=1):
+        _write_parquet(source, [{"event_id": f"evt-{i}"}])
+
+    compactor = Compactor()
+    merged = await compactor.compact_partition(partition)
+
+    assert merged == 3
+    assert not any(path.exists() for path in source_files)
+    assert list(partition.glob(".compacted-*.tmp")) == []
+    assert not (partition / ".compaction.lock").exists()
+
+    compacted_files = list(partition.glob("compacted-*.parquet"))
+    assert len(compacted_files) == 1
+    merged_table = pq.read_table(compacted_files[0])
+    assert merged_table.num_rows == 3
+
+
+@pytest.mark.asyncio
+async def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
+    partition.mkdir(parents=True)
+
+    source_files = [
+        partition / "part-1.parquet",
+        partition / "part-2.parquet",
+    ]
+    for i, source in enumerate(source_files, start=1):
+        _write_parquet(source, [{"event_id": f"evt-{i}"}])
+
+    original_read_table = compactor_module.pq.read_table
+    call_count = {"value": 0}
+
+    def failing_read_table(path: Path):  # type: ignore[override]
+        call_count["value"] += 1
+        if call_count["value"] == 2:
+            raise RuntimeError("synthetic read failure")
+        return original_read_table(path)
+
+    monkeypatch.setattr(compactor_module.pq, "read_table", failing_read_table)
+
+    compactor = Compactor()
+    merged = await compactor.compact_partition(partition)
+
+    assert merged == 0
+    assert all(path.exists() for path in source_files)
+    assert list(partition.glob("compacted-*.parquet")) == []
+    assert list(partition.glob(".compacted-*.tmp")) == []
+    assert not (partition / ".compaction.lock").exists()
+
+
+
+================================================
 FILE: tests/test_edge_cases.py
 ================================================
 """Edge Case Test Library for Heber Zero-Leakage System (Phase 49.3).
@@ -50469,6 +51167,128 @@ def test_feature_view_source_path_matches_gold_layout(
 
 
 ================================================
+FILE: tests/test_hotstore_unification.py
+================================================
+"""Regression tests for unified Hot Store implementation."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+
+from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
+from heber.hotstore.tables import create_all_tables
+
+
+@dataclass
+class _QueryResult:
+    result_rows: list[tuple]
+    column_names: list[str]
+
+
+class _StubClickHouseClient:
+    def __init__(self):
+        self.commands: list[str] = []
+        self.inserts: list[tuple[str, list[tuple], list[str]]] = []
+
+    def command(self, statement: str) -> None:
+        self.commands.append(statement)
+
+    def insert(self, table: str, rows: list[tuple], column_names: list[str]) -> int:
+        self.inserts.append((table, rows, column_names))
+        return len(rows)
+
+    def query(self, _query: str, parameters=None):  # noqa: ARG002
+        return _QueryResult(result_rows=[(1,)], column_names=["count"])
+
+
+class _StubHotStoreClient:
+    def __init__(self):
+        self.client = _StubClickHouseClient()
+
+    def get_sync_lag_seconds(self, _dataset: str) -> float:
+        return 12.5
+
+    def get_row_count(self, _dataset: str, days: int = 7) -> int:  # noqa: ARG002
+        return 42
+
+
+def test_create_all_tables_uses_sync_client_command() -> None:
+    stub = _StubClickHouseClient()
+    create_all_tables(stub)
+    assert len(stub.commands) == 5
+
+
+def test_hotstore_sync_write_batch_uses_unified_insert_path() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+
+    rows_written = syncer.write_batch(
+        "quotes",
+        [
+            {
+                "event_id": "evt-1",
+                "provider": "alpaca",
+                "feed": "quotes",
+                "instrument_type": "equity",
+                "instrument_key": "equity:AAPL",
+                "symbol": "AAPL",
+                "payload": {"bid_px": 180.0, "ask_px": 180.1},
+            }
+        ],
+    )
+
+    assert rows_written == 1
+    assert len(client.client.inserts) == 1
+    table, rows, columns = client.client.inserts[0]
+    assert table == "quotes_hot"
+    assert len(rows) == 1
+    assert "bid_px" in columns
+    assert "ask_px" in columns
+
+
+def test_hotstore_sync_metrics_no_await_mismatch() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+    metrics = asyncio.run(syncer.get_metrics())
+    assert metrics["quotes_lag_seconds"] == 12.5
+    assert metrics["trades_lag_seconds"] == 12.5
+    assert metrics["bars_lag_seconds"] == 12.5
+
+
+def test_hotstore_event_sync_batches_before_insert() -> None:
+    client = _StubHotStoreClient()
+    config = HotStoreSyncConfig(event_batch_max_rows=3, event_batch_max_wait_seconds=60.0)
+    syncer = HotStoreSync(client=client, config=config)
+
+    asyncio.run(syncer.sync_quote({"event_id": "evt-1", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    asyncio.run(syncer.sync_quote({"event_id": "evt-2", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    assert len(client.client.inserts) == 0
+
+    asyncio.run(syncer.sync_quote({"event_id": "evt-3", "feed": "quotes", "instrument_key": "equity:AAPL"}))
+    assert len(client.client.inserts) == 1
+    table, rows, _ = client.client.inserts[0]
+    assert table == "quotes_hot"
+    assert len(rows) == 3
+
+
+def test_hotstore_event_sync_stop_flushes_pending_buffer() -> None:
+    client = _StubHotStoreClient()
+    config = HotStoreSyncConfig(event_batch_max_rows=100, event_batch_max_wait_seconds=60.0)
+    syncer = HotStoreSync(client=client, config=config)
+
+    asyncio.run(syncer.sync_trade({"event_id": "evt-1", "feed": "trades", "instrument_key": "equity:MSFT"}))
+    assert len(client.client.inserts) == 0
+
+    syncer.stop()
+    assert len(client.client.inserts) == 1
+    table, rows, _ = client.client.inserts[0]
+    assert table == "trades_hot"
+    assert len(rows) == 1
+
+
+
+================================================
 FILE: tests/test_meta_label_alignment.py
 ================================================
 from datetime import UTC, datetime
@@ -50603,6 +51423,115 @@ def test_runtime_entrypoint_modules_exist() -> None:
 
 
 ================================================
+FILE: tests/test_sdk_catalog_defaults.py
+================================================
+"""Regression tests for SDK catalog URL defaults."""
+
+from __future__ import annotations
+
+from heber.config import Settings
+from heber.sdk import client as sdk_client
+
+
+def test_settings_defaults_for_api_and_catalog_url(monkeypatch) -> None:
+    monkeypatch.delenv("HEBER_API_PORT", raising=False)
+    monkeypatch.delenv("HEBER_CATALOG_URL", raising=False)
+
+    settings = Settings(_env_file=None)
+    assert settings.api_port == 8080
+    assert settings.catalog_url == "http://localhost:8085/api/v1"
+
+
+def test_heber_client_uses_settings_catalog_url_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(sdk_client.settings, "api_port", 8080)
+    monkeypatch.setattr(sdk_client.settings, "catalog_url", "http://localhost:8085/api/v1")
+
+    client = sdk_client.HeberClient()
+    assert client.catalog_url == "http://localhost:8085/api/v1"
+
+
+
+================================================
+FILE: tests/test_silver_flush_config.py
+================================================
+"""Regression tests for Silver writer flush timing configuration."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
+
+import pytest
+
+from heber.config import settings
+from heber.writer.silver import SilverWriter
+
+
+@pytest.mark.asyncio
+async def test_silver_flush_uses_silver_max_flush_time(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "silver_max_rows_per_file", 999_999)
+    monkeypatch.setattr(settings, "silver_max_flush_time_seconds", 5)
+    monkeypatch.setattr(settings, "bronze_flush_interval_seconds", 9999)
+
+    writer = SilverWriter()
+    partition_key = "feed=bars/instrument_type=equity/dt=2026-02-05"
+    writer.buffers[partition_key] = [{"event_id": "evt-1"}]
+    writer.last_flush = datetime.now(UTC) - timedelta(seconds=10)
+    writer._flush_partition = AsyncMock()
+
+    await writer.flush_if_needed()
+
+    writer._flush_partition.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_silver_flush_does_not_use_bronze_interval(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "silver_max_rows_per_file", 999_999)
+    monkeypatch.setattr(settings, "silver_max_flush_time_seconds", 600)
+    monkeypatch.setattr(settings, "bronze_flush_interval_seconds", 0)
+
+    writer = SilverWriter()
+    partition_key = "feed=bars/instrument_type=equity/dt=2026-02-05"
+    writer.buffers[partition_key] = [{"event_id": "evt-1"}]
+    writer.last_flush = datetime.now(UTC) - timedelta(seconds=1)
+    writer._flush_partition = AsyncMock()
+
+    await writer.flush_if_needed()
+
+    writer._flush_partition.assert_not_awaited()
+
+
+
+================================================
+FILE: tests/test_silver_schema_source.py
+================================================
+"""Regression tests for Silver schema single source of truth."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from heber.schemas.silver import DEFAULT_SCHEMA, SILVER_SCHEMAS
+from heber.writer.silver import SilverWriter
+
+
+def test_silver_writer_uses_canonical_schema_module() -> None:
+    writer = SilverWriter()
+
+    assert writer._get_schema("bars") is SILVER_SCHEMAS["bars"]
+    assert writer._get_schema("unknown-feed").equals(DEFAULT_SCHEMA)
+
+
+def test_writer_silver_does_not_define_inline_schema_constants() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    silver_writer_source = (repo_root / "heber" / "writer" / "silver.py").read_text(encoding="utf-8")
+
+    assert "SILVER_SCHEMAS = {" not in silver_writer_source
+    assert "DEFAULT_SCHEMA = pa.schema(" not in silver_writer_source
+
+
+
+================================================
 FILE: tests/test_terraform_module_sources.py
 ================================================
 """Regression checks for Terraform local module wiring."""
@@ -50637,6 +51566,137 @@ def test_expected_module_entrypoints_have_main_tf() -> None:
             missing.append(str(module_main))
 
     assert not missing, f"Missing Terraform module files: {missing}"
+
+
+
+================================================
+FILE: tests/test_utcnow_regression.py
+================================================
+"""Regression test to prevent naive UTC timestamp usage."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_heber_sources_do_not_use_datetime_utcnow() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    heber_root = repo_root / "heber"
+
+    offenders: list[str] = []
+    for path in heber_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "datetime.utcnow(" in text:
+            offenders.append(str(path.relative_to(repo_root)))
+
+    assert offenders == [], f"Found naive datetime.utcnow usage in: {offenders}"
+
+
+
+================================================
+FILE: tests/test_writer_consumer_reliability.py
+================================================
+"""Reliability regression tests for the Redis stream writer consumer."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from heber.writer.consumer import EventConsumer
+
+
+class _StubRedis:
+    def __init__(self):
+        self.pending = []
+        self.claimed = []
+        self.acked: list[tuple] = []
+        self.added: list[tuple] = []
+        self.fail_xadd = False
+
+    async def xpending_range(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self.pending
+
+    async def xclaim(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self.claimed
+
+    async def xack(self, *args):  # noqa: ANN002
+        self.acked.append(args)
+        return len(args) - 2
+
+    async def xadd(self, stream: str, payload: dict):
+        if self.fail_xadd:
+            raise RuntimeError("dlq unavailable")
+        self.added.append((stream, payload))
+        return "9-0"
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_messages_claims_and_acks() -> None:
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    redis.pending = [{"message_id": "1-0"}]
+    redis.claimed = [("1-0", {"data": "{}"})]
+    consumer.redis = redis
+
+    consumer._process_stream_messages = AsyncMock(return_value=(["1-0"], []))
+    consumer.bronze_writer.flush_if_needed = AsyncMock()
+    consumer.silver_writer.flush_if_needed = AsyncMock()
+
+    recovered = await consumer._recover_pending_messages()
+
+    assert recovered == 1
+    assert len(redis.acked) == 1
+    assert redis.acked[0][0] == "heber:events"
+    assert redis.acked[0][1] == "heber-writers"
+    assert redis.acked[0][2] == "1-0"
+
+
+@pytest.mark.asyncio
+async def test_process_stream_messages_moves_failures_to_dlq() -> None:
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+
+    consumer._process_with_retry = AsyncMock(
+        side_effect=[
+            (True, "", 1),
+            (False, "validation_error", 3),
+        ]
+    )
+
+    ack_ids, failed_ids = await consumer._process_stream_messages(
+        [
+            ("1-0", {"data": "{}"}),
+            ("2-0", {"data": "{}"}),
+        ]
+    )
+
+    assert ack_ids == ["1-0", "2-0"]
+    assert failed_ids == []
+    assert len(redis.added) == 1
+    assert redis.added[0][0] == "heber:events:dlq"
+    assert redis.added[0][1]["source_message_id"] == "2-0"
+
+
+@pytest.mark.asyncio
+async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    redis.fail_xadd = True
+    consumer.redis = redis
+
+    consumer._process_with_retry = AsyncMock(return_value=(False, "boom", 3))
+
+    ack_ids, failed_ids = await consumer._process_stream_messages(
+        [
+            ("2-0", {"data": "{}"}),
+        ]
+    )
+
+    assert ack_ids == []
+    assert failed_ids == ["2-0"]
 
 
 

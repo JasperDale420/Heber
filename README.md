@@ -74,7 +74,7 @@ docker compose up heber-watch
 
 Environment variables:
 
-- `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6379`)
+- `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6380`)
 - `DATA_GATEWAY_URL` - Data Gateway for option quotes (default: `http://localhost:8000`)
 - `HEBER_GOLD_PATH` - Gold layer output path
 

@@ -10,8 +10,8 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 |---|---|---|
 | `HEBER_DATA_ROOT` | `/Volumes/heber/data` | Root path for Bronze/Silver/Gold data |
 | `HEBER_VOLUME_ROOT` | `/Volumes/heber` | External volume root used by scripts/docker |
-| `HEBER_POSTGRES_URL` | `postgresql+asyncpg://heber:heber_dev_password@localhost:5432/heber_catalog` | Catalog DB connection string |
-| `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis Streams endpoint |
+| `HEBER_POSTGRES_URL` | `postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog` | Catalog DB connection string |
+| `HEBER_REDIS_URL` | `redis://localhost:6380` | Redis Streams endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Redis stream name |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Redis consumer group |
 | `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed consumer messages |
