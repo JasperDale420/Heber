@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added architecture overview (`docs/architecture.md`)
 - Added configuration guide updates and host port mapping (`docs/configuration.md`)
 - Added technical debt audit (`docs/technical_debt_audit.md`)
+- Expanded technical debt audit (pass 2 findings and scope)
 
 #### Alert Watch Service (`heber/watch/`)
 

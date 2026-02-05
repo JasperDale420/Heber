@@ -6,7 +6,7 @@ This audit is based on static code inspection only. No services were run and no 
 
 ## Scope
 
-Audited in this run (files reviewed directly):
+Audit Pass 1 (2026-02-05, files reviewed directly):
 - README.md
 - CHANGELOG.md
 - pyproject.toml
@@ -30,26 +30,77 @@ Audited in this run (files reviewed directly):
 - tests/test_placeholder.py
 - tests/test_edge_cases.py
 
+Audit Pass 2 (2026-02-05, files reviewed directly):
+- docs/architecture.md
+- docs/operations/backup-dr-runbook.md
+- docs/operations/cost-estimates.md
+- docs/operations/deployment.md
+- docs/operations/monitoring.md
+- docs/operations/network-topology.md
+- docs/operations/troubleshooting.md
+- heber/watch/__init__.py
+- heber/watch/__main__.py
+- heber/watch/checker.py
+- heber/watch/consumer.py
+- heber/watch/features.py
+- heber/watch/manager.py
+- heber/watch/models.py
+- heber/watch/poller.py
+- heber/watch/writer.py
+- heber/ml/datasets.py
+- heber/ml/inference.py
+- heber/ml/trainer.py
+- heber/quality/contracts.py
+- heber/quality/soda_scanner.py
+- heber/quality/tests.py
+- heber/sre/capacity.py
+- heber/sre/chaos.py
+- heber/sre/error_budget.py
+- heber/sre/oncall.py
+- heber/sre/runbooks.py
+- heber/sre/slo.py
+- heber/sre/tests.py
+- heber/testing/ci_gates.py
+- heber/testing/environments.py
+- heber/testing/framework.py
+- heber/testing/generators.py
+- heber/testing/leakage.py
+- heber/testing/performance.py
+- heber/testing/tests.py
+- heber/testing/tests_framework.py
+- heber/storage/iceberg_catalog.py
+- heber/storage/iceberg_writer.py
+- heber/universe/survivor_bias.py
+- heber/universe/tests.py
+- heber/catalog/service.py
+- heber/catalog/datasources.py
+- heber/bus/__init__.py
+- heber/bus/backpressure.py
+- heber/bus/dedupe.py
+- heber/bus/streams.py
+- heber/schema/registry_client.py
+- heber/schemas/additional.py
+
 Not yet audited in this run (recommend a future pass):
-- docs/architecture.md and docs/operations/*
+- docs/ (all other files not listed above)
 - infrastructure/ and k8s/
 - scripts/ (including init and data tooling)
 - features/ and heber/features/
-- heber/watch/
-- heber/ml/
-- heber/quality/
-- heber/sre/
-- heber/testing/
-- heber/storage/
-- heber/universe/
+- heber/ops/
+- heber/firewall/ (scd.py, validation.py, tests.py)
+- heber/gold/
+- heber/hotstore/tables.py
+- heber/models/ (silver.py, etc.)
+- heber/retention/
+- heber/feast/
 - heber/backfill/ and heber/backtest/
-- heber/catalog/service.py and heber/catalog/datasources.py
-- heber/bus/
-- heber/schemas/ and docs/schema_registry.md
+- heber/versioning/
+- heber/calendar/market.py
+- heber/schemas/tests_additional.py
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, and inconsistent Hot Store implementations. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), and an event-bus claim path that can silently drop messages. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -71,6 +122,24 @@ Severity key: High, Medium, Low
 | TD-012 | Medium | Catalog DB | No Alembic migrations; tables are created at runtime. |
 | TD-013 | Low | Validation | Instrument key validation is defined but not enforced in ingestion. |
 | TD-014 | Low | Observability | Metrics are mostly placeholders and not wired to a running exporter. |
+| TD-015 | High | Event Bus | Claimed pending messages are not yielded to consumers, risking silent drops. |
+| TD-016 | High | ML | Meta-label dataset builder expects columns not produced by the label writer. |
+| TD-017 | Medium | Watch Service | Uses synchronous Redis calls inside async loops; can block the event loop. |
+| TD-018 | Medium | Watch Service | Acks watch-stream messages even when processing fails; no DLQ. |
+| TD-019 | Medium | Features | Time-of-day features are computed without timezone conversion (UTC vs ET). |
+| TD-020 | Medium | Integration | Data Gateway endpoints are inconsistent across watch/feature codepaths. |
+| TD-021 | Medium | ML | Default gold/features paths do not align with configured volume root. |
+| TD-022 | Medium | ML | Feature persistence to Gold is not wired; builder expects Parquet that is never written. |
+| TD-023 | Medium | ML | Feature ordering for inference is not tied to training feature order. |
+| TD-024 | Medium | Data Quality | Soda scanner default Silver path misses `/data` segment. |
+| TD-025 | Low | Data Quality | Non-null rate uses hard-coded 0.99 for per-column threshold. |
+| TD-026 | Medium | Testing | `tests_framework.py` calls missing `E2ETestSuite.get_schedule()`. |
+| TD-027 | Low | Environment | Testing environment defaults (ports/services) diverge from docker-compose. |
+| TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
+| TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
+| TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
+| TD-031 | Low | Watch Models | `created_at`/`updated_at` use naive `datetime.utcnow()` defaults. |
+| TD-032 | Low | Watch Poller | Polling interval ignores per-horizon settings and over-polls long horizons. |
 
 ## Detailed Findings
 
@@ -130,18 +199,90 @@ Recommendation: Validate in the consumer and attach a quality flag or reject inv
 Evidence: Several modules reference metrics counters but there is no wiring to a metrics server or standard export path. Some modules have metrics placeholders and log-only paths.
 Recommendation: Add a consistent metrics export strategy, likely via Prometheus, and register metrics in service entrypoints.
 
+**TD-015: Claimed pending messages are not yielded to consumers (possible silent drops).**
+Evidence: `heber/bus/__init__.py` calls `_claim_idle_messages()` inside `RedisEventBus.consume()` but discards the returned messages. Claimed messages are never processed, yet are removed from other consumers.
+Recommendation: Yield claimed messages in the consume loop or merge them into the next batch. Add an integration test that simulates XPENDING/XCLAIM behavior.
+
+**TD-016: Meta-label dataset builder expects columns not produced by the label writer.**
+Evidence: `heber/ml/datasets.py` expects `outcome` and `hit_tp_first`, but `heber/watch/checker.py`/`outcome_to_label_row()` writes `outcome_reason` and `contract_hit_tp_first`. Joins and labeling will be empty or incorrect.
+Recommendation: Align the label writer output with the dataset builder expectations (or vice versa) and add a small end-to-end test from watch outcome → dataset build.
+
+**TD-017: Watch service uses synchronous Redis calls inside async loops.**
+Evidence: `heber/watch/consumer.py` and `heber/watch/manager.py` use sync `redis` clients inside `async def` loops. This can block the event loop and stall poller/checker tasks.
+Recommendation: Switch to `redis.asyncio` for the watch service or run sync calls in a thread executor. Add backpressure metrics for watch processing latency.
+
+**TD-018: Watch consumer acknowledges messages even when processing fails; no DLQ.**
+Evidence: `heber/watch/consumer.py` unconditionally XACKs each message after `_process_alert`, even if parsing/processing failed. Failed alerts are silently dropped and no DLQ exists for the watch stream.
+Recommendation: Only ack on success, and add a DLQ stream for watch failures with retry/backoff similar to `heber/bus/backpressure.py`.
+
+**TD-019: Time-of-day features are computed without timezone conversion.**
+Evidence: `heber/watch/features.py` uses `alert.ts_event.hour` and assumes ET market hours. If `ts_event` is UTC (likely), time features are wrong.
+Recommendation: Normalize timestamps to a market timezone before feature extraction (e.g., convert UTC to US/Eastern) and document the assumption.
+
+**TD-020: Data Gateway endpoint paths are inconsistent.**
+Evidence: `SnapshotPoller` uses `/api/v1/alpaca/options/quotes`, while feature enrichment uses `/alpaca/...` and `/uw/...` paths. These may not exist on the same gateway.
+Recommendation: Centralize Data Gateway base paths and versioning in config and align all callers.
+
+**TD-021: Meta-label builder defaults to `/tmp/heber/gold` instead of configured data root.**
+Evidence: `heber/ml/datasets.py` default paths point to `/tmp/heber/gold`, while the system’s data root is `/Volumes/heber/data` via `Settings`.
+Recommendation: Use `HEBER_DATA_ROOT` or `settings.gold_path` and ensure the builder follows environment configuration.
+
+**TD-022: Feature persistence to Gold is not wired; builder expects Parquet that is never written.**
+Evidence: Features are stored in Redis (`heber/watch/features.py`) but no job writes features to Gold; `MetaLabelDatasetBuilder` expects Parquet under `meta_labels/features`.
+Recommendation: Add a persistence step that writes features to Gold (or update the builder to read from Redis + outcomes).
+
+**TD-023: Inference feature ordering is not tied to training feature order.**
+Evidence: Training uses `MetaLabelDatasetBuilder.get_feature_columns()` (dataframe column order), while inference uses `AlertFeatures.numeric_feature_names()` (fixed order). These can diverge.
+Recommendation: Persist the feature name order with the model (e.g., in model metadata) and enforce the same order at inference.
+
+**TD-024: Soda scanner default Silver path is likely wrong.**
+Evidence: `SodaConfig.silver_path` defaults to `/Volumes/heber/silver` but the data root is `/Volumes/heber/data/silver`.
+Recommendation: Default to `settings.silver_path` or set `HEBER_SILVER_PATH` in `.env.example`.
+
+**TD-025: Non-null rate uses a hard-coded 0.99 threshold for per-column reporting.**
+Evidence: `DataQualityValidator.check_non_null_rate()` flags columns below 0.99 regardless of the contract threshold. This can produce false violations when contract thresholds differ.
+Recommendation: Use the contract threshold when identifying columns below threshold.
+
+**TD-026: `tests_framework.py` references a missing method.**
+Evidence: `TestE2ETestSuite.test_get_schedule()` calls `E2ETestSuite.get_schedule()` but the method does not exist in `heber/testing/framework.py`.
+Recommendation: Implement `get_schedule()` or remove the test to keep test suites consistent.
+
+**TD-027: Testing environment defaults diverge from docker-compose.**
+Evidence: `heber/testing/environments.py` defines local services on ports 5432/6379, while `docker-compose.yml` uses 5433/6380. This causes confusion in local testing guidance.
+Recommendation: Align testing defaults with compose ports or document the difference.
+
+**TD-028: Iceberg partition spec format may not match PyIceberg API.**
+Evidence: `create_silver_table()` passes a list to `partition_spec`. PyIceberg typically expects a `PartitionSpec` object; this may break at runtime.
+Recommendation: Use `PartitionSpec` builders from PyIceberg and add a smoke test that initializes tables.
+
+**TD-029: Quarantine paths read provider/feed from `envelope.meta`.**
+Evidence: `heber/bus/backpressure.py` expects `envelope["meta"]["provider"]`/`["feed"]`, but `EventEnvelope` stores `provider` and `feed` at the top level.
+Recommendation: Use top-level fields or normalize envelope format before quarantine writes.
+
+**TD-030: Stream naming diverges across modules and docs.**
+Evidence: `heber/bus` uses `stream:*` names, writer/consumer uses `heber:events`, and ops docs reference `stream:market.bars`. This split-brain naming leads to non-wired components.
+Recommendation: Standardize on one stream naming convention and update docs, bus config, and consumers together.
+
+**TD-031: Watch model timestamps use naive `datetime.utcnow()` defaults.**
+Evidence: `heber/watch/models.py` sets `created_at` and `updated_at` with `datetime.utcnow()` (naive), while other parts expect timezone-aware UTC.
+Recommendation: Use `datetime.now(UTC)` or enforce timezone-aware defaults across models.
+
+**TD-032: Watch poller ignores per-horizon intervals.**
+Evidence: `SnapshotPoller.run()` uses the minimum interval from `POLL_CONFIG` for all watches, which over-polls swing/LEAP horizons.
+Recommendation: Respect per-watch polling intervals or schedule per-horizon polling loops.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014.
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
