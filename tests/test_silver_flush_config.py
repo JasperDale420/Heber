@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,7 +20,7 @@ async def test_silver_flush_uses_silver_max_flush_time(monkeypatch) -> None:
     writer = SilverWriter()
     partition_key = "feed=bars/instrument_type=equity/dt=2026-02-05"
     writer.buffers[partition_key] = [{"event_id": "evt-1"}]
-    writer.last_flush = datetime.utcnow() - timedelta(seconds=10)
+    writer.last_flush = datetime.now(UTC) - timedelta(seconds=10)
     writer._flush_partition = AsyncMock()
 
     await writer.flush_if_needed()
@@ -37,7 +37,7 @@ async def test_silver_flush_does_not_use_bronze_interval(monkeypatch) -> None:
     writer = SilverWriter()
     partition_key = "feed=bars/instrument_type=equity/dt=2026-02-05"
     writer.buffers[partition_key] = [{"event_id": "evt-1"}]
-    writer.last_flush = datetime.utcnow() - timedelta(seconds=1)
+    writer.last_flush = datetime.now(UTC) - timedelta(seconds=1)
     writer._flush_partition = AsyncMock()
 
     await writer.flush_if_needed()

@@ -6,7 +6,7 @@ Runs periodically to prevent "small file problem."
 
 import asyncio
 import signal
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -65,7 +65,7 @@ class Compactor:
             merged_table = pa.concat_tables(tables)
 
             # Write merged file
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}.parquet"
 
             pq.write_table(

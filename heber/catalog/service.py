@@ -1,6 +1,6 @@
 """Catalog service business logic."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -119,7 +119,7 @@ class CatalogService:
             for key, value in kwargs.items():
                 if hasattr(existing, key) and value is not None:
                     setattr(existing, key, value)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(UTC)
         else:
             existing = InstrumentRegistry(
                 instrument_key=instrument_key,
@@ -176,7 +176,7 @@ class CatalogService:
             coverage.dt_max = max(coverage.dt_max, dt_max)
             if approx_row_count:
                 coverage.approx_row_count = (coverage.approx_row_count or 0) + approx_row_count
-            coverage.last_updated_ts = datetime.utcnow()
+            coverage.last_updated_ts = datetime.now(UTC)
         else:
             coverage = DataCoverage(
                 dataset_name=dataset_name,

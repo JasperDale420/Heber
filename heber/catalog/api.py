@@ -4,7 +4,7 @@ See PRD Section 11.7 for API contract.
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -132,7 +132,7 @@ async def list_datasets(
             )
             for d in datasets
         ],
-        meta=MetaResponse(ts=datetime.utcnow()),
+        meta=MetaResponse(ts=datetime.now(UTC)),
     )
 
 
@@ -152,7 +152,7 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
             partition_cols=dataset.partition_cols,
             is_active=dataset.is_active,
         ),
-        meta=MetaResponse(ts=datetime.utcnow()),
+        meta=MetaResponse(ts=datetime.now(UTC)),
     )
 
 
@@ -169,7 +169,7 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
             }
             for v in versions
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -186,7 +186,7 @@ async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_
             }
             for c in coverage
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -207,7 +207,7 @@ async def get_instrument(key: str, service: CatalogService = Depends(get_service
             strike=instrument.strike,
             put_call=instrument.put_call,
         ),
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -231,7 +231,7 @@ async def lookup_instruments(
             )
             for i in instruments
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -261,7 +261,7 @@ async def search_instruments(
             )
             for i in instruments
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -278,7 +278,7 @@ async def list_feeds(service: CatalogService = Depends(get_service)):
             )
             for m in mappings
         ],
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -296,7 +296,7 @@ async def resolve_feed(
         )
     return {
         "data": {"silver_dataset_name": silver_dataset},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -322,7 +322,7 @@ async def get_dataset_version(
             "is_current": target.is_current,
             "created_at": target.created_at,
         },
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -357,7 +357,7 @@ async def create_dataset(
     )
     return {
         "data": {"dataset_name": dataset.dataset_name},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -393,7 +393,7 @@ async def upsert_instrument(
     )
     return {
         "data": {"instrument_key": instrument.instrument_key},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -428,11 +428,11 @@ async def create_backfill(request: BackfillRequest):
         "end_date": request.end_date,
         "project": request.project,
         "status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     return {
         "data": {"backfill_id": job_id, "status": "pending"},
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -444,7 +444,7 @@ async def get_backfill(id: str):
         raise HTTPException(status_code=404, detail=f"Backfill job '{id}' not found")
     return {
         "data": job,
-        "meta": {"ts": datetime.utcnow()},
+        "meta": {"ts": datetime.now(UTC)},
     }
 
 
@@ -459,7 +459,7 @@ async def list_backfills(
         jobs = [j for j in jobs if j["status"] == status]
     return {
         "data": jobs[:limit],
-        "meta": {"ts": datetime.utcnow(), "count": len(jobs)},
+        "meta": {"ts": datetime.now(UTC), "count": len(jobs)},
     }
 
 
@@ -488,7 +488,7 @@ async def http_exception_handler(request, exc: HTTPException):
                 "code": code,
                 "message": str(exc.detail),
             },
-            "meta": {"ts": datetime.utcnow().isoformat()},
+            "meta": {"ts": datetime.now(UTC).isoformat()},
         },
     )
 

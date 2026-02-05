@@ -8,7 +8,7 @@ Path: bronze/provider={}/feed={}/dt={}/hour={}/
 import gzip
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -25,7 +25,7 @@ class BronzeWriter:
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
         self.buffer_counts: dict[str, int] = defaultdict(int)
-        self.last_flush: datetime = datetime.utcnow()
+        self.last_flush: datetime = datetime.now(UTC)
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -39,7 +39,7 @@ class BronzeWriter:
         base.mkdir(parents=True, exist_ok=True)
 
         # Use timestamp-based filename for uniqueness
-        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"events-{ts}.jsonl.gz"
 
     async def write(self, envelope: EventEnvelope) -> None:
@@ -53,7 +53,7 @@ class BronzeWriter:
 
     async def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         for partition_key, events in list(self.buffers.items()):

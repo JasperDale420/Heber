@@ -6,7 +6,7 @@ Path: silver/feed={}/instrument_type={}/dt={}/[hour={}]/
 """
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1118,7 +1118,7 @@ class SilverWriter:
 
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
-        self.last_flush: datetime = datetime.utcnow()
+        self.last_flush: datetime = datetime.now(UTC)
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -1246,7 +1246,7 @@ class SilverWriter:
         base = settings.silver_path / partition_key
         base.mkdir(parents=True, exist_ok=True)
 
-        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"part-{ts}.parquet"
 
     async def write(self, envelope: EventEnvelope) -> None:
@@ -1257,7 +1257,7 @@ class SilverWriter:
 
     async def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         for partition_key, rows in list(self.buffers.items()):

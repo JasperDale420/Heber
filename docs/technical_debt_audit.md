@@ -224,6 +224,7 @@ Updated: 2026-02-05
 - `TD-004` and `TD-071` addressed via `T-09`: Hot Store sync/write implementation is unified under `heber.hotstore.sync` with a single `clickhouse-connect` client path and sync-safe table creation helpers.
 - `TD-008` addressed via `T-10`: writer consumer now retries processing failures, claims idle pending messages at startup, and routes unrecoverable records to a Redis DLQ stream.
 - `TD-005` addressed via `T-11`: Silver writer flush interval now respects `silver_max_flush_time_seconds` rather than Bronze flush configuration.
+- `TD-006` addressed via `T-12`: all `heber/` runtime modules now use timezone-aware UTC timestamps (`datetime.now(UTC)`) in place of naive `datetime.utcnow()`, with a regression test guarding against reintroduction.
 
 ## Executive Summary
 

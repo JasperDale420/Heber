@@ -3,7 +3,7 @@
 Provides safe, point-in-time correct access to Silver and Gold datasets.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -455,7 +455,7 @@ class HeberClient:
             )
             partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             file_path = partition_path / f"part-{ts}.parquet"
 
             # Drop temporary dt column

@@ -12,7 +12,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -411,7 +411,7 @@ class BronzeToSilverTransformer:
         partition_path.mkdir(parents=True, exist_ok=True)
 
         # Generate unique filename
-        ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         file_path = partition_path / f"part-{ts}.parquet"
 
         try:
