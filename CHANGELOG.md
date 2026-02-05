@@ -197,6 +197,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Compaction now writes to temp files and promotes merged output atomically before removing source files
   - Added per-partition lock-file handling and failure cleanup so failed compactions keep source files intact
   - Added regression tests for successful merge cleanup and failure safety (`tests/test_compactor_safety.py`)
+- **Silver Schema Source Consolidation** (`heber/schemas/silver.py`, `heber/writer/silver.py`, `heber/writer/transformer.py`)
+  - Moved canonical Silver Arrow schema definitions out of `heber.writer.silver` into shared `heber.schemas.silver`
+  - Updated writer and Bronze-to-Silver transformer to consume the shared schema module
+  - Added regression tests to enforce single-source schema ownership and block inline schema constant reintroduction (`tests/test_silver_schema_source.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

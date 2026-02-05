@@ -22,7 +22,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
-from heber.writer.silver import SILVER_SCHEMAS
+from heber.schemas.silver import SILVER_SCHEMAS
 
 logger = structlog.get_logger(__name__)
 

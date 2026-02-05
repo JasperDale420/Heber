@@ -21,6 +21,7 @@ Updated: 2026-02-05
 - `T-11` complete (`TD-005`): Silver writer flush cadence now correctly uses `silver_max_flush_time_seconds` instead of Bronze flush settings, with regression tests.
 - `T-12` complete (`TD-006`): replaced naive `datetime.utcnow()` usage across `heber/` runtime modules with timezone-aware `datetime.now(UTC)`, with regression coverage to prevent reintroduction.
 - `T-13` complete (`TD-007`): compactor now performs streamed merge writes into temp files, promotes output atomically, and only removes source files after successful promotion; regression tests added for success/failure paths.
+- `T-14` complete (`TD-009`): Silver Arrow schema definitions moved from `heber.writer.silver` into shared `heber.schemas.silver`, with writer/transformer wired to the shared module and regression coverage preventing inline schema duplication.
 
 ## Prioritization Approach
 
@@ -207,6 +208,25 @@ Acceptance Criteria:
 
 Estimate: 1-2 days
 
+### T-14: Centralize Silver Schema Definitions (TD-009)
+
+Priority: P2
+
+Description: Silver schema constants were defined inline in `heber.writer.silver`, causing drift risk and duplicated ownership. Centralize schema definitions into a shared schema module and keep runtime writers/transforms consuming that source.
+
+Scope:
+- `heber/schemas/silver.py`
+- `heber/writer/silver.py`
+- `heber/writer/transformer.py`
+- `tests/test_silver_schema_source.py`
+
+Acceptance Criteria:
+- Canonical Silver Arrow schemas live in one shared module.
+- Writer and transformer import schemas from shared module, not from duplicated inline constants.
+- Regression tests verify writer behavior still resolves known/default schemas and guard against reintroducing inline schema constants.
+
+Estimate: 1 day
+
 ## Suggested Execution Order
 
 1. T-01 (Event bus claim handling)
@@ -222,3 +242,4 @@ Estimate: 1-2 days
 11. T-11 (Silver flush config alignment)
 12. T-12 (Timezone-aware UTC normalization)
 13. T-13 (Compactor atomic merge hardening)
+14. T-14 (Silver schema centralization)
