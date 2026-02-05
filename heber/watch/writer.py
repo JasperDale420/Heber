@@ -172,7 +172,7 @@ class WatchService:
 
         while self._running:
             try:
-                outcomes = self.checker.check_all()
+                outcomes = await asyncio.to_thread(self.checker.check_all)
 
                 if outcomes:
                     self.writer.write_outcomes(outcomes)

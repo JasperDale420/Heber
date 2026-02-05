@@ -25,6 +25,7 @@ Updated: 2026-02-05
 - `T-15` complete (`TD-011`): Hot Store event sync (`sync_quote`/`sync_trade`/`sync_bar`) now buffers records and writes batched inserts based on row/time thresholds, with flush-on-stop and regression coverage.
 - `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
 - `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
+- `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 
 ## Prioritization Approach
 
@@ -214,6 +215,27 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-18: Remove Blocking Redis Calls from Watch Async Loops (TD-017)
+
+Priority: P1
+
+Description: Watch consumer and poller async loops previously called sync Redis / manager methods directly, risking event-loop stalls. Move these calls behind async wrappers that offload blocking work.
+
+Scope:
+- `heber/watch/manager.py`
+- `heber/watch/consumer.py`
+- `heber/watch/poller.py`
+- `heber/watch/writer.py`
+- `tests/test_watch_async_redis.py`
+
+Acceptance Criteria:
+- Consumer stream read/ack and watch creation in async paths no longer perform direct blocking sync calls.
+- Poller quote update loop uses async manager wrappers for watch/snapshot updates.
+- Check/write loop offloads synchronous barrier checks from the event loop.
+- Regression tests verify async paths are used and event loop remains responsive while reading stream messages.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -309,3 +331,4 @@ Estimate: 1 day
 15. T-15 (Hot Store event batching)
 16. T-16 (Local service port alignment)
 17. T-17 (Catalog migration baseline + non-dev startup guard)
+18. T-18 (Watch async Redis non-blocking refactor)

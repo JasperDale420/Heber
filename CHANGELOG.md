@@ -215,6 +215,12 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Catalog API lifespan now applies `Base.metadata.create_all` only in `dev` environment
   - Non-dev environments now skip runtime schema auto-create and are expected to run Alembic migrations
   - Added regression tests for dev/non-dev startup behavior and migration assets (`tests/test_catalog_migrations.py`)
+- **Watch Async Redis Non-Blocking Refactor** (`heber/watch/*.py`)
+  - Added async wrappers in `WatchManager` for Redis-backed CRUD/update operations used from async loops
+  - Watch consumer stream read/ack and watch creation now offload sync Redis/manager calls via `asyncio.to_thread`
+  - Snapshot poller now uses async manager wrappers for active-watch fetches, snapshot writes, and price updates
+  - Check/write loop now offloads synchronous barrier checks from async context
+  - Added regression tests to verify non-blocking async paths (`tests/test_watch_async_redis.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

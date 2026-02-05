@@ -100,10 +100,29 @@ class AlertWatchConsumer:
             else:
                 raise
 
+    async def _setup_consumer_group_async(self) -> None:
+        """Async wrapper for consumer group setup."""
+        await asyncio.to_thread(self.setup_consumer_group)
+
+    async def _read_messages(self):
+        """Read stream messages without blocking the event loop."""
+        return await asyncio.to_thread(
+            self.redis.xreadgroup,
+            CONSUMER_GROUP,
+            CONSUMER_NAME,
+            {HEBER_EVENTS_STREAM: ">"},
+            count=100,
+            block=5000,
+        )
+
+    async def _ack_message(self, msg_id: str) -> None:
+        """Acknowledge stream message without blocking the event loop."""
+        await asyncio.to_thread(self.redis.xack, HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+
     async def run(self) -> None:
         """Run the consumer as a continuous service."""
         self._running = True
-        self.setup_consumer_group()
+        await self._setup_consumer_group_async()
 
         logger.info(
             "Starting alert watch consumer",
@@ -114,13 +133,7 @@ class AlertWatchConsumer:
         while self._running:
             try:
                 # Read new messages from stream
-                messages = self.redis.xreadgroup(
-                    CONSUMER_GROUP,
-                    CONSUMER_NAME,
-                    {HEBER_EVENTS_STREAM: ">"},
-                    count=100,
-                    block=5000,
-                )
+                messages = await self._read_messages()
 
                 if messages:
                     for _stream, entries in messages:
@@ -129,7 +142,7 @@ class AlertWatchConsumer:
                             if self._is_flow_alert(data):
                                 await self._process_alert(msg_id, data)
                             # Always acknowledge to avoid reprocessing
-                            self.redis.xack(HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+                            await self._ack_message(msg_id)
 
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
@@ -194,7 +207,7 @@ class AlertWatchConsumer:
                 entry_price = alert.get("contract_px", 1.0)
 
             # Create watch
-            watch = self.manager.create_watch(
+            watch = await self.manager.create_watch_async(
                 alert_id=alert["id"],
                 occ_symbol=alert["occ_symbol"],
                 underlying=alert["underlying"],

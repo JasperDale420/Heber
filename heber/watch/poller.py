@@ -60,7 +60,7 @@ class SnapshotPoller:
             Stats from the poll cycle
         """
         # Get active watches grouped by symbol
-        active = self.manager.get_active_watches()
+        active = await self.manager.get_active_watches_async()
 
         if not active:
             return {"watches": 0, "quotes": 0, "errors": 0}
@@ -84,8 +84,8 @@ class SnapshotPoller:
         for symbol, quote in quotes.items():
             for watch in symbol_to_watches.get(symbol, []):
                 snapshot = self._create_snapshot(watch, quote)
-                self.manager.add_snapshot(snapshot)
-                self.manager.update_watch_price(
+                await self.manager.add_snapshot_async(snapshot)
+                await self.manager.update_watch_price_async(
                     watch.watch_id,
                     snapshot.mid_px or snapshot.last_px,
                     snapshot.timestamp,
@@ -130,7 +130,7 @@ class SnapshotPoller:
                 logger.info("Poll cycle complete", **stats)
 
                 # Cleanup expired watches
-                expired = self.manager.cleanup_expired()
+                expired = await self.manager.cleanup_expired_async()
                 if expired:
                     logger.info("Expired watches cleaned", count=expired)
 

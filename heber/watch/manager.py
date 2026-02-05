@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -120,6 +121,40 @@ class WatchManager:
 
         return watch
 
+    async def create_watch_async(
+        self,
+        alert_id: str,
+        occ_symbol: str,
+        underlying: str,
+        put_call: str,
+        expiry: str,
+        strike: float,
+        entry_price: float,
+        spot_at_alert: float,
+        alert_time: datetime,
+        horizon: WatchHorizon,
+        tp_threshold: float,
+        sl_threshold: float,
+        atr_at_alert: float | None = None,
+    ) -> AlertWatch:
+        """Async wrapper for create_watch to avoid blocking event loops."""
+        return await asyncio.to_thread(
+            self.create_watch,
+            alert_id,
+            occ_symbol,
+            underlying,
+            put_call,
+            expiry,
+            strike,
+            entry_price,
+            spot_at_alert,
+            alert_time,
+            horizon,
+            tp_threshold,
+            sl_threshold,
+            atr_at_alert,
+        )
+
     def get_watch(self, watch_id: str) -> AlertWatch | None:
         """Get a watch by ID."""
         key = WatchKeys.watch_key(watch_id)
@@ -141,6 +176,10 @@ class WatchManager:
                 watches.append(watch)
 
         return watches
+
+    async def get_active_watches_async(self) -> list[AlertWatch]:
+        """Async wrapper for get_active_watches."""
+        return await asyncio.to_thread(self.get_active_watches)
 
     def get_watches_for_symbol(self, occ_symbol: str) -> list[AlertWatch]:
         """Get all watches for a specific contract."""
@@ -194,6 +233,15 @@ class WatchManager:
 
         return watch
 
+    async def update_watch_price_async(
+        self,
+        watch_id: str,
+        current_price: float,
+        timestamp: datetime,
+    ) -> AlertWatch | None:
+        """Async wrapper for update_watch_price."""
+        return await asyncio.to_thread(self.update_watch_price, watch_id, current_price, timestamp)
+
     def complete_watch(
         self,
         watch_id: str,
@@ -241,6 +289,10 @@ class WatchManager:
         key = WatchKeys.snapshots_key(snapshot.watch_id)
         self.redis.rpush(key, snapshot.model_dump_json())
 
+    async def add_snapshot_async(self, snapshot: WatchSnapshot) -> None:
+        """Async wrapper for add_snapshot."""
+        await asyncio.to_thread(self.add_snapshot, snapshot)
+
     def get_snapshots(self, watch_id: str) -> list[WatchSnapshot]:
         """Get all snapshots for a watch."""
         key = WatchKeys.snapshots_key(watch_id)
@@ -275,6 +327,10 @@ class WatchManager:
         logger.info("Cleaned up expired watches", count=len(expired))
 
         return len(expired)
+
+    async def cleanup_expired_async(self) -> int:
+        """Async wrapper for cleanup_expired."""
+        return await asyncio.to_thread(self.cleanup_expired)
 
     def delete_watch(self, watch_id: str) -> bool:
         """Delete a watch and its snapshots."""
