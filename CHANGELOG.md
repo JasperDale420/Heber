@@ -185,6 +185,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added per-message retry with configurable backoff before dead-lettering
   - Added Redis DLQ routing for unrecoverable messages (`HEBER_REDIS_DLQ_STREAM_NAME`)
   - Added regression coverage for pending recovery and DLQ behavior (`tests/test_writer_consumer_reliability.py`)
+- **Silver Flush Timing Fix** (`heber/writer/silver.py`)
+  - Silver flush checks now use `silver_max_flush_time_seconds` instead of Bronze flush interval settings
+  - Added regression tests to ensure Silver timing is independent from Bronze config (`tests/test_silver_flush_config.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

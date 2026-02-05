@@ -1262,7 +1262,7 @@ class SilverWriter:
 
         for partition_key, rows in list(self.buffers.items()):
             should_flush = (
-                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.bronze_flush_interval_seconds
+                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
             )
             if should_flush and rows:
                 await self._flush_partition(partition_key, rows)

@@ -18,6 +18,7 @@ Updated: 2026-02-05
 - `T-08` complete (`TD-002`): SDK now defaults to `HEBER_CATALOG_URL` (`http://localhost:8085/api/v1`) to match docker-compose host exposure; docs and regression tests updated.
 - `T-09` complete (`TD-004`, `TD-071`): unified Hot Store sync/write logic under `heber.hotstore.sync` with `clickhouse-connect`; legacy `heber.writer.hotstore` now re-exports the unified path.
 - `T-10` complete (`TD-008`): writer consumer now retries failures, claims idle pending messages on startup, and dead-letters unrecoverable messages to a Redis DLQ stream.
+- `T-11` complete (`TD-005`): Silver writer flush cadence now correctly uses `silver_max_flush_time_seconds` instead of Bronze flush settings, with regression tests.
 
 ## Prioritization Approach
 
