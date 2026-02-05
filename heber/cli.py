@@ -33,6 +33,12 @@ def main() -> int:
     versions_parser = subparsers.add_parser("versions", help="List Gold versions")
     versions_parser.add_argument("dataset", help="Dataset name")
 
+    # Backfill command
+    backfill_parser = subparsers.add_parser("backfill", help="Backfill Silver from Bronze")
+    backfill_parser.add_argument("--feed", help="Specific feed to backfill")
+    backfill_parser.add_argument("--since", help="Start date (YYYY-MM-DD)")
+    backfill_parser.add_argument("--until", help="End date (YYYY-MM-DD)")
+
     args = parser.parse_args()
 
     if args.command == "info":
@@ -69,6 +75,28 @@ def main() -> int:
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
+        return 0
+
+    elif args.command == "backfill":
+        import asyncio
+        from datetime import datetime
+
+        from heber.writer.transformer import BronzeToSilverTransformer
+
+        since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
+        until = datetime.strptime(args.until, "%Y-%m-%d") if args.until else None
+
+        transformer = BronzeToSilverTransformer()
+
+        if args.feed:
+            print(f"Backfilling feed: {args.feed}")
+            count = asyncio.run(transformer.transform(args.feed))
+            print(f"Transformed {count} records")
+        else:
+            print("Backfilling all feeds from Bronze to Silver...")
+            stats = asyncio.run(transformer.transform_all(since=since, until=until))
+            for feed, count in sorted(stats.items()):
+                print(f"  {feed}: {count} records")
         return 0
 
     else:

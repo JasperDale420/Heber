@@ -180,6 +180,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Replaced legacy duplicate `heber.writer.hotstore` implementation with a compatibility re-export facade
   - Fixed async/sync mismatch points by using sync-safe table creation (`create_all_tables`) plus optional async helper (`create_all_tables_async`)
   - Added regression coverage for unified table creation, batch writes, and metrics (`tests/test_hotstore_unification.py`)
+- **Consumer DLQ + Pending Recovery** (`heber/writer/consumer.py`)
+  - Added startup recovery for idle pending Redis stream entries via `XPENDING`/`XCLAIM`
+  - Added per-message retry with configurable backoff before dead-lettering
+  - Added Redis DLQ routing for unrecoverable messages (`HEBER_REDIS_DLQ_STREAM_NAME`)
+  - Added regression coverage for pending recovery and DLQ behavior (`tests/test_writer_consumer_reliability.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

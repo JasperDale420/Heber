@@ -7,6 +7,7 @@ import asyncio
 import json
 import signal
 from datetime import UTC, datetime
+from typing import Any
 
 import redis.asyncio as redis
 import structlog
@@ -105,11 +106,72 @@ class EventConsumer:
             else:
                 raise
 
-    async def process_event(self, event_data: dict) -> bool:
-        """Process a single event through Bronze and Silver layers.
+        recovered = await self._recover_pending_messages()
+        if recovered > 0:
+            logger.info(
+                "Recovered pending messages",
+                recovered=recovered,
+                stream=settings.redis_stream_name,
+                group=settings.redis_consumer_group,
+            )
 
-        Returns True if successful, False otherwise.
-        """
+    @staticmethod
+    def _decode_string(value: Any) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+
+    def _serialize_message_data(self, message_data: dict) -> str:
+        """Serialize Redis stream payload for DLQ auditing."""
+        normalized: dict[str, str] = {}
+        for key, value in message_data.items():
+            key_str = self._decode_string(key)
+            if isinstance(value, bytes):
+                normalized[key_str] = value.decode("utf-8", errors="replace")
+            elif isinstance(value, dict | list):
+                normalized[key_str] = json.dumps(value, default=str)
+            else:
+                normalized[key_str] = str(value)
+        return json.dumps(normalized, default=str)
+
+    async def _send_to_dlq(
+        self,
+        message_id: str | bytes,
+        message_data: dict,
+        error: str,
+        attempts: int,
+    ) -> bool:
+        """Write failed message details to DLQ stream."""
+        try:
+            dlq_event = {
+                "source_stream": settings.redis_stream_name,
+                "source_group": settings.redis_consumer_group,
+                "source_message_id": self._decode_string(message_id),
+                "consumer_name": self.consumer_name,
+                "attempts": str(attempts),
+                "error": error,
+                "failed_at": datetime.now(UTC).isoformat(),
+                "payload": self._serialize_message_data(message_data),
+            }
+            dlq_id = await self.redis.xadd(settings.redis_dlq_stream_name, dlq_event)
+            logger.warning(
+                "Message sent to DLQ",
+                dlq_stream=settings.redis_dlq_stream_name,
+                source_message_id=dlq_event["source_message_id"],
+                dlq_message_id=self._decode_string(dlq_id),
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "Failed to write message to DLQ",
+                source_message_id=self._decode_string(message_id),
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+
+    async def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
+        """Process an event one time and return `(success, error)`."""
         try:
             # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
             payload_str = (
@@ -145,7 +207,7 @@ class EventConsumer:
                 feed=envelope.feed,
                 instrument_key=envelope.instrument_key,
             )
-            return True
+            return True, None
 
         except Exception as e:
             logger.error(
@@ -154,7 +216,115 @@ class EventConsumer:
                 event_data=str(event_data)[:200],
                 exc_info=True,
             )
-            return False
+            return False, str(e)
+
+    async def process_event(self, event_data: dict) -> bool:
+        """Process a single event through Bronze and Silver layers.
+
+        Returns True if successful, False otherwise.
+        """
+        success, _ = await self._process_event_once(event_data)
+        return success
+
+    async def _process_with_retry(self, event_data: dict) -> tuple[bool, str, int]:
+        """Process message with retry/backoff before DLQ."""
+        max_retries = max(1, settings.redis_process_max_retries)
+        backoff = max(0.0, settings.redis_retry_backoff_seconds)
+        last_error = "unknown_error"
+
+        for attempt in range(1, max_retries + 1):
+            success, error = await self._process_event_once(event_data)
+            if success:
+                return True, "", attempt
+
+            if error:
+                last_error = error
+
+            if attempt < max_retries and backoff > 0:
+                await asyncio.sleep(backoff * attempt)
+
+        return False, last_error, max_retries
+
+    async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
+        """Process a list of stream messages and return `(acked_ids, failed_ids)`."""
+        processed_ids: list[str] = []
+        failed_ids: list[str] = []
+
+        for message_id, message_data in stream_messages:
+            success, error, attempts = await self._process_with_retry(message_data)
+            message_id_str = self._decode_string(message_id)
+            if success:
+                processed_ids.append(message_id_str)
+                continue
+
+            moved_to_dlq = await self._send_to_dlq(
+                message_id=message_id,
+                message_data=message_data,
+                error=error,
+                attempts=attempts,
+            )
+            if moved_to_dlq:
+                # Ack after durable DLQ write so poison messages don't block group progress.
+                processed_ids.append(message_id_str)
+            else:
+                failed_ids.append(message_id_str)
+
+        return processed_ids, failed_ids
+
+    async def _recover_pending_messages(self) -> int:
+        """Claim and process idle pending messages for this consumer group."""
+        pending = await self.redis.xpending_range(
+            settings.redis_stream_name,
+            settings.redis_consumer_group,
+            "-",
+            "+",
+            settings.redis_claim_batch_size,
+            idle=settings.redis_claim_idle_ms,
+        )
+        if not pending:
+            return 0
+
+        message_ids: list[str] = []
+        for entry in pending:
+            if isinstance(entry, dict):
+                msg_id = entry.get("message_id") or entry.get(b"message_id")
+                if msg_id is not None:
+                    message_ids.append(self._decode_string(msg_id))
+
+        if not message_ids:
+            return 0
+
+        claimed = await self.redis.xclaim(
+            settings.redis_stream_name,
+            settings.redis_consumer_group,
+            self.consumer_name,
+            settings.redis_claim_idle_ms,
+            message_ids,
+        )
+        if not claimed:
+            return 0
+
+        ack_ids, failed_ids = await self._process_stream_messages(claimed)
+
+        # Flush to disk before acking claimed messages.
+        await self.bronze_writer.flush_if_needed()
+        await self.silver_writer.flush_if_needed()
+
+        if ack_ids:
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                *ack_ids,
+            )
+
+        if failed_ids:
+            logger.warning(
+                "Pending messages could not be recovered",
+                failed_count=len(failed_ids),
+                failed_ids=failed_ids[:10],
+            )
+
+        return len(ack_ids)
 
     def _validate_payload_schema(self, envelope: EventEnvelope) -> None:
         """Warn on missing/unknown payload keys for selected feeds."""
@@ -227,17 +397,13 @@ class EventConsumer:
             return
 
         # Collect successfully processed message IDs
-        processed_ids: list[bytes] = []
-        failed_ids: list[bytes] = []
+        processed_ids: list[str] = []
+        failed_ids: list[str] = []
 
         for _stream_name, stream_messages in messages:
-            for message_id, message_data in stream_messages:
-                success = await self.process_event(message_data)
-                if success:
-                    processed_ids.append(message_id)
-                else:
-                    failed_ids.append(message_id)
-                    logger.warning("Event failed, needs DLQ", message_id=message_id)
+            ack_ids, stream_failed_ids = await self._process_stream_messages(stream_messages)
+            processed_ids.extend(ack_ids)
+            failed_ids.extend(stream_failed_ids)
 
         # Flush to disk BEFORE acknowledging
         await self.bronze_writer.flush_if_needed()
@@ -251,6 +417,13 @@ class EventConsumer:
                 *processed_ids,
             )
             logger.debug("Acknowledged batch", count=len(processed_ids))
+
+        if failed_ids:
+            logger.warning(
+                "Messages left pending after DLQ failures",
+                failed_count=len(failed_ids),
+                failed_ids=failed_ids[:10],
+            )
 
     async def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""

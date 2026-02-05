@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-04T17:41:17*
+*Generated: 2026-02-05T12:47:37*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 207
+Files analyzed: 221
 
-Estimated tokens: 353.8k
+Estimated tokens: 378.1k
 
 ---
 
@@ -44,6 +44,8 @@ Directory structure:
     │   ├── schema_registry.md
     │   ├── schemaaudit.md
     │   ├── sdk.md
+    │   ├── technical_debt_audit.md
+    │   ├── technical_debt_plan.md
     │   ├── UW_endpoints.md
     │   └── operations/
     │       ├── backup-dr-runbook.md
@@ -57,6 +59,7 @@ Directory structure:
     │   ├── feature_store.yaml
     │   └── feature_views/
     │       ├── __init__.py
+    │       ├── _paths.py
     │       ├── alert_labels.py
     │       ├── flow.py
     │       ├── labels.py
@@ -218,12 +221,25 @@ Directory structure:
     ├── infrastructure/
     │   └── terraform/
     │       ├── main.tf
-    │       └── environments/
-    │           ├── dev/
+    │       ├── environments/
+    │       │   ├── dev/
+    │       │   │   └── main.tf
+    │       │   ├── prod/
+    │       │   │   └── main.tf
+    │       │   └── staging/
+    │       │       └── main.tf
+    │       └── modules/
+    │           ├── ecr/
     │           │   └── main.tf
-    │           ├── prod/
+    │           ├── eks/
     │           │   └── main.tf
-    │           └── staging/
+    │           ├── elasticache/
+    │           │   └── main.tf
+    │           ├── rds/
+    │           │   └── main.tf
+    │           ├── s3/
+    │           │   └── main.tf
+    │           └── vpc/
     │               └── main.tf
     ├── k8s/
     │   ├── base/
@@ -277,7 +293,12 @@ Directory structure:
     ├── tests/
     │   ├── __init__.py
     │   ├── test_edge_cases.py
-    │   └── test_placeholder.py
+    │   ├── test_event_bus_claim.py
+    │   ├── test_feature_view_alignment.py
+    │   ├── test_meta_label_alignment.py
+    │   ├── test_placeholder.py
+    │   ├── test_runtime_entrypoints.py
+    │   └── test_terraform_module_sources.py
     └── .claude/
         └── settings.local.json
 
@@ -520,6 +541,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Hot Store guide (`docs/hot_store.md`)
 - Added architecture overview (`docs/architecture.md`)
 - Added configuration guide updates and host port mapping (`docs/configuration.md`)
+- Added technical debt audit (`docs/technical_debt_audit.md`)
+- Expanded technical debt audit (pass 2 findings and scope)
+- Expanded technical debt audit (pass 3: features/Feast review)
+- Expanded technical debt audit (pass 4: ops review)
+- Expanded technical debt audit (pass 5: firewall/models review)
+- Expanded technical debt audit (pass 6: gold/retention review)
+- Expanded technical debt audit (pass 7: feast review)
+- Expanded technical debt audit (pass 8: scripts/docs review)
+- Expanded technical debt audit (pass 9: versioning/calendar review)
+- Expanded technical debt audit (pass 10: hotstore/schemas review)
+- Expanded technical debt audit (pass 11: infra/k8s review)
+- Expanded technical debt audit (pass 12: backfill/backtest review)
+- Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
 
@@ -633,6 +667,33 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added `_coerce_value()` method for automatic type conversion to Arrow types
   - Added field name mapping for UW flow_alerts: `price`→`contract_px`, `underlying_price`→`spot_px`, `option_chain`→`occ_symbol`, `alert_rule`→`alert_type`
   - Fixes `ArrowTypeError: object of type <class 'str'> cannot be converted to int` when processing UW flow alerts with string numeric values
+- **Redis Event Bus Pending Claims** (`heber/bus/__init__.py`)
+  - Claimed idle messages are now yielded to consumers instead of being dropped
+  - Added regression test to ensure claimed messages are processed
+- **Meta-Label Alignment** (`heber/watch/checker.py`, `heber/ml/datasets.py`)
+  - Label rows now emit canonical outcome columns (`outcome`, `hit_tp_first`, `mfe`, `mae`, `bars_to_hit`)
+  - Dataset builder normalizes legacy columns and uses correct outcome values
+- **Feature Template Availability** (`heber/features/templates/*.py`)
+  - `ts_available` is now derived from source data availability instead of wall-clock time
+  - Flow rolling windows now use time-indexed aggregation for correctness
+- **Feast Feature View Alignment** (`features/feature_views/*.py`, `features/feature_store.yaml`)
+  - Feature view schemas now match produced template/pipeline columns for flow, microstructure, momentum, volatility, return labels, and alert labels
+  - Gold offline source paths now follow `dataset/project/version/dt/*.parquet` layout with configurable roots/project/version globs
+  - Feast local registry/online paths no longer hardcode `/data/feast`
+  - Added regression coverage for schema/path alignment (`tests/test_feature_view_alignment.py`)
+- **Pytest Discovery Expansion** (`pyproject.toml`)
+  - Test discovery now includes both `tests/` and `heber/`
+  - Added support for in-package test files named `tests.py` and `tests_*.py`
+  - Default `pytest --collect-only` now sees in-package coverage that was previously skipped
+- **Runtime Entrypoint Alignment** (`Dockerfile`, `k8s/base/deployments/*.yaml`)
+  - Replaced stale module paths (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`) with existing runtime modules
+  - Docker consumer/writer now run `heber.writer.consumer`; compactor runs `heber.writer.compactor`
+  - Kubernetes consumer/writer/compactor deployments now use matching module entrypoints
+  - Added regression coverage for runtime module references (`tests/test_runtime_entrypoints.py`)
+- **Terraform Module Availability** (`infrastructure/terraform/modules/*`)
+  - Added local Terraform module scaffolds for `vpc`, `s3`, `rds`, `elasticache`, `ecr`, and `eks` so root module sources resolve
+  - Preserved existing root module inputs/outputs wiring while unblocking initialization from missing-module failures
+  - Added regression checks for module-source path resolution (`tests/test_terraform_module_sources.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -1392,19 +1453,19 @@ CMD ["python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "-
 # Stage 3 (optional): Consumer service
 # -----------------------------------------------------------------------------
 FROM runtime AS consumer
-CMD ["python", "-m", "heber.bus.consumer"]
+CMD ["python", "-m", "heber.writer.consumer"]
 
 # -----------------------------------------------------------------------------
 # Stage 4 (optional): Writer service
 # -----------------------------------------------------------------------------
 FROM runtime AS writer
-CMD ["python", "-m", "heber.writer.service"]
+CMD ["python", "-m", "heber.writer.consumer"]
 
 # -----------------------------------------------------------------------------
 # Stage 5 (optional): Compactor service
 # -----------------------------------------------------------------------------
 FROM runtime AS compactor
-CMD ["python", "-m", "heber.writer.compaction"]
+CMD ["python", "-m", "heber.writer.compactor"]
 
 # -----------------------------------------------------------------------------
 # Stage 6 (optional): Catalog API service
@@ -8828,7 +8889,8 @@ ignore = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "heber"]
+python_files = ["test_*.py", "*_test.py", "tests.py", "tests_*.py"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -11136,6 +11198,894 @@ Iceberg and other OSS migration components live in `heber/storage/` and are not 
 
 
 ================================================
+FILE: docs/technical_debt_audit.md
+================================================
+# Heber Technical Debt Audit
+
+Date: 2026-02-05
+
+This audit is based on static code inspection only. No services were run and no tests or linters were executed.
+
+## Scope
+
+Audit Pass 1 (2026-02-05, files reviewed directly):
+- README.md
+- CHANGELOG.md
+- pyproject.toml
+- docker-compose.yml
+- Dockerfile
+- CLAUDE.md
+- codebase.md
+- heber/config.py
+- heber/models/envelope.py
+- heber/sdk/client.py
+- heber/writer/consumer.py
+- heber/writer/bronze.py
+- heber/writer/silver.py
+- heber/writer/compactor.py
+- heber/writer/hotstore.py
+- heber/hotstore/client.py
+- heber/hotstore/sync.py
+- heber/firewall/asof.py
+- heber/catalog/api.py
+- heber/catalog/db.py
+- tests/test_placeholder.py
+- tests/test_edge_cases.py
+
+Audit Pass 2 (2026-02-05, files reviewed directly):
+- docs/architecture.md
+- docs/operations/backup-dr-runbook.md
+- docs/operations/cost-estimates.md
+- docs/operations/deployment.md
+- docs/operations/monitoring.md
+- docs/operations/network-topology.md
+- docs/operations/troubleshooting.md
+- heber/watch/__init__.py
+- heber/watch/__main__.py
+- heber/watch/checker.py
+- heber/watch/consumer.py
+- heber/watch/features.py
+- heber/watch/manager.py
+- heber/watch/models.py
+- heber/watch/poller.py
+- heber/watch/writer.py
+- heber/ml/datasets.py
+- heber/ml/inference.py
+- heber/ml/trainer.py
+- heber/quality/contracts.py
+- heber/quality/soda_scanner.py
+- heber/quality/tests.py
+- heber/sre/capacity.py
+- heber/sre/chaos.py
+- heber/sre/error_budget.py
+- heber/sre/oncall.py
+- heber/sre/runbooks.py
+- heber/sre/slo.py
+- heber/sre/tests.py
+- heber/testing/ci_gates.py
+- heber/testing/environments.py
+- heber/testing/framework.py
+- heber/testing/generators.py
+- heber/testing/leakage.py
+- heber/testing/performance.py
+- heber/testing/tests.py
+- heber/testing/tests_framework.py
+- heber/storage/iceberg_catalog.py
+- heber/storage/iceberg_writer.py
+- heber/universe/survivor_bias.py
+- heber/universe/tests.py
+- heber/catalog/service.py
+- heber/catalog/datasources.py
+- heber/bus/__init__.py
+- heber/bus/backpressure.py
+- heber/bus/dedupe.py
+- heber/bus/streams.py
+- heber/schema/registry_client.py
+- heber/schemas/additional.py
+
+Audit Pass 3 (2026-02-05, files reviewed directly):
+- features/entities.py
+- features/feature_store.yaml
+- features/feature_views/__init__.py
+- features/feature_views/alert_labels.py
+- features/feature_views/flow.py
+- features/feature_views/labels.py
+- features/feature_views/microstructure.py
+- features/feature_views/momentum.py
+- features/feature_views/volatility.py
+- heber/features/__init__.py
+- heber/features/pipelines/__init__.py
+- heber/features/pipelines/alert_labels.py
+- heber/features/templates/__init__.py
+- heber/features/templates/alert_labels.py
+- heber/features/templates/cross_asset.py
+- heber/features/templates/flow.py
+- heber/features/templates/labels.py
+- heber/features/templates/microstructure.py
+- heber/features/templates/momentum.py
+- heber/features/templates/tests.py
+- heber/features/templates/volatility.py
+
+Audit Pass 4 (2026-02-05, files reviewed directly):
+- heber/ops/__init__.py
+- heber/ops/alerting.py
+- heber/ops/circuit_breaker.py
+- heber/ops/gap_resolutions.py
+- heber/ops/health.py
+- heber/ops/lifecycle.py
+- heber/ops/logging.py
+- heber/ops/metrics.py
+- heber/ops/reliability.py
+- heber/ops/slices.py
+- heber/ops/tests_remaining.py
+- heber/ops/tracing.py
+
+Audit Pass 5 (2026-02-05, files reviewed directly):
+- heber/firewall/__init__.py
+- heber/firewall/scd.py
+- heber/firewall/validation.py
+- heber/firewall/tests.py
+- heber/models/__init__.py
+- heber/models/silver.py
+
+Audit Pass 6 (2026-02-05, files reviewed directly):
+- heber/gold/__init__.py
+- heber/gold/label_tests.py
+- heber/gold/labels.py
+- heber/gold/split_tests.py
+- heber/gold/splits.py
+- heber/gold/tests.py
+- heber/retention/__init__.py
+
+Audit Pass 7 (2026-02-05, files reviewed directly):
+- heber/feast/__init__.py
+- heber/feast/materialization.py
+- heber/feast/tests.py
+
+Audit Pass 8 (2026-02-05, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/docker-build.sh
+- scripts/docker-push.sh
+- scripts/init_volume.sh
+- scripts/security-scan.sh
+- docs/Alpaca_market_data_endpoints.md
+- docs/Alpaca_trading_endpoints.md
+- docs/UW_endpoints.md
+- docs/catalog_api.md
+- docs/configuration.md
+- docs/data_contract.md
+- docs/hot_store.md
+- docs/iceberg_migration.md
+- docs/labeling_strategy.md
+- docs/schema_registry.md
+- docs/schemaaudit.md
+- docs/sdk.md
+
+Audit Pass 9 (2026-02-05, files reviewed directly):
+- heber/versioning/__init__.py
+- heber/calendar/market.py
+
+Audit Pass 10 (2026-02-05, files reviewed directly):
+- heber/hotstore/tables.py
+- heber/schemas/tests_additional.py
+
+Audit Pass 11 (2026-02-05, files reviewed directly):
+- infrastructure/terraform/main.tf
+- infrastructure/terraform/environments/dev/main.tf
+- infrastructure/terraform/environments/staging/main.tf
+- infrastructure/terraform/environments/prod/main.tf
+- k8s/base/configmap.yaml
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/kustomization.yaml
+- k8s/base/namespace.yaml
+- k8s/base/pdb/catalog.yaml
+- k8s/base/pdb/consumer.yaml
+- k8s/base/pdb/hotloader.yaml
+- k8s/base/pdb/writer.yaml
+- k8s/base/secrets/cluster-secret-store.yaml
+- k8s/base/secrets/external-secret.yaml
+- k8s/base/secrets/secrets-local.yaml.example
+- k8s/base/services/catalog.yaml
+- k8s/base/services/consumer.yaml
+- k8s/base/services/hotloader.yaml
+- k8s/base/services/writer.yaml
+- k8s/overlays/dev/kustomization.yaml
+- k8s/overlays/staging/kustomization.yaml
+- k8s/overlays/prod/kustomization.yaml
+
+Audit Pass 12 (2026-02-05, files reviewed directly):
+- heber/backfill/__init__.py
+- heber/backtest/__init__.py
+- heber/backtest/integration.py
+- heber/backtest/tests.py
+
+Not yet audited in this run (recommend a future pass):
+None.
+
+## Remediation Updates
+
+Updated: 2026-02-05
+
+- `TD-015` addressed via `T-01`: Redis pending claims are consumed instead of dropped.
+- `TD-016` addressed via `T-02`: meta-label writer and dataset builder columns are aligned.
+- `TD-034` addressed via `T-03`: template `ts_available` values are source-derived.
+- `TD-033` addressed via `T-04`: feature view schemas and offline paths align with Gold outputs and include schema/path regression coverage.
+- `TD-001` addressed via `T-05`: pytest discovery now includes in-package tests under `heber/` and legacy test file names (`tests.py`, `tests_*.py`).
+- `TD-003` and `TD-074` addressed via `T-06`: Docker/Kubernetes runtime commands now point to existing modules, replacing stale references to missing paths.
+- `TD-073` addressed via `T-07`: Terraform local module paths now exist under `infrastructure/terraform/modules/*`, with tests that assert module source paths resolve.
+
+## Executive Summary
+
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. Finally, Hot Store DDL and schema tests contain drift: tables omit some schema fields and async DDL creation assumes an async client while other modules use sync clients; schema tests are hardcoded to a count and can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+
+## Findings Summary
+
+Severity key: High, Medium, Low
+
+| ID | Severity | Area | Summary |
+| --- | --- | --- | --- |
+| TD-001 | High | Testing | Pytest only discovers `tests/`, so in-package tests under `heber/` are not executed. |
+| TD-002 | High | SDK/Config | SDK default catalog URL uses port 8080 but docker-compose exposes 8085. |
+| TD-003 | High | Docker | Dockerfile stages reference non-existent modules. |
+| TD-004 | High | Hot Store | Two divergent Hot Store implementations with inconsistent clients and async behavior. |
+| TD-005 | Medium | Silver Writer | Flush interval uses Bronze setting instead of Silver setting. |
+| TD-006 | Medium | Time Handling | Widespread use of naive `datetime.utcnow()` despite UTC expectations. |
+| TD-007 | Medium | Compaction | Compactor loads all files into memory and deletes originals without atomic swap. |
+| TD-008 | Medium | Ingestion | Redis consumer has no DLQ or pending-entries recovery. |
+| TD-009 | Medium | Schemas | Schema definitions duplicated and hardcoded in `heber/writer/silver.py`. |
+| TD-010 | Medium | Local Dev | Config defaults (Redis/Postgres) do not align with docker-compose host ports. |
+| TD-011 | Medium | Hot Store | HotStoreSync inserts one row per event with no batching. |
+| TD-012 | Medium | Catalog DB | No Alembic migrations; tables are created at runtime. |
+| TD-013 | Low | Validation | Instrument key validation is defined but not enforced in ingestion. |
+| TD-014 | Low | Observability | Metrics are mostly placeholders and not wired to a running exporter. |
+| TD-015 | High | Event Bus | Claimed pending messages are not yielded to consumers, risking silent drops. |
+| TD-016 | High | ML | Meta-label dataset builder expects columns not produced by the label writer. |
+| TD-017 | Medium | Watch Service | Uses synchronous Redis calls inside async loops; can block the event loop. |
+| TD-018 | Medium | Watch Service | Acks watch-stream messages even when processing fails; no DLQ. |
+| TD-019 | Medium | Features | Time-of-day features are computed without timezone conversion (UTC vs ET). |
+| TD-020 | Medium | Integration | Data Gateway endpoints are inconsistent across watch/feature codepaths. |
+| TD-021 | Medium | ML | Default gold/features paths do not align with configured volume root. |
+| TD-022 | Medium | ML | Feature persistence to Gold is not wired; builder expects Parquet that is never written. |
+| TD-023 | Medium | ML | Feature ordering for inference is not tied to training feature order. |
+| TD-024 | Medium | Data Quality | Soda scanner default Silver path misses `/data` segment. |
+| TD-025 | Low | Data Quality | Non-null rate uses hard-coded 0.99 for per-column threshold. |
+| TD-026 | Medium | Testing | `tests_framework.py` calls missing `E2ETestSuite.get_schedule()`. |
+| TD-027 | Low | Environment | Testing environment defaults (ports/services) diverge from docker-compose. |
+| TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
+| TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
+| TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
+| TD-031 | Low | Watch Models | `created_at`/`updated_at` use naive `datetime.utcnow()` defaults. |
+| TD-032 | Low | Watch Poller | Polling interval ignores per-horizon settings and over-polls long horizons. |
+| TD-033 | High | Feast/Features | Feature views hardcode paths and schemas that do not match Gold layout or computed columns. |
+| TD-034 | High | Features | Feature templates set `ts_available` to current time, breaking point-in-time correctness. |
+| TD-035 | Medium | Label Pipeline | Alert label pipeline queries bars using raw symbols, not canonical instrument keys. |
+| TD-036 | Medium | Label Pipeline | Pipeline references `bars_5min` dataset that is not defined in Silver schemas. |
+| TD-037 | Medium | Label Pipeline | Intraday labeling uses day-based windows for availability and SPY returns. |
+| TD-038 | Medium | Flow Features | Time-window rolling uses `on=ts_event` on Series and lacks datetime normalization. |
+| TD-039 | Medium | Tracing | Tracing decorator crashes when OpenTelemetry is not installed, despite intended noop behavior. |
+| TD-040 | Medium | Lifecycle | Async shutdown wait can hang if shutdown happens before the async event is created. |
+| TD-041 | Low | Lifecycle | Shutdown timeouts are logged but still reported as success in metrics. |
+| TD-042 | Low | Logging | `configure_logging()` accepts a log level but does not apply it. |
+| TD-043 | Medium | Reliability | Bloom filter dedupe has no TTL/rotation, causing rising false positives and potential drops without a backing store. |
+| TD-044 | Low | Reliability | In-memory DLQ is non-persistent; failures are lost on restart. |
+| TD-045 | Medium | Firewall | SCD join expects suffixed validity columns that may not exist, causing runtime failures. |
+| TD-046 | Low | Firewall | Gold build validation treats warning-level violations as hard failures in strict mode. |
+| TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
+| TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
+| TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
+| TD-050 | Low | Gold Labels | `read_label()` chooses the “latest” version lexicographically, which can pick the wrong semantic version. |
+| TD-051 | Medium | Retention | Retention scanning assumes `dt=` partitions under `<layer>/<dataset>` and does not align with Gold layout/versioning, so Gold retention and version pruning are ineffective. |
+| TD-052 | Low | Retention | Retention policies for Hot Store and DLQ are defined but never executed by the reaper. |
+| TD-053 | Low | Retention | Retention defaults are hardcoded to `/data/heber` and ignore configured data roots. |
+| TD-054 | Medium | Gold Labels | `read_label()` allows datasets without `ts_available` and returns all rows, bypassing point-in-time guards. |
+| TD-055 | Low | Retention | Version pruning sorts versions lexicographically instead of semver or creation time. |
+| TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
+| TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
+| TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
+| TD-059 | Low | Scripts | ClickHouse backup script logs S3 bucket/prefix but never applies them to `clickhouse-backup`. |
+| TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
+| TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
+| TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
+| TD-063 | Low | Docs | Data contract claims a Gold layout that doesn’t match the label writer’s on-disk layout. |
+| TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
+| TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
+| TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
+| TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
+| TD-068 | Medium | Calendar | Market calendar assumes tz-aware datetimes; naive inputs will raise on `tz_convert`. |
+| TD-069 | Low | Calendar | `include_extended` flag is unused; extended hours are never applied. |
+| TD-070 | Low | Hot Store | Hot Store DDL omits columns present in Silver schemas (e.g., `quality_flags`, `lineage`). |
+| TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
+| TD-072 | Low | Testing | Additional schema tests assert a fixed schema count, which will break on new schemas. |
+| TD-073 | High | Infra | Terraform root module references local modules (`./modules/*`) that are not present. |
+| TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
+| TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
+| TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
+| TD-077 | Medium | K8s | Images are referenced as `heber:<service>-latest`, but kustomize only rewrites `heber` image name. |
+| TD-078 | Low | K8s | Namespace base is `heber` while overlays change namespace; secrets/configmap names may not be present in each namespace. |
+| TD-079 | Low | Infra | Terraform backends and module configs are hardcoded to `us-east-1` without variable override. |
+| TD-080 | Medium | Backfill | Backfill writes only Silver temp partitions and never updates Bronze, coverage, or catalog metadata. |
+| TD-081 | Medium | Backfill | Backfill jobs are in-memory only; jobs and progress are lost on restart. |
+| TD-082 | Medium | Backfill | `BackfillWriter._write_parquet()` silently drops data when `pyarrow` is missing. |
+| TD-083 | Low | Backfill | Gap detection assumes `silver/{provider}_{feed}/dt=*` layout, which may not match actual partitions. |
+| TD-084 | Low | Backtest | Label reads use `read_gold()` without a version parameter, which may load unintended versions. |
+| TD-085 | Low | Backtest | Experiment results omit dataset as-of timestamps, weakening reproducibility. |
+
+## Detailed Findings
+
+**TD-001: Pytest only discovers `tests/`, so in-package tests are not executed.**
+Evidence: `pyproject.toml` restricts `testpaths` to `tests`, while there are multiple test modules under `heber/` such as `heber/catalog/tests_access_control.py` and `heber/ops/tests_remaining.py`. This means those tests never run in CI or locally by default. This hides regressions in critical logic.
+Recommendation: Expand `testpaths` to include `heber` or move internal tests into `tests/` with a consistent naming convention. Add a minimal CI check that confirms expected test modules are collected.
+
+**TD-002: SDK default catalog URL uses port 8080 but docker-compose exposes 8085.**
+Evidence: `heber/config.py` defaults `api_port` to 8080 and `heber/sdk/client.py` uses `settings.api_port`. `docker-compose.yml` maps catalog 8080 to host 8085 and `README.md` advertises 8085. This mismatch breaks the default SDK in a typical docker-compose local setup.
+Recommendation: Add `HEBER_CATALOG_URL` and use it as the SDK default. Align README and `.env.example` with the new behavior.
+
+**TD-003: Dockerfile stages reference non-existent modules.**
+Evidence: `Dockerfile` stages reference `heber.bus.consumer`, `heber.writer.service`, and `heber.writer.compaction`, which are not present. This makes those build targets fail and creates confusion for deployment.
+Recommendation: Fix stage commands to point to existing modules (`heber.writer.consumer`, `heber.writer.compactor`) or remove the stages entirely if unused.
+
+**TD-004: Hot Store has two divergent implementations with inconsistent clients and async behavior.**
+Evidence: `heber/hotstore/client.py` uses `clickhouse-connect` synchronously. `heber/writer/hotstore.py` uses `clickhouse_driver` and defines async methods that `await` a non-async client. `heber/hotstore/sync.py` uses a third approach with direct inserts. This creates runtime inconsistency and unclear ownership of the Hot Store pipeline.
+Recommendation: Pick one Hot Store implementation, unify on a single ClickHouse client, and enforce a consistent async model. Deprecate or delete the unused path.
+
+**TD-005: Silver writer flush interval uses Bronze setting.**
+Evidence: `heber/writer/silver.py` uses `settings.bronze_flush_interval_seconds` inside `flush_if_needed`. This is likely a bug and creates unexpected flush timing for Silver files.
+Recommendation: Replace with `settings.silver_max_flush_time_seconds` and add a regression test around flush timing.
+
+**TD-006: Naive time handling risks incorrect UTC semantics.**
+Evidence: `datetime.utcnow()` is used in `heber/writer/bronze.py`, `heber/writer/silver.py`, `heber/writer/compactor.py`, and `heber/catalog/api.py`. These values are naive (no timezone). Some schemas expect `timestamp('us', tz='UTC')` which will mismatch or silently coerce.
+Recommendation: Replace with `datetime.now(UTC)` and enforce timezone-aware timestamps in `EventEnvelope` validation. Add a guard that rejects naive datetimes for `ts_event`, `ts_ingest`, and `ts_available`.
+
+**TD-007: Compactor loads all small files into memory and deletes originals without atomic swap.**
+Evidence: `heber/writer/compactor.py` reads all parquet files into memory, concatenates, writes a new file, and deletes originals immediately. A crash between write and delete will corrupt data or lose lineage.
+Recommendation: Use streaming compaction or chunked merges, write to a temp file, and replace atomically. Consider using a manifest or lock file.
+
+**TD-008: Redis consumer has no DLQ or pending-entry recovery.**
+Evidence: `heber/writer/consumer.py` logs failed events but does not push to a dead-letter stream or attempt to claim pending entries on startup. Failed events can remain stuck in the group without visibility.
+Recommendation: Add a DLQ stream, implement a retry/backoff policy, and add a startup sweep of `XPENDING`/`XCLAIM` for stale messages.
+
+**TD-009: Schema definitions are duplicated and hardcoded in `heber/writer/silver.py`.**
+Evidence: `SILVER_SCHEMAS` is a large in-code dictionary while schema information also exists in docs and likely in `heber/schemas/`. This will drift over time and complicates schema evolution.
+Recommendation: Move schemas into a single source of truth (JSON/YAML or a schema registry client) and generate both Arrow schemas and documentation from it.
+
+**TD-010: Local dev ports are inconsistent between config and docker-compose.**
+Evidence: `docker-compose.yml` exposes Postgres on 5433 and Redis on 6380, but `heber/config.py` defaults to 5432 and 6379. This breaks local usage from host processes unless the user manually sets env vars.
+Recommendation: Align defaults with compose host ports or explicitly document and populate `.env.example` with correct values for local dev.
+
+**TD-011: HotStoreSync inserts one row per event without batching.**
+Evidence: `heber/hotstore/sync.py` calls `client.insert` per event. This will be slow under load and could violate the 5-minute SLA.
+Recommendation: Buffer and batch inserts in the sync path and add a flush policy similar to the Silver writer.
+
+**TD-012: Catalog DB has no migration strategy.**
+Evidence: `heber/catalog/api.py` calls `Base.metadata.create_all` on startup and there are no Alembic migrations in the repo. This is brittle for production schema changes.
+Recommendation: Add Alembic migrations and remove auto-create for non-dev environments.
+
+**TD-013: Instrument key validation is defined but not enforced.**
+Evidence: `validate_instrument_key` exists in `heber/models/envelope.py`, but `EventConsumer` does not enforce it. Invalid instrument keys can silently flow into Silver.
+Recommendation: Validate in the consumer and attach a quality flag or reject invalid events.
+
+**TD-014: Observability is partially stubbed.**
+Evidence: Several modules reference metrics counters but there is no wiring to a metrics server or standard export path. Some modules have metrics placeholders and log-only paths.
+Recommendation: Add a consistent metrics export strategy, likely via Prometheus, and register metrics in service entrypoints.
+
+**TD-015: Claimed pending messages are not yielded to consumers (possible silent drops).**
+Evidence: `heber/bus/__init__.py` calls `_claim_idle_messages()` inside `RedisEventBus.consume()` but discards the returned messages. Claimed messages are never processed, yet are removed from other consumers.
+Recommendation: Yield claimed messages in the consume loop or merge them into the next batch. Add an integration test that simulates XPENDING/XCLAIM behavior.
+
+**TD-016: Meta-label dataset builder expects columns not produced by the label writer.**
+Evidence: `heber/ml/datasets.py` expects `outcome` and `hit_tp_first`, but `heber/watch/checker.py`/`outcome_to_label_row()` writes `outcome_reason` and `contract_hit_tp_first`. Joins and labeling will be empty or incorrect.
+Recommendation: Align the label writer output with the dataset builder expectations (or vice versa) and add a small end-to-end test from watch outcome → dataset build.
+
+**TD-017: Watch service uses synchronous Redis calls inside async loops.**
+Evidence: `heber/watch/consumer.py` and `heber/watch/manager.py` use sync `redis` clients inside `async def` loops. This can block the event loop and stall poller/checker tasks.
+Recommendation: Switch to `redis.asyncio` for the watch service or run sync calls in a thread executor. Add backpressure metrics for watch processing latency.
+
+**TD-018: Watch consumer acknowledges messages even when processing fails; no DLQ.**
+Evidence: `heber/watch/consumer.py` unconditionally XACKs each message after `_process_alert`, even if parsing/processing failed. Failed alerts are silently dropped and no DLQ exists for the watch stream.
+Recommendation: Only ack on success, and add a DLQ stream for watch failures with retry/backoff similar to `heber/bus/backpressure.py`.
+
+**TD-019: Time-of-day features are computed without timezone conversion.**
+Evidence: `heber/watch/features.py` uses `alert.ts_event.hour` and assumes ET market hours. If `ts_event` is UTC (likely), time features are wrong.
+Recommendation: Normalize timestamps to a market timezone before feature extraction (e.g., convert UTC to US/Eastern) and document the assumption.
+
+**TD-020: Data Gateway endpoint paths are inconsistent.**
+Evidence: `SnapshotPoller` uses `/api/v1/alpaca/options/quotes`, while feature enrichment uses `/alpaca/...` and `/uw/...` paths. These may not exist on the same gateway.
+Recommendation: Centralize Data Gateway base paths and versioning in config and align all callers.
+
+**TD-021: Meta-label builder defaults to `/tmp/heber/gold` instead of configured data root.**
+Evidence: `heber/ml/datasets.py` default paths point to `/tmp/heber/gold`, while the system’s data root is `/Volumes/heber/data` via `Settings`.
+Recommendation: Use `HEBER_DATA_ROOT` or `settings.gold_path` and ensure the builder follows environment configuration.
+
+**TD-022: Feature persistence to Gold is not wired; builder expects Parquet that is never written.**
+Evidence: Features are stored in Redis (`heber/watch/features.py`) but no job writes features to Gold; `MetaLabelDatasetBuilder` expects Parquet under `meta_labels/features`.
+Recommendation: Add a persistence step that writes features to Gold (or update the builder to read from Redis + outcomes).
+
+**TD-023: Inference feature ordering is not tied to training feature order.**
+Evidence: Training uses `MetaLabelDatasetBuilder.get_feature_columns()` (dataframe column order), while inference uses `AlertFeatures.numeric_feature_names()` (fixed order). These can diverge.
+Recommendation: Persist the feature name order with the model (e.g., in model metadata) and enforce the same order at inference.
+
+**TD-024: Soda scanner default Silver path is likely wrong.**
+Evidence: `SodaConfig.silver_path` defaults to `/Volumes/heber/silver` but the data root is `/Volumes/heber/data/silver`.
+Recommendation: Default to `settings.silver_path` or set `HEBER_SILVER_PATH` in `.env.example`.
+
+**TD-025: Non-null rate uses a hard-coded 0.99 threshold for per-column reporting.**
+Evidence: `DataQualityValidator.check_non_null_rate()` flags columns below 0.99 regardless of the contract threshold. This can produce false violations when contract thresholds differ.
+Recommendation: Use the contract threshold when identifying columns below threshold.
+
+**TD-026: `tests_framework.py` references a missing method.**
+Evidence: `TestE2ETestSuite.test_get_schedule()` calls `E2ETestSuite.get_schedule()` but the method does not exist in `heber/testing/framework.py`.
+Recommendation: Implement `get_schedule()` or remove the test to keep test suites consistent.
+
+**TD-027: Testing environment defaults diverge from docker-compose.**
+Evidence: `heber/testing/environments.py` defines local services on ports 5432/6379, while `docker-compose.yml` uses 5433/6380. This causes confusion in local testing guidance.
+Recommendation: Align testing defaults with compose ports or document the difference.
+
+**TD-028: Iceberg partition spec format may not match PyIceberg API.**
+Evidence: `create_silver_table()` passes a list to `partition_spec`. PyIceberg typically expects a `PartitionSpec` object; this may break at runtime.
+Recommendation: Use `PartitionSpec` builders from PyIceberg and add a smoke test that initializes tables.
+
+**TD-029: Quarantine paths read provider/feed from `envelope.meta`.**
+Evidence: `heber/bus/backpressure.py` expects `envelope["meta"]["provider"]`/`["feed"]`, but `EventEnvelope` stores `provider` and `feed` at the top level.
+Recommendation: Use top-level fields or normalize envelope format before quarantine writes.
+
+**TD-030: Stream naming diverges across modules and docs.**
+Evidence: `heber/bus` uses `stream:*` names, writer/consumer uses `heber:events`, and ops docs reference `stream:market.bars`. This split-brain naming leads to non-wired components.
+Recommendation: Standardize on one stream naming convention and update docs, bus config, and consumers together.
+
+**TD-031: Watch model timestamps use naive `datetime.utcnow()` defaults.**
+Evidence: `heber/watch/models.py` sets `created_at` and `updated_at` with `datetime.utcnow()` (naive), while other parts expect timezone-aware UTC.
+Recommendation: Use `datetime.now(UTC)` or enforce timezone-aware defaults across models.
+
+**TD-032: Watch poller ignores per-horizon intervals.**
+Evidence: `SnapshotPoller.run()` uses the minimum interval from `POLL_CONFIG` for all watches, which over-polls swing/LEAP horizons.
+Recommendation: Respect per-watch polling intervals or schedule per-horizon polling loops.
+
+**TD-033: Feast feature views hardcode paths and schemas that do not match Gold layout or computed columns.**
+Evidence: Feature views in `features/feature_views/*` point to `/data/gold/dataset=.../type=...` while the Gold layout is `dataset/project/version/dt`. Several schemas do not match template outputs (e.g., `microstructure.py` view expects `bid_ask_spread_pct` and `quoted_depth_*` while templates output `spread_bps` and `bid_depth`/`ask_depth`; `flow.py` view expects `net_call_premium` but templates output `call_premium_24h`; `volatility.py` view expects `bollinger_upper/lower` but templates output `bb_width_20`). Feast registry paths are also hardcoded to `/data/feast/...`.
+Recommendation: Make paths configurable via settings/env, and align feature view schemas to the actual Gold outputs (or update templates/pipelines to produce the expected columns). Add a schema/contract test that validates view fields exist in a sample Gold file.
+
+**TD-034: Feature templates set `ts_available` to the current time.**
+Evidence: `compute_momentum_features`, `compute_volatility_features`, `compute_microstructure_features`, `compute_flow_features`, and `compute_relative_features` set `ts_available = pd.Timestamp.now(tz="UTC")`, which is not tied to source data availability.
+Recommendation: Derive `ts_available` from input data (e.g., max of input `ts_available` or `ts_event` + processing lag) to preserve point-in-time correctness.
+
+**TD-035: Alert labels pipeline queries bars using raw symbols, not canonical instrument keys.**
+Evidence: `AlertLabelsPipeline._load_bars()` passes `instrument_keys=symbols` where symbols are `["AAPL", "SPY", ...]`, but Silver bars use canonical keys like `equity:AAPL`.
+Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberClient.resolve_instrument`) before querying Silver.
+
+**TD-036: Alert labels pipeline references a non-existent dataset.**
+Evidence: `_load_intraday_bars()` queries dataset `bars_5min`, which is not present in Silver schemas or writer outputs.
+Recommendation: Either implement `bars_5min` ingestion or use existing bars with a timeframe column/filter.
+
+**TD-037: Intraday label windows are computed in days, not minutes.**
+Evidence: In `alert_labels.py`, `ts_available` uses `timedelta(days=max_window_bars // 24)` and SPY-relative returns use `timedelta(days=max_window_bars)`. For intraday horizons (24 five-minute bars), this becomes 1–24 days instead of ~2 hours.
+Recommendation: Track bar duration explicitly and compute windows in minutes/hours for intraday labels.
+
+**TD-038: Flow feature rolling windows may be incorrect.**
+Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
+Recommendation: Convert `ts_event` to datetime and use DataFrame-level rolling with `on=ts_event`, or set a DatetimeIndex for correct time-window rolling.
+
+**TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
+Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
+Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
+
+**TD-040: Async shutdown wait can hang if shutdown is signaled early.**
+Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
+Recommendation: In `async_wait_for_shutdown()`, return immediately if `self._shutdown_event.is_set()` or create `_async_shutdown_event` and set it when shutdown is already in progress.
+
+**TD-041: Shutdown timeouts are logged but still reported as success.**
+Evidence: `execute_shutdown()` logs `drain_timeout` when the deadline passes but still increments `shutdown_completed` with status `success` and returns True.
+Recommendation: Increment `shutdown_completed` with `status="timeout"` and return False (or a distinct status) when draining exceeds the configured deadline.
+
+**TD-042: `configure_logging()` accepts a log level but does not apply it.**
+Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
+Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
+
+**TD-043: Bloom filter deduplication has no TTL/rotation.**
+Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
+Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
+
+**TD-044: In-memory DLQ is non-persistent.**
+Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
+Recommendation: Back the DLQ with Redis/stream storage or write to disk and implement a replay path.
+
+**TD-045: SCD join expects suffixed validity columns that may not exist.**
+Evidence: `join_with_reference_asof()` always filters on `valid_from{suffix}`/`valid_to{suffix}`. Polars only applies suffixes on name collisions; if the left table does not have `valid_from` or `valid_to`, the reference columns are unsuffixed and the filter will fail with missing columns.
+Recommendation: Normalize reference validity columns before the join (e.g., rename to fixed names) or detect whether suffixing occurred and use the correct column names.
+
+**TD-046: Gold build validation treats warning-level violations as hard failures.**
+Evidence: `validate_gold_build()` labels the `max_ts_event_used > max_ts_available_used` check as a warning, but appends it to `violations` and raises when `strict=True`.
+Recommendation: Separate warnings from hard violations or only raise for the strict gates.
+
+**TD-047: `lineage` type mismatch between models and Arrow schema.**
+Evidence: `SilverBase.lineage` is `dict[str, Any] | None` but `SILVER_BASE_SCHEMA` defines `lineage` as `pa.string()` with “JSON serialized” comment. This mismatch creates inconsistent serialization expectations across ingestion and writing.
+Recommendation: Standardize lineage as a structured type (e.g., JSON/struct) and enforce serialization in one place, or update the Pydantic model to store serialized JSON consistently.
+
+**TD-048: `schema_version` defaults to `v1` across all models.**
+Evidence: `SilverBase.schema_version` defaults to `v1` even for v2/v3/v4 datasets (news, filings, alternative data). Unless overridden at write time, stored rows will be mislabeled.
+Recommendation: Set per-dataset defaults in each model or enforce schema_version injection in the writer based on dataset.
+
+**TD-049: Date fields are inconsistently typed across Silver schemas.**
+Evidence: Some models use `date` (e.g., `expiry` in options), while others use `str` for dates (e.g., `expiry` in `MaxPainRecord`, `HottestChainRecord`, `IVTermStructureRecord`). This leads to inconsistent parsing and schema drift across datasets.
+Recommendation: Standardize date representation (prefer `date`/`datetime`) and enforce normalization in ingestion.
+
+**TD-050: `read_label()` picks latest version by lexicographic sort.**
+Evidence: `read_label()` sorts `version=` directories by name and picks the highest string. Versions like `v1.10.0` will sort before `v1.2.0`, yielding an older dataset as “latest.”
+Recommendation: Parse semantic versions or use metadata (created_at) to choose the newest version.
+
+**TD-051: Retention scanning does not match Gold layout.**
+Evidence: `ReaperWorker.scan_partitions()` expects partitions under `<storage_root>/<layer>/<dataset>/dt=*` and never populates `PartitionInfo.version`. Gold datasets are written as `dataset=.../type=.../version=...` (and labels have no `dt=`), so Gold partitions are never discovered and version pruning cannot work.
+Recommendation: Implement Gold-specific scanning that walks `dataset=.../type=.../version=...` and records version identifiers and optional `dt` partitions.
+
+**TD-052: Hot Store and DLQ retention policies are never applied.**
+Evidence: `ReaperScheduler._process_dataset()` only evaluates Bronze, Silver, and Gold layers; `HOT_STORE` and `DLQ` are defined but ignored.
+Recommendation: Include Hot Store and DLQ layers in the reaper or remove the unused policies to avoid false safety assumptions.
+
+**TD-053: Retention uses hardcoded storage root defaults.**
+Evidence: `DEFAULT_STORAGE_ROOT = "/data/heber"` and `create_reaper()` default paths do not reference `Settings` or `HEBER_DATA_ROOT`, while other parts of the system use `/Volumes/heber/data`.
+Recommendation: Wire retention defaults to the shared configuration and document expected paths.
+
+**TD-054: `read_label()` bypasses ts_available guard if column is missing.**
+Evidence: `read_label()` only filters by `ts_available` when the column exists. A malformed or externally-written label dataset without `ts_available` will return all rows, including future data.
+Recommendation: Require `ts_available` for label datasets (raise or warn) and fail closed in training contexts.
+
+**TD-055: Retention version pruning uses lexicographic ordering.**
+Evidence: `find_expired_versions()` sorts version keys as strings. This can delete or keep the wrong versions for semver patterns.
+Recommendation: Parse semantic versions or use explicit creation timestamps to decide which versions to retain.
+
+**TD-056: Default Feast repo path is hardcoded.**
+Evidence: `DEFAULT_REPO_PATH = "features/"` and the helpers default to that location, ignoring any configured environment or settings for the repo path.
+Recommendation: Allow repo path to be set via config/env (e.g., `HEBER_FEAST_REPO_PATH`) and use that as the default.
+
+**TD-057: Materialization does not report row counts.**
+Evidence: `materialize_features()` returns `-1` for each view and does not surface actual row counts, making monitoring or alerting on materialization health impossible.
+Recommendation: Capture row counts from Feast logs/metrics or implement a lightweight count query after materialization where feasible.
+
+**TD-058: `search_features()` matches tags by key only.**
+Evidence: `search_features()` checks `t in view_tags` where `view_tags` is a dict, so it only matches tag keys, not values. This can miss intended matches or produce false positives.
+Recommendation: Support key:value tag filters or compare against values explicitly.
+
+**TD-059: ClickHouse backup script logs S3 bucket/prefix but doesn’t enforce them.**
+Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
+Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
+
+**TD-060: Catalog backup validation can leak the test DB instance on failure.**
+Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
+Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
+
+**TD-061: Volume init script assumes macOS tooling.**
+Evidence: `scripts/init_volume.sh` calls `dot_clean` unconditionally, which is macOS-only. On Linux, the script fails even if directory creation succeeded.
+Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
+
+**TD-062: Labeling docs reference outdated API location/signature.**
+Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
+Recommendation: Update the docs to match the current module path and function signature.
+
+**TD-063: Data contract Gold layout doesn’t match label writer layout.**
+Evidence: `docs/data_contract.md` states Gold is partitioned as `dataset/project/version/dt`, but label writes use `dataset={name}/type=label/version={version}` without `project` or `dt`.
+Recommendation: Align docs with actual Gold write layout, or update the writer to match the documented layout.
+
+**TD-064: UW endpoint coverage summary conflicts with its own tables.**
+Evidence: `docs/UW_endpoints.md` summary says “Complete (11)” while the tables above list many more endpoints as ✅. This makes the summary unreliable.
+Recommendation: Recompute totals automatically or remove summary counts to avoid drift.
+
+**TD-065: Security scan doesn’t fail on filesystem findings.**
+Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
+Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
+
+**TD-066: lakeFS repo creation hardcodes the storage namespace.**
+Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
+Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
+
+**TD-067: lakeFS metrics coverage is incomplete.**
+Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
+Recommendation: Instrument all lakeFS operations (success/failure/duration) consistently.
+
+**TD-068: Market calendar crashes on naive datetimes.**
+Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
+Recommendation: Normalize inputs by assuming UTC when tzinfo is missing (or require tz-aware inputs and validate early with a clear error).
+
+**TD-069: `include_extended` flag is unused.**
+Evidence: `MarketCalendar.include_extended` is stored but never used to expand the trading session to include pre/post-market. Methods always rely on the default exchange calendar schedule.
+Recommendation: Either wire in extended hours support or remove the flag to avoid misleading behavior.
+
+**TD-070: Hot Store DDL omits some base columns.**
+Evidence: `heber/hotstore/tables.py` defines Hot Store tables without `quality_flags` or `lineage` columns that exist in Silver base schema. This prevents storing provenance/quality flags in Hot Store and creates schema drift.
+Recommendation: Decide which base columns must be preserved in Hot Store and add them (or document the intentional omission).
+
+**TD-071: Hot Store DDL creation assumes async client.**
+Evidence: `create_all_tables()` is `async` and calls `await client.execute(stmt)`, but the repo’s primary ClickHouse client (`clickhouse_connect`) is synchronous. This mismatch can lead to runtime errors depending on which client is passed.
+Recommendation: Provide separate sync/async helpers or normalize on a single client and call pattern.
+
+**TD-072: Additional schema tests hardcode the schema count.**
+Evidence: `tests_additional.py` asserts `len(schemas) == 16`. As new schemas are added, the test will fail even if behavior is correct.
+Recommendation: Assert on minimum required schemas or specific known names rather than total count.
+
+**TD-073: Terraform references modules that are missing from the repo.**
+Evidence: `infrastructure/terraform/main.tf` references `./modules/vpc`, `./modules/s3`, `./modules/rds`, etc., but there is no `modules/` directory under `infrastructure/terraform/`. Terraform will fail at init/plan.
+Recommendation: Add the modules or replace with a remote module source. If infrastructure is managed elsewhere, remove or clearly mark these files as placeholders.
+
+**TD-074: Kubernetes deployments reference non-existent module entrypoints.**
+Evidence: `k8s/base/deployments/consumer.yaml` runs `python -m heber.bus.consumer`, and writer/compactor run `heber.writer.service` and `heber.writer.compaction`. These module paths do not exist in the repo (writer is `consumer.py`/`compactor.py`).
+Recommendation: Update commands to valid module paths (e.g., `heber.writer.consumer`, `heber.writer.compactor`) and verify entrypoints.
+
+**TD-075: HPA targets custom metrics that are not exported.**
+Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
+Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
+
+**TD-076: Probes target endpoints that are not implemented.**
+Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
+Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
+
+**TD-077: Image references do not align with kustomize image rewrite.**
+Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
+Recommendation: Use a consistent image name (e.g., `ghcr.io/jacobmcmillan/heber:<tag>`) with distinct tags per component, or update kustomize image rules to match the actual names.
+
+**TD-078: Namespace/secret references may drift across overlays.**
+Evidence: Base namespace is `heber` and secrets are referenced by name `heber-secrets`. Overlays change namespace but do not include secrets or ServiceAccount manifests, so deployments may reference missing secrets unless applied separately.
+Recommendation: Add namespace-scoped secrets/serviceaccounts per overlay or document required prerequisites in deployment steps.
+
+**TD-079: Terraform environment settings are hardcoded.**
+Evidence: Each env `main.tf` pins `region = "us-east-1"` and backend config is fixed. This makes multi-region deployment or account reuse harder.
+Recommendation: Parameterize region and backend settings via variables or separate workspace configs.
+
+**TD-080: Backfill does not update Bronze or Catalog metadata.**
+Evidence: `BackfillWriter.write_batch()` writes only to Silver temp partitions and logs that compactor will merge. It does not write Bronze, nor does it update catalog coverage or schema metadata.
+Recommendation: Add an explicit Bronze write path (or document why it’s skipped), and update catalog coverage once backfill completes.
+
+**TD-081: Backfill jobs are in-memory only.**
+Evidence: `BackfillCoordinator` stores jobs in a process-local dict. On restart, in-flight jobs and progress are lost; the API is described as in-memory only in docs.
+Recommendation: Persist backfill state in the catalog DB or Redis and add resume/retry support.
+
+**TD-082: Missing `pyarrow` silently drops backfill writes.**
+Evidence: `_write_parquet()` catches `ImportError` and logs `pyarrow_not_available` but does not raise, so the backfill job continues and reports progress even though nothing was written.
+Recommendation: Fail fast when `pyarrow` is missing, or track a failed write and mark the job as failed.
+
+**TD-083: Gap detection assumes a storage layout that may not exist.**
+Evidence: `GapDetector.detect_gaps()` reads `silver/{provider}_{feed}/dt=*`, while other components use feed/instrument_type/dt or dataset-based layouts. This can incorrectly report full gaps.
+Recommendation: Align gap detection with actual Silver partition layout and/or use the Catalog to discover coverage.
+
+**TD-084: Backtest labels use `read_gold()` without a version.**
+Evidence: `BacktestDataLoader` passes `label_dataset` into `read_gold()` without specifying `version`. If the label dataset is versioned, this may read an unintended or incompatible version.
+Recommendation: Add a label version parameter (or reuse `label_version`) and pass it to `read_gold()`.
+
+**TD-085: Backtest reproducibility omits data as-of cutoffs.**
+Evidence: `ExperimentConfig` and results capture dataset names and versions but do not persist the as-of timestamp used for feature/label reads, which is critical for reproducibility.
+Recommendation: Record `asof_time` per split or overall experiment in the config/results metadata.
+
+## Suggested Remediation Plan
+
+Phase 1 (Stabilize correctness, 1-2 days):
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-054, TD-074.
+- Add minimal regression tests for Silver flush and SDK default URL.
+
+Phase 2 (Operational reliability, 2-4 days):
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Add a DLQ stream and pending-entries recovery policy.
+
+Phase 3 (Performance and maintainability, 3-7 days):
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Unify Hot Store implementation and schema definitions.
+
+## Open Questions for Future Audits
+
+- How is schema evolution governed and enforced in production?
+- What are the SLAs and current performance baselines for ingestion and Hot Store?
+- Are there existing CI checks on GitHub Actions beyond linting and tests?
+
+
+
+================================================
+FILE: docs/technical_debt_plan.md
+================================================
+# Technical Debt Remediation Plan (High Severity)
+
+Date: 2026-02-05
+
+This plan converts high-severity audit items into ticket-ready tasks with clear scope and acceptance criteria. It references the audit IDs in `docs/technical_debt_audit.md`.
+
+## Implementation Status
+
+Updated: 2026-02-05
+
+- `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
+- `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
+- `T-03` complete (`TD-034`): feature templates derive `ts_available` from source availability.
+- `T-04` complete (`TD-033`): Feast feature views now align with template outputs and Gold `dataset/project/version/dt` layout, with schema/path regression tests.
+- `T-05` complete (`TD-001`): pytest now discovers tests under both `tests/` and `heber/`, including files named `tests.py` and `tests_*.py`.
+- `T-06` complete (`TD-003`, `TD-074`): Docker and Kubernetes entrypoints now reference existing runtime modules (`heber.writer.consumer`, `heber.writer.compactor`), with regression checks.
+- `T-07` complete (`TD-073`): added local Terraform module scaffolds (`vpc`, `s3`, `rds`, `elasticache`, `ecr`, `eks`) so root references resolve; added regression checks for module sources.
+
+## Prioritization Approach
+
+P0 = data loss or leakage risk, pipeline correctness, or critical deploy blockers.
+P1 = developer productivity and reliability improvements that unlock safe iteration.
+P2 = structural cleanups that require larger refactors.
+
+## P0 Tickets (Immediate)
+
+### T-01: Fix Event Bus Pending Claim Handling (TD-015)
+
+Priority: P0
+
+Description: `RedisEventBus.consume()` claims idle messages but never yields them, risking silent drops. Ensure claimed messages are processed before new reads.
+
+Scope:
+- `heber/bus/__init__.py`
+- Any tests for consume/claim behavior
+
+Acceptance Criteria:
+- Claimed messages are yielded to consumer processing.
+- Integration test simulates XPENDING/XCLAIM and confirms delivery.
+- No regression in normal consume flow.
+
+Risk Notes:
+- Requires careful handling to avoid double-processing.
+
+Estimate: 1-2 days
+
+### T-02: Align Meta-Label Writer and Dataset Builder (TD-016)
+
+Priority: P0
+
+Description: Label writer outputs columns (`outcome_reason`, `contract_hit_tp_first`) that the dataset builder does not consume. Align names and semantics to produce non-empty training sets.
+
+Scope:
+- `heber/watch/checker.py`
+- `heber/watch/writer.py`
+- `heber/ml/datasets.py`
+
+Acceptance Criteria:
+- End-to-end test: watch outcome -> label write -> dataset build returns expected labels.
+- Column names and meanings are consistent and documented.
+
+Estimate: 1-2 days
+
+### T-03: Fix `ts_available` in Feature Templates (TD-034)
+
+Priority: P0
+
+Description: Feature templates use `pd.Timestamp.now()` for `ts_available`, causing leakage. Derive `ts_available` from input data availability.
+
+Scope:
+- `heber/features/templates/*.py`
+
+Acceptance Criteria:
+- `ts_available` is derived from input data (max `ts_available` or computed lag).
+- Unit test validates `ts_available` is not later than processing time and respects source availability.
+
+Estimate: 1-2 days
+
+### T-04: Align Feast Feature Views With Gold Outputs (TD-033)
+
+Priority: P0
+
+Description: Feature view schemas and paths do not match Gold outputs, breaking materialization and training.
+
+Scope:
+- `features/feature_views/*.py`
+- `features/feature_store.yaml`
+- `heber/features/templates/*.py`
+
+Acceptance Criteria:
+- Feature view fields match Gold output columns.
+- Paths configurable and aligned with Gold layout.
+- Schema validation test ensures all feature view fields exist in sample Gold files.
+
+Estimate: 2-4 days
+
+## P1 Tickets (Next)
+
+### T-05: Expand Test Discovery to Include In-Package Tests (TD-001)
+
+Priority: P1
+
+Description: Pytest only discovers tests under `tests/`, leaving many tests under `heber/` unexecuted.
+
+Scope:
+- `pyproject.toml`
+- Move or include in-package tests
+
+Acceptance Criteria:
+- Running `pytest` collects tests under `tests/` and `heber/`.
+- CI reports total collected tests and fails on test collection errors.
+
+Estimate: 0.5-1 day
+
+### T-06: Fix Runtime Entry Points (Docker + K8s) (TD-003, TD-074)
+
+Priority: P1
+
+Description: Dockerfile stages and k8s deployments reference module paths that do not exist.
+
+Scope:
+- `Dockerfile`
+- `k8s/base/deployments/*.yaml`
+
+Acceptance Criteria:
+- Docker build targets use valid module paths.
+- K8s deployments run valid module entrypoints.
+- Smoke test: containers start and run for consumer/writer/compactor.
+
+Estimate: 1-2 days
+
+### T-07: Terraform Modules Availability (TD-073)
+
+Priority: P1
+
+Description: Terraform root module references local modules that are not present in the repo.
+
+Scope:
+- `infrastructure/terraform/main.tf`
+- `infrastructure/terraform/modules/*` (add or replace)
+
+Acceptance Criteria:
+- `terraform init` and `terraform plan` run without missing module errors.
+- Modules are either added or referenced from a remote source with pinned versions.
+
+Estimate: 1-3 days
+
+### T-08: SDK Default Port Alignment (TD-002)
+
+Priority: P1
+
+Description: SDK defaults to port 8080, while docker-compose exposes 8085 on host.
+
+Scope:
+- `heber/config.py`
+- `heber/sdk/client.py`
+- `README.md` or `docs/sdk.md`
+
+Acceptance Criteria:
+- Default SDK URL works in local docker-compose without overrides.
+- Documentation matches default behavior.
+
+Estimate: 0.5-1 day
+
+## P2 Tickets (Structural)
+
+### T-09: Unify Hot Store Implementation (TD-004)
+
+Priority: P2
+
+Description: Hot Store has divergent implementations and clients (sync vs async). Consolidate on one client and data path.
+
+Scope:
+- `heber/hotstore/client.py`
+- `heber/writer/hotstore.py`
+- `heber/hotstore/sync.py`
+- `heber/hotstore/tables.py`
+
+Acceptance Criteria:
+- Single ClickHouse client/library across code paths.
+- Consistent async/sync model with documented usage.
+- Load test shows stable ingestion without per-row inserts.
+
+Estimate: 3-5 days
+
+## Suggested Execution Order
+
+1. T-01 (Event bus claim handling)
+2. T-02 (Meta-label alignment)
+3. T-03 (ts_available fix)
+4. T-04 (Feast feature view alignment)
+5. T-05 (Test discovery)
+6. T-06 (Docker/K8s entrypoints)
+7. T-07 (Terraform modules)
+8. T-08 (SDK port alignment)
+9. T-09 (Hot Store unification)
+
+
+
+================================================
 FILE: docs/UW_endpoints.md
 ================================================
 # UnusualWhales API Endpoints Tracking
@@ -12348,7 +13298,7 @@ provider: local
 # In production, this would be the Heber Catalog (Postgres)
 registry:
   registry_type: file
-  path: /data/feast/registry.pb
+  path: registry.pb
 
 # Offline Store: historical feature storage (Gold Parquet)
 offline_store:
@@ -12358,7 +13308,7 @@ offline_store:
 # Note: Using SQLite for local dev, switch to ClickHouse for production
 online_store:
   type: sqlite
-  path: /data/feast/online.db
+  path: online.db
 
 # For production, use:
 # online_store:
@@ -12381,6 +13331,34 @@ FILE: features/feature_views/__init__.py
 
 
 ================================================
+FILE: features/feature_views/_paths.py
+================================================
+"""Shared path builders for Feast FileSource definitions."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+def gold_dataset_glob(dataset: str) -> str:
+    """Return Gold dataset glob aligned with Heber write_gold layout.
+
+    Layout:
+      <gold_root>/dataset=<dataset>/project=<project>/version=<version>/dt=<date>/*.parquet
+    """
+    data_root = Path(os.getenv("HEBER_DATA_ROOT", "/data"))
+    gold_root = Path(os.getenv("HEBER_GOLD_ROOT", str(data_root / "gold")))
+    project_glob = os.getenv("HEBER_GOLD_PROJECT", "*")
+    version_glob = os.getenv("HEBER_GOLD_VERSION", "*")
+
+    return str(
+        gold_root / f"dataset={dataset}" / f"project={project_glob}" / f"version={version_glob}" / "dt=*" / "*.parquet"
+    )
+
+
+
+================================================
 FILE: features/feature_views/alert_labels.py
 ================================================
 """Alert barrier label feature views for Feast (PRD §31.12).
@@ -12395,6 +13373,7 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32, Int64, String
 
 from features.entities import alert
+from features.feature_views._paths import gold_dataset_glob
 
 # =============================================================================
 # All Horizons Combined
@@ -12402,8 +13381,8 @@ from features.entities import alert
 
 alert_barrier_labels_source = FileSource(
     name="alert_barrier_labels_source",
-    path="/data/gold/dataset=labels_alert_barriers/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_barriers"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -12432,6 +13411,13 @@ alert_barrier_labels = FeatureView(
         Field(name="mfe_adj", dtype=Float32),
         Field(name="mae_adj", dtype=Float32),
         Field(name="bars_to_hit", dtype=Float32),
+        # Option contract outcomes
+        Field(name="contract_hit_tp_first", dtype=Int64),
+        Field(name="contract_mfe", dtype=Float32),
+        Field(name="contract_mae", dtype=Float32),
+        Field(name="contract_mfe_adj", dtype=Float32),
+        Field(name="contract_mae_adj", dtype=Float32),
+        Field(name="contract_bars_to_hit", dtype=Float32),
         # Beta-neutral (SPY-relative) return
         Field(name="beta_neutral_return", dtype=Float32),
         # Regime context
@@ -12456,8 +13442,8 @@ alert_barrier_labels = FeatureView(
 
 alert_intraday_labels_source = FileSource(
     name="alert_intraday_labels_source",
-    path="/data/gold/dataset=labels_alert_intraday/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_intraday"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -12498,8 +13484,8 @@ alert_intraday_labels = FeatureView(
 
 alert_swing_labels_source = FileSource(
     name="alert_swing_labels_source",
-    path="/data/gold/dataset=labels_alert_swing/type=label/",
-    timestamp_field="ts_alert",
+    path=gold_dataset_glob("labels_alert_swing"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -12543,14 +13529,15 @@ FILE: features/feature_views/flow.py
 from datetime import timedelta
 
 from feast import FeatureView, Field, FileSource
-from feast.types import Float32, Int64
+from feast.types import Float32
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for flow features
 flow_source = FileSource(
     name="flow_source",
-    path="/data/gold/dataset=flow_features/",
+    path=gold_dataset_glob("flow_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -12561,14 +13548,12 @@ flow_features = FeatureView(
     entities=[equity],
     ttl=timedelta(days=30),
     schema=[
-        Field(name="net_call_premium", dtype=Float32),
-        Field(name="net_put_premium", dtype=Float32),
-        Field(name="put_call_ratio", dtype=Float32),
-        Field(name="unusual_activity_score", dtype=Float32),
-        Field(name="whale_net_premium", dtype=Float32),
-        Field(name="smart_money_divergence", dtype=Float32),
-        Field(name="total_volume", dtype=Int64),
-        Field(name="open_interest_change", dtype=Int64),
+        Field(name="total_premium_24h", dtype=Float32),
+        Field(name="call_premium_24h", dtype=Float32),
+        Field(name="put_premium_24h", dtype=Float32),
+        Field(name="call_put_premium_ratio", dtype=Float32),
+        Field(name="net_premium_24h", dtype=Float32),
+        Field(name="sweep_count_24h", dtype=Float32),
     ],
     source=flow_source,
     online=True,
@@ -12589,15 +13574,16 @@ FILE: features/feature_views/labels.py
 from datetime import timedelta
 
 from feast import FeatureView, Field, FileSource
-from feast.types import Float32
+from feast.types import Float32, Int64
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for return labels
 returns_5d_source = FileSource(
     name="returns_5d_source",
-    path="/data/gold/dataset=labels_returns_5d/type=label/",
-    timestamp_field="ts_label",
+    path=gold_dataset_glob("labels_returns_5d"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -12608,8 +13594,9 @@ returns_5d = FeatureView(
     ttl=timedelta(days=365),
     schema=[
         Field(name="return_5d", dtype=Float32),
-        Field(name="return_5d_excess", dtype=Float32),
-        Field(name="return_5d_rank", dtype=Float32),
+        Field(name="direction_5d", dtype=Int64),
+        Field(name="is_up_5d", dtype=Int64),
+        Field(name="is_down_5d", dtype=Int64),
     ],
     source=returns_5d_source,
     online=False,
@@ -12624,8 +13611,8 @@ returns_5d = FeatureView(
 # Source: Gold Parquet files for 1-day return labels
 returns_1d_source = FileSource(
     name="returns_1d_source",
-    path="/data/gold/dataset=labels_returns_1d/type=label/",
-    timestamp_field="ts_label",
+    path=gold_dataset_glob("labels_returns_1d"),
+    timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
 
@@ -12636,8 +13623,9 @@ returns_1d = FeatureView(
     ttl=timedelta(days=365),
     schema=[
         Field(name="return_1d", dtype=Float32),
-        Field(name="return_1d_excess", dtype=Float32),
-        Field(name="direction_1d", dtype=Float32),
+        Field(name="direction_1d", dtype=Int64),
+        Field(name="is_up_1d", dtype=Int64),
+        Field(name="is_down_1d", dtype=Int64),
     ],
     source=returns_1d_source,
     online=False,
@@ -12662,11 +13650,12 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32, Int64
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for microstructure features
 microstructure_source = FileSource(
     name="microstructure_source",
-    path="/data/gold/dataset=microstructure_features/",
+    path=gold_dataset_glob("microstructure_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -12678,14 +13667,12 @@ microstructure_features = FeatureView(
     ttl=timedelta(days=30),
     schema=[
         Field(name="bid_ask_spread", dtype=Float32),
-        Field(name="bid_ask_spread_pct", dtype=Float32),
-        Field(name="quoted_depth_bid", dtype=Int64),
-        Field(name="quoted_depth_ask", dtype=Int64),
-        Field(name="trade_imbalance", dtype=Float32),
-        Field(name="vwap", dtype=Float32),
-        Field(name="twap", dtype=Float32),
-        Field(name="kyle_lambda", dtype=Float32),
-        Field(name="amihud_illiquidity", dtype=Float32),
+        Field(name="spread_bps", dtype=Float32),
+        Field(name="mid_px", dtype=Float32),
+        Field(name="bid_depth", dtype=Int64),
+        Field(name="ask_depth", dtype=Int64),
+        Field(name="depth_imbalance", dtype=Float32),
+        Field(name="total_depth", dtype=Int64),
     ],
     source=microstructure_source,
     online=True,
@@ -12708,11 +13695,12 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files
 momentum_source = FileSource(
     name="momentum_source",
-    path="/data/gold/dataset=momentum_features/",
+    path=gold_dataset_glob("momentum_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",  # Point-in-time gate
 )
@@ -12728,6 +13716,8 @@ momentum_features = FeatureView(
         Field(name="momentum_10d", dtype=Float32),
         Field(name="momentum_20d", dtype=Float32),
         Field(name="momentum_60d", dtype=Float32),
+        Field(name="roc_5d", dtype=Float32),
+        Field(name="roc_20d", dtype=Float32),
         Field(name="rsi_14", dtype=Float32),
         Field(name="rsi_28", dtype=Float32),
         Field(name="macd", dtype=Float32),
@@ -12754,11 +13744,12 @@ from feast import FeatureView, Field, FileSource
 from feast.types import Float32
 
 from features.entities import equity
+from features.feature_views._paths import gold_dataset_glob
 
 # Source: Gold Parquet files for volatility features
 volatility_source = FileSource(
     name="volatility_source",
-    path="/data/gold/dataset=volatility_features/",
+    path=gold_dataset_glob("volatility_features"),
     timestamp_field="ts_event",
     created_timestamp_column="ts_available",
 )
@@ -12769,15 +13760,17 @@ volatility_features = FeatureView(
     entities=[equity],
     ttl=timedelta(days=90),
     schema=[
-        Field(name="volatility_5d", dtype=Float32),
-        Field(name="volatility_10d", dtype=Float32),
-        Field(name="volatility_20d", dtype=Float32),
-        Field(name="volatility_60d", dtype=Float32),
+        Field(name="vol_5d", dtype=Float32),
+        Field(name="vol_20d", dtype=Float32),
+        Field(name="vol_60d", dtype=Float32),
+        Field(name="vol_ratio_5_20", dtype=Float32),
+        Field(name="vol_ratio_20_60", dtype=Float32),
+        Field(name="parkinson_vol_20d", dtype=Float32),
         Field(name="atr_14", dtype=Float32),
         Field(name="atr_20", dtype=Float32),
-        Field(name="bollinger_upper", dtype=Float32),
-        Field(name="bollinger_lower", dtype=Float32),
-        Field(name="bollinger_width", dtype=Float32),
+        Field(name="bb_width_20", dtype=Float32),
+        Field(name="price_zscore_20d", dtype=Float32),
+        Field(name="price_zscore_60d", dtype=Float32),
     ],
     source=volatility_source,
     online=True,
@@ -14595,6 +15588,11 @@ class RedisEventBus(EventBus):
         """Consume messages using XREADGROUP."""
         while True:
             try:
+                claimed = await self._claim_idle_messages(config)
+                if claimed:
+                    yield claimed
+                    continue
+
                 results = await self._redis.xreadgroup(
                     groupname=config.group_name,
                     consumername=config.consumer_name,
@@ -14607,8 +15605,6 @@ class RedisEventBus(EventBus):
                     messages = self._parse_stream_results(results)
                     if messages:
                         yield messages
-
-                await self._claim_idle_messages(config)
 
             except asyncio.CancelledError:
                 logger.info("consumer_cancelled", stream=config.stream.value)
@@ -14676,12 +15672,13 @@ class RedisEventBus(EventBus):
                     )
                     for msg_id, msg_data in claimed:
                         if msg_data:
-                            message = Message(
-                                id=msg_id,
-                                stream=config.stream.value,
-                                data=msg_data,
+                            message = self._parse_single_message(
+                                msg_id=msg_id,
+                                stream_name=config.stream.value,
+                                msg_data=msg_data,
                             )
                             claimed_messages.append(message)
+                            messages_received.labels(stream=config.stream.value).inc()
                             logger.info(
                                 "message_claimed",
                                 stream=config.stream.value,
@@ -20920,6 +21917,14 @@ import numpy as np
 import pandas as pd
 
 
+def _rolling_max_datetime(series: pd.Series, window: int) -> pd.Series:
+    source = pd.to_datetime(series, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=series.index).rolling(window=window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_relative_features(
     bars_df: pd.DataFrame,
     benchmark_key: str = "equity:SPY",
@@ -20934,22 +21939,39 @@ def compute_relative_features(
         DataFrame with relative features
     """
     # Get benchmark data
-    benchmark = bars_df[bars_df["instrument_key"] == benchmark_key][["bar_start_ts", "close"]].rename(
-        columns={"close": "benchmark_close"}
+    benchmark_cols = ["bar_start_ts", "close"]
+    if "ts_available" in bars_df.columns:
+        benchmark_cols.append("ts_available")
+
+    benchmark = bars_df[bars_df["instrument_key"] == benchmark_key][benchmark_cols].rename(
+        columns={"close": "benchmark_close", "ts_available": "benchmark_ts_available"}
     )
 
     # Merge with all instruments
     merged = bars_df.merge(benchmark, on="bar_start_ts", how="left")
 
+    if "ts_available" in merged.columns:
+        base_available = pd.to_datetime(merged["ts_available"], utc=True, errors="coerce")
+    else:
+        base_available = pd.to_datetime(merged["bar_start_ts"], utc=True, errors="coerce")
+
+    if "benchmark_ts_available" in merged.columns:
+        bench_available = pd.to_datetime(merged["benchmark_ts_available"], utc=True, errors="coerce")
+        base_available = pd.concat([base_available, bench_available], axis=1).max(axis=1)
+
+    merged["_ts_available_source"] = base_available
+
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.sort_values("bar_start_ts")
         returns = df["close"].pct_change()
         bench_returns = df["benchmark_close"].pct_change()
+        ts_available = _rolling_max_datetime(df["_ts_available_source"], window=60)
 
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Relative strength
                 "rel_strength_20d": (
                     (df["close"] / df["close"].shift(20)) / (df["benchmark_close"] / df["benchmark_close"].shift(20))
@@ -20993,6 +22015,20 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(df: pd.DataFrame, lookback_hours: int) -> pd.Series:
+    if "ts_available" in df.columns:
+        source = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
+    else:
+        source = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+
+    ts_event = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    series = pd.Series(source_int.to_numpy(), index=ts_event)
+    rolled = series.rolling(f"{lookback_hours}h", min_periods=1).max()
+    return pd.to_datetime(rolled.values, utc=True)
+
+
 def compute_flow_features(
     flow_df: pd.DataFrame,
     _bars_df: pd.DataFrame | None = None,  # Reserved for price normalization
@@ -21012,25 +22048,24 @@ def compute_flow_features(
 
     for underlying, group in flow_df.groupby("underlying"):
         df = group.sort_values("ts_event").copy()
+        ts_available = _derive_ts_available(df, lookback_hours)
+        df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+        df = df.set_index("ts_event")
 
         # Premium aggregates
         call_mask = df["put_call"] == "C"
         put_mask = df["put_call"] == "P"
         sweep_mask = df["alert_type"] == "SWEEP"
 
-        total_premium = df["premium"].rolling(f"{lookback_hours}h", on="ts_event").sum()
-        call_premium = (
-            df.loc[call_mask, "premium"].reindex(df.index).fillna(0).rolling(f"{lookback_hours}h", on="ts_event").sum()
-        )
-        put_premium = (
-            df.loc[put_mask, "premium"].reindex(df.index).fillna(0).rolling(f"{lookback_hours}h", on="ts_event").sum()
-        )
+        total_premium = df["premium"].rolling(f"{lookback_hours}h").sum()
+        call_premium = df["premium"].where(call_mask, 0).rolling(f"{lookback_hours}h").sum()
+        put_premium = df["premium"].where(put_mask, 0).rolling(f"{lookback_hours}h").sum()
 
         result = pd.DataFrame(
             {
                 "instrument_key": f"equity:{underlying}",
-                "ts_event": df["ts_event"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_event": df.index,
+                "ts_available": ts_available.to_numpy(),
                 # Premium aggregates
                 "total_premium_24h": total_premium,
                 "call_premium_24h": call_premium,
@@ -21040,7 +22075,7 @@ def compute_flow_features(
                 # Net premium (call - put)
                 "net_premium_24h": call_premium - put_premium,
                 # Sweep activity
-                "sweep_count_24h": sweep_mask.astype(int).rolling(f"{lookback_hours}h", on="ts_event").sum(),
+                "sweep_count_24h": sweep_mask.astype(int).rolling(f"{lookback_hours}h").sum(),
             }
         )
 
@@ -21160,6 +22195,11 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(group: pd.DataFrame) -> pd.Series:
+    source = group["ts_available"] if "ts_available" in group.columns else group["ts_event"]
+    return pd.to_datetime(source, utc=True, errors="coerce")
+
+
 def compute_microstructure_features(
     quotes_df: pd.DataFrame,
     _trades_df: pd.DataFrame | None = None,  # Reserved for trade-based metrics
@@ -21179,11 +22219,12 @@ def compute_microstructure_features(
     df["mid_px"] = (df["bid_px"] + df["ask_px"]) / 2
 
     def calc_features(group: pd.DataFrame) -> pd.DataFrame:
+        ts_available = _derive_ts_available(group)
         return pd.DataFrame(
             {
                 "instrument_key": group["instrument_key"],
                 "ts_event": group["ts_event"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Spread metrics
                 "bid_ask_spread": group["ask_px"] - group["bid_px"],
                 "spread_bps": (group["ask_px"] - group["bid_px"]) / group["mid_px"] * 10000,
@@ -21218,6 +22259,15 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(df: pd.DataFrame, time_col: str, max_window: int) -> pd.Series:
+    source = df["ts_available"] if "ts_available" in df.columns else df[time_col]
+    source = pd.to_datetime(source, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=df.index).rolling(window=max_window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     """Compute Relative Strength Index (RSI).
 
@@ -21239,7 +22289,7 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
     """Compute momentum features for each instrument.
 
     Input: Silver bars with columns [instrument_key, bar_start_ts, open, high, low, close, volume]
-    Output: Gold features with ts_available set to computation time
+    Output: Gold features with ts_available derived from source availability
 
     Args:
         bars_df: DataFrame with OHLCV bar data
@@ -21250,11 +22300,12 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
 
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
+        ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Price momentum (returns over lookback)
                 "momentum_1d": close.pct_change(1),
                 "momentum_5d": close / close.shift(5) - 1,
@@ -21304,10 +22355,12 @@ class TestMomentumFeatures:
         from heber.features.templates.momentum import compute_momentum_features
 
         rng = np.random.default_rng(42)
+        ts_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC"),
+                "ts_available": ts_available,
                 "open": rng.standard_normal(100).cumsum() + 100,
                 "high": rng.standard_normal(100).cumsum() + 101,
                 "low": rng.standard_normal(100).cumsum() + 99,
@@ -21322,6 +22375,32 @@ class TestMomentumFeatures:
         assert "rsi_14" in features.columns
         assert "macd" in features.columns
         assert len(features) == len(bars)
+        assert features["ts_available"].reset_index(drop=True).equals(pd.Series(ts_available).reset_index(drop=True))
+
+    def test_momentum_ts_available_rolls_forward(self):
+        from heber.features.templates.momentum import compute_momentum_features
+
+        bars = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"] * 3,
+                "bar_start_ts": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC"),
+                "ts_available": [
+                    pd.Timestamp("2024-01-03", tz="UTC"),
+                    pd.Timestamp("2024-01-02", tz="UTC"),
+                    pd.Timestamp("2024-01-04", tz="UTC"),
+                ],
+                "open": [1, 2, 3],
+                "high": [1, 2, 3],
+                "low": [1, 2, 3],
+                "close": [1, 2, 3],
+                "volume": [100, 200, 300],
+            }
+        )
+
+        features = compute_momentum_features(bars)
+        ts_available = features["ts_available"].reset_index(drop=True)
+
+        assert ts_available.iloc[1] == pd.Timestamp("2024-01-03", tz="UTC")
 
 
 class TestVolatilityFeatures:
@@ -21344,10 +22423,12 @@ class TestVolatilityFeatures:
         from heber.features.templates.volatility import compute_volatility_features
 
         rng = np.random.default_rng(42)
+        ts_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 100,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D"),
+                "bar_start_ts": pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC"),
+                "ts_available": ts_available,
                 "open": rng.standard_normal(100).cumsum() + 100,
                 "high": rng.standard_normal(100).cumsum() + 101,
                 "low": rng.standard_normal(100).cumsum() + 99,
@@ -21361,6 +22442,7 @@ class TestVolatilityFeatures:
         assert "vol_20d" in features.columns
         assert "atr_14" in features.columns
         assert "bb_width_20" in features.columns
+        assert features["ts_available"].reset_index(drop=True).equals(pd.Series(ts_available).reset_index(drop=True))
 
 
 class TestCrossAssetFeatures:
@@ -21370,7 +22452,9 @@ class TestCrossAssetFeatures:
         from heber.features.templates.cross_asset import compute_relative_features
 
         rng = np.random.default_rng(42)
-        dates = pd.date_range("2024-01-01", periods=100, freq="D")
+        dates = pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC")
+        aapl_available = pd.date_range("2024-01-02", periods=100, freq="D", tz="UTC")
+        spy_available = pd.date_range("2024-01-03", periods=100, freq="D", tz="UTC")
 
         bars = pd.concat(
             [
@@ -21378,6 +22462,7 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:AAPL"] * 100,
                         "bar_start_ts": dates,
+                        "ts_available": aapl_available,
                         "close": rng.standard_normal(100).cumsum() + 150,
                     }
                 ),
@@ -21385,6 +22470,7 @@ class TestCrossAssetFeatures:
                     {
                         "instrument_key": ["equity:SPY"] * 100,
                         "bar_start_ts": dates,
+                        "ts_available": spy_available,
                         "close": rng.standard_normal(100).cumsum() + 500,
                     }
                 ),
@@ -21397,6 +22483,57 @@ class TestCrossAssetFeatures:
         assert (features["instrument_key"] == "equity:AAPL").all()
         assert "beta_60d" in features.columns
         assert "alpha_20d" in features.columns
+        assert features["ts_available"].iloc[0] == spy_available[0]
+
+
+class TestFlowFeatures:
+    """Test flow feature computation."""
+
+    def test_flow_ts_available_rolls_forward(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        base = pd.Timestamp("2024-01-01 09:30", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL"] * 3,
+                "ts_event": [base, base + pd.Timedelta(hours=1), base + pd.Timedelta(hours=2)],
+                "ts_available": [
+                    base + pd.Timedelta(hours=2),
+                    base + pd.Timedelta(hours=1),
+                    base + pd.Timedelta(hours=3),
+                ],
+                "premium": [100.0, 110.0, 120.0],
+                "put_call": ["C", "C", "P"],
+                "alert_type": ["SWEEP", "BLOCK", "SWEEP"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+        ts_available = features["ts_available"].reset_index(drop=True)
+
+        assert ts_available.iloc[1] == base + pd.Timedelta(hours=2)
+
+
+class TestMicrostructureFeatures:
+    """Test microstructure feature computation."""
+
+    def test_microstructure_ts_available_uses_source(self):
+        from heber.features.templates.microstructure import compute_microstructure_features
+
+        quotes = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL"] * 3,
+                "ts_event": pd.date_range("2024-01-01", periods=3, freq="min", tz="UTC"),
+                "ts_available": pd.date_range("2024-01-01 00:01", periods=3, freq="min", tz="UTC"),
+                "bid_px": [100.0, 100.5, 101.0],
+                "ask_px": [100.2, 100.7, 101.2],
+                "bid_sz": [10, 12, 14],
+                "ask_sz": [11, 13, 15],
+            }
+        )
+
+        features = compute_microstructure_features(quotes)
+        assert features["ts_available"].reset_index(drop=True).equals(quotes["ts_available"].reset_index(drop=True))
 
 
 class TestLabelFeatures:
@@ -21486,6 +22623,15 @@ import numpy as np
 import pandas as pd
 
 
+def _derive_ts_available(df: pd.DataFrame, time_col: str, max_window: int) -> pd.Series:
+    source = df["ts_available"] if "ts_available" in df.columns else df[time_col]
+    source = pd.to_datetime(source, utc=True, errors="coerce")
+    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
+    source_int = source_naive.astype("int64")
+    rolled = pd.Series(source_int, index=df.index).rolling(window=max_window, min_periods=1).max()
+    return pd.to_datetime(rolled, utc=True)
+
+
 def compute_parkinson_vol(high: pd.Series, low: pd.Series, window: int) -> pd.Series:
     """Compute Parkinson volatility (uses high/low range).
 
@@ -21535,12 +22681,13 @@ def compute_volatility_features(bars_df: pd.DataFrame) -> pd.DataFrame:
         high = df["high"]
         low = df["low"]
         returns = close.pct_change()
+        ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
 
         return pd.DataFrame(
             {
                 "instrument_key": df["instrument_key"],
                 "ts_event": df["bar_start_ts"],
-                "ts_available": pd.Timestamp.now(tz="UTC"),
+                "ts_available": ts_available,
                 # Realized volatility (annualized)
                 "vol_5d": returns.rolling(5).std() * np.sqrt(252),
                 "vol_20d": returns.rolling(20).std() * np.sqrt(252),
@@ -24522,6 +25669,8 @@ class MetaLabelDatasetBuilder:
         outcomes: pl.DataFrame,
     ) -> pl.DataFrame:
         """Join features with outcomes on alert_id."""
+        outcomes = self._normalize_outcomes(outcomes)
+
         # Ensure alert_id column exists in both
         if "alert_id" not in features.columns:
             logger.error("Features missing alert_id column")
@@ -24549,12 +25698,38 @@ class MetaLabelDatasetBuilder:
             how="inner",
         )
 
+    def _normalize_outcomes(self, outcomes: pl.DataFrame) -> pl.DataFrame:
+        """Normalize outcome columns for backward compatibility."""
+        df = outcomes
+
+        if "outcome" not in df.columns and "outcome_reason" in df.columns:
+            df = df.with_columns(pl.col("outcome_reason").alias("outcome"))
+
+        if "hit_tp_first" not in df.columns and "contract_hit_tp_first" in df.columns:
+            df = df.with_columns(pl.col("contract_hit_tp_first").alias("hit_tp_first"))
+
+        if "mfe" not in df.columns and "contract_mfe" in df.columns:
+            df = df.with_columns(pl.col("contract_mfe").alias("mfe"))
+
+        if "mae" not in df.columns and "contract_mae" in df.columns:
+            df = df.with_columns(pl.col("contract_mae").alias("mae"))
+
+        if "bars_to_hit" not in df.columns and "contract_bars_to_hit" in df.columns:
+            df = df.with_columns(pl.col("contract_bars_to_hit").alias("bars_to_hit"))
+
+        return df
+
     def _add_meta_label(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add meta-label column (1 if TP hit, 0 otherwise)."""
         if "outcome" not in df.columns:
             return df
 
-        return df.with_columns(pl.when(pl.col("outcome") == "HIT_TP").then(1).otherwise(0).alias("meta_label"))
+        return df.with_columns(
+            pl.when(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == "hit_tp")
+            .then(1)
+            .otherwise(0)
+            .alias("meta_label")
+        )
 
     def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
         """Apply configured filters to dataset."""
@@ -24563,7 +25738,7 @@ class MetaLabelDatasetBuilder:
 
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
-            df = df.filter(pl.col("outcome") != "EXPIRED")
+            df = df.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() != "expired")
 
         # Min samples per symbol
         if "symbol" in df.columns and self.config.min_outcomes_per_symbol > 1:
@@ -26200,7 +27375,6 @@ class PoliticianTradeRecord(SilverBase):
     comment: str | None = None
 
 
-
 # ==============================================================================
 # V4 Schemas - Market Analytics (Analyst, Fundamentals, Events, Indicators)
 # ==============================================================================
@@ -26269,7 +27443,100 @@ class MarketIndicatorRecord(SilverBase):
     metadata_json: str | None = Field(None, description="Additional indicator-specific data")
 
 
+# ==============================================================================
+# V5 Schemas - Options Deep Data (History, Chains, Volume Profile, Group Flow)
+# ==============================================================================
 
+
+class OptionHistoryRecord(SilverBase):
+    """Historical option contract data."""
+
+    occ_symbol: str
+    history_date: date
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    open_interest: float | None = None
+    implied_volatility: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+
+class OptionChainSnapshotRecord(SilverBase):
+    """Point-in-time snapshot of option chain."""
+
+    snapshot_ts: datetime
+    underlying: str
+    expiry: date
+    chain_json: str = Field(..., description="JSON of full chain data")
+    total_call_volume: float | None = None
+    total_put_volume: float | None = None
+    total_call_oi: float | None = None
+    total_put_oi: float | None = None
+    atm_iv: float | None = None
+
+
+class VolumeProfileRecord(SilverBase):
+    """Volume profile data for option contracts."""
+
+    occ_symbol: str
+    profile_date: date
+    price_level: float
+    volume: float
+    cumulative_volume: float | None = None
+    pct_of_total: float | None = None
+
+
+class GroupFlowRecord(SilverBase):
+    """Greek flow aggregated by group (sector, index, etc.)."""
+
+    group_name: str = Field(..., description="SPY, QQQ, sector name, etc.")
+    group_type: str = Field(..., description="etf, sector, index")
+    flow_date: date
+    expiry: date | None = None
+    call_gex: float | None = None
+    put_gex: float | None = None
+    net_gex: float | None = None
+    call_dex: float | None = None
+    put_dex: float | None = None
+    net_premium: float | None = None
+
+
+# ==============================================================================
+# V6 Schemas - ETF Deep Data (Metadata, Sector Weights)
+# ==============================================================================
+
+
+class ETFMetadataRecord(SilverBase):
+    """ETF metadata and exposure details."""
+
+    etf_symbol: str
+    snapshot_date: date
+    fund_name: str | None = None
+    issuer: str | None = None
+    expense_ratio: float | None = None
+    aum: float | None = None
+    avg_volume: float | None = None
+    inception_date: date | None = None
+    asset_class: str | None = None
+    category: str | None = None
+    index_tracked: str | None = None
+    leverage_factor: float | None = None
+
+
+class ETFSectorWeightsRecord(SilverBase):
+    """ETF sector and country weight breakdown."""
+
+    etf_symbol: str
+    weight_date: date
+    weight_type: str = Field(..., description="sector or country")
+    weight_name: str = Field(..., description="Technology, Healthcare, USA, etc.")
+    weight_pct: float
+    change_pct: float | None = None
 
 
 class NewsArticleRecord(SilverBase):
@@ -41696,6 +42963,8 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
     Returns:
         Dict suitable for DataFrame row
     """
+    outcome_value = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
+
     return {
         # Identifiers
         "alert_id": outcome.alert_id,
@@ -41710,9 +42979,14 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "ts_available": outcome.outcome_time,
         "horizon": outcome.horizon,
         # THE LABEL
+        "outcome": outcome_value,
+        "hit_tp_first": outcome.hit_tp_first,
         "contract_hit_tp_first": outcome.hit_tp_first,
-        "outcome_reason": outcome.status,
+        "outcome_reason": outcome_value,
         # Path stats
+        "mfe": outcome.mfe,
+        "mae": outcome.mae,
+        "bars_to_hit": outcome.bars_to_hit,
         "contract_mfe": outcome.mfe,
         "contract_mae": outcome.mae,
         "contract_mfe_adj": outcome.mfe_adj,
@@ -45727,8 +47001,269 @@ SILVER_SCHEMAS = {
             ("comment", pa.string()),
         ]
     ),
+    # V4: Market Analytics (Analyst, Fundamentals, Events, Indicators)
+    "analyst_ratings": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("rating_id", pa.string()),
+            ("analyst_name", pa.string()),
+            ("analyst_firm", pa.string()),
+            ("rating", pa.string()),
+            ("rating_prior", pa.string()),
+            ("price_target", pa.float64()),
+            ("price_target_prior", pa.float64()),
+            ("rating_date", pa.date32()),
+            ("action", pa.string()),
+        ]
+    ),
+    "stock_fundamentals": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("snapshot_date", pa.date32()),
+            ("company_name", pa.string()),
+            ("sector", pa.string()),
+            ("industry", pa.string()),
+            ("market_cap", pa.float64()),
+            ("pe_ratio", pa.float64()),
+            ("eps", pa.float64()),
+            ("dividend_yield", pa.float64()),
+            ("beta", pa.float64()),
+            ("shares_outstanding", pa.float64()),
+            ("float_shares", pa.float64()),
+            ("avg_volume", pa.float64()),
+            ("price", pa.float64()),
+            ("high_52w", pa.float64()),
+            ("low_52w", pa.float64()),
+        ]
+    ),
+    "economic_events": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("event_name", pa.string()),
+            ("event_type", pa.string()),
+            ("event_date", pa.date32()),
+            ("event_time", pa.string()),
+            ("country", pa.string()),
+            ("importance", pa.string()),
+            ("actual", pa.string()),
+            ("forecast", pa.string()),
+            ("previous", pa.string()),
+            ("source_url", pa.string()),
+        ]
+    ),
+    "market_indicators": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("indicator_name", pa.string()),
+            ("indicator_date", pa.date32()),
+            ("indicator_time", pa.string()),
+            ("value", pa.float64()),
+            ("value_prior", pa.float64()),
+            ("change", pa.float64()),
+            ("change_pct", pa.float64()),
+            ("percentile", pa.float64()),
+            ("metadata_json", pa.string()),
+        ]
+    ),
+    # V5: Options Deep Data
+    "option_history": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("occ_symbol", pa.string()),
+            ("history_date", pa.date32()),
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("implied_volatility", pa.float64()),
+            ("delta", pa.float64()),
+            ("gamma", pa.float64()),
+            ("theta", pa.float64()),
+            ("vega", pa.float64()),
+        ]
+    ),
+    "option_chain_snapshot": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("snapshot_ts", pa.timestamp("us", tz="UTC")),
+            ("underlying", pa.string()),
+            ("expiry", pa.date32()),
+            ("chain_json", pa.string()),
+            ("total_call_volume", pa.float64()),
+            ("total_put_volume", pa.float64()),
+            ("total_call_oi", pa.float64()),
+            ("total_put_oi", pa.float64()),
+            ("atm_iv", pa.float64()),
+        ]
+    ),
+    "volume_profile": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("occ_symbol", pa.string()),
+            ("profile_date", pa.date32()),
+            ("price_level", pa.float64()),
+            ("volume", pa.float64()),
+            ("cumulative_volume", pa.float64()),
+            ("pct_of_total", pa.float64()),
+        ]
+    ),
+    "group_flow": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("group_name", pa.string()),
+            ("group_type", pa.string()),
+            ("flow_date", pa.date32()),
+            ("expiry", pa.date32()),
+            ("call_gex", pa.float64()),
+            ("put_gex", pa.float64()),
+            ("net_gex", pa.float64()),
+            ("call_dex", pa.float64()),
+            ("put_dex", pa.float64()),
+            ("net_premium", pa.float64()),
+        ]
+    ),
+    # V6: ETF Deep Data
+    "etf_metadata": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("snapshot_date", pa.date32()),
+            ("fund_name", pa.string()),
+            ("issuer", pa.string()),
+            ("expense_ratio", pa.float64()),
+            ("aum", pa.float64()),
+            ("avg_volume", pa.float64()),
+            ("inception_date", pa.date32()),
+            ("asset_class", pa.string()),
+            ("category", pa.string()),
+            ("index_tracked", pa.string()),
+            ("leverage_factor", pa.float64()),
+        ]
+    ),
+    "etf_sector_weights": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("etf_symbol", pa.string()),
+            ("weight_date", pa.date32()),
+            ("weight_type", pa.string()),
+            ("weight_name", pa.string()),
+            ("weight_pct", pa.float64()),
+            ("change_pct", pa.float64()),
+        ]
+    ),
 }
-
 
 
 # Default schema for unknown feeds
@@ -46271,6 +47806,194 @@ output "redis_endpoint" {
 
 
 ================================================
+FILE: infrastructure/terraform/modules/ecr/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "repositories" {
+  description = "Repository names"
+  type        = list(string)
+}
+
+output "repository_urls" {
+  description = "ECR repository URL map"
+  value = {
+    for repo in var.repositories :
+    repo => "000000000000.dkr.ecr.us-east-1.amazonaws.com/${repo}-${var.environment}"
+  }
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/modules/eks/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "node_count" {
+  description = "Worker node count"
+  type        = number
+}
+
+variable "vpc_id" {
+  description = "VPC ID"
+  type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs"
+  type        = list(string)
+}
+
+output "cluster_endpoint" {
+  description = "EKS API endpoint"
+  value       = "https://heber-${var.environment}.eks.local"
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/modules/elasticache/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "node_type" {
+  description = "Redis node type"
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "VPC ID"
+  type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs"
+  type        = list(string)
+}
+
+output "endpoint" {
+  description = "Redis endpoint"
+  value       = "heber-${var.environment}.redis.internal:6379"
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/modules/rds/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "instance_class" {
+  description = "RDS instance class"
+  type        = string
+}
+
+variable "vpc_id" {
+  description = "VPC ID"
+  type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "Private subnet IDs"
+  type        = list(string)
+}
+
+output "endpoint" {
+  description = "Catalog DB endpoint"
+  value       = "heber-${var.environment}.catalog.internal:5432"
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/modules/s3/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "bucket_name" {
+  description = "Data bucket name"
+  type        = string
+}
+
+output "bucket_name" {
+  description = "S3 bucket name"
+  value       = var.bucket_name
+}
+
+
+
+================================================
+FILE: infrastructure/terraform/modules/vpc/main.tf
+================================================
+terraform {
+  required_version = ">= 1.5.0"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+}
+
+variable "region" {
+  description = "AWS region"
+  type        = string
+}
+
+locals {
+  # Placeholder IDs to keep root module wiring valid until full VPC resources are implemented.
+  vpc_id             = "vpc-${var.environment}"
+  private_subnet_ids = ["subnet-${var.environment}-a", "subnet-${var.environment}-b", "subnet-${var.environment}-c"]
+}
+
+output "vpc_id" {
+  description = "VPC identifier"
+  value       = local.vpc_id
+}
+
+output "private_subnet_ids" {
+  description = "Private subnet identifiers"
+  value       = local.private_subnet_ids
+}
+
+
+
+================================================
 FILE: k8s/base/configmap.yaml
 ================================================
 # =============================================================================
@@ -46615,7 +48338,7 @@ spec:
         - name: compactor
           image: heber:compactor-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.writer.compaction"]
+          command: ["python", "-m", "heber.writer.compactor"]
           ports:
             - name: metrics
               containerPort: 9090
@@ -46702,7 +48425,7 @@ spec:
         - name: consumer
           image: heber:consumer-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.bus.consumer"]
+          command: ["python", "-m", "heber.writer.consumer"]
           ports:
             - name: metrics
               containerPort: 9090
@@ -46874,7 +48597,7 @@ spec:
         - name: writer
           image: heber:writer-latest
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "heber.writer.service"]
+          command: ["python", "-m", "heber.writer.consumer"]
           ports:
             - name: metrics
               containerPort: 9090
@@ -48463,6 +50186,370 @@ if __name__ == "__main__":
 
 
 ================================================
+FILE: tests/test_event_bus_claim.py
+================================================
+import asyncio
+import json
+from unittest.mock import AsyncMock
+
+from heber.bus import ConsumerConfig, RedisEventBus, StreamName
+
+
+def test_consume_yields_claimed_messages():
+    async def run_test():
+        bus = RedisEventBus()
+        bus._redis = AsyncMock()
+
+        config = ConsumerConfig(
+            group_name="test-group",
+            consumer_name="test-consumer",
+            stream=StreamName.MARKET_BARS,
+            batch_size=10,
+            block_ms=1,
+            claim_idle_ms=1,
+        )
+
+        bus._redis.xpending_range.return_value = [
+            {"message_id": "1-0", "idle": 1000},
+        ]
+        bus._redis.xclaim.return_value = [
+            ("1-0", {"payload": json.dumps({"a": 1})}),
+        ]
+        bus._redis.xreadgroup.return_value = []
+
+        gen = bus.consume(config)
+        batch = await asyncio.wait_for(gen.__anext__(), timeout=1)
+        await gen.aclose()
+
+        return batch
+
+    batch = asyncio.run(run_test())
+
+    assert len(batch) == 1
+    assert batch[0].id == "1-0"
+    assert batch[0].stream == StreamName.MARKET_BARS.value
+    assert batch[0].data["payload"] == {"a": 1}
+
+
+
+================================================
+FILE: tests/test_feature_view_alignment.py
+================================================
+"""Regression tests for Feast feature-view schema/path alignment."""
+
+from __future__ import annotations
+
+import importlib
+import sys
+import types
+
+import pytest
+
+try:
+    import feast  # noqa: F401
+except ImportError:
+    feast_module = types.ModuleType("feast")
+
+    class Entity:
+        def __init__(self, name: str, description: str | None = None, join_keys: list[str] | None = None):
+            self.name = name
+            self.description = description
+            self.join_keys = join_keys or []
+
+    class Field:
+        def __init__(self, name: str, dtype):
+            self.name = name
+            self.dtype = dtype
+
+    class FileSource:
+        def __init__(
+            self,
+            name: str,
+            path: str,
+            timestamp_field: str,
+            created_timestamp_column: str | None = None,
+        ):
+            self.name = name
+            self.path = path
+            self.timestamp_field = timestamp_field
+            self.created_timestamp_column = created_timestamp_column
+
+    class FeatureView:
+        def __init__(
+            self,
+            name: str,
+            entities: list[Entity],
+            ttl,
+            schema: list[Field],
+            source: FileSource,
+            online: bool,
+            tags: dict | None = None,
+        ):
+            self.name = name
+            self.entities = entities
+            self.ttl = ttl
+            self.schema = schema
+            self.source = source
+            self.online = online
+            self.tags = tags or {}
+
+    feast_types = types.ModuleType("feast.types")
+
+    class Float32:
+        pass
+
+    class Int64:
+        pass
+
+    class String:
+        pass
+
+    feast_types.Float32 = Float32
+    feast_types.Int64 = Int64
+    feast_types.String = String
+
+    feast_module.Entity = Entity
+    feast_module.Field = Field
+    feast_module.FileSource = FileSource
+    feast_module.FeatureView = FeatureView
+
+    sys.modules["feast"] = feast_module
+    sys.modules["feast.types"] = feast_types
+
+
+FEATURE_VIEW_CASES = [
+    (
+        "features.feature_views.flow",
+        "flow_features",
+        [
+            "total_premium_24h",
+            "call_premium_24h",
+            "put_premium_24h",
+            "call_put_premium_ratio",
+            "net_premium_24h",
+            "sweep_count_24h",
+        ],
+    ),
+    (
+        "features.feature_views.microstructure",
+        "microstructure_features",
+        [
+            "bid_ask_spread",
+            "spread_bps",
+            "mid_px",
+            "bid_depth",
+            "ask_depth",
+            "depth_imbalance",
+            "total_depth",
+        ],
+    ),
+    (
+        "features.feature_views.momentum",
+        "momentum_features",
+        [
+            "momentum_1d",
+            "momentum_5d",
+            "momentum_10d",
+            "momentum_20d",
+            "momentum_60d",
+            "roc_5d",
+            "roc_20d",
+            "rsi_14",
+            "rsi_28",
+            "macd",
+            "macd_signal",
+        ],
+    ),
+    (
+        "features.feature_views.volatility",
+        "volatility_features",
+        [
+            "vol_5d",
+            "vol_20d",
+            "vol_60d",
+            "vol_ratio_5_20",
+            "vol_ratio_20_60",
+            "parkinson_vol_20d",
+            "atr_14",
+            "atr_20",
+            "bb_width_20",
+            "price_zscore_20d",
+            "price_zscore_60d",
+        ],
+    ),
+    (
+        "features.feature_views.labels",
+        "returns_1d",
+        [
+            "return_1d",
+            "direction_1d",
+            "is_up_1d",
+            "is_down_1d",
+        ],
+    ),
+    (
+        "features.feature_views.labels",
+        "returns_5d",
+        [
+            "return_5d",
+            "direction_5d",
+            "is_up_5d",
+            "is_down_5d",
+        ],
+    ),
+    (
+        "features.feature_views.alert_labels",
+        "alert_barrier_labels",
+        [
+            "underlying",
+            "put_call",
+            "dte",
+            "horizon",
+            "spot_at_alert",
+            "atr_at_alert",
+            "tp_threshold",
+            "sl_threshold",
+            "hit_tp_first",
+            "mfe",
+            "mae",
+            "mfe_adj",
+            "mae_adj",
+            "bars_to_hit",
+            "contract_hit_tp_first",
+            "contract_mfe",
+            "contract_mae",
+            "contract_mfe_adj",
+            "contract_mae_adj",
+            "contract_bars_to_hit",
+            "beta_neutral_return",
+            "vix_at_alert",
+            "vix_regime",
+        ],
+    ),
+]
+
+
+SOURCE_CASES = [
+    ("features.feature_views.flow", "flow_source", "flow_features"),
+    ("features.feature_views.microstructure", "microstructure_source", "microstructure_features"),
+    ("features.feature_views.momentum", "momentum_source", "momentum_features"),
+    ("features.feature_views.volatility", "volatility_source", "volatility_features"),
+    ("features.feature_views.labels", "returns_1d_source", "labels_returns_1d"),
+    ("features.feature_views.labels", "returns_5d_source", "labels_returns_5d"),
+    ("features.feature_views.alert_labels", "alert_barrier_labels_source", "labels_alert_barriers"),
+    ("features.feature_views.alert_labels", "alert_intraday_labels_source", "labels_alert_intraday"),
+    ("features.feature_views.alert_labels", "alert_swing_labels_source", "labels_alert_swing"),
+]
+
+
+@pytest.mark.parametrize(("module_name", "view_name", "expected_fields"), FEATURE_VIEW_CASES)
+def test_feature_view_schema_matches_expected(module_name: str, view_name: str, expected_fields: list[str]) -> None:
+    module = importlib.import_module(module_name)
+    feature_view = getattr(module, view_name)
+    field_names = [field.name for field in feature_view.schema]
+    assert field_names == expected_fields
+
+
+@pytest.mark.parametrize(("module_name", "source_name", "dataset_name"), SOURCE_CASES)
+def test_feature_view_source_path_matches_gold_layout(
+    module_name: str,
+    source_name: str,
+    dataset_name: str,
+) -> None:
+    module = importlib.import_module(module_name)
+    source = getattr(module, source_name)
+    path = source.path
+
+    assert f"dataset={dataset_name}" in path
+    assert "project=" in path
+    assert "version=" in path
+    assert "dt=" in path
+    assert path.endswith("*.parquet")
+
+
+
+================================================
+FILE: tests/test_meta_label_alignment.py
+================================================
+from datetime import UTC, datetime
+
+import polars as pl
+
+from heber.ml.datasets import MetaLabelDatasetBuilder
+from heber.watch.checker import outcome_to_label_row
+from heber.watch.models import WatchOutcome, WatchStatus
+
+
+def _sample_outcome(status: WatchStatus) -> WatchOutcome:
+    now = datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
+    return WatchOutcome(
+        watch_id="w1",
+        alert_id="a1",
+        occ_symbol="AAPL250117C00150000",
+        underlying="AAPL",
+        put_call="C",
+        horizon="intraday",
+        status=status,
+        outcome_time=now,
+        outcome_return=0.25,
+        bars_to_hit=3,
+        mfe=0.3,
+        mae=-0.1,
+        mfe_adj=0.28,
+        mae_adj=-0.12,
+        hit_tp_first=1 if status == WatchStatus.HIT_TP else 0,
+        entry_price=2.5,
+        spot_at_alert=150.0,
+        alert_time=now,
+        window_duration_hours=4.0,
+        trading_minutes_to_hit=45,
+    )
+
+
+def test_outcome_to_label_row_columns():
+    outcome = _sample_outcome(WatchStatus.HIT_TP)
+    row = outcome_to_label_row(outcome)
+
+    assert row["outcome"] == "hit_tp"
+    assert row["hit_tp_first"] == 1
+    assert row["mfe"] == outcome.mfe
+    assert row["mae"] == outcome.mae
+    assert row["bars_to_hit"] == outcome.bars_to_hit
+
+
+def test_meta_label_builder_normalizes_legacy_columns():
+    builder = MetaLabelDatasetBuilder()
+
+    features = pl.DataFrame(
+        {
+            "alert_id": ["a1"],
+            "feature_x": [1.0],
+        }
+    )
+
+    legacy_outcomes = pl.DataFrame(
+        {
+            "alert_id": ["a1"],
+            "outcome_reason": ["hit_tp"],
+            "contract_hit_tp_first": [1],
+            "contract_mfe": [0.3],
+            "contract_mae": [-0.1],
+            "contract_bars_to_hit": [3],
+            "outcome_return": [0.25],
+            "trading_minutes_to_hit": [45],
+        }
+    )
+
+    joined = builder._join_features_outcomes(features, legacy_outcomes)
+    labeled = builder._add_meta_label(joined)
+
+    assert labeled.shape[0] == 1
+    assert labeled.get_column("hit_tp_first")[0] == 1
+    assert labeled.get_column("meta_label")[0] == 1
+
+
+
+================================================
 FILE: tests/test_placeholder.py
 ================================================
 """Placeholder test to ensure pytest runs successfully."""
@@ -48472,6 +50559,84 @@ def test_placeholder() -> None:
     """Placeholder test - replace with actual tests."""
     result = 1 + 1
     assert result == 2
+
+
+
+================================================
+FILE: tests/test_runtime_entrypoints.py
+================================================
+"""Regression tests for Docker/Kubernetes runtime entrypoints."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_legacy_missing_modules_are_not_referenced() -> None:
+    files = [
+        ROOT / "Dockerfile",
+        ROOT / "k8s/base/deployments/consumer.yaml",
+        ROOT / "k8s/base/deployments/writer.yaml",
+        ROOT / "k8s/base/deployments/compactor.yaml",
+    ]
+    contents = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    assert "heber.bus.consumer" not in contents
+    assert "heber.writer.service" not in contents
+    assert "heber.writer.compaction" not in contents
+
+
+def test_runtime_entrypoint_modules_exist() -> None:
+    expected_modules = [
+        "heber.catalog.api",
+        "heber.writer.consumer",
+        "heber.writer.compactor",
+        "heber.writer.hotstore",
+    ]
+
+    missing = [name for name in expected_modules if importlib.util.find_spec(name) is None]
+    assert not missing, f"Missing runtime modules: {missing}"
+
+
+
+================================================
+FILE: tests/test_terraform_module_sources.py
+================================================
+"""Regression checks for Terraform local module wiring."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TERRAFORM_ROOT = ROOT / "infrastructure" / "terraform"
+
+
+def test_root_module_sources_exist_on_disk() -> None:
+    main_tf = (TERRAFORM_ROOT / "main.tf").read_text(encoding="utf-8")
+    sources = re.findall(r'source\s*=\s*"([^"]+)"', main_tf)
+
+    local_sources = [src for src in sources if src.startswith("./")]
+    assert local_sources
+
+    missing = [(src, (TERRAFORM_ROOT / src)) for src in local_sources if not (TERRAFORM_ROOT / src).exists()]
+    assert not missing, f"Missing Terraform module sources: {missing}"
+
+
+def test_expected_module_entrypoints_have_main_tf() -> None:
+    expected_modules = ["vpc", "s3", "rds", "elasticache", "ecr", "eks"]
+    missing = []
+
+    for name in expected_modules:
+        module_main = TERRAFORM_ROOT / "modules" / name / "main.tf"
+        if not module_main.exists():
+            missing.append(str(module_main))
+
+    assert not missing, f"Missing Terraform module files: {missing}"
 
 
 

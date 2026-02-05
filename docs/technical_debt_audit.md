@@ -222,6 +222,7 @@ Updated: 2026-02-05
 - `TD-073` addressed via `T-07`: Terraform local module paths now exist under `infrastructure/terraform/modules/*`, with tests that assert module source paths resolve.
 - `TD-002` addressed via `T-08`: SDK default catalog URL now uses `HEBER_CATALOG_URL` (`http://localhost:8085/api/v1`) to match docker-compose host routing.
 - `TD-004` and `TD-071` addressed via `T-09`: Hot Store sync/write implementation is unified under `heber.hotstore.sync` with a single `clickhouse-connect` client path and sync-safe table creation helpers.
+- `TD-008` addressed via `T-10`: writer consumer now retries processing failures, claims idle pending messages at startup, and routes unrecoverable records to a Redis DLQ stream.
 
 ## Executive Summary
 

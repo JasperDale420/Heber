@@ -47,6 +47,26 @@ class Settings(BaseSettings):
         default="heber-writers",
         description="Redis consumer group name",
     )
+    redis_dlq_stream_name: str = Field(
+        default="heber:events:dlq",
+        description="Redis stream for failed consumer messages",
+    )
+    redis_claim_idle_ms: int = Field(
+        default=60_000,
+        description="Minimum idle time before claiming pending stream messages",
+    )
+    redis_claim_batch_size: int = Field(
+        default=100,
+        description="Max pending messages to claim per recovery cycle",
+    )
+    redis_process_max_retries: int = Field(
+        default=3,
+        description="Retry attempts for a stream message before DLQ",
+    )
+    redis_retry_backoff_seconds: float = Field(
+        default=0.25,
+        description="Base backoff delay between processing retries",
+    )
 
     # ClickHouse (Hot Store)
     clickhouse_host: str = Field(default="localhost")

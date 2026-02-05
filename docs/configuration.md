@@ -14,6 +14,11 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis Streams endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Redis stream name |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Redis consumer group |
+| `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed consumer messages |
+| `HEBER_REDIS_CLAIM_IDLE_MS` | `60000` | Idle threshold before claiming pending messages |
+| `HEBER_REDIS_CLAIM_BATCH_SIZE` | `100` | Max pending messages claimed per recovery cycle |
+| `HEBER_REDIS_PROCESS_MAX_RETRIES` | `3` | Processing retries before DLQ |
+| `HEBER_REDIS_RETRY_BACKOFF_SECONDS` | `0.25` | Base retry backoff delay |
 | `HEBER_CLICKHOUSE_HOST` | `localhost` | ClickHouse hostname |
 | `HEBER_CLICKHOUSE_PORT` | `9000` | ClickHouse native port |
 | `HEBER_CLICKHOUSE_USER` | `default` | ClickHouse user |
