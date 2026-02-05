@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 2 findings and scope)
 - Expanded technical debt audit (pass 3: features/Feast review)
 - Expanded technical debt audit (pass 4: ops review)
+- Expanded technical debt audit (pass 5: firewall/models review)
 
 #### Alert Watch Service (`heber/watch/`)
 

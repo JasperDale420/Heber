@@ -118,14 +118,20 @@ Audit Pass 4 (2026-02-05, files reviewed directly):
 - heber/ops/tests_remaining.py
 - heber/ops/tracing.py
 
+Audit Pass 5 (2026-02-05, files reviewed directly):
+- heber/firewall/__init__.py
+- heber/firewall/scd.py
+- heber/firewall/validation.py
+- heber/firewall/tests.py
+- heber/models/__init__.py
+- heber/models/silver.py
+
 Not yet audited in this run (recommend a future pass):
 - docs/ (all other files not listed above)
 - infrastructure/ and k8s/
 - scripts/ (including init and data tooling)
-- heber/firewall/ (scd.py, validation.py, tests.py)
 - heber/gold/
 - heber/hotstore/tables.py
-- heber/models/ (silver.py, etc.)
 - heber/retention/
 - heber/feast/
 - heber/backfill/ and heber/backtest/
@@ -135,7 +141,7 @@ Not yet audited in this run (recommend a future pass):
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -187,6 +193,11 @@ Severity key: High, Medium, Low
 | TD-042 | Low | Logging | `configure_logging()` accepts a log level but does not apply it. |
 | TD-043 | Medium | Reliability | Bloom filter dedupe has no TTL/rotation, causing rising false positives and potential drops without a backing store. |
 | TD-044 | Low | Reliability | In-memory DLQ is non-persistent; failures are lost on restart. |
+| TD-045 | Medium | Firewall | SCD join expects suffixed validity columns that may not exist, causing runtime failures. |
+| TD-046 | Low | Firewall | Gold build validation treats warning-level violations as hard failures in strict mode. |
+| TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
+| TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
+| TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
 
 ## Detailed Findings
 
@@ -366,14 +377,34 @@ Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing s
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
 Recommendation: Back the DLQ with Redis/stream storage or write to disk and implement a replay path.
 
+**TD-045: SCD join expects suffixed validity columns that may not exist.**
+Evidence: `join_with_reference_asof()` always filters on `valid_from{suffix}`/`valid_to{suffix}`. Polars only applies suffixes on name collisions; if the left table does not have `valid_from` or `valid_to`, the reference columns are unsuffixed and the filter will fail with missing columns.
+Recommendation: Normalize reference validity columns before the join (e.g., rename to fixed names) or detect whether suffixing occurred and use the correct column names.
+
+**TD-046: Gold build validation treats warning-level violations as hard failures.**
+Evidence: `validate_gold_build()` labels the `max_ts_event_used > max_ts_available_used` check as a warning, but appends it to `violations` and raises when `strict=True`.
+Recommendation: Separate warnings from hard violations or only raise for the strict gates.
+
+**TD-047: `lineage` type mismatch between models and Arrow schema.**
+Evidence: `SilverBase.lineage` is `dict[str, Any] | None` but `SILVER_BASE_SCHEMA` defines `lineage` as `pa.string()` with “JSON serialized” comment. This mismatch creates inconsistent serialization expectations across ingestion and writing.
+Recommendation: Standardize lineage as a structured type (e.g., JSON/struct) and enforce serialization in one place, or update the Pydantic model to store serialized JSON consistently.
+
+**TD-048: `schema_version` defaults to `v1` across all models.**
+Evidence: `SilverBase.schema_version` defaults to `v1` even for v2/v3/v4 datasets (news, filings, alternative data). Unless overridden at write time, stored rows will be mislabeled.
+Recommendation: Set per-dataset defaults in each model or enforce schema_version injection in the writer based on dataset.
+
+**TD-049: Date fields are inconsistently typed across Silver schemas.**
+Evidence: Some models use `date` (e.g., `expiry` in options), while others use `str` for dates (e.g., `expiry` in `MaxPainRecord`, `HottestChainRecord`, `IVTermStructureRecord`). This leads to inconsistent parsing and schema drift across datasets.
+Recommendation: Standardize date representation (prefer `date`/`datetime`) and enforce normalization in ingestion.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
