@@ -140,10 +140,28 @@ Audit Pass 7 (2026-02-05, files reviewed directly):
 - heber/feast/materialization.py
 - heber/feast/tests.py
 
+Audit Pass 8 (2026-02-05, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/docker-build.sh
+- scripts/docker-push.sh
+- scripts/init_volume.sh
+- scripts/security-scan.sh
+- docs/Alpaca_market_data_endpoints.md
+- docs/Alpaca_trading_endpoints.md
+- docs/UW_endpoints.md
+- docs/catalog_api.md
+- docs/configuration.md
+- docs/data_contract.md
+- docs/hot_store.md
+- docs/iceberg_migration.md
+- docs/labeling_strategy.md
+- docs/schema_registry.md
+- docs/schemaaudit.md
+- docs/sdk.md
+
 Not yet audited in this run (recommend a future pass):
-- docs/ (all other files not listed above)
 - infrastructure/ and k8s/
-- scripts/ (including init and data tooling)
 - heber/hotstore/tables.py
 - heber/backfill/ and heber/backtest/
 - heber/versioning/
@@ -152,7 +170,7 @@ Not yet audited in this run (recommend a future pass):
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. Finally, script automation and docs have drift: backup validation can leak test DBs on failure, endpoint coverage docs have inconsistent counts, and labeling docs reference outdated APIs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -218,6 +236,13 @@ Severity key: High, Medium, Low
 | TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
 | TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
 | TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
+| TD-059 | Low | Scripts | ClickHouse backup script logs S3 bucket/prefix but never applies them to `clickhouse-backup`. |
+| TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
+| TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
+| TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
+| TD-063 | Low | Docs | Data contract claims a Gold layout that doesn’t match the label writer’s on-disk layout. |
+| TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
+| TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
 
 ## Detailed Findings
 
@@ -453,6 +478,34 @@ Recommendation: Capture row counts from Feast logs/metrics or implement a lightw
 Evidence: `search_features()` checks `t in view_tags` where `view_tags` is a dict, so it only matches tag keys, not values. This can miss intended matches or produce false positives.
 Recommendation: Support key:value tag filters or compare against values explicitly.
 
+**TD-059: ClickHouse backup script logs S3 bucket/prefix but doesn’t enforce them.**
+Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
+Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
+
+**TD-060: Catalog backup validation can leak the test DB instance on failure.**
+Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
+Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
+
+**TD-061: Volume init script assumes macOS tooling.**
+Evidence: `scripts/init_volume.sh` calls `dot_clean` unconditionally, which is macOS-only. On Linux, the script fails even if directory creation succeeded.
+Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
+
+**TD-062: Labeling docs reference outdated API location/signature.**
+Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
+Recommendation: Update the docs to match the current module path and function signature.
+
+**TD-063: Data contract Gold layout doesn’t match label writer layout.**
+Evidence: `docs/data_contract.md` states Gold is partitioned as `dataset/project/version/dt`, but label writes use `dataset={name}/type=label/version={version}` without `project` or `dt`.
+Recommendation: Align docs with actual Gold write layout, or update the writer to match the documented layout.
+
+**TD-064: UW endpoint coverage summary conflicts with its own tables.**
+Evidence: `docs/UW_endpoints.md` summary says “Complete (11)” while the tables above list many more endpoints as ✅. This makes the summary unreliable.
+Recommendation: Recompute totals automatically or remove summary counts to avoid drift.
+
+**TD-065: Security scan doesn’t fail on filesystem findings.**
+Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
+Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -460,11 +513,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055.
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
