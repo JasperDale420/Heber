@@ -81,11 +81,33 @@ Audit Pass 2 (2026-02-05, files reviewed directly):
 - heber/schema/registry_client.py
 - heber/schemas/additional.py
 
+Audit Pass 3 (2026-02-05, files reviewed directly):
+- features/entities.py
+- features/feature_store.yaml
+- features/feature_views/__init__.py
+- features/feature_views/alert_labels.py
+- features/feature_views/flow.py
+- features/feature_views/labels.py
+- features/feature_views/microstructure.py
+- features/feature_views/momentum.py
+- features/feature_views/volatility.py
+- heber/features/__init__.py
+- heber/features/pipelines/__init__.py
+- heber/features/pipelines/alert_labels.py
+- heber/features/templates/__init__.py
+- heber/features/templates/alert_labels.py
+- heber/features/templates/cross_asset.py
+- heber/features/templates/flow.py
+- heber/features/templates/labels.py
+- heber/features/templates/microstructure.py
+- heber/features/templates/momentum.py
+- heber/features/templates/tests.py
+- heber/features/templates/volatility.py
+
 Not yet audited in this run (recommend a future pass):
 - docs/ (all other files not listed above)
 - infrastructure/ and k8s/
 - scripts/ (including init and data tooling)
-- features/ and heber/features/
 - heber/ops/
 - heber/firewall/ (scd.py, validation.py, tests.py)
 - heber/gold/
@@ -100,7 +122,7 @@ Not yet audited in this run (recommend a future pass):
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), and an event-bus claim path that can silently drop messages. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -140,6 +162,12 @@ Severity key: High, Medium, Low
 | TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
 | TD-031 | Low | Watch Models | `created_at`/`updated_at` use naive `datetime.utcnow()` defaults. |
 | TD-032 | Low | Watch Poller | Polling interval ignores per-horizon settings and over-polls long horizons. |
+| TD-033 | High | Feast/Features | Feature views hardcode paths and schemas that do not match Gold layout or computed columns. |
+| TD-034 | High | Features | Feature templates set `ts_available` to current time, breaking point-in-time correctness. |
+| TD-035 | Medium | Label Pipeline | Alert label pipeline queries bars using raw symbols, not canonical instrument keys. |
+| TD-036 | Medium | Label Pipeline | Pipeline references `bars_5min` dataset that is not defined in Silver schemas. |
+| TD-037 | Medium | Label Pipeline | Intraday labeling uses day-based windows for availability and SPY returns. |
+| TD-038 | Medium | Flow Features | Time-window rolling uses `on=ts_event` on Series and lacks datetime normalization. |
 
 ## Detailed Findings
 
@@ -271,14 +299,38 @@ Recommendation: Use `datetime.now(UTC)` or enforce timezone-aware defaults acros
 Evidence: `SnapshotPoller.run()` uses the minimum interval from `POLL_CONFIG` for all watches, which over-polls swing/LEAP horizons.
 Recommendation: Respect per-watch polling intervals or schedule per-horizon polling loops.
 
+**TD-033: Feast feature views hardcode paths and schemas that do not match Gold layout or computed columns.**
+Evidence: Feature views in `features/feature_views/*` point to `/data/gold/dataset=.../type=...` while the Gold layout is `dataset/project/version/dt`. Several schemas do not match template outputs (e.g., `microstructure.py` view expects `bid_ask_spread_pct` and `quoted_depth_*` while templates output `spread_bps` and `bid_depth`/`ask_depth`; `flow.py` view expects `net_call_premium` but templates output `call_premium_24h`; `volatility.py` view expects `bollinger_upper/lower` but templates output `bb_width_20`). Feast registry paths are also hardcoded to `/data/feast/...`.
+Recommendation: Make paths configurable via settings/env, and align feature view schemas to the actual Gold outputs (or update templates/pipelines to produce the expected columns). Add a schema/contract test that validates view fields exist in a sample Gold file.
+
+**TD-034: Feature templates set `ts_available` to the current time.**
+Evidence: `compute_momentum_features`, `compute_volatility_features`, `compute_microstructure_features`, `compute_flow_features`, and `compute_relative_features` set `ts_available = pd.Timestamp.now(tz="UTC")`, which is not tied to source data availability.
+Recommendation: Derive `ts_available` from input data (e.g., max of input `ts_available` or `ts_event` + processing lag) to preserve point-in-time correctness.
+
+**TD-035: Alert labels pipeline queries bars using raw symbols, not canonical instrument keys.**
+Evidence: `AlertLabelsPipeline._load_bars()` passes `instrument_keys=symbols` where symbols are `["AAPL", "SPY", ...]`, but Silver bars use canonical keys like `equity:AAPL`.
+Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberClient.resolve_instrument`) before querying Silver.
+
+**TD-036: Alert labels pipeline references a non-existent dataset.**
+Evidence: `_load_intraday_bars()` queries dataset `bars_5min`, which is not present in Silver schemas or writer outputs.
+Recommendation: Either implement `bars_5min` ingestion or use existing bars with a timeframe column/filter.
+
+**TD-037: Intraday label windows are computed in days, not minutes.**
+Evidence: In `alert_labels.py`, `ts_available` uses `timedelta(days=max_window_bars // 24)` and SPY-relative returns use `timedelta(days=max_window_bars)`. For intraday horizons (24 five-minute bars), this becomes 1–24 days instead of ~2 hours.
+Recommendation: Track bar duration explicitly and compute windows in minutes/hours for intraday labels.
+
+**TD-038: Flow feature rolling windows may be incorrect.**
+Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
+Recommendation: Convert `ts_event` to datetime and use DataFrame-level rolling with `on=ts_event`, or set a DatetimeIndex for correct time-window rolling.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
