@@ -296,6 +296,208 @@ class SectorTideRecord(SilverBase):
 
 
 # ==============================================================================
+# Phase 1: Core Analytics Schemas (High Value)
+# ==============================================================================
+
+
+class GreekExposureRecord(SilverBase):
+    """GEX/DEX/VEX exposure data from UW greek_exposure endpoint."""
+
+    gamma_exposure: float
+    delta_exposure: float | None = None
+    vanna_exposure: float | None = None
+    charm_exposure: float | None = None
+    strike: float | None = None
+    expiry: date | None = None
+
+
+class MaxPainRecord(SilverBase):
+    """Max pain strike data."""
+
+    expiry: str  # YYYY-MM-DD
+    max_pain_strike: float
+    call_oi: int | None = None
+    put_oi: int | None = None
+
+
+class NetPremiumTickRecord(SilverBase):
+    """Net premium tick data (intraday premium flow)."""
+
+    net_call_premium: float
+    net_put_premium: float
+    call_volume: int
+    put_volume: int
+
+
+class HottestChainRecord(SilverBase):
+    """Hottest options chain/contract (high activity)."""
+
+    contract_symbol: str
+    underlying: str
+    strike: float
+    expiry: str  # YYYY-MM-DD
+    option_type: str = Field(..., description="call or put")
+    volume: int
+    open_interest: int
+    premium: float
+    iv: float | None = None
+
+
+# ==============================================================================
+# Phase 2: Reference Data Schemas
+# ==============================================================================
+
+
+class EarningsRecord(SilverBase):
+    """Earnings calendar entry."""
+
+    earnings_date: str  # YYYY-MM-DD
+    time: str = Field(..., description="premarket, afterhours, unknown")
+    eps_estimate: float | None = None
+    eps_actual: float | None = None
+    revenue_estimate: float | None = None
+    revenue_actual: float | None = None
+
+
+class CorporateActionRecord(SilverBase):
+    """Corporate action (splits, dividends, mergers)."""
+
+    action_type: str = Field(..., description="split, dividend, merger, spinoff")
+    ex_date: str  # YYYY-MM-DD
+    record_date: str | None = None
+    payable_date: str | None = None
+    amount: float | None = None
+    ratio: str | None = Field(None, description="For splits: 4:1, 2:1")
+
+
+# ==============================================================================
+# Phase 3: Market Screener Schemas
+# ==============================================================================
+
+
+class MostActiveRecord(SilverBase):
+    """Most active stock data."""
+
+    volume: int
+    trade_count: int
+
+
+class MoverRecord(SilverBase):
+    """Top gainer/loser data."""
+
+    price: float
+    change: float
+    percent_change: float
+    direction: str = Field(..., description="gainer or loser")
+
+
+class ScreenerResultRecord(SilverBase):
+    """Stock screener result."""
+
+    price: float | None = None
+    volume: int | None = None
+    market_cap: float | None = None
+    sector: str | None = None
+    call_volume: int | None = None
+    put_volume: int | None = None
+    iv_rank: float | None = None
+
+
+# ==============================================================================
+# Phase 4: Advanced Analytics Schemas
+# ==============================================================================
+
+
+class IVRankRecord(SilverBase):
+    """IV rank/percentile data."""
+
+    iv_rank: float
+    iv_percentile: float | None = None
+    current_iv: float | None = None
+    one_year_high: float | None = None
+    one_year_low: float | None = None
+
+
+class IVTermStructureRecord(SilverBase):
+    """IV term structure data point."""
+
+    expiry: str  # YYYY-MM-DD
+    iv: float
+    days_to_expiry: int
+    call_iv: float | None = None
+    put_iv: float | None = None
+
+
+class VolatilityStatsRecord(SilverBase):
+    """Volatility statistics."""
+
+    realized_vol_30d: float | None = None
+    realized_vol_60d: float | None = None
+    realized_vol_90d: float | None = None
+    iv_30d: float | None = None
+    iv_percentile: float | None = None
+    hv_iv_ratio: float | None = None
+
+
+class OIChangeRecord(SilverBase):
+    """Open interest change data."""
+
+    oi_date: str  # YYYY-MM-DD
+    call_oi: int
+    put_oi: int
+    call_oi_change: int
+    put_oi_change: int
+
+
+class ETFHoldingRecord(SilverBase):
+    """ETF holding data."""
+
+    etf_symbol: str
+    holding_symbol: str
+    weight: float
+    shares: int | None = None
+    market_value: float | None = None
+
+
+class ETFFlowRecord(SilverBase):
+    """ETF inflow/outflow data."""
+
+    flow_date: str  # YYYY-MM-DD
+    inflow: float
+    outflow: float
+    net_flow: float
+
+
+class ShortDataRecord(SilverBase):
+    """Short interest data."""
+
+    short_date: str  # YYYY-MM-DD
+    short_interest: int
+    days_to_cover: float | None = None
+    short_percent_float: float | None = None
+    short_percent_outstanding: float | None = None
+
+
+class FTDRecord(SilverBase):
+    """Failure to deliver data."""
+
+    ftd_date: str  # YYYY-MM-DD
+    quantity: int
+    price: float | None = None
+    value: float | None = None
+
+
+class SeasonalityRecord(SilverBase):
+    """Seasonality data."""
+
+    month: int
+    avg_return: float
+    median_return: float | None = None
+    win_rate: float
+    sample_years: int | None = None
+
+
+# ==============================================================================
 # V2 Schemas - News and Filing Data (PRD §9, §58, §59)
 # ==============================================================================
 

@@ -28,6 +28,58 @@ class EventConsumer:
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        self._payload_required: dict[str, set[str]] = {
+            "flow_alerts": {
+                "timestamp",
+                "symbol",
+                "strike",
+                "expiry",
+                "put_call",
+                "premium",
+                "volume",
+            },
+            "market_tide": {
+                "timestamp",
+                "date",
+                "net_call_premium",
+                "net_put_premium",
+                "net_volume",
+                "sentiment",
+            },
+        }
+        self._payload_allowed: dict[str, set[str]] = {
+            "flow_alerts": {
+                "timestamp",
+                "symbol",
+                "strike",
+                "expiry",
+                "put_call",
+                "premium",
+                "volume",
+                "open_interest",
+                "side",
+                "is_sweep",
+                "is_unusual",
+                "sentiment",
+                "option_chain",
+                "price",
+                "underlying_price",
+                "alert_rule",
+                "alert_type",
+                "aggressor",
+                "tags",
+                "provider",
+            },
+            "market_tide": {
+                "timestamp",
+                "date",
+                "net_call_premium",
+                "net_put_premium",
+                "net_volume",
+                "sentiment",
+                "provider",
+            },
+        }
 
     async def connect(self):
         """Connect to Redis."""
@@ -79,6 +131,8 @@ class EventConsumer:
             if envelope.ts_available is None:
                 envelope = envelope.with_ts_available(datetime.now(UTC))
 
+            self._validate_payload_schema(envelope)
+
             # Write to Bronze (always)
             await self.bronze_writer.write(envelope)
 
@@ -101,6 +155,31 @@ class EventConsumer:
                 exc_info=True,
             )
             return False
+
+    def _validate_payload_schema(self, envelope: EventEnvelope) -> None:
+        """Warn on missing/unknown payload keys for selected feeds."""
+        feed = envelope.feed
+        if feed not in self._payload_required:
+            return
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        required = self._payload_required[feed]
+        allowed = self._payload_allowed.get(feed, required)
+
+        missing = required - set(payload.keys())
+        unexpected = set(payload.keys()) - allowed
+
+        if missing:
+            logger.warning(
+                "payload_missing_keys",
+                feed=feed,
+                missing=sorted(missing),
+            )
+        if unexpected:
+            logger.warning(
+                "payload_unexpected_keys",
+                feed=feed,
+                unexpected=sorted(unexpected),
+            )
 
     async def run(self):
         """Main consumer loop."""
