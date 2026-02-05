@@ -147,6 +147,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
 - **Redis Event Bus Pending Claims** (`heber/bus/__init__.py`)
   - Claimed idle messages are now yielded to consumers instead of being dropped
   - Added regression test to ensure claimed messages are processed
+- **Meta-Label Alignment** (`heber/watch/checker.py`, `heber/ml/datasets.py`)
+  - Label rows now emit canonical outcome columns (`outcome`, `hit_tp_first`, `mfe`, `mae`, `bars_to_hit`)
+  - Dataset builder normalizes legacy columns and uses correct outcome values
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

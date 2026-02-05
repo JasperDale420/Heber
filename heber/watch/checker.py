@@ -209,6 +209,8 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
     Returns:
         Dict suitable for DataFrame row
     """
+    outcome_value = outcome.status.value if hasattr(outcome.status, "value") else str(outcome.status)
+
     return {
         # Identifiers
         "alert_id": outcome.alert_id,
@@ -223,9 +225,14 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "ts_available": outcome.outcome_time,
         "horizon": outcome.horizon,
         # THE LABEL
+        "outcome": outcome_value,
+        "hit_tp_first": outcome.hit_tp_first,
         "contract_hit_tp_first": outcome.hit_tp_first,
-        "outcome_reason": outcome.status,
+        "outcome_reason": outcome_value,
         # Path stats
+        "mfe": outcome.mfe,
+        "mae": outcome.mae,
+        "bars_to_hit": outcome.bars_to_hit,
         "contract_mfe": outcome.mfe,
         "contract_mae": outcome.mae,
         "contract_mfe_adj": outcome.mfe_adj,

@@ -191,6 +191,8 @@ class MetaLabelDatasetBuilder:
         outcomes: pl.DataFrame,
     ) -> pl.DataFrame:
         """Join features with outcomes on alert_id."""
+        outcomes = self._normalize_outcomes(outcomes)
+
         # Ensure alert_id column exists in both
         if "alert_id" not in features.columns:
             logger.error("Features missing alert_id column")
@@ -218,12 +220,38 @@ class MetaLabelDatasetBuilder:
             how="inner",
         )
 
+    def _normalize_outcomes(self, outcomes: pl.DataFrame) -> pl.DataFrame:
+        """Normalize outcome columns for backward compatibility."""
+        df = outcomes
+
+        if "outcome" not in df.columns and "outcome_reason" in df.columns:
+            df = df.with_columns(pl.col("outcome_reason").alias("outcome"))
+
+        if "hit_tp_first" not in df.columns and "contract_hit_tp_first" in df.columns:
+            df = df.with_columns(pl.col("contract_hit_tp_first").alias("hit_tp_first"))
+
+        if "mfe" not in df.columns and "contract_mfe" in df.columns:
+            df = df.with_columns(pl.col("contract_mfe").alias("mfe"))
+
+        if "mae" not in df.columns and "contract_mae" in df.columns:
+            df = df.with_columns(pl.col("contract_mae").alias("mae"))
+
+        if "bars_to_hit" not in df.columns and "contract_bars_to_hit" in df.columns:
+            df = df.with_columns(pl.col("contract_bars_to_hit").alias("bars_to_hit"))
+
+        return df
+
     def _add_meta_label(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add meta-label column (1 if TP hit, 0 otherwise)."""
         if "outcome" not in df.columns:
             return df
 
-        return df.with_columns(pl.when(pl.col("outcome") == "HIT_TP").then(1).otherwise(0).alias("meta_label"))
+        return df.with_columns(
+            pl.when(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == "hit_tp")
+            .then(1)
+            .otherwise(0)
+            .alias("meta_label")
+        )
 
     def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
         """Apply configured filters to dataset."""
@@ -232,7 +260,7 @@ class MetaLabelDatasetBuilder:
 
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
-            df = df.filter(pl.col("outcome") != "EXPIRED")
+            df = df.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() != "expired")
 
         # Min samples per symbol
         if "symbol" in df.columns and self.config.min_outcomes_per_symbol > 1:
