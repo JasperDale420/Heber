@@ -168,13 +168,44 @@ Audit Pass 10 (2026-02-05, files reviewed directly):
 - heber/hotstore/tables.py
 - heber/schemas/tests_additional.py
 
+Audit Pass 11 (2026-02-05, files reviewed directly):
+- infrastructure/terraform/main.tf
+- infrastructure/terraform/environments/dev/main.tf
+- infrastructure/terraform/environments/staging/main.tf
+- infrastructure/terraform/environments/prod/main.tf
+- k8s/base/configmap.yaml
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/kustomization.yaml
+- k8s/base/namespace.yaml
+- k8s/base/pdb/catalog.yaml
+- k8s/base/pdb/consumer.yaml
+- k8s/base/pdb/hotloader.yaml
+- k8s/base/pdb/writer.yaml
+- k8s/base/secrets/cluster-secret-store.yaml
+- k8s/base/secrets/external-secret.yaml
+- k8s/base/secrets/secrets-local.yaml.example
+- k8s/base/services/catalog.yaml
+- k8s/base/services/consumer.yaml
+- k8s/base/services/hotloader.yaml
+- k8s/base/services/writer.yaml
+- k8s/overlays/dev/kustomization.yaml
+- k8s/overlays/staging/kustomization.yaml
+- k8s/overlays/prod/kustomization.yaml
+
 Not yet audited in this run (recommend a future pass):
-- infrastructure/ and k8s/
 - heber/backfill/ and heber/backtest/
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. Finally, Hot Store DDL and schema tests contain drift: tables omit some schema fields and async DDL creation assumes an async client while other modules use sync clients; schema tests are hardcoded to a count and can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. Finally, Hot Store DDL and schema tests contain drift: tables omit some schema fields and async DDL creation assumes an async client while other modules use sync clients; schema tests are hardcoded to a count and can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -254,6 +285,13 @@ Severity key: High, Medium, Low
 | TD-070 | Low | Hot Store | Hot Store DDL omits columns present in Silver schemas (e.g., `quality_flags`, `lineage`). |
 | TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
 | TD-072 | Low | Testing | Additional schema tests assert a fixed schema count, which will break on new schemas. |
+| TD-073 | High | Infra | Terraform root module references local modules (`./modules/*`) that are not present. |
+| TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
+| TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
+| TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
+| TD-077 | Medium | K8s | Images are referenced as `heber:<service>-latest`, but kustomize only rewrites `heber` image name. |
+| TD-078 | Low | K8s | Namespace base is `heber` while overlays change namespace; secrets/configmap names may not be present in each namespace. |
+| TD-079 | Low | Infra | Terraform backends and module configs are hardcoded to `us-east-1` without variable override. |
 
 ## Detailed Findings
 
@@ -545,18 +583,46 @@ Recommendation: Provide separate sync/async helpers or normalize on a single cli
 Evidence: `tests_additional.py` asserts `len(schemas) == 16`. As new schemas are added, the test will fail even if behavior is correct.
 Recommendation: Assert on minimum required schemas or specific known names rather than total count.
 
+**TD-073: Terraform references modules that are missing from the repo.**
+Evidence: `infrastructure/terraform/main.tf` references `./modules/vpc`, `./modules/s3`, `./modules/rds`, etc., but there is no `modules/` directory under `infrastructure/terraform/`. Terraform will fail at init/plan.
+Recommendation: Add the modules or replace with a remote module source. If infrastructure is managed elsewhere, remove or clearly mark these files as placeholders.
+
+**TD-074: Kubernetes deployments reference non-existent module entrypoints.**
+Evidence: `k8s/base/deployments/consumer.yaml` runs `python -m heber.bus.consumer`, and writer/compactor run `heber.writer.service` and `heber.writer.compaction`. These module paths do not exist in the repo (writer is `consumer.py`/`compactor.py`).
+Recommendation: Update commands to valid module paths (e.g., `heber.writer.consumer`, `heber.writer.compactor`) and verify entrypoints.
+
+**TD-075: HPA targets custom metrics that are not exported.**
+Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
+Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
+
+**TD-076: Probes target endpoints that are not implemented.**
+Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
+Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
+
+**TD-077: Image references do not align with kustomize image rewrite.**
+Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
+Recommendation: Use a consistent image name (e.g., `ghcr.io/jacobmcmillan/heber:<tag>`) with distinct tags per component, or update kustomize image rules to match the actual names.
+
+**TD-078: Namespace/secret references may drift across overlays.**
+Evidence: Base namespace is `heber` and secrets are referenced by name `heber-secrets`. Overlays change namespace but do not include secrets or ServiceAccount manifests, so deployments may reference missing secrets unless applied separately.
+Recommendation: Add namespace-scoped secrets/serviceaccounts per overlay or document required prerequisites in deployment steps.
+
+**TD-079: Terraform environment settings are hardcoded.**
+Evidence: Each env `main.tf` pins `region = "us-east-1"` and backend config is fixed. This makes multi-region deployment or account reuse harder.
+Recommendation: Parameterize region and backend settings via variables or separate workspace configs.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-054.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-054, TD-074.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071.
+- Fix TD-006, TD-008, TD-010, TD-012, TD-017, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072.
+- Address TD-004, TD-007, TD-009, TD-011, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
