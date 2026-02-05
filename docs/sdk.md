@@ -36,10 +36,12 @@ bars = client.read_asof(
 
 ### Local Docker Compose Note
 
-When the Catalog API is running via `docker compose`, it is exposed on port `8085` (host). Either:
+By default, `HeberClient()` now uses `http://localhost:8085/api/v1`, which matches the host port exposed by `docker compose`.
 
-- Set `HEBER_API_PORT=8085` in your environment, or
-- Pass `catalog_url="http://localhost:8085/api/v1"` when constructing `HeberClient`.
+If you need a different endpoint:
+
+- Set `HEBER_CATALOG_URL`, or
+- Pass `catalog_url="http://<host>:<port>/api/v1"` when constructing `HeberClient`.
 
 ## Core Features
 

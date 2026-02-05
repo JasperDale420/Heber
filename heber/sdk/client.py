@@ -51,11 +51,11 @@ class HeberClient:
         """Initialize HeberClient.
 
         Args:
-            catalog_url: URL of the Catalog API. Defaults to settings.
+            catalog_url: URL of the Catalog API. Defaults to settings.catalog_url.
             data_root: Root path for data. Defaults to settings.
             api_key: API key for authentication.
         """
-        self.catalog_url = catalog_url or f"http://localhost:{settings.api_port}/api/v1"
+        self.catalog_url = catalog_url or settings.catalog_url
         self.data_root = data_root or settings.data_root
         self.api_key = api_key
         self._http_client: httpx.Client | None = None

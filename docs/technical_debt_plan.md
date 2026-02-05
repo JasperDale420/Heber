@@ -15,6 +15,7 @@ Updated: 2026-02-05
 - `T-05` complete (`TD-001`): pytest now discovers tests under both `tests/` and `heber/`, including files named `tests.py` and `tests_*.py`.
 - `T-06` complete (`TD-003`, `TD-074`): Docker and Kubernetes entrypoints now reference existing runtime modules (`heber.writer.consumer`, `heber.writer.compactor`), with regression checks.
 - `T-07` complete (`TD-073`): added local Terraform module scaffolds (`vpc`, `s3`, `rds`, `elasticache`, `ecr`, `eks`) so root references resolve; added regression checks for module sources.
+- `T-08` complete (`TD-002`): SDK now defaults to `HEBER_CATALOG_URL` (`http://localhost:8085/api/v1`) to match docker-compose host exposure; docs and regression tests updated.
 
 ## Prioritization Approach
 

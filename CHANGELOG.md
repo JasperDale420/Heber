@@ -171,6 +171,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added local Terraform module scaffolds for `vpc`, `s3`, `rds`, `elasticache`, `ecr`, and `eks` so root module sources resolve
   - Preserved existing root module inputs/outputs wiring while unblocking initialization from missing-module failures
   - Added regression checks for module-source path resolution (`tests/test_terraform_module_sources.py`)
+- **SDK Catalog URL Alignment** (`heber/config.py`, `heber/sdk/client.py`)
+  - Added `HEBER_CATALOG_URL` defaulting to `http://localhost:8085/api/v1` for SDK clients
+  - `HeberClient` now defaults to `settings.catalog_url` instead of deriving URL from API service bind port
+  - Updated SDK/config docs and added regression checks (`tests/test_sdk_catalog_defaults.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)
+    catalog_url: str = Field(
+        default="http://localhost:8085/api/v1",
+        description="Catalog API base URL used by SDK clients",
+    )
 
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
