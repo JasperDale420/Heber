@@ -25,20 +25,23 @@ logger = structlog.get_logger(__name__)
 
 
 # Stream topology per PRD §12.7.2 (Pattern A)
+STREAM_NAMESPACE = "heber:events"
+
+
 class StreamName(str, Enum):
     """Canonical stream names per PRD §12.7.2."""
 
     # Market data streams
-    MARKET_BARS = "stream:market.bars"
-    MARKET_QUOTES = "stream:market.quotes"
-    MARKET_TRADES = "stream:market.trades"
+    MARKET_BARS = f"{STREAM_NAMESPACE}:market.bars"
+    MARKET_QUOTES = f"{STREAM_NAMESPACE}:market.quotes"
+    MARKET_TRADES = f"{STREAM_NAMESPACE}:market.trades"
 
     # Intel streams
-    INTEL_FLOW_ALERTS = "stream:intel.flow_alerts"
-    INTEL_DARKPOOL = "stream:intel.darkpool_trades"
+    INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:intel.flow_alerts"
+    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool_trades"
 
     # System streams
-    DLQ = "stream:heber.dlq"
+    DLQ = f"{STREAM_NAMESPACE}:dlq"
 
 
 # All canonical streams

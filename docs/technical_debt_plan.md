@@ -27,6 +27,7 @@ Updated: 2026-02-05
 - `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 - `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
+- `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
 
 ## Prioritization Approach
 
@@ -256,6 +257,30 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-20: Unify Stream Naming Convention (TD-030)
+
+Priority: P1
+
+Description: Stream names diverged between `stream:*`, `heber:stream:*`, and `heber:events`, creating wiring and ops confusion. Standardize stream naming under a single `heber:events` namespace.
+
+Scope:
+- `heber/bus/__init__.py`
+- `heber/bus/streams.py`
+- `heber/watch/consumer.py`
+- `heber/sre/runbooks.py`
+- `docs/operations/troubleshooting.md`
+- `heber/ops/tests_remaining.py`
+- `tests/test_stream_naming_conventions.py`
+
+Acceptance Criteria:
+- Event bus stream enum values use `heber:events:*` names.
+- Stream registry helper keys use `heber:events:{name}`.
+- Watch consumer defaults to `settings.redis_stream_name` instead of hardcoded stream literals.
+- Ops runbook/troubleshooting commands reference the same namespace for backlog and DLQ checks.
+- Regression tests guard stream naming conventions against drift.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -353,3 +378,4 @@ Estimate: 1 day
 17. T-17 (Catalog migration baseline + non-dev startup guard)
 18. T-18 (Watch async Redis non-blocking refactor)
 19. T-19 (Watch consumer retry + DLQ policy)
+20. T-20 (Stream naming convention unification)

@@ -56,7 +56,7 @@ class TestStreamRegistry:
     def test_stream_key(self):
         config = StreamConfig("test", "test_dataset", StreamPriority.NORMAL, "test-consumer")
 
-        assert config.stream_key == "heber:stream:test"
+        assert config.stream_key == "heber:events:test"
 
     def test_generate_report(self):
         registry = StreamRegistry()

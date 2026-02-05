@@ -38,7 +38,7 @@ class StreamConfig:
     @property
     def stream_key(self) -> str:
         """Redis stream key."""
-        return f"heber:stream:{self.name}"
+        return f"heber:events:{self.name}"
 
     def to_dict(self) -> dict[str, Any]:
         return {

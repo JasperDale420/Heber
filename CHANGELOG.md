@@ -227,6 +227,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Updated ACK policy to acknowledge only on successful processing or successful DLQ write
   - Retains pending messages when DLQ write fails, avoiding silent drops
   - Added regression tests for retry count, DLQ routing, and ACK decision behavior (`tests/test_watch_consumer_reliability.py`)
+- **Stream Naming Convention Unification** (`heber/bus/__init__.py`, `heber/bus/streams.py`, `heber/watch/consumer.py`)
+  - Standardized event-bus stream naming to `heber:events:*` across stream enum values and registry helpers
+  - Watch consumer now defaults to `settings.redis_stream_name` instead of hardcoded stream literals
+  - Updated operations runbook/troubleshooting Redis commands to use aligned event and DLQ stream keys
+  - Added regression coverage for stream naming consistency (`tests/test_stream_naming_conventions.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

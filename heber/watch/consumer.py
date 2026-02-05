@@ -27,8 +27,8 @@ from heber.watch.models import WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
-# Stream configuration - matches Data Gateway's HEBER_STREAM
-HEBER_EVENTS_STREAM = "heber:events"
+# Stream configuration
+DEFAULT_EVENTS_STREAM = settings.redis_stream_name
 FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
@@ -48,7 +48,8 @@ def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
 class AlertWatchConsumer:
     """Consumes flow alerts and creates watches.
 
-    Runs as a background service, listening to the flow_alerts Redis stream.
+    Runs as a background service, listening to the events stream and filtering
+    for the flow_alerts feed.
     """
 
     def __init__(
@@ -58,6 +59,7 @@ class AlertWatchConsumer:
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
         async_redis: redis.asyncio.Redis | None = None,
+        stream_name: str | None = None,
         dlq_stream_name: str | None = None,
         max_process_retries: int | None = None,
         retry_backoff_seconds: float | None = None,
@@ -70,6 +72,7 @@ class AlertWatchConsumer:
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
             async_redis: Async Redis client for feature storage (optional)
+            stream_name: Redis stream to consume events from
             dlq_stream_name: Redis stream for watch processing failures
             max_process_retries: Retry attempts before dead-lettering
             retry_backoff_seconds: Base retry backoff delay in seconds
@@ -79,6 +82,7 @@ class AlertWatchConsumer:
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
         self.max_process_retries = max_process_retries or settings.redis_process_max_retries
         self.retry_backoff_seconds = retry_backoff_seconds or settings.redis_retry_backoff_seconds
@@ -94,14 +98,14 @@ class AlertWatchConsumer:
         """Create consumer group if it doesn't exist."""
         try:
             self.redis.xgroup_create(
-                HEBER_EVENTS_STREAM,
+                self.stream_name,
                 CONSUMER_GROUP,
                 id="0",
                 mkstream=True,
             )
             logger.info(
                 "Created consumer group",
-                stream=HEBER_EVENTS_STREAM,
+                stream=self.stream_name,
                 group=CONSUMER_GROUP,
             )
         except redis.ResponseError as e:
@@ -121,14 +125,14 @@ class AlertWatchConsumer:
             self.redis.xreadgroup,
             CONSUMER_GROUP,
             CONSUMER_NAME,
-            {HEBER_EVENTS_STREAM: ">"},
+            {self.stream_name: ">"},
             count=100,
             block=5000,
         )
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""
-        await asyncio.to_thread(self.redis.xack, HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+        await asyncio.to_thread(self.redis.xack, self.stream_name, CONSUMER_GROUP, msg_id)
 
     @staticmethod
     def _normalize_stream_data(data: dict[Any, Any]) -> dict[str, Any]:
@@ -144,7 +148,7 @@ class AlertWatchConsumer:
     async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
         """Write failed message to DLQ stream."""
         dlq_payload = {
-            "origin_stream": HEBER_EVENTS_STREAM,
+            "origin_stream": self.stream_name,
             "origin_message_id": msg_id,
             "attempts": str(attempts),
             "error": error,
@@ -200,7 +204,7 @@ class AlertWatchConsumer:
 
         logger.info(
             "Starting alert watch consumer",
-            stream=HEBER_EVENTS_STREAM,
+            stream=self.stream_name,
             group=CONSUMER_GROUP,
         )
 
@@ -228,8 +232,8 @@ class AlertWatchConsumer:
     def _is_flow_alert(self, data: dict) -> bool:
         """Check if the event is a flow_alerts feed event.
 
-        The heber:events stream contains multiple feed types (flow_alerts,
-        darkpool, market_tide, etc.). We only process flow_alerts.
+        The configured events stream contains multiple feed types
+        (flow_alerts, darkpool, market_tide, etc.). We only process flow_alerts.
         """
         # The 'data' field contains JSON string with event envelope
         if b"data" in data:

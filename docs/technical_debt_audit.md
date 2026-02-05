@@ -232,6 +232,7 @@ Updated: 2026-02-05
 - `TD-012` addressed via `T-17`: Catalog startup now runs SQLAlchemy `create_all` only in `dev`, and Alembic migration scaffolding with an initial baseline revision is included for non-dev schema management.
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
 - `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
+- `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
 
 ## Executive Summary
 
@@ -450,6 +451,7 @@ Recommendation: Use top-level fields or normalize envelope format before quarant
 **TD-030: Stream naming diverges across modules and docs.**
 Evidence: `heber/bus` uses `stream:*` names, writer/consumer uses `heber:events`, and ops docs reference `stream:market.bars`. This split-brain naming leads to non-wired components.
 Recommendation: Standardize on one stream naming convention and update docs, bus config, and consumers together.
+Update 2026-02-05: Remediated in `T-20` by standardizing bus and stream registry keys to `heber:events:*` and aligning watch/ops references.
 
 **TD-031: Watch model timestamps use naive `datetime.utcnow()` defaults.**
 Evidence: `heber/watch/models.py` sets `created_at` and `updated_at` with `datetime.utcnow()` (naive), while other parts expect timezone-aware UTC.

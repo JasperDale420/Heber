@@ -395,7 +395,7 @@ def with_consumer_dedupe(stream_name: str):
     """Decorator to add consumer-layer deduplication to a message handler.
 
     Usage:
-        @with_consumer_dedupe("stream:market.bars")
+        @with_consumer_dedupe("heber:events:market.bars")
         async def handle_message(message):
             # Only called for non-duplicate messages
             ...

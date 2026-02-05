@@ -134,7 +134,7 @@ CONSUMER_LAG_RUNBOOK = Runbook(
     ],
     triage_steps=[
         TriageStep(1, "kubectl get pods -l app=heber-consumer", "Check consumer pod health"),
-        TriageStep(2, "redis-cli XPENDING stream:market.bars heber-writers", "Check Redis Streams backlog"),
+        TriageStep(2, "redis-cli XPENDING heber:events heber-writers", "Check Redis Streams backlog"),
         TriageStep(3, "kubectl logs -l app=heber-consumer | grep rebalance", "Check if rebalancing"),
     ],
     common_causes=[

@@ -32,7 +32,7 @@ docker logs heber-catalog --since 5m 2>&1 | grep -E "(ERROR|Exception)"
 docker logs heber-consumer --tail 100
 
 # Check Redis stream length
-docker exec heber-redis redis-cli XLEN heber:events:bars
+docker exec heber-redis redis-cli XLEN heber:events
 ```
 
 **Resolution**:
@@ -117,7 +117,7 @@ docker logs heber-consumer --tail 50 | grep -i hotstore
 docker exec heber-catalog python -m heber.quality.soda_scanner
 
 # Check dead letter queue
-docker exec heber-redis redis-cli LLEN heber:dlq
+docker exec heber-redis redis-cli XLEN heber:events:dlq
 ```
 
 **Resolution**:

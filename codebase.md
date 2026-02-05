@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T14:48:18*
+*Generated: 2026-02-05T15:48:39*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 235
+Files analyzed: 236
 
-Estimated tokens: 393.1k
+Estimated tokens: 394.2k
 
 ---
 
@@ -314,6 +314,7 @@ Directory structure:
     │   ├── test_terraform_module_sources.py
     │   ├── test_utcnow_regression.py
     │   ├── test_watch_async_redis.py
+    │   ├── test_watch_consumer_reliability.py
     │   └── test_writer_consumer_reliability.py
     └── .claude/
         └── settings.local.json
@@ -802,6 +803,12 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Snapshot poller now uses async manager wrappers for active-watch fetches, snapshot writes, and price updates
   - Check/write loop now offloads synchronous barrier checks from async context
   - Added regression tests to verify non-blocking async paths (`tests/test_watch_async_redis.py`)
+- **Watch Consumer Retry + DLQ Reliability** (`heber/watch/consumer.py`)
+  - Added bounded retry/backoff for flow-alert processing before terminal failure handling
+  - Added Redis DLQ write path with message metadata for unrecoverable watch-consumer records
+  - Updated ACK policy to acknowledge only on successful processing or successful DLQ write
+  - Retains pending messages when DLQ write fails, avoiding silent drops
+  - Added regression tests for retry count, DLQ routing, and ACK decision behavior (`tests/test_watch_consumer_reliability.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -11659,6 +11666,7 @@ Updated: 2026-02-05
 - `TD-010` addressed via `T-16`: host defaults now align with docker-compose exposed ports (`HEBER_POSTGRES_URL` on `localhost:5433`, `HEBER_REDIS_URL` on `localhost:6380`) across settings, docs, and `.env.example`.
 - `TD-012` addressed via `T-17`: Catalog startup now runs SQLAlchemy `create_all` only in `dev`, and Alembic migration scaffolding with an initial baseline revision is included for non-dev schema management.
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
+- `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
 
 ## Executive Summary
 
@@ -12105,7 +12113,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-018, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
@@ -12151,6 +12159,7 @@ Updated: 2026-02-05
 - `T-16` complete (`TD-010`): host runtime defaults now align with docker-compose exposed ports (`5433` Postgres, `6380` Redis) across settings/docs/env templates, with regression coverage.
 - `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
+- `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
 
 ## Prioritization Approach
 
@@ -12361,6 +12370,25 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-19: Add Watch Consumer Retry + DLQ Policy (TD-018)
+
+Priority: P1
+
+Description: Watch consumer previously acknowledged stream messages even when processing failed, causing silent drops with no DLQ trace. Add retry/backoff and dead-letter handling with ACK policy tied to processing outcome.
+
+Scope:
+- `heber/watch/consumer.py`
+- `tests/test_watch_consumer_reliability.py`
+
+Acceptance Criteria:
+- Flow-alert messages are retried with bounded attempts and backoff.
+- Terminal failures are written to Redis DLQ stream with context metadata.
+- Messages are ACKed only after successful processing or successful DLQ write.
+- If DLQ write fails, message remains pending (not ACKed) for later recovery.
+- Regression tests verify retry count, DLQ routing, and ACK decision behavior.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -12457,6 +12485,7 @@ Estimate: 1 day
 16. T-16 (Local service port alignment)
 17. T-17 (Catalog migration baseline + non-dev startup guard)
 18. T-18 (Watch async Redis non-blocking refactor)
+19. T-19 (Watch consumer retry + DLQ policy)
 
 
 
@@ -15755,20 +15784,23 @@ logger = structlog.get_logger(__name__)
 
 
 # Stream topology per PRD §12.7.2 (Pattern A)
+STREAM_NAMESPACE = "heber:events"
+
+
 class StreamName(str, Enum):
     """Canonical stream names per PRD §12.7.2."""
 
     # Market data streams
-    MARKET_BARS = "stream:market.bars"
-    MARKET_QUOTES = "stream:market.quotes"
-    MARKET_TRADES = "stream:market.trades"
+    MARKET_BARS = f"{STREAM_NAMESPACE}:market.bars"
+    MARKET_QUOTES = f"{STREAM_NAMESPACE}:market.quotes"
+    MARKET_TRADES = f"{STREAM_NAMESPACE}:market.trades"
 
     # Intel streams
-    INTEL_FLOW_ALERTS = "stream:intel.flow_alerts"
-    INTEL_DARKPOOL = "stream:intel.darkpool_trades"
+    INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:intel.flow_alerts"
+    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool_trades"
 
     # System streams
-    DLQ = "stream:heber.dlq"
+    DLQ = f"{STREAM_NAMESPACE}:dlq"
 
 
 # All canonical streams
@@ -17216,7 +17248,7 @@ def with_consumer_dedupe(stream_name: str):
     """Decorator to add consumer-layer deduplication to a message handler.
 
     Usage:
-        @with_consumer_dedupe("stream:market.bars")
+        @with_consumer_dedupe("heber:events:market.bars")
         async def handle_message(message):
             # Only called for non-duplicate messages
             ...
@@ -17281,7 +17313,7 @@ class StreamConfig:
     @property
     def stream_key(self) -> str:
         """Redis stream key."""
-        return f"heber:stream:{self.name}"
+        return f"heber:events:{self.name}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52219,6 +52251,99 @@ async def test_poller_uses_async_manager_methods() -> None:
     assert stats["updated"] == 1
     assert manager.snapshots == 1
     assert manager.updated == 1
+
+
+
+================================================
+FILE: tests/test_watch_consumer_reliability.py
+================================================
+"""Regression tests for watch consumer retry and DLQ behavior."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from heber.watch.consumer import AlertWatchConsumer
+
+
+class _RedisWithDlq:
+    def __init__(self) -> None:
+        self.added: list[tuple[str, dict]] = []
+
+    def xgroup_create(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    def xreadgroup(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return []
+
+    def xack(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return 1
+
+    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+        self.added.append((stream, payload))
+        return "1-0"
+
+
+class _RedisDlqFailure(_RedisWithDlq):
+    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+        raise RuntimeError("dlq unavailable")
+
+
+class _NoopManager:
+    async def create_watch_async(self, **kwargs):  # noqa: ANN003
+        return None
+
+
+@pytest.mark.asyncio
+async def test_process_flow_alert_retries_then_dead_letters() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=3,
+        retry_backoff_seconds=0.0,
+        dlq_stream_name="heber:watch:dlq",
+    )
+    consumer._process_alert = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    ackable = await consumer._process_flow_alert_with_retries("1-0", {b"data": b"{}"})
+
+    assert ackable is True
+    assert consumer._process_alert.await_count == 3
+    assert len(redis_client.added) == 1
+    assert redis_client.added[0][0] == "heber:watch:dlq"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_keeps_pending_when_dlq_write_fails() -> None:
+    redis_client = _RedisDlqFailure()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=2,
+        retry_backoff_seconds=0.0,
+    )
+    consumer._process_alert = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    # _is_flow_alert is sync; override with lambda to keep deterministic.
+    consumer._is_flow_alert = lambda data: True  # type: ignore[method-assign]
+
+    should_ack = await consumer._handle_message("2-0", {b"data": b"{}"})
+
+    assert should_ack is False
+
+
+@pytest.mark.asyncio
+async def test_handle_message_skips_non_flow_alerts_with_ack() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    consumer._is_flow_alert = lambda data: False  # type: ignore[method-assign]
+
+    should_ack = await consumer._handle_message("3-0", {b"data": b"{}"})
+
+    assert should_ack is True
 
 
 
