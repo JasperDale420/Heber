@@ -89,6 +89,8 @@ These are read by modules in `heber/storage/`, `heber/versioning/`, and `heber/s
 
 - `ICEBERG_*` for Iceberg catalog + warehouse
 - `LAKEFS_*` for Gold versioning
+  - `LAKEFS_STORAGE_NAMESPACE_BASE` (default `s3://heber-lakehouse`)
+  - `LAKEFS_STORAGE_NAMESPACE_TEMPLATE` (optional, supports `{repo}` placeholder)
 - `SCHEMA_REGISTRY_*` for schema registry
 - `MINIO_*` for S3-compatible storage
 

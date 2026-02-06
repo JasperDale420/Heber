@@ -334,6 +334,11 @@ Audit Pass 33 (2026-02-06, files reviewed directly):
 - heber/ops/reliability.py
 - tests/test_event_deduplicator_rotation.py
 
+Audit Pass 34 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- tests/test_lakefs_namespace_config.py
+- docs/configuration.md
+
 Not yet audited in this run (recommend a future pass):
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
@@ -369,6 +374,7 @@ Updated: 2026-02-06
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
 - `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
+- `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
@@ -397,6 +403,7 @@ Updated: 2026-02-06
 - Audit Pass 31 revalidated `TD-064` as resolved via `T-39`; UW endpoint summary counts now match table rows.
 - Audit Pass 32 revalidated `TD-042` as resolved via `T-26`; log-level filtering is now enforced and covered by regression tests.
 - Audit Pass 33 revalidated `TD-043` as resolved via `T-27`; dedupe Bloom state is now bounded by rotation with regression coverage.
+- Audit Pass 34 revalidated `TD-066` as resolved via `T-28`; lakeFS repository creation now uses configurable storage namespace resolution.
 
 ## Executive Summary
 
@@ -798,6 +805,8 @@ Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `s
 Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
 Revalidated 2026-02-06 (Pass 14): Still open. Repository creation path still hardcodes `s3://heber-lakehouse/{repo}` and `LakeFSConfig` has no storage namespace field.
 Revalidated 2026-02-06 (Pass 17): Still open. Version manager continues to hardcode `storage_namespace` and lacks a configurable namespace field in `LakeFSConfig`.
+Update 2026-02-06: Remediated in `T-28` by adding `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE` support in `LakeFSConfig` and routing repository creation through config-driven namespace resolution.
+Revalidated 2026-02-06 (Pass 34): Resolved. Repository creation no longer hardcodes `s3://heber-lakehouse/{repo}` and now respects configuration for environment-specific namespaces.
 
 **TD-067: lakeFS metrics coverage is incomplete.**
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.

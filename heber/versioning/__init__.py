@@ -43,12 +43,16 @@ class LakeFSConfig:
         LAKEFS_ACCESS_KEY: Access key ID
         LAKEFS_SECRET_KEY: Secret access key
         LAKEFS_DEFAULT_REPO: Default repository name
+        LAKEFS_STORAGE_NAMESPACE_BASE: Storage namespace base (default: s3://heber-lakehouse)
+        LAKEFS_STORAGE_NAMESPACE_TEMPLATE: Optional template with {repo} placeholder
     """
 
     endpoint: str = "http://localhost:8000"
     access_key: str = ""
     secret_key: str = ""
     default_repo: str = "heber-gold"
+    storage_namespace_base: str = "s3://heber-lakehouse"
+    storage_namespace_template: str | None = None
 
     @classmethod
     def from_env(cls) -> LakeFSConfig:
@@ -58,7 +62,18 @@ class LakeFSConfig:
             access_key=os.getenv("LAKEFS_ACCESS_KEY", ""),
             secret_key=os.getenv("LAKEFS_SECRET_KEY", ""),
             default_repo=os.getenv("LAKEFS_DEFAULT_REPO", "heber-gold"),
+            storage_namespace_base=os.getenv("LAKEFS_STORAGE_NAMESPACE_BASE", "s3://heber-lakehouse"),
+            storage_namespace_template=os.getenv("LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
         )
+
+    def resolve_storage_namespace(self, repo_name: str) -> str:
+        """Resolve storage namespace for repository creation."""
+        if self.storage_namespace_template:
+            if "{repo}" in self.storage_namespace_template:
+                return self.storage_namespace_template.format(repo=repo_name)
+            return f"{self.storage_namespace_template.rstrip('/')}/{repo_name}"
+
+        return f"{self.storage_namespace_base.rstrip('/')}/{repo_name}"
 
 
 @dataclass
@@ -151,7 +166,7 @@ class LakeFSVersionManager:
             # Repository doesn't exist, create it
             logger.info("creating_lakefs_repository", repo=repo_name)
             return lakefs.Repository(repo_name, client=client).create(
-                storage_namespace=f"s3://heber-lakehouse/{repo_name}",
+                storage_namespace=self.config.resolve_storage_namespace(repo_name),
                 default_branch="main",
             )
 
