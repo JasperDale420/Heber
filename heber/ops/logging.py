@@ -7,6 +7,7 @@ Provides:
 - Trace context propagation
 """
 
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -54,11 +55,20 @@ def configure_logging(
 
     Args:
         service_name: Override service name
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         json_output: If True, output JSON; otherwise, dev-friendly format
     """
     if service_name:
         os.environ["SERVICE_NAME"] = service_name
+
+    normalized_level = log_level.strip().upper()
+    level_value = logging.getLevelName(normalized_level)
+    if not isinstance(level_value, int):
+        valid_levels = "DEBUG, INFO, WARNING, ERROR, CRITICAL"
+        raise ValueError(f"Invalid log level '{log_level}'. Expected one of: {valid_levels}.")
+
+    # Keep stdlib and structlog filtering aligned for consistent behavior.
+    logging.getLogger().setLevel(level_value)
 
     # Shared processors
     shared_processors = [
@@ -78,7 +88,7 @@ def configure_logging(
 
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.stdlib.BoundLogger,
+        wrapper_class=structlog.make_filtering_bound_logger(level_value),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,

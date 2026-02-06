@@ -40,6 +40,18 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_SILVER_MAX_FLUSH_TIME_SECONDS` | `30` | Max time before Silver flush |
 | `HEBER_SILVER_ROW_GROUP_SIZE_MB` | `128` | Parquet row group size |
 
+## Logging Levels
+
+`heber.ops.configure_logging(log_level=...)` accepts:
+
+- `DEBUG`
+- `INFO`
+- `WARNING`
+- `ERROR`
+- `CRITICAL`
+
+Values are normalized case-insensitively (for example, `info` -> `INFO`). Invalid values raise `ValueError`.
+
 ## Local vs Container URLs
 
 `docker-compose.yml` exposes different host ports. If you run SDK/CLI on the host, use:

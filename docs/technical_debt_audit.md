@@ -325,8 +325,13 @@ Audit Pass 30 (2026-02-06, files reviewed directly):
 Audit Pass 31 (2026-02-06, files reviewed directly):
 - docs/UW_endpoints.md
 
+Audit Pass 32 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- tests/test_logging_level_filtering.py
+- docs/configuration.md
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
+- heber/ops/reliability.py (`TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
 
@@ -359,6 +364,7 @@ Updated: 2026-02-06
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
+- `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
@@ -385,6 +391,7 @@ Updated: 2026-02-06
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
 - Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35`/`T-36`; labeling and data-contract docs now match current code paths and path conventions.
 - Audit Pass 31 revalidated `TD-064` as resolved via `T-39`; UW endpoint summary counts now match table rows.
+- Audit Pass 32 revalidated `TD-042` as resolved via `T-26`; log-level filtering is now enforced and covered by regression tests.
 
 ## Executive Summary
 
@@ -664,6 +671,8 @@ Evidence: `configure_logging()` has a `log_level` argument but does not set stdl
 Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
 Revalidated 2026-02-06 (Pass 13): Still open. `configure_logging()` continues to ignore `log_level` and uses `PrintLoggerFactory` without level filtering.
 Revalidated 2026-02-06 (Pass 18): Still open. `configure_logging()` still accepts but does not consume `log_level` in logger/filter configuration.
+Update 2026-02-06: Remediated in `T-26` by validating/normalizing `log_level`, applying root logger level configuration, and using structlog filtering (`make_filtering_bound_logger`) with regression tests for INFO/DEBUG behavior in JSON and console output modes.
+Revalidated 2026-02-06 (Pass 32): Resolved. `configure_logging(log_level=...)` now enforces effective filtering and fails fast on invalid level names.
 
 **TD-043: Bloom filter deduplication has no TTL/rotation.**
 Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
