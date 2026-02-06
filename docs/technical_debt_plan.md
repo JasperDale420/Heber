@@ -33,6 +33,7 @@ Updated: 2026-02-06
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
+- Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 
 ## Prioritization Approach
 
@@ -414,6 +415,44 @@ Acceptance Criteria:
 
 Estimate: 1-2 days
 
+### T-28: Make lakeFS Storage Namespace Configurable (TD-066)
+
+Priority: P1
+
+Description: lakeFS repository creation currently hardcodes `s3://heber-lakehouse/{repo}`, which prevents environment-specific storage namespace configuration (e.g., MinIO/staging buckets).
+
+Scope:
+- `heber/versioning/__init__.py`
+- Versioning docs/config references for new namespace setting
+- Regression tests for config/env resolution
+
+Acceptance Criteria:
+- `LakeFSConfig` supports configurable storage namespace template or base namespace.
+- Repository creation uses the configured namespace value instead of hardcoded literals.
+- Default behavior remains backward-compatible when new env vars are unset.
+- Regression tests validate repository namespace selection from env/config.
+
+Estimate: 0.5-1 day
+
+### T-29: Align K8s HPA Metrics and Probes With Runtime Reality (TD-075, TD-076)
+
+Priority: P1
+
+Description: HPA specs reference metrics that are not emitted, and several deployments probe HTTP endpoints that worker processes do not expose. Align manifests with exported metrics and actual health-check surfaces.
+
+Scope:
+- `k8s/base/hpa/*.yaml`
+- `k8s/base/deployments/*.yaml` (consumer, writer, compactor, hotloader, and related workers)
+- Optional runtime metrics/health wiring if preferred over manifest-only changes
+
+Acceptance Criteria:
+- HPA rules use existing/exported metrics or fallback to CPU/memory autoscaling.
+- Liveness/readiness probes target real endpoints/check mechanisms for each worker type.
+- Updated manifests pass a dry-run schema validation (`kubectl kustomize`/`kubectl apply --dry-run=client`).
+- Added regression/static checks to prevent future drift between manifests and runtime endpoints/metrics.
+
+Estimate: 1-2 days
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -519,3 +558,5 @@ Estimate: 1 day
 25. T-25 (Lifecycle shutdown timeout status fix)
 26. T-26 (Logging level filtering)
 27. T-27 (Dedupe rotation/backing-store policy)
+28. T-28 (lakeFS storage namespace configurability)
+29. T-29 (K8s HPA/probe conformance)

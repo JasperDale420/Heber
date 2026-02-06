@@ -210,10 +210,22 @@ Audit Pass 13 (2026-02-06, files reviewed directly):
 - heber/ops/logging.py
 - heber/ops/reliability.py
 
+Audit Pass 14 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/backfill.yaml
+
 Not yet audited in this run (recommend a future pass):
 - heber/ops/tracing.py (`TD-039`) re-audit after lifecycle/logging follow-up changes.
-- k8s/base/hpa/*.yaml and k8s/base/deployments/*.yaml (`TD-075`, `TD-076`) runtime conformance re-check.
-- heber/versioning/__init__.py (`TD-066`) config-driven storage namespace verification pass.
+- scripts/backup/validate-catalog-backup.sh (`TD-060`) cleanup-path re-audit.
+- scripts/security-scan.sh (`TD-065`) fail-on-findings behavior re-audit.
 
 ## Remediation Updates
 
@@ -615,6 +627,7 @@ Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
 Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
+Revalidated 2026-02-06 (Pass 14): Still open. Repository creation path still hardcodes `s3://heber-lakehouse/{repo}` and `LakeFSConfig` has no storage namespace field.
 
 **TD-067: lakeFS metrics coverage is incomplete.**
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
@@ -651,10 +664,12 @@ Recommendation: Update commands to valid module paths (e.g., `heber.writer.consu
 **TD-075: HPA targets custom metrics that are not exported.**
 Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
 Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
+Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
 Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
+Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
