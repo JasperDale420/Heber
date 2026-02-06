@@ -36,6 +36,7 @@ Updated: 2026-02-06
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
+- Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086`/`TD-087` for non-running k8s worker entrypoints.
 
 ## Prioritization Approach
 
@@ -575,6 +576,42 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-37: Make Backfill Deployment Entrypoint Executable (TD-086)
+
+Priority: P1
+
+Description: Backfill deployment currently runs `python -m heber.backfill`, but the package has no `__main__` module, so pods fail at startup.
+
+Scope:
+- `k8s/base/deployments/backfill.yaml`
+- Backfill runtime module(s) under `heber/backfill/` (add executable entrypoint)
+- Optional docs for backfill runtime mode
+
+Acceptance Criteria:
+- `python -m ...` command used by deployment resolves to an executable module with a running process model.
+- Backfill pod no longer exits immediately due to module execution error.
+- Probes/ports in deployment match the actual backfill runtime mode.
+
+Estimate: 0.5-1 day
+
+### T-38: Add Real Hotloader Service Entrypoint (TD-087)
+
+Priority: P1
+
+Description: Hotloader deployment runs a compatibility facade module that exits immediately. Add a long-running hotloader entrypoint and align deployment command/probes.
+
+Scope:
+- `heber/hotstore/sync.py` (or new dedicated service module)
+- `heber/writer/hotstore.py` (if keeping compatibility facade separate)
+- `k8s/base/deployments/hotloader.yaml`
+
+Acceptance Criteria:
+- Deployment command targets a long-running hotloader process (not a facade import module).
+- Hotloader process performs continuous sync/event handling as intended.
+- Probe strategy reflects real runtime behavior (HTTP if exposed, otherwise tcp/exec).
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -689,3 +726,5 @@ Estimate: 1 day
 34. T-34 (Cross-platform volume init script)
 35. T-35 (Labeling strategy doc refresh)
 36. T-36 (Data contract doc alignment)
+37. T-37 (Backfill deployment entrypoint fix)
+38. T-38 (Hotloader runtime entrypoint)

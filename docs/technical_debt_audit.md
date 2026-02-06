@@ -233,10 +233,29 @@ Audit Pass 16 (2026-02-06, files reviewed directly):
 - docs/labeling_strategy.md
 - docs/data_contract.md
 
+Audit Pass 17 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/backfill.yaml
+- heber/catalog/api.py
+- heber/ops/metrics.py
+- heber/writer/consumer.py
+- heber/writer/compactor.py
+- heber/writer/hotstore.py
+- heber/hotstore/sync.py
+- heber/backfill/__init__.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/versioning/__init__.py (`TD-066`, `TD-067`) follow-up re-audit after namespace/metrics fixes.
-- k8s/base/hpa/*.yaml and k8s/base/deployments/*.yaml (`TD-075`, `TD-076`) runtime-conformance re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) follow-up re-audit after observability fixes.
+- docs/UW_endpoints.md (`TD-064`) docs-consistency re-audit.
+- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-fix runtime conformance re-audit.
 
 ## Remediation Updates
 
@@ -267,6 +286,7 @@ Updated: 2026-02-06
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
+- Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 
 ## Executive Summary
 
@@ -363,6 +383,8 @@ Severity key: High, Medium, Low
 | TD-083 | Low | Backfill | Gap detection assumes `silver/{provider}_{feed}/dt=*` layout, which may not match actual partitions. |
 | TD-084 | Low | Backtest | Label reads use `read_gold()` without a version parameter, which may load unintended versions. |
 | TD-085 | Low | Backtest | Experiment results omit dataset as-of timestamps, weakening reproducibility. |
+| TD-086 | Medium | K8s | Backfill deployment runs `python -m heber.backfill`, but the package has no `__main__`, so the container exits immediately with module-execution errors. |
+| TD-087 | Medium | K8s | Hotloader deployment runs `python -m heber.writer.hotstore`, but that module is a compatibility facade with no long-running entrypoint, so the container exits immediately. |
 
 ## Detailed Findings
 
@@ -646,10 +668,12 @@ Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
 Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
 Revalidated 2026-02-06 (Pass 14): Still open. Repository creation path still hardcodes `s3://heber-lakehouse/{repo}` and `LakeFSConfig` has no storage namespace field.
+Revalidated 2026-02-06 (Pass 17): Still open. Version manager continues to hardcode `storage_namespace` and lacks a configurable namespace field in `LakeFSConfig`.
 
 **TD-067: lakeFS metrics coverage is incomplete.**
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
 Recommendation: Instrument all lakeFS operations (success/failure/duration) consistently.
+Revalidated 2026-02-06 (Pass 17): Still open. `lakefs_operations`/`lakefs_operation_duration` remain wired only for `create_branch` and `commit`.
 
 **TD-068: Market calendar crashes on naive datetimes.**
 Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
@@ -683,11 +707,13 @@ Recommendation: Update commands to valid module paths (e.g., `heber.writer.consu
 Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
 Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
 Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
+Revalidated 2026-02-06 (Pass 17): Still open. Metrics module still does not define `heber_writer_pending_batch_rows` or `heber_catalog_request_latency_p99_seconds`.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
 Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
 Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
+Revalidated 2026-02-06 (Pass 17): Still open. Catalog exposes `/health`, but worker modules still do not run HTTP health servers on probed ports.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
@@ -725,6 +751,14 @@ Recommendation: Add a label version parameter (or reuse `label_version`) and pas
 Evidence: `ExperimentConfig` and results capture dataset names and versions but do not persist the as-of timestamp used for feature/label reads, which is critical for reproducibility.
 Recommendation: Record `asof_time` per split or overall experiment in the config/results metadata.
 
+**TD-086: Backfill deployment entrypoint is not executable.**
+Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
+Recommendation: Add a concrete executable backfill entrypoint (e.g., `heber.backfill.main`) and update the deployment command to that module; then align probes with the actual service mode.
+
+**TD-087: Hotloader deployment command exits immediately.**
+Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hotstore`, but `heber/writer/hotstore.py` is a compatibility re-export with no `main()` loop. Executing it exits immediately, so pods will churn under restart policy.
+Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -732,7 +766,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
