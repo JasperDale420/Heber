@@ -222,10 +222,15 @@ Audit Pass 14 (2026-02-06, files reviewed directly):
 - k8s/base/deployments/hotloader.yaml
 - k8s/base/deployments/backfill.yaml
 
+Audit Pass 15 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/security-scan.sh
+
 Not yet audited in this run (recommend a future pass):
 - heber/ops/tracing.py (`TD-039`) re-audit after lifecycle/logging follow-up changes.
-- scripts/backup/validate-catalog-backup.sh (`TD-060`) cleanup-path re-audit.
-- scripts/security-scan.sh (`TD-065`) fail-on-findings behavior re-audit.
+- scripts/init_volume.sh (`TD-061`) cross-platform behavior re-audit.
+- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs drift re-audit.
 
 ## Remediation Updates
 
@@ -599,10 +604,12 @@ Recommendation: Support key:value tag filters or compare against values explicit
 **TD-059: ClickHouse backup script logs S3 bucket/prefix but doesn’t enforce them.**
 Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
 Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
+Revalidated 2026-02-06 (Pass 15): Still open. Script output advertises `S3_BUCKET/S3_PREFIX`, but backup/upload commands still rely on external clickhouse-backup config only.
 
 **TD-060: Catalog backup validation can leak the test DB instance on failure.**
 Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
 Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
+Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
 
 **TD-061: Volume init script assumes macOS tooling.**
 Evidence: `scripts/init_volume.sh` calls `dot_clean` unconditionally, which is macOS-only. On Linux, the script fails even if directory creation succeeded.
@@ -623,6 +630,7 @@ Recommendation: Recompute totals automatically or remove summary counts to avoid
 **TD-065: Security scan doesn’t fail on filesystem findings.**
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
 Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
+Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but `trivy fs` invocation still omits it.
 
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).

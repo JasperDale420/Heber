@@ -34,6 +34,7 @@ Updated: 2026-02-06
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
+- Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 
 ## Prioritization Approach
 
@@ -453,6 +454,56 @@ Acceptance Criteria:
 
 Estimate: 1-2 days
 
+### T-30: Align ClickHouse Backup Script With Effective S3 Destination (TD-059)
+
+Priority: P1
+
+Description: Backup script currently prints `S3_BUCKET/S3_PREFIX` values but does not apply them to `clickhouse-backup` commands, creating misleading operational output.
+
+Scope:
+- `scripts/backup/clickhouse-backup.sh`
+- Backup/runbook docs referencing S3 backup path behavior
+
+Acceptance Criteria:
+- Script either applies bucket/prefix via clickhouse-backup config/env integration or removes misleading destination output.
+- Verification output reflects the actual remote destination used by `clickhouse-backup`.
+- Regression/smoke checks verify backup list/verification path consistency.
+
+Estimate: 0.5 day
+
+### T-31: Guarantee Catalog Backup Cleanup on Failure (TD-060)
+
+Priority: P1
+
+Description: Validation script may leak the temporary restored RDS instance when restore/query steps fail due to `set -e` exit before cleanup.
+
+Scope:
+- `scripts/backup/validate-catalog-backup.sh`
+
+Acceptance Criteria:
+- Script uses a `trap` (or equivalent) to always delete the test instance on exit/failure.
+- Failure paths still preserve enough logs/output for diagnosis.
+- Success/failure runs both exercise cleanup path deterministically.
+
+Estimate: 0.5 day
+
+### T-32: Enforce Failure on Filesystem Secret/Misconfig Findings (TD-065)
+
+Priority: P1
+
+Description: `trivy fs` scan in `security-scan.sh` currently does not set a non-zero exit code on findings, reducing CI gate effectiveness.
+
+Scope:
+- `scripts/security-scan.sh`
+- Any CI docs that describe security scan failure behavior
+
+Acceptance Criteria:
+- Filesystem scan uses explicit non-zero exit behavior (`--exit-code 1`) for configured severities.
+- Script exits non-zero when critical/high filesystem findings are present.
+- Documentation reflects expected blocking behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -560,3 +611,6 @@ Estimate: 1 day
 27. T-27 (Dedupe rotation/backing-store policy)
 28. T-28 (lakeFS storage namespace configurability)
 29. T-29 (K8s HPA/probe conformance)
+30. T-30 (ClickHouse backup S3 destination alignment)
+31. T-31 (Catalog backup cleanup trap)
+32. T-32 (Security scan filesystem exit enforcement)
