@@ -270,11 +270,24 @@ Audit Pass 20 (2026-02-06, files reviewed directly):
 - heber/backfill/__init__.py
 - heber/writer/hotstore.py
 
+Audit Pass 21 (2026-02-06, files reviewed directly):
+- heber/ops/health.py
+- heber/ops/metrics.py
+- heber/ops/alerting.py
+- heber/ops/__init__.py
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+
 Not yet audited in this run (recommend a future pass):
 - scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
+- heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
 
 ## Remediation Updates
 
@@ -309,6 +322,7 @@ Updated: 2026-02-06
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
 - Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (k8s worker entrypoints still fail/exit immediately).
+- Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-server wiring drift.
 
 ## Executive Summary
 
@@ -407,6 +421,7 @@ Severity key: High, Medium, Low
 | TD-085 | Low | Backtest | Experiment results omit dataset as-of timestamps, weakening reproducibility. |
 | TD-086 | Medium | K8s | Backfill deployment runs `python -m heber.backfill`, but the package has no `__main__`, so the container exits immediately with module-execution errors. |
 | TD-087 | Medium | K8s | Hotloader deployment runs `python -m heber.writer.hotstore`, but that module is a compatibility facade with no long-running entrypoint, so the container exits immediately. |
+| TD-088 | Medium | Observability | Deployments advertise Prometheus scraping on port 9090, but service entrypoints do not start a metrics HTTP server, so scrape targets are non-functional. |
 
 ## Detailed Findings
 
@@ -738,12 +753,14 @@ Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_bat
 Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
 Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
 Revalidated 2026-02-06 (Pass 17): Still open. Metrics module still does not define `heber_writer_pending_batch_rows` or `heber_catalog_request_latency_p99_seconds`.
+Revalidated 2026-02-06 (Pass 21): Still open. HPA manifests continue to reference unavailable writer/catalog custom metrics.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
 Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
 Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
 Revalidated 2026-02-06 (Pass 17): Still open. Catalog exposes `/health`, but worker modules still do not run HTTP health servers on probed ports.
+Revalidated 2026-02-06 (Pass 21): Still open. Consumer/writer deployments still probe HTTP health endpoints on a metrics port with no health server process.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
@@ -791,6 +808,10 @@ Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hot
 Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
 Revalidated 2026-02-06 (Pass 20): Still open. Deployment still invokes facade module, and `python -m heber.writer.hotstore` still exits immediately.
 
+**TD-088: Prometheus scrape annotations/ports are not backed by running exporters.**
+Evidence: Deployments annotate `prometheus.io/scrape: "true"` with `prometheus.io/port: "9090"` (catalog/consumer/writer and other workers), but runtime entrypoints do not call `start_metrics_server()` from `heber.ops.metrics`. Catalog runs only Uvicorn on 8080, and worker modules run non-HTTP loops without starting a Prometheus HTTP endpoint.
+Recommendation: Start a metrics server on the advertised port in each service entrypoint (or remove/adjust scrape annotations/ports to match reality), and add an integration check that verifies `/metrics` reachability per deployment.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -798,7 +819,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

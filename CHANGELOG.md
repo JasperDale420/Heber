@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 18: ops logging/reliability + UW coverage-doc re-audit)
 - Expanded technical debt audit (pass 19: backup/security scripts + labeling/data contract docs re-audit)
 - Expanded technical debt audit (pass 20: backfill/hotloader runtime conformance re-audit)
+- Expanded technical debt audit (pass 21: observability/runtime wiring + k8s metrics conformance re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

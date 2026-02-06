@@ -40,6 +40,7 @@ Updated: 2026-02-06
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging filter wiring, dedupe rotation policy, UW endpoint summary drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
 - Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (backfill/hotloader deployment entrypoints remain non-runnable).
+- Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-exporter wiring drift.
 
 ## Prioritization Approach
 
@@ -632,6 +633,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-40: Align Prometheus Scrape Targets With Running Metrics Exporters (TD-088)
+
+Priority: P1
+
+Description: Deployments advertise Prometheus scrape on port `9090`, but runtime entrypoints do not start a metrics HTTP server, so scrape targets and related dashboards/alerts are partially non-functional.
+
+Scope:
+- Service entrypoints for catalog/consumer/writer/compactor/hotloader/backfill
+- `heber/ops/metrics.py` usage (`start_metrics_server`)
+- `k8s/base/deployments/*.yaml` scrape annotations and metrics container ports
+
+Acceptance Criteria:
+- Each deployment with `prometheus.io/scrape: "true"` exposes a reachable `/metrics` endpoint on the declared port.
+- Service entrypoints either start metrics exporters or deployment annotations/ports are corrected to match actual runtime behavior.
+- Add a lightweight validation check (script/test) that confirms metrics endpoint reachability assumptions stay in sync with manifests.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -749,3 +768,4 @@ Estimate: 1 day
 37. T-37 (Backfill deployment entrypoint fix)
 38. T-38 (Hotloader runtime entrypoint)
 39. T-39 (UW endpoint tracker summary reconciliation)
+40. T-40 (Prometheus scrape/exporter alignment)
