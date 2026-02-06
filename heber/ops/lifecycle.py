@@ -250,8 +250,16 @@ class LifecycleManager:
 
     async def async_wait_for_shutdown(self) -> None:
         """Async wait for shutdown signal."""
+        if self._shutdown_event.is_set():
+            return
+
         if not self._async_shutdown_event:
             self._async_shutdown_event = asyncio.Event()
+
+            # Handle race where shutdown was signaled before async event creation.
+            if self._shutdown_event.is_set():
+                self._async_shutdown_event.set()
+
         await self._async_shutdown_event.wait()
 
     def execute_shutdown(self) -> bool:

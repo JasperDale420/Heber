@@ -245,6 +245,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Normalized flow `ts_event` values to UTC and dropped invalid timestamps before time-window rolling
   - Added regression checks that 24-hour aggregates are time-windowed (not row-count based)
   - Added regression checks for UTC normalization of string timestamps in flow feature outputs (`heber/features/templates/tests.py`)
+- **Lifecycle Async Shutdown Wait Race Fix** (`heber/ops/lifecycle.py`)
+  - `async_wait_for_shutdown` now returns immediately when shutdown is already signaled
+  - Added race-safe async shutdown-event initialization to prevent hung waits
+  - Added regression coverage for pre-signaled and late-signaled async shutdown waits (`tests/test_lifecycle_shutdown_wait.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

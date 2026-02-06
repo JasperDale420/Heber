@@ -31,6 +31,7 @@ Updated: 2026-02-05
 - `T-21` complete (`TD-035`, `TD-036`): alert labels pipeline now canonicalizes underlying instrument keys for bar joins and loads intraday data from `bars` with `5Min` timeframe filtering (with daily fallback), replacing the stale `bars_5min` read path.
 - `T-22` complete (`TD-037`): alert-label intraday windows now use minute-based 5-minute bar durations for `ts_available` and SPY-relative windows instead of day-based offsets.
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
+- `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 
 ## Prioritization Approach
 
@@ -339,6 +340,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-24: Fix Async Shutdown Wait Hang Path (TD-040)
+
+Priority: P1
+
+Description: `async_wait_for_shutdown()` could hang forever when shutdown was initiated before the async event existed. Add pre-signaled checks and race-safe async event initialization.
+
+Scope:
+- `heber/ops/lifecycle.py`
+- `tests/test_lifecycle_shutdown_wait.py`
+
+Acceptance Criteria:
+- `async_wait_for_shutdown()` returns immediately if shutdown is already signaled.
+- If shutdown is signaled during async event creation, waiters are still released.
+- Regression tests cover both pre-signaled and late-signaled async wait scenarios.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -440,3 +458,4 @@ Estimate: 1 day
 21. T-21 (Alert label bar key + intraday dataset wiring)
 22. T-22 (Intraday label window unit correction)
 23. T-23 (Flow feature time-window hardening)
+24. T-24 (Lifecycle async shutdown wait hang fix)
