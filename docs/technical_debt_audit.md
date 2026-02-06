@@ -354,6 +354,11 @@ Audit Pass 36 (2026-02-06, files reviewed directly):
 - heber/ops/tracing.py
 - tests/test_tracing_no_otel.py
 
+Audit Pass 37 (2026-02-06, files reviewed directly):
+- scripts/init_volume.sh
+- docs/configuration.md
+- tests/test_init_volume_platform_guard.py
+
 Not yet audited in this run (recommend a future pass):
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
@@ -390,6 +395,7 @@ Updated: 2026-02-06
 - `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
 - `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
 - `TD-039` addressed via `T-33`: tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, and a regression test confirms `@traced` execution works with tracing disabled.
+- `TD-061` addressed via `T-34`: `init_volume.sh` now checks host OS and `dot_clean` availability explicitly before cleanup, emits explicit skip reasons on unsupported hosts, and avoids implicit `|| true` fallback semantics.
 - `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
 - `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
@@ -423,6 +429,7 @@ Updated: 2026-02-06
 - Audit Pass 34 revalidated `TD-066` as resolved via `T-28`; lakeFS repository creation now uses configurable storage namespace resolution.
 - Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`; HPA metric sources and worker probe types now match runtime behavior.
 - Audit Pass 36 revalidated `TD-039` as resolved via `T-33`; tracing decorators now remain safe without OpenTelemetry.
+- Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
 
 ## Executive Summary
 
@@ -793,6 +800,8 @@ Revalidated 2026-02-06 (Pass 28): Resolved. Script now uses `EXIT` trap cleanup 
 Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
 Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
 Revalidated 2026-02-06 (Pass 16): Still open. Script still runs `dot_clean` unconditionally and relies on `|| true` rather than explicit platform detection.
+Update 2026-02-06: Remediated in `T-34` by adding explicit host OS and `dot_clean` detection, explicit skip messaging, and non-fatal per-directory cleanup handling without implicit shell fallback.
+Revalidated 2026-02-06 (Pass 37): Resolved. macOS cleanup is now guarded explicitly, and non-macOS hosts skip cleanly with clear logs.
 
 **TD-062: Labeling docs reference outdated API location/signature.**
 Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.

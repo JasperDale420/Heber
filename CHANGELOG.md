@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 34: lakeFS namespace configurability remediation re-audit)
 - Expanded technical debt audit (pass 35: k8s HPA/probe conformance remediation re-audit)
 - Expanded technical debt audit (pass 36: tracing optional-dependency safety remediation re-audit)
+- Expanded technical debt audit (pass 37: cross-platform init-volume remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -297,6 +298,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `traced()` now avoids unconditional `SpanKind` access when OpenTelemetry is unavailable
   - No-OpenTelemetry paths now pass `kind=None` to noop tracing context safely
   - Added regression coverage for `@traced` execution with `OTEL_AVAILABLE=False` (`tests/test_tracing_no_otel.py`)
+- **Cross-Platform Volume Init Guarding** (`scripts/init_volume.sh`)
+  - Added explicit OS/tool checks before invoking macOS-only `dot_clean`
+  - Non-macOS and missing-tool paths now emit clear skip messages instead of implicit fallback
+  - Added regression checks for explicit platform guards and removal of `dot_clean ... || true` behavior (`tests/test_init_volume_platform_guard.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

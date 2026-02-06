@@ -44,11 +44,23 @@ chmod -R 755 "$VOLUME_ROOT/redis"
 # These cause "Operation not permitted" errors that crash postgres, redis, and
 # clickhouse on startup. This MUST run after chmod since chmod itself creates
 # ._* files on non-HFS+ filesystems.
-echo "Cleaning macOS resource fork files..."
-for dir in postgres redis clickhouse elasticsearch minio data; do
-    dot_clean -m "$VOLUME_ROOT/$dir" 2>/dev/null || true
-done
-echo "Resource fork cleanup complete"
+HOST_OS="$(uname -s)"
+if [ "$HOST_OS" = "Darwin" ]; then
+    if command -v dot_clean >/dev/null 2>&1; then
+        echo "Cleaning macOS resource fork files with dot_clean..."
+        for dir in postgres redis clickhouse elasticsearch minio data; do
+            target="$VOLUME_ROOT/$dir"
+            if ! dot_clean -m "$target" 2>/dev/null; then
+                echo "Warning: dot_clean failed for $target; continuing"
+            fi
+        done
+        echo "Resource fork cleanup complete"
+    else
+        echo "Skipping resource fork cleanup: dot_clean is not installed"
+    fi
+else
+    echo "Skipping resource fork cleanup: host OS is $HOST_OS (dot_clean is macOS-only)"
+fi
 
 echo ""
 echo "Heber storage initialized at $VOLUME_ROOT"

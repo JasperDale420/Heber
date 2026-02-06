@@ -83,6 +83,8 @@ From `docker-compose.yml`:
 - `data/bronze`, `data/silver`, `data/gold`
 - `postgres/data`, `clickhouse/data`, `clickhouse/logs`, `redis/data`
 
+On macOS hosts, the script also runs `dot_clean` to remove AppleDouble `._*` files after permissions are set. On non-macOS hosts (or if `dot_clean` is missing), it emits an explicit skip message and continues.
+
 ## OSS Migration Settings (Optional)
 
 These are read by modules in `heber/storage/`, `heber/versioning/`, and `heber/schema/`:
