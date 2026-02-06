@@ -39,6 +39,7 @@ Updated: 2026-02-06
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086`/`TD-087` for non-running k8s worker entrypoints.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging filter wiring, dedupe rotation policy, UW endpoint summary drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
+- Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (backfill/hotloader deployment entrypoints remain non-runnable).
 
 ## Prioritization Approach
 

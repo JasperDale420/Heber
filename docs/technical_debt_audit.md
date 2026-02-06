@@ -264,11 +264,17 @@ Audit Pass 19 (2026-02-06, files reviewed directly):
 - docs/labeling_strategy.md
 - docs/data_contract.md
 
+Audit Pass 20 (2026-02-06, files reviewed directly):
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/hotloader.yaml
+- heber/backfill/__init__.py
+- heber/writer/hotstore.py
+
 Not yet audited in this run (recommend a future pass):
-- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-fix runtime conformance re-audit.
 - scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
+- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 
 ## Remediation Updates
 
@@ -302,6 +308,7 @@ Updated: 2026-02-06
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
+- Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (k8s worker entrypoints still fail/exit immediately).
 
 ## Executive Summary
 
@@ -777,10 +784,12 @@ Recommendation: Record `asof_time` per split or overall experiment in the config
 **TD-086: Backfill deployment entrypoint is not executable.**
 Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
 Recommendation: Add a concrete executable backfill entrypoint (e.g., `heber.backfill.main`) and update the deployment command to that module; then align probes with the actual service mode.
+Revalidated 2026-02-06 (Pass 20): Still open. Deployment command is unchanged and module execution still fails with missing `__main__`.
 
 **TD-087: Hotloader deployment command exits immediately.**
 Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hotstore`, but `heber/writer/hotstore.py` is a compatibility re-export with no `main()` loop. Executing it exits immediately, so pods will churn under restart policy.
 Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
+Revalidated 2026-02-06 (Pass 20): Still open. Deployment still invokes facade module, and `python -m heber.writer.hotstore` still exits immediately.
 
 ## Suggested Remediation Plan
 
