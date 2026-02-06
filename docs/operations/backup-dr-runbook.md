@@ -66,7 +66,7 @@ aws s3api list-object-versions \
 
 - **Backup tool:** `clickhouse-backup`
 - **Frequency:** Daily at 02:00 UTC
-- **Storage:** S3 (`s3://heber-backups-prod/clickhouse/`)
+- **Storage:** Remote destination configured in `clickhouse-backup` config (production target: S3)
 - **Retention:** 7 days
 
 **Commands:**

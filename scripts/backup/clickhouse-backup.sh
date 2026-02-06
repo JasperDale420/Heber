@@ -3,22 +3,22 @@
 # Heber ClickHouse Backup Script per PRD §24.2
 # =============================================================================
 # Runs daily via cron at 02:00 UTC
-# Stores backups in S3 with 7-day retention
+# Remote destination is managed by clickhouse-backup config
 # =============================================================================
 
 set -euo pipefail
 
 # Configuration
 BACKUP_NAME="daily-$(date +%Y%m%d-%H%M%S)"
-S3_BUCKET="${HEBER_BACKUP_BUCKET:-heber-backups-prod}"
-S3_PREFIX="clickhouse"
 RETENTION_DAYS=7
+BACKUP_CONFIG_PATH="${CLICKHOUSE_BACKUP_CONFIG:-/etc/clickhouse-backup/config.yml}"
 
 echo "============================================"
 echo "ClickHouse Backup Starting"
 echo "============================================"
 echo "Backup Name: ${BACKUP_NAME}"
-echo "S3 Bucket:   ${S3_BUCKET}"
+echo "Backup Config: ${BACKUP_CONFIG_PATH}"
+echo "Remote Destination: managed by clickhouse-backup config"
 echo "Retention:   ${RETENTION_DAYS} days"
 echo "============================================"
 
@@ -47,16 +47,18 @@ clickhouse-backup delete remote --keep-backups-remote=${RETENTION_DAYS}
 # Verify backup
 echo "Verifying backup..."
 if clickhouse-backup list remote | grep -q "${BACKUP_NAME}"; then
-    echo "✅ Backup verified in S3"
+    echo "✅ Backup verified in remote storage"
 else
     echo "❌ Backup verification failed!"
     exit 1
 fi
+
+REMOTE_ENTRY=$(clickhouse-backup list remote | grep "${BACKUP_NAME}" | head -n 1)
 
 echo ""
 echo "============================================"
 echo "✅ ClickHouse Backup Complete"
 echo "============================================"
 echo "Backup: ${BACKUP_NAME}"
-echo "S3 Path: s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
+echo "Remote Entry: ${REMOTE_ENTRY}"
 echo ""

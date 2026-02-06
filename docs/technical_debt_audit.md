@@ -310,8 +310,11 @@ Audit Pass 27 (2026-02-06, files reviewed directly):
 Audit Pass 28 (2026-02-06, files reviewed directly):
 - scripts/backup/validate-catalog-backup.sh
 
+Audit Pass 29 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- docs/operations/backup-dr-runbook.md
+
 Not yet audited in this run (recommend a future pass):
-- scripts/backup/clickhouse-backup.sh (`TD-059`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
@@ -352,6 +355,7 @@ Updated: 2026-02-06
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
+- `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -365,6 +369,7 @@ Updated: 2026-02-06
 - Audit Pass 26 revalidated `TD-070` as resolved via `T-43`; Hot Store DDL and insert mappings now include provenance/quality base fields.
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
+- Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
 
 ## Executive Summary
 
@@ -434,7 +439,7 @@ Severity key: High, Medium, Low
 | TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
 | TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
 | TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
-| TD-059 | Low | Scripts | ClickHouse backup script logs S3 bucket/prefix but never applies them to `clickhouse-backup`. |
+| TD-059 | Low | Scripts | ClickHouse backup script output now reflects config-managed remote destination without misleading hardcoded S3 path. |
 | TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
@@ -716,6 +721,7 @@ Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREF
 Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
 Revalidated 2026-02-06 (Pass 15): Still open. Script output advertises `S3_BUCKET/S3_PREFIX`, but backup/upload commands still rely on external clickhouse-backup config only.
 Revalidated 2026-02-06 (Pass 19): Still open. Script still only logs bucket/prefix while `create`/`upload` calls do not pass destination overrides.
+Revalidated 2026-02-06 (Pass 29): Resolved. Script removed misleading hardcoded S3 path output and now reports config-driven remote backup entry.
 
 **TD-060: Catalog backup validation can leak the test DB instance on failure.**
 Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
@@ -876,7 +882,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
