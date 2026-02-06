@@ -41,6 +41,7 @@ Updated: 2026-02-06
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
 - Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (backfill/hotloader deployment entrypoints remain non-runnable).
 - Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-exporter wiring drift.
+- Audit Pass 22 revalidated `TD-068`, `TD-069`, `TD-070`, and `TD-072` as still open; `TD-071` was confirmed resolved by the `T-09` Hot Store table-helper refactor.
 
 ## Prioritization Approach
 
@@ -651,6 +652,76 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-41: Harden MarketCalendar Timezone Input Handling (TD-068)
+
+Priority: P1
+
+Description: `MarketCalendar` converts input timestamps with `tz_convert()` without handling naive datetimes, which raises at runtime and can break watch/calendar flows.
+
+Scope:
+- `heber/calendar/market.py`
+- Calendar-related unit tests in `heber/watch/` and/or new focused calendar tests
+
+Acceptance Criteria:
+- All public `MarketCalendar` methods either accept naive timestamps by localizing with documented semantics (for example assume UTC) or reject them with deterministic, explicit validation errors.
+- Regression tests cover naive `datetime`, timezone-aware `datetime`, and `pd.Timestamp` inputs.
+- Behavior is documented in class/module docstrings.
+
+Estimate: 0.5 day
+
+### T-42: Implement or Remove Extended-Hours Calendar Flag (TD-069)
+
+Priority: P1
+
+Description: `include_extended` is currently configuration-only and does not alter scheduling/trading-window logic, which is misleading for callers.
+
+Scope:
+- `heber/calendar/market.py`
+- Any watch-service callsites that construct `MarketCalendar`
+- Documentation for calendar behavior
+
+Acceptance Criteria:
+- `include_extended=True` produces a materially different, tested session window behavior (pre/post-market) OR the flag is removed and callers/docs are updated.
+- Constructor/docs accurately reflect supported behavior.
+- Regression tests assert the chosen behavior.
+
+Estimate: 0.5 day
+
+### T-43: Resolve Hot Store Base-Column Drift in DDL (TD-070)
+
+Priority: P1
+
+Description: Hot Store tables omit base provenance/quality columns (`quality_flags`, `lineage`) that exist in Silver schemas, causing schema drift and reduced traceability.
+
+Scope:
+- `heber/hotstore/tables.py`
+- `heber/schemas/silver.py` (contract reference)
+- Any writers/sync code that inserts into Hot Store
+
+Acceptance Criteria:
+- Hot Store DDL either includes required base columns with compatible types or explicitly documents a deliberate omission in code/docs.
+- Insert paths are updated (or validated) so writes remain successful with the selected schema.
+- A schema-conformance regression test checks expected base columns for each hot table definition.
+
+Estimate: 0.5-1 day
+
+### T-44: Make Additional Schema Tests Growth-Tolerant (TD-072)
+
+Priority: P1
+
+Description: `tests_additional.py` asserts a fixed total schema count (`16`), creating brittle failures when valid schemas are added.
+
+Scope:
+- `heber/schemas/tests_additional.py`
+- Optional schema-registry docs if test expectations are codified
+
+Acceptance Criteria:
+- Tests assert required schema names/contracts rather than an exact global count.
+- Adding a valid new schema does not fail unrelated assertions.
+- Test output remains clear about which required schema contract failed when a regression occurs.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -769,3 +840,7 @@ Estimate: 1 day
 38. T-38 (Hotloader runtime entrypoint)
 39. T-39 (UW endpoint tracker summary reconciliation)
 40. T-40 (Prometheus scrape/exporter alignment)
+41. T-41 (MarketCalendar timezone input hardening)
+42. T-42 (Extended-hours calendar flag behavior)
+43. T-43 (Hot Store DDL base-column conformance)
+44. T-44 (Additional schema test stability)
