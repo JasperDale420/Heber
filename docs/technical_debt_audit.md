@@ -257,10 +257,18 @@ Audit Pass 18 (2026-02-06, files reviewed directly):
 - heber/ops/reliability.py
 - docs/UW_endpoints.md
 
+Audit Pass 19 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/security-scan.sh
+- docs/labeling_strategy.md
+- docs/data_contract.md
+
 Not yet audited in this run (recommend a future pass):
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-fix runtime conformance re-audit.
-- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-fix re-audit.
-- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-fix re-audit.
+- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
+- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
+- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 
 ## Remediation Updates
 
@@ -293,6 +301,7 @@ Updated: 2026-02-06
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
+- Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
 
 ## Executive Summary
 
@@ -642,11 +651,13 @@ Recommendation: Support key:value tag filters or compare against values explicit
 Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
 Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
 Revalidated 2026-02-06 (Pass 15): Still open. Script output advertises `S3_BUCKET/S3_PREFIX`, but backup/upload commands still rely on external clickhouse-backup config only.
+Revalidated 2026-02-06 (Pass 19): Still open. Script still only logs bucket/prefix while `create`/`upload` calls do not pass destination overrides.
 
 **TD-060: Catalog backup validation can leak the test DB instance on failure.**
 Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
 Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
 Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
+Revalidated 2026-02-06 (Pass 19): Still open. Cleanup still only runs on success path; no guaranteed teardown trap exists.
 
 **TD-061: Volume init script assumes macOS tooling.**
 Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
@@ -657,11 +668,13 @@ Revalidated 2026-02-06 (Pass 16): Still open. Script still runs `dot_clean` unco
 Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
 Recommendation: Update the docs to match the current module path and function signature.
 Revalidated 2026-02-06 (Pass 16): Still open. The snippet still points to `heber/firewall/splits.py` with stale parameter names.
+Revalidated 2026-02-06 (Pass 19): Still open. Train/test split snippet still references the stale module path and signature.
 
 **TD-063: Data contract docs drift from current schema sources and concrete Gold partition path conventions.**
 Evidence: `docs/data_contract.md` still lists `heber/writer/silver.py` as the Silver schema source, while canonical Arrow schemas are now defined in `heber/schemas/silver.py`. It also documents Gold partitioning in abstract (`dataset/project/version/dt`) without the key-value path convention used by writers (`dataset=.../project=.../version=.../dt=...`), which creates avoidable interpretation drift.
 Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silver.py` as the canonical schema source and show concrete key-value Gold path examples that match `write_gold()` / label-writer output.
 Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
+Revalidated 2026-02-06 (Pass 19): Still open. Schema source reference and Gold path notation remain unaligned with current implementation conventions.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
 Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
@@ -672,6 +685,7 @@ Revalidated 2026-02-06 (Pass 18): Still open. Summary totals and status buckets 
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
 Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
 Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but `trivy fs` invocation still omits it.
+Revalidated 2026-02-06 (Pass 19): Still open. Filesystem scan path still omits `--exit-code`, so high/critical findings will not block execution.
 
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
