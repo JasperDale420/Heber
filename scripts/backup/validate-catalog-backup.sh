@@ -11,6 +11,46 @@ set -euo pipefail
 DB_INSTANCE="heber-catalog-prod"
 TEST_INSTANCE="heber-catalog-backup-test"
 REGION="${AWS_REGION:-us-east-1}"
+VALIDATION_PASSED=0
+
+cleanup_test_instance() {
+    if aws rds describe-db-instances \
+        --db-instance-identifier "${TEST_INSTANCE}" \
+        --region "${REGION}" >/dev/null 2>&1; then
+        echo "Deleting test instance ${TEST_INSTANCE}..."
+        aws rds delete-db-instance \
+            --db-instance-identifier "${TEST_INSTANCE}" \
+            --skip-final-snapshot \
+            --region "${REGION}" >/dev/null 2>&1 || true
+        echo "Waiting for test instance deletion..."
+        aws rds wait db-instance-deleted \
+            --db-instance-identifier "${TEST_INSTANCE}" \
+            --region "${REGION}" >/dev/null 2>&1 || true
+    else
+        echo "No test instance cleanup needed."
+    fi
+}
+
+cleanup_on_exit() {
+    local exit_code=$?
+    set +e
+    echo ""
+    echo "Ensuring backup-validation test instance cleanup..."
+    cleanup_test_instance
+
+    if [ "${exit_code}" -ne 0 ] || [ "${VALIDATION_PASSED}" -ne 1 ]; then
+        echo ""
+        echo "============================================"
+        echo "❌ Backup Validation Failed"
+        echo "============================================"
+        echo "Status: FAILED"
+    fi
+
+    trap - EXIT
+    exit "${exit_code}"
+}
+
+trap cleanup_on_exit EXIT
 
 echo "============================================"
 echo "Catalog Backup Validation"
@@ -37,14 +77,7 @@ echo "Latest snapshot: ${LATEST_SNAPSHOT}"
 
 # Delete existing test instance if exists
 echo "Cleaning up any existing test instance..."
-aws rds delete-db-instance \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --skip-final-snapshot \
-    --region "${REGION}" 2>/dev/null || true
-
-aws rds wait db-instance-deleted \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --region "${REGION}" 2>/dev/null || true
+cleanup_test_instance
 
 # Restore from snapshot
 echo "Restoring from snapshot..."
@@ -76,13 +109,7 @@ SELECT COUNT(*) as dataset_count FROM datasets;
 SELECT COUNT(*) as partition_count FROM partitions;
 SELECT MAX(created_at) as latest_partition FROM partitions;
 "
-
-# Cleanup test instance
-echo "Cleaning up test instance..."
-aws rds delete-db-instance \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --skip-final-snapshot \
-    --region "${REGION}"
+VALIDATION_PASSED=1
 
 echo ""
 echo "============================================"

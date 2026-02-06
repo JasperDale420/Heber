@@ -33,6 +33,7 @@ Updated: 2026-02-06
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
+- `T-31` complete (`TD-060`): catalog backup validation script now guarantees test-instance cleanup via `EXIT` trap and preserves failure status on restore/query errors.
 - `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
@@ -52,6 +53,7 @@ Updated: 2026-02-06
 - Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; `TD-070` remains open.
 - Audit Pass 26 revalidated `TD-070` as resolved via `T-43`.
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`.
+- Audit Pass 28 revalidated `TD-060` as resolved via `T-31`.
 
 ## Prioritization Approach
 

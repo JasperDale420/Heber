@@ -307,8 +307,11 @@ Audit Pass 27 (2026-02-06, files reviewed directly):
 - scripts/security-scan.sh
 - README.md
 
+Audit Pass 28 (2026-02-06, files reviewed directly):
+- scripts/backup/validate-catalog-backup.sh
+
 Not yet audited in this run (recommend a future pass):
-- scripts/backup/clickhouse-backup.sh and scripts/backup/validate-catalog-backup.sh (`TD-059`, `TD-060`) post-remediation re-audit.
+- scripts/backup/clickhouse-backup.sh (`TD-059`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
@@ -348,6 +351,7 @@ Updated: 2026-02-06
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
+- `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -360,6 +364,7 @@ Updated: 2026-02-06
 - Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; extended-hours mode is now explicit and non-silent.
 - Audit Pass 26 revalidated `TD-070` as resolved via `T-43`; Hot Store DDL and insert mappings now include provenance/quality base fields.
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
+- Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
 
 ## Executive Summary
 
@@ -430,7 +435,7 @@ Severity key: High, Medium, Low
 | TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
 | TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
 | TD-059 | Low | Scripts | ClickHouse backup script logs S3 bucket/prefix but never applies them to `clickhouse-backup`. |
-| TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
+| TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
 | TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
@@ -717,6 +722,7 @@ Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore o
 Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
 Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
 Revalidated 2026-02-06 (Pass 19): Still open. Cleanup still only runs on success path; no guaranteed teardown trap exists.
+Revalidated 2026-02-06 (Pass 28): Resolved. Script now uses `EXIT` trap cleanup and preserves failure status while tearing down test instances.
 
 **TD-061: Volume init script assumes macOS tooling.**
 Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
@@ -866,7 +872,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
