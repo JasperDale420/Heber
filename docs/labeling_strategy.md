@@ -169,9 +169,16 @@ This ensures you never use information that wasn't available at prediction time.
 ### Train/Test Split
 
 ```python
-# heber/firewall/splits.py
-def validate_train_test_split(train_end, test_start, label_horizon, purge_days, embargo_days):
-    """Ensure no information leakage between train and test."""
+# heber/firewall/validation.py
+from heber.firewall.validation import validate_train_test_split
+
+# purge_window / embargo_window are seconds
+validate_train_test_split(
+    train_end=train_end,
+    test_start=test_start,
+    purge_window=purge_seconds,
+    embargo_window=embargo_seconds,
+)
 ```
 
 - **Purge**: Remove training samples whose label windows overlap test period

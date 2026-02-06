@@ -314,8 +314,15 @@ Audit Pass 29 (2026-02-06, files reviewed directly):
 - scripts/backup/clickhouse-backup.sh
 - docs/operations/backup-dr-runbook.md
 
+Audit Pass 30 (2026-02-06, files reviewed directly):
+- docs/labeling_strategy.md
+- docs/data_contract.md
+- heber/firewall/validation.py
+- heber/schemas/silver.py
+- heber/sdk/client.py
+- heber/watch/writer.py
+
 Not yet audited in this run (recommend a future pass):
-- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
@@ -356,6 +363,8 @@ Updated: 2026-02-06
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
+- `TD-062` addressed via `T-35`: labeling strategy docs now reference `heber/firewall/validation.py` and the current `validate_train_test_split` argument contract.
+- `TD-063` addressed via `T-36`: data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK/label writers.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -370,6 +379,7 @@ Updated: 2026-02-06
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
+- Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35`/`T-36`; labeling and data-contract docs now match current code paths and path conventions.
 
 ## Executive Summary
 
@@ -442,8 +452,8 @@ Severity key: High, Medium, Low
 | TD-059 | Low | Scripts | ClickHouse backup script output now reflects config-managed remote destination without misleading hardcoded S3 path. |
 | TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
-| TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
-| TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
+| TD-062 | Low | Docs | Labeling strategy docs now reference the current split-validation module and signature. |
+| TD-063 | Low | Docs | Data contract docs now reference canonical Silver schema source and concrete Gold path conventions. |
 | TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
 | TD-065 | Low | Scripts | Filesystem security scan now fails on HIGH/CRITICAL secret/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
@@ -740,12 +750,14 @@ Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and s
 Recommendation: Update the docs to match the current module path and function signature.
 Revalidated 2026-02-06 (Pass 16): Still open. The snippet still points to `heber/firewall/splits.py` with stale parameter names.
 Revalidated 2026-02-06 (Pass 19): Still open. Train/test split snippet still references the stale module path and signature.
+Revalidated 2026-02-06 (Pass 30): Resolved. Snippet now references `heber/firewall/validation.py` with current `purge_window`/`embargo_window` parameters.
 
 **TD-063: Data contract docs drift from current schema sources and concrete Gold partition path conventions.**
 Evidence: `docs/data_contract.md` still lists `heber/writer/silver.py` as the Silver schema source, while canonical Arrow schemas are now defined in `heber/schemas/silver.py`. It also documents Gold partitioning in abstract (`dataset/project/version/dt`) without the key-value path convention used by writers (`dataset=.../project=.../version=.../dt=...`), which creates avoidable interpretation drift.
 Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silver.py` as the canonical schema source and show concrete key-value Gold path examples that match `write_gold()` / label-writer output.
 Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
 Revalidated 2026-02-06 (Pass 19): Still open. Schema source reference and Gold path notation remain unaligned with current implementation conventions.
+Revalidated 2026-02-06 (Pass 30): Resolved. Doc now references `heber/schemas/silver.py` and concrete Gold key-value path conventions.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
 Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
@@ -882,7 +894,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

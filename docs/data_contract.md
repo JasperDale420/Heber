@@ -43,11 +43,12 @@ Regex validation in `validate_instrument_key()`:
 
 - Bronze: raw envelope (JSONL.gz) partitioned by `provider/feed/dt/hour`
 - Silver: normalized Parquet partitioned by `feed/instrument_type/dt` (and `hour` for quotes/trades)
-- Gold: Parquet partitioned by `dataset/project/version/dt`
+- Gold (SDK writer): Parquet partitioned by `dataset={name}/project={name}/version={version}/dt={date}`
+- Gold (label writer): Parquet partitioned by `dataset={name}/type=label/version={version}`
 
 ## Silver Schemas (Parquet Writer)
 
-Source: `heber/writer/silver.py`
+Source: `heber/schemas/silver.py`
 
 All feeds include base fields:
 
@@ -84,7 +85,15 @@ Gold writes require:
 
 - `instrument_key`, `ts_event`, `ts_available`
 
-Partition key: `dt` derived from `ts_event`. The SDK enforces `ts_available >= ts_event`.
+SDK path convention:
+
+- `gold/dataset={dataset}/project={project}/version={version}/dt={YYYY-MM-DD}/part-*.parquet`
+
+Label path convention:
+
+- `gold/dataset={dataset}/type=label/version={version}/data.parquet`
+
+Partition key for SDK writer: `dt` derived from `ts_event`. The SDK enforces `ts_available >= ts_event`.
 
 ## SDK Semantics
 

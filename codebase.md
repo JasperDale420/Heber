@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T18:50:10*
+*Generated: 2026-02-05T19:50:31*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 241
+Files analyzed: 242
 
-Estimated tokens: 407.2k
+Estimated tokens: 410.5k
 
 ---
 
@@ -309,6 +309,7 @@ Directory structure:
     │   ├── test_hotstore_unification.py
     │   ├── test_lifecycle_shutdown_timeout.py
     │   ├── test_lifecycle_shutdown_wait.py
+    │   ├── test_market_calendar_timezones.py
     │   ├── test_meta_label_alignment.py
     │   ├── test_placeholder.py
     │   ├── test_runtime_entrypoints.py
@@ -530,7 +531,7 @@ GitHub Actions workflow (`.github/workflows/ci.yaml`) runs:
 
 1. **Build** - Docker image creation
 2. **Test** - Linting (ruff, mypy) + pytest with coverage
-3. **Scan** - Trivy security scanning for vulnerabilities
+3. **Scan** - Trivy security scanning for vulnerabilities and filesystem secrets/misconfigurations (fails on HIGH/CRITICAL findings)
 4. **Push** - Container registry push (main branch only)
 5. **Deploy** - Staging -> Production (main branch only)
 
@@ -627,6 +628,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 20: backfill/hotloader runtime conformance re-audit)
 - Expanded technical debt audit (pass 21: observability/runtime wiring + k8s metrics conformance re-audit)
 - Expanded technical debt audit (pass 22: calendar/hotstore/schema conformance re-audit)
+- Expanded technical debt audit (pass 23: MarketCalendar timezone hardening + regression-test re-audit)
+- Expanded technical debt audit (pass 24: additional schema registry test hardening re-audit)
+- Expanded technical debt audit (pass 25: include_extended behavior hardening re-audit)
+- Expanded technical debt audit (pass 26: Hot Store base-column conformance re-audit)
+- Expanded technical debt audit (pass 27: filesystem security scan gate hardening re-audit)
+- Expanded technical debt audit (pass 28: catalog backup cleanup-trap hardening re-audit)
+- Expanded technical debt audit (pass 29: clickhouse-backup destination-output alignment re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -11763,13 +11771,38 @@ Audit Pass 22 (2026-02-06, files reviewed directly):
 - heber/hotstore/tables.py
 - heber/schemas/tests_additional.py
 
+Audit Pass 23 (2026-02-06, files reviewed directly):
+- heber/calendar/market.py
+- tests/test_market_calendar_timezones.py
+
+Audit Pass 24 (2026-02-06, files reviewed directly):
+- heber/schemas/tests_additional.py
+
+Audit Pass 25 (2026-02-06, files reviewed directly):
+- heber/calendar/market.py
+- tests/test_market_calendar_timezones.py
+
+Audit Pass 26 (2026-02-06, files reviewed directly):
+- heber/hotstore/tables.py
+- heber/hotstore/sync.py
+- tests/test_hotstore_unification.py
+
+Audit Pass 27 (2026-02-06, files reviewed directly):
+- scripts/security-scan.sh
+- README.md
+
+Audit Pass 28 (2026-02-06, files reviewed directly):
+- scripts/backup/validate-catalog-backup.sh
+
+Audit Pass 29 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- docs/operations/backup-dr-runbook.md
+
 Not yet audited in this run (recommend a future pass):
-- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
-- heber/calendar/market.py, heber/hotstore/tables.py, and heber/schemas/tests_additional.py (`TD-068`, `TD-069`, `TD-070`, `TD-072`) post-remediation re-audit.
 
 ## Remediation Updates
 
@@ -11800,6 +11833,13 @@ Updated: 2026-02-06
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
+- `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
+- `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
+- `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
+- `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
+- `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
+- `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -11807,10 +11847,17 @@ Updated: 2026-02-06
 - Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-server wiring drift.
 - Audit Pass 22 revalidated `TD-068`, `TD-069`, `TD-070`, and `TD-072` as still open (calendar timezone handling, unused market-hours flag, Hot Store provenance-column drift, and brittle schema-count assertions).
 - Audit Pass 22 revalidated `TD-071` as resolved via `T-09` (`create_all_tables()` now supports sync clients and `create_all_tables_async()` handles awaitable execution).
+- Audit Pass 23 revalidated `TD-068` as resolved via `T-41` and focused timezone regression coverage.
+- Audit Pass 24 revalidated `TD-072` as resolved via `T-44`; schema registry tests are now growth-tolerant.
+- Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; extended-hours mode is now explicit and non-silent.
+- Audit Pass 26 revalidated `TD-070` as resolved via `T-43`; Hot Store DDL and insert mappings now include provenance/quality base fields.
+- Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
+- Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
+- Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. Finally, Hot Store DDL and schema tests still contain drift: tables omit some schema fields and schema tests are hardcoded to a count that can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -11876,20 +11923,20 @@ Severity key: High, Medium, Low
 | TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
 | TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
 | TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
-| TD-059 | Low | Scripts | ClickHouse backup script logs S3 bucket/prefix but never applies them to `clickhouse-backup`. |
-| TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
+| TD-059 | Low | Scripts | ClickHouse backup script output now reflects config-managed remote destination without misleading hardcoded S3 path. |
+| TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
 | TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
 | TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
-| TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
+| TD-065 | Low | Scripts | Filesystem security scan now fails on HIGH/CRITICAL secret/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
 | TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
-| TD-068 | Medium | Calendar | Market calendar assumes tz-aware datetimes; naive inputs will raise on `tz_convert`. |
-| TD-069 | Low | Calendar | `include_extended` flag is unused; extended hours are never applied. |
-| TD-070 | Low | Hot Store | Hot Store DDL omits columns present in Silver schemas (e.g., `quality_flags`, `lineage`). |
+| TD-068 | Medium | Calendar | Market calendar naive datetime handling was remediated in `T-41` via UTC normalization and regression tests. |
+| TD-069 | Low | Calendar | `include_extended=True` is now explicitly rejected to avoid silent no-op behavior. |
+| TD-070 | Low | Hot Store | Hot Store DDL and sync mappings now preserve base provenance/quality fields (`quality_flags`, `lineage`). |
 | TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
-| TD-072 | Low | Testing | Additional schema tests assert a fixed schema count, which will break on new schemas. |
+| TD-072 | Low | Testing | Additional schema registry tests are now growth-tolerant and verify required schema contracts. |
 | TD-073 | High | Infra | Terraform root module references local modules (`./modules/*`) that are not present. |
 | TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
 | TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
@@ -12158,12 +12205,14 @@ Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREF
 Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
 Revalidated 2026-02-06 (Pass 15): Still open. Script output advertises `S3_BUCKET/S3_PREFIX`, but backup/upload commands still rely on external clickhouse-backup config only.
 Revalidated 2026-02-06 (Pass 19): Still open. Script still only logs bucket/prefix while `create`/`upload` calls do not pass destination overrides.
+Revalidated 2026-02-06 (Pass 29): Resolved. Script removed misleading hardcoded S3 path output and now reports config-driven remote backup entry.
 
 **TD-060: Catalog backup validation can leak the test DB instance on failure.**
 Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
 Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
 Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
 Revalidated 2026-02-06 (Pass 19): Still open. Cleanup still only runs on success path; no guaranteed teardown trap exists.
+Revalidated 2026-02-06 (Pass 28): Resolved. Script now uses `EXIT` trap cleanup and preserves failure status while tearing down test instances.
 
 **TD-061: Volume init script assumes macOS tooling.**
 Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
@@ -12192,6 +12241,7 @@ Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so s
 Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
 Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but `trivy fs` invocation still omits it.
 Revalidated 2026-02-06 (Pass 19): Still open. Filesystem scan path still omits `--exit-code`, so high/critical findings will not block execution.
+Revalidated 2026-02-06 (Pass 27): Resolved. `trivy fs` now uses `--exit-code 1` with explicit failure handling.
 
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
@@ -12208,16 +12258,19 @@ Revalidated 2026-02-06 (Pass 17): Still open. `lakefs_operations`/`lakefs_operat
 Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
 Recommendation: Normalize inputs by assuming UTC when tzinfo is missing (or require tz-aware inputs and validate early with a clear error).
 Revalidated 2026-02-06 (Pass 22): Still open. Converting naive timestamps still raises `TypeError` (`tz-naive Timestamp`).
+Revalidated 2026-02-06 (Pass 23): Resolved. Calendar methods now normalize inputs to UTC and accept naive `datetime`/`pd.Timestamp` values.
 
 **TD-069: `include_extended` flag is unused.**
 Evidence: `MarketCalendar.include_extended` is stored but never used to expand the trading session to include pre/post-market. Methods always rely on the default exchange calendar schedule.
 Recommendation: Either wire in extended hours support or remove the flag to avoid misleading behavior.
 Revalidated 2026-02-06 (Pass 22): Still open. `include_extended` appears in constructor/docs state only and is not used by session logic.
+Revalidated 2026-02-06 (Pass 25): Resolved. `include_extended=True` now raises a clear `NotImplementedError`.
 
 **TD-070: Hot Store DDL omits some base columns.**
 Evidence: `heber/hotstore/tables.py` defines Hot Store tables without `quality_flags` or `lineage` columns that exist in Silver base schema. This prevents storing provenance/quality flags in Hot Store and creates schema drift.
 Recommendation: Decide which base columns must be preserved in Hot Store and add them (or document the intentional omission).
 Revalidated 2026-02-06 (Pass 22): Still open. Current DDL still omits `quality_flags` and `lineage`.
+Revalidated 2026-02-06 (Pass 26): Resolved. Hot Store DDL and sync inserts now include `quality_flags` and `lineage`.
 
 **TD-071: Hot Store DDL creation assumes async client.**
 Evidence: `create_all_tables()` is `async` and calls `await client.execute(stmt)`, but the repo’s primary ClickHouse client (`clickhouse_connect`) is synchronous. This mismatch can lead to runtime errors depending on which client is passed.
@@ -12228,6 +12281,7 @@ Revalidated 2026-02-06 (Pass 22): Resolved. `create_all_tables()` now supports s
 Evidence: `tests_additional.py` asserts `len(schemas) == 16`. As new schemas are added, the test will fail even if behavior is correct.
 Recommendation: Assert on minimum required schemas or specific known names rather than total count.
 Revalidated 2026-02-06 (Pass 22): Still open. Test continues to assert an exact schema count.
+Revalidated 2026-02-06 (Pass 24): Resolved. Tests now assert required schema contracts and registry lookup behavior.
 
 **TD-073: Terraform references modules that are missing from the repo.**
 Evidence: `infrastructure/terraform/main.tf` references `./modules/vpc`, `./modules/s3`, `./modules/rds`, etc., but there is no `modules/` directory under `infrastructure/terraform/`. Terraform will fail at init/plan.
@@ -12308,11 +12362,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-069, TD-070, TD-072, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
@@ -12361,6 +12415,13 @@ Updated: 2026-02-06
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
+- `T-30` complete (`TD-059`): clickhouse backup script output now aligns with effective destination behavior by reporting config-managed remote destination/entries instead of an unenforced hardcoded S3 path.
+- `T-31` complete (`TD-060`): catalog backup validation script now guarantees test-instance cleanup via `EXIT` trap and preserves failure status on restore/query errors.
+- `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
+- `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
+- `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
+- `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
+- `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -12370,6 +12431,13 @@ Updated: 2026-02-06
 - Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (backfill/hotloader deployment entrypoints remain non-runnable).
 - Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-exporter wiring drift.
 - Audit Pass 22 revalidated `TD-068`, `TD-069`, `TD-070`, and `TD-072` as still open; `TD-071` was confirmed resolved by the `T-09` Hot Store table-helper refactor.
+- Audit Pass 23 revalidated `TD-068` as resolved via `T-41`; `TD-069`, `TD-070`, and `TD-072` remain open.
+- Audit Pass 24 revalidated `TD-072` as resolved via `T-44`; `TD-069` and `TD-070` remain open.
+- Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; `TD-070` remains open.
+- Audit Pass 26 revalidated `TD-070` as resolved via `T-43`.
+- Audit Pass 27 revalidated `TD-065` as resolved via `T-32`.
+- Audit Pass 28 revalidated `TD-060` as resolved via `T-31`.
+- Audit Pass 29 revalidated `TD-059` as resolved via `T-30`.
 
 ## Prioritization Approach
 
@@ -13521,7 +13589,7 @@ aws s3api list-object-versions \
 
 - **Backup tool:** `clickhouse-backup`
 - **Frequency:** Daily at 02:00 UTC
-- **Storage:** S3 (`s3://heber-backups-prod/clickhouse/`)
+- **Storage:** Remote destination configured in `clickhouse-backup` config (production target: S3)
 - **Retention:** 7 days
 
 **Commands:**
@@ -18221,28 +18289,28 @@ class MarketCalendar:
 
         Args:
             exchange: Exchange code (ISO-10383), default XNYS (NYSE)
-            include_extended: Include extended hours (pre/post market).
-                             Default False since options liquidity is poor
-                             outside regular hours.
+            include_extended: Extended-hours support switch. Only regular sessions
+                             are currently supported. Setting this to True raises.
         """
+        if include_extended:
+            raise NotImplementedError(
+                "MarketCalendar does not currently support include_extended=True. "
+                "Use regular session hours or add explicit extended-session logic."
+            )
+
         self.exchange = exchange
-        self.include_extended = include_extended
         self._cal = xcals.get_calendar(exchange)
 
     def is_market_open(self, dt: datetime | None = None) -> bool:
         """Check if market is currently open.
 
         Args:
-            dt: Datetime to check (default: now)
+            dt: Datetime to check (default: now). Naive values are treated as UTC.
 
         Returns:
             True if market is open for trading
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        # Convert to pandas Timestamp for exchange-calendars
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         try:
             return self._cal.is_open_on_minute(ts)
@@ -18250,19 +18318,16 @@ class MarketCalendar:
             # Date out of calendar range
             return False
 
-    def is_trading_day(self, dt: datetime | None = None) -> bool:
+    def is_trading_day(self, dt: datetime | pd.Timestamp | None = None) -> bool:
         """Check if date is a trading day (not weekend/holiday).
 
         Args:
-            dt: Datetime to check (default: now)
+            dt: Datetime to check (default: now). Naive values are treated as UTC.
 
         Returns:
             True if the date has a trading session
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         date = ts.date()
 
         try:
@@ -18270,19 +18335,16 @@ class MarketCalendar:
         except ValueError:
             return False
 
-    def session_open(self, dt: datetime | None = None) -> datetime:
+    def session_open(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get market open time for the session containing dt.
 
         Args:
-            dt: Datetime within the session (default: now)
+            dt: Datetime within the session (default: now). Naive values are treated as UTC.
 
         Returns:
             Market open time as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         session = self._get_session(ts)
 
         if session is None:
@@ -18292,21 +18354,18 @@ class MarketCalendar:
         open_time = self._cal.session_open(session)
         return open_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def session_close(self, dt: datetime | None = None) -> datetime:
+    def session_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get market close time for the session containing dt.
 
         Handles early closes (e.g., day after Thanksgiving at 1pm).
 
         Args:
-            dt: Datetime within the session (default: now)
+            dt: Datetime within the session (default: now). Naive values are treated as UTC.
 
         Returns:
             Market close time as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         session = self._get_session(ts)
 
         if session is None:
@@ -18316,21 +18375,18 @@ class MarketCalendar:
         close_time = self._cal.session_close(session)
         return close_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def next_open(self, dt: datetime | None = None) -> datetime:
+    def next_open(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market open time.
 
         If market is currently open, returns the open time of the next session.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Next market open as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         # Find next session
         next_session = self._next_session(ts)
@@ -18338,22 +18394,19 @@ class MarketCalendar:
 
         return open_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def next_close(self, dt: datetime | None = None) -> datetime:
+    def next_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market close time.
 
         If market is currently open, returns close time of current session.
         If market is closed, returns close time of next session.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Next market close as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         if self.is_market_open(dt):
             # Return current session's close
@@ -18367,7 +18420,7 @@ class MarketCalendar:
         close_time = self._cal.session_close(next_session)
         return close_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def add_trading_hours(self, dt: datetime, hours: float) -> datetime:
+    def add_trading_hours(self, dt: datetime | pd.Timestamp, hours: float) -> datetime:
         """Add trading hours to a timestamp, skipping non-trading time.
 
         Essential for calculating watch window_end in *market time* rather
@@ -18375,14 +18428,14 @@ class MarketCalendar:
         actual trading, not calendar time.
 
         Args:
-            dt: Starting datetime
+            dt: Starting datetime. Naive values are treated as UTC.
             hours: Number of trading hours to add
 
         Returns:
             Datetime after the specified trading hours have elapsed
         """
         minutes_remaining = int(hours * 60)
-        current = pd.Timestamp(dt).tz_convert(ET)
+        current = self._to_exchange_timestamp(dt)
 
         while minutes_remaining > 0:
             # If not during trading hours, advance to next open
@@ -18416,8 +18469,8 @@ class MarketCalendar:
 
     def trading_minutes_until(
         self,
-        start: datetime,
-        end: datetime,
+        start: datetime | pd.Timestamp,
+        end: datetime | pd.Timestamp,
     ) -> int:
         """Count trading minutes between two times.
 
@@ -18425,14 +18478,14 @@ class MarketCalendar:
         how long a trade actually took in *market time*.
 
         Args:
-            start: Start datetime
-            end: End datetime
+            start: Start datetime. Naive values are treated as UTC.
+            end: End datetime. Naive values are treated as UTC.
 
         Returns:
             Number of trading minutes between start and end
         """
-        start_ts = pd.Timestamp(start).tz_convert(ET)
-        end_ts = pd.Timestamp(end).tz_convert(ET)
+        start_ts = self._to_exchange_timestamp(start)
+        end_ts = self._to_exchange_timestamp(end)
 
         if end_ts <= start_ts:
             return 0
@@ -18491,25 +18544,43 @@ class MarketCalendar:
 
         return end_ts, minutes
 
-    def seconds_until_open(self, dt: datetime | None = None) -> float:
+    def seconds_until_open(self, dt: datetime | pd.Timestamp | None = None) -> float:
         """Get seconds until market opens.
 
         Returns 0 if market is currently open.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Seconds until next market open, or 0 if already open
         """
-        if dt is None:
-            dt = datetime.now(UTC)
+        dt_utc = self._to_utc_timestamp(dt).to_pydatetime()
 
-        if self.is_market_open(dt):
+        if self.is_market_open(dt_utc):
             return 0.0
 
-        next_open = self.next_open(dt)
-        return max(0.0, (next_open - dt).total_seconds())
+        next_open = self.next_open(dt_utc)
+        return max(0.0, (next_open - dt_utc).total_seconds())
+
+    def _to_utc_timestamp(self, dt: datetime | pd.Timestamp | None) -> pd.Timestamp:
+        """Normalize supported datetime inputs to timezone-aware UTC pandas timestamp.
+
+        Naive datetime-like values are interpreted as UTC.
+        """
+        if dt is None:
+            return pd.Timestamp(datetime.now(UTC))
+        if not isinstance(dt, datetime | pd.Timestamp):
+            raise TypeError(f"MarketCalendar expects datetime or pandas.Timestamp, got {type(dt).__name__}")
+
+        ts = pd.Timestamp(dt)
+        if ts.tz is None:
+            return ts.tz_localize(UTC)
+        return ts.tz_convert(UTC)
+
+    def _to_exchange_timestamp(self, dt: datetime | pd.Timestamp | None) -> pd.Timestamp:
+        """Convert supported inputs to exchange timezone timestamp for calendar checks."""
+        return self._to_utc_timestamp(dt).tz_convert(ET)
 
     def _get_session(self, ts: pd.Timestamp) -> pd.Timestamp | None:
         """Get the trading session for a timestamp."""
@@ -26420,6 +26491,7 @@ wrappers for event-driven callers.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -26549,12 +26621,33 @@ class HotStoreSync:
             "ts_available",
             "source",
             "schema_version",
+            "quality_flags",
+            "lineage",
         ]
         if table == HotStoreTable.QUOTES:
             return common + ["bid_px", "bid_sz", "ask_px", "ask_sz", "bid_exchange", "ask_exchange"]
         if table == HotStoreTable.TRADES:
             return common + ["price", "size", "trade_id", "exchange", "tape"]
         return common + ["timeframe", "bar_start_ts", "open", "high", "low", "close", "volume", "trade_count", "vwap"]
+
+    @staticmethod
+    def _normalize_quality_flags(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [str(value)]
+
+    @staticmethod
+    def _normalize_lineage(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except TypeError:
+            return str(value)
 
     def _build_row(self, table: HotStoreTable, record: dict[str, Any]) -> tuple[Any, ...]:
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
@@ -26569,6 +26662,8 @@ class HotStoreSync:
         instrument_type = record.get("instrument_type") or payload.get("instrument_type") or "equity"
         source = record.get("source") or payload.get("source") or "unknown"
         schema_version = record.get("schema_version") or payload.get("schema_version") or "v1"
+        quality_flags = self._normalize_quality_flags(record.get("quality_flags", payload.get("quality_flags")))
+        lineage = self._normalize_lineage(record.get("lineage", payload.get("lineage")))
         event_id = record.get("event_id") or payload.get("event_id") or ""
 
         common = (
@@ -26583,6 +26678,8 @@ class HotStoreSync:
             ts_available,
             source,
             schema_version,
+            quality_flags,
+            lineage,
         )
 
         if table == HotStoreTable.QUOTES:
@@ -26895,6 +26992,8 @@ CREATE TABLE IF NOT EXISTS quotes_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Quote-specific
     bid_px Float64,
@@ -26929,6 +27028,8 @@ CREATE TABLE IF NOT EXISTS trades_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Trade-specific
     price Float64,
@@ -26962,6 +27063,8 @@ CREATE TABLE IF NOT EXISTS bars_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Bar-specific
     timeframe LowCardinality(String),
@@ -37000,12 +37103,41 @@ class TestForexCrypto:
 class TestSchemaRegistry:
     """Test schema registry."""
 
+    REQUIRED_SCHEMA_NAMES = {
+        # Market + options
+        "bars_daily",
+        "option_quotes",
+        "option_trades",
+        # Alternative
+        "congress_trades",
+        "lobbying",
+        # Fundamentals
+        "company_info",
+        "income_statement",
+        "balance_sheet",
+        "cash_flow",
+        "ratios",
+        # Macro + rates
+        "economic_indicators",
+        "interest_rate",
+        "treasury_yield",
+        # FX + crypto
+        "forex_rates",
+        "crypto_bars",
+        "crypto_quotes",
+    }
+
     def test_list_additional_schemas(self):
         schemas = list_additional_schemas()
 
-        assert len(schemas) == 16
-        assert "bars_daily" in schemas
-        assert "option_quotes" in schemas
+        # Registry can grow over time; assert required contracts rather than exact size.
+        assert set(schemas) >= self.REQUIRED_SCHEMA_NAMES
+        assert len(schemas) == len(set(schemas))
+
+    def test_required_schema_classes_are_registered(self):
+        for schema_name in self.REQUIRED_SCHEMA_NAMES:
+            schema_cls = get_schema_class(schema_name)
+            assert schema_cls is not None
 
     def test_get_schema_class(self):
         cls = get_schema_class("congress_trades")
@@ -51321,16 +51453,12 @@ fi
 
 # Run vulnerability scan
 echo "Scanning for vulnerabilities..."
-trivy image \
+if trivy image \
     --config .trivy.yaml \
     --severity CRITICAL,HIGH \
     --exit-code 1 \
     --ignore-unfixed \
-    "${IMAGE}"
-
-SCAN_RESULT=$?
-
-if [ ${SCAN_RESULT} -eq 0 ]; then
+    "${IMAGE}"; then
     echo ""
     echo "============================================"
     echo "✅ No CRITICAL or HIGH vulnerabilities found"
@@ -51346,10 +51474,22 @@ fi
 # Additional checks
 echo ""
 echo "Running filesystem scan..."
-trivy fs \
+if trivy fs \
     --scanners secret,misconfig \
     --severity HIGH,CRITICAL \
-    .
+    --exit-code 1 \
+    .; then
+    echo ""
+    echo "============================================"
+    echo "✅ No HIGH/CRITICAL filesystem secrets or misconfigurations found"
+    echo "============================================"
+else
+    echo ""
+    echo "============================================"
+    echo "❌ Filesystem security findings detected! Fix before push."
+    echo "============================================"
+    exit 1
+fi
 
 echo ""
 echo "============================================"
@@ -51366,22 +51506,22 @@ FILE: scripts/backup/clickhouse-backup.sh
 # Heber ClickHouse Backup Script per PRD §24.2
 # =============================================================================
 # Runs daily via cron at 02:00 UTC
-# Stores backups in S3 with 7-day retention
+# Remote destination is managed by clickhouse-backup config
 # =============================================================================
 
 set -euo pipefail
 
 # Configuration
 BACKUP_NAME="daily-$(date +%Y%m%d-%H%M%S)"
-S3_BUCKET="${HEBER_BACKUP_BUCKET:-heber-backups-prod}"
-S3_PREFIX="clickhouse"
 RETENTION_DAYS=7
+BACKUP_CONFIG_PATH="${CLICKHOUSE_BACKUP_CONFIG:-/etc/clickhouse-backup/config.yml}"
 
 echo "============================================"
 echo "ClickHouse Backup Starting"
 echo "============================================"
 echo "Backup Name: ${BACKUP_NAME}"
-echo "S3 Bucket:   ${S3_BUCKET}"
+echo "Backup Config: ${BACKUP_CONFIG_PATH}"
+echo "Remote Destination: managed by clickhouse-backup config"
 echo "Retention:   ${RETENTION_DAYS} days"
 echo "============================================"
 
@@ -51410,18 +51550,20 @@ clickhouse-backup delete remote --keep-backups-remote=${RETENTION_DAYS}
 # Verify backup
 echo "Verifying backup..."
 if clickhouse-backup list remote | grep -q "${BACKUP_NAME}"; then
-    echo "✅ Backup verified in S3"
+    echo "✅ Backup verified in remote storage"
 else
     echo "❌ Backup verification failed!"
     exit 1
 fi
+
+REMOTE_ENTRY=$(clickhouse-backup list remote | grep "${BACKUP_NAME}" | head -n 1)
 
 echo ""
 echo "============================================"
 echo "✅ ClickHouse Backup Complete"
 echo "============================================"
 echo "Backup: ${BACKUP_NAME}"
-echo "S3 Path: s3://${S3_BUCKET}/${S3_PREFIX}/${BACKUP_NAME}"
+echo "Remote Entry: ${REMOTE_ENTRY}"
 echo ""
 
 
@@ -51442,6 +51584,46 @@ set -euo pipefail
 DB_INSTANCE="heber-catalog-prod"
 TEST_INSTANCE="heber-catalog-backup-test"
 REGION="${AWS_REGION:-us-east-1}"
+VALIDATION_PASSED=0
+
+cleanup_test_instance() {
+    if aws rds describe-db-instances \
+        --db-instance-identifier "${TEST_INSTANCE}" \
+        --region "${REGION}" >/dev/null 2>&1; then
+        echo "Deleting test instance ${TEST_INSTANCE}..."
+        aws rds delete-db-instance \
+            --db-instance-identifier "${TEST_INSTANCE}" \
+            --skip-final-snapshot \
+            --region "${REGION}" >/dev/null 2>&1 || true
+        echo "Waiting for test instance deletion..."
+        aws rds wait db-instance-deleted \
+            --db-instance-identifier "${TEST_INSTANCE}" \
+            --region "${REGION}" >/dev/null 2>&1 || true
+    else
+        echo "No test instance cleanup needed."
+    fi
+}
+
+cleanup_on_exit() {
+    local exit_code=$?
+    set +e
+    echo ""
+    echo "Ensuring backup-validation test instance cleanup..."
+    cleanup_test_instance
+
+    if [ "${exit_code}" -ne 0 ] || [ "${VALIDATION_PASSED}" -ne 1 ]; then
+        echo ""
+        echo "============================================"
+        echo "❌ Backup Validation Failed"
+        echo "============================================"
+        echo "Status: FAILED"
+    fi
+
+    trap - EXIT
+    exit "${exit_code}"
+}
+
+trap cleanup_on_exit EXIT
 
 echo "============================================"
 echo "Catalog Backup Validation"
@@ -51468,14 +51650,7 @@ echo "Latest snapshot: ${LATEST_SNAPSHOT}"
 
 # Delete existing test instance if exists
 echo "Cleaning up any existing test instance..."
-aws rds delete-db-instance \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --skip-final-snapshot \
-    --region "${REGION}" 2>/dev/null || true
-
-aws rds wait db-instance-deleted \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --region "${REGION}" 2>/dev/null || true
+cleanup_test_instance
 
 # Restore from snapshot
 echo "Restoring from snapshot..."
@@ -51507,13 +51682,7 @@ SELECT COUNT(*) as dataset_count FROM datasets;
 SELECT COUNT(*) as partition_count FROM partitions;
 SELECT MAX(created_at) as latest_partition FROM partitions;
 "
-
-# Cleanup test instance
-echo "Cleaning up test instance..."
-aws rds delete-db-instance \
-    --db-instance-identifier "${TEST_INSTANCE}" \
-    --skip-final-snapshot \
-    --region "${REGION}"
+VALIDATION_PASSED=1
 
 echo ""
 echo "============================================"
@@ -52734,7 +52903,7 @@ import asyncio
 from dataclasses import dataclass
 
 from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
-from heber.hotstore.tables import create_all_tables
+from heber.hotstore.tables import BARS_HOT_DDL, QUOTES_HOT_DDL, TRADES_HOT_DDL, create_all_tables
 
 
 @dataclass
@@ -52802,6 +52971,48 @@ def test_hotstore_sync_write_batch_uses_unified_insert_path() -> None:
     assert len(rows) == 1
     assert "bid_px" in columns
     assert "ask_px" in columns
+    assert "quality_flags" in columns
+    assert "lineage" in columns
+    row = rows[0]
+    assert row[columns.index("quality_flags")] == []
+    assert row[columns.index("lineage")] is None
+
+
+def test_hotstore_ddl_includes_quality_and_lineage_columns() -> None:
+    assert "quality_flags Array(String)" in QUOTES_HOT_DDL
+    assert "lineage Nullable(String)" in QUOTES_HOT_DDL
+    assert "quality_flags Array(String)" in TRADES_HOT_DDL
+    assert "lineage Nullable(String)" in TRADES_HOT_DDL
+    assert "quality_flags Array(String)" in BARS_HOT_DDL
+    assert "lineage Nullable(String)" in BARS_HOT_DDL
+
+
+def test_hotstore_sync_serializes_lineage_dict() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+
+    rows_written = syncer.write_batch(
+        "quotes",
+        [
+            {
+                "event_id": "evt-1",
+                "provider": "alpaca",
+                "feed": "quotes",
+                "instrument_type": "equity",
+                "instrument_key": "equity:AAPL",
+                "symbol": "AAPL",
+                "quality_flags": ["validated", "deduped"],
+                "lineage": {"source_event_id": "raw-1"},
+                "payload": {"bid_px": 180.0, "ask_px": 180.1},
+            }
+        ],
+    )
+
+    assert rows_written == 1
+    _, rows, columns = client.client.inserts[0]
+    row = rows[0]
+    assert row[columns.index("quality_flags")] == ["validated", "deduped"]
+    assert row[columns.index("lineage")] == '{"source_event_id": "raw-1"}'
 
 
 def test_hotstore_sync_metrics_no_await_mismatch() -> None:
@@ -52929,6 +53140,63 @@ async def test_async_wait_unblocks_after_late_shutdown_signal() -> None:
     lifecycle.initiate_shutdown(reason="unit_test")
 
     await asyncio.wait_for(wait_task, timeout=0.1)
+
+
+
+================================================
+FILE: tests/test_market_calendar_timezones.py
+================================================
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+import pytest
+
+from heber.calendar.market import MarketCalendar
+
+REFERENCE_AWARE = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
+REFERENCE_NAIVE = REFERENCE_AWARE.replace(tzinfo=None)
+
+
+@pytest.fixture(scope="module")
+def calendar() -> MarketCalendar:
+    return MarketCalendar()
+
+
+def test_naive_and_aware_inputs_match_for_core_methods(calendar: MarketCalendar) -> None:
+    assert calendar.is_trading_day(REFERENCE_NAIVE) == calendar.is_trading_day(REFERENCE_AWARE)
+    assert calendar.is_market_open(REFERENCE_NAIVE) == calendar.is_market_open(REFERENCE_AWARE)
+    assert calendar.session_open(REFERENCE_NAIVE) == calendar.session_open(REFERENCE_AWARE)
+    assert calendar.session_close(REFERENCE_NAIVE) == calendar.session_close(REFERENCE_AWARE)
+    assert calendar.next_open(REFERENCE_NAIVE) == calendar.next_open(REFERENCE_AWARE)
+    assert calendar.next_close(REFERENCE_NAIVE) == calendar.next_close(REFERENCE_AWARE)
+    assert calendar.add_trading_hours(REFERENCE_NAIVE, 1.5) == calendar.add_trading_hours(REFERENCE_AWARE, 1.5)
+    assert calendar.trading_minutes_until(
+        REFERENCE_NAIVE,
+        REFERENCE_NAIVE + timedelta(hours=5),
+    ) == calendar.trading_minutes_until(
+        REFERENCE_AWARE,
+        REFERENCE_AWARE + timedelta(hours=5),
+    )
+    assert calendar.seconds_until_open(REFERENCE_NAIVE) == calendar.seconds_until_open(REFERENCE_AWARE)
+
+
+def test_pandas_timestamp_inputs_are_supported(calendar: MarketCalendar) -> None:
+    ts_naive = pd.Timestamp("2026-01-05 15:00:00")
+    ts_aware = pd.Timestamp("2026-01-05 15:00:00", tz="UTC")
+
+    assert calendar.session_open(ts_naive) == calendar.session_open(ts_aware)
+    assert calendar.session_close(ts_naive) == calendar.session_close(ts_aware)
+    assert calendar.seconds_until_open(ts_naive) == calendar.seconds_until_open(ts_aware)
+
+
+def test_invalid_datetime_input_raises_clear_error(calendar: MarketCalendar) -> None:
+    with pytest.raises(TypeError, match="datetime or pandas.Timestamp"):
+        calendar.is_market_open("2026-01-05")  # type: ignore[arg-type]
+
+
+def test_include_extended_true_is_explicitly_rejected() -> None:
+    with pytest.raises(NotImplementedError, match="include_extended=True"):
+        MarketCalendar(include_extended=True)
 
 
 
