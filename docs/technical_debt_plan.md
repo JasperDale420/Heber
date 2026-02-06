@@ -35,6 +35,7 @@ Updated: 2026-02-06
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
+- Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
 
 ## Prioritization Approach
 
@@ -504,6 +505,76 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-33: Harden Optional OpenTelemetry Tracing Path (TD-039)
+
+Priority: P1
+
+Description: `traced()` still dereferences `SpanKind` before checking OpenTelemetry availability. In environments without OTel installed, decorated functions raise `NameError` instead of safely falling back to noop tracing.
+
+Scope:
+- `heber/ops/tracing.py`
+- Regression tests covering OTel-missing fallback behavior
+
+Acceptance Criteria:
+- `@traced` functions execute without error when OpenTelemetry packages are absent.
+- Span kind resolution is guarded behind availability checks and defaults safely in noop mode.
+- Regression tests simulate OTel-unavailable import/runtime path and verify no `NameError` is raised.
+
+Estimate: 0.5 day
+
+### T-34: Make Volume Init Script Explicitly Cross-Platform (TD-061)
+
+Priority: P1
+
+Description: `init_volume.sh` always invokes macOS `dot_clean` and relies on `|| true` fallback. Replace implicit shell fallback with explicit platform/tool detection and clear logging.
+
+Scope:
+- `scripts/init_volume.sh`
+- `docs/operations/deployment.md` (or relevant setup docs if script behavior is documented)
+
+Acceptance Criteria:
+- Script checks OS/tool availability before invoking `dot_clean`.
+- Non-macOS runs emit explicit skip messaging rather than implicit command fallback behavior.
+- macOS behavior remains unchanged for AppleDouble cleanup.
+
+Estimate: 0.5 day
+
+### T-35: Refresh Labeling Strategy API References (TD-062)
+
+Priority: P1
+
+Description: Labeling documentation still references `heber/firewall/splits.py` and stale split-validation parameters that no longer match runtime code.
+
+Scope:
+- `docs/labeling_strategy.md`
+- `heber/firewall/validation.py` (for signature/source-of-truth cross-check only)
+
+Acceptance Criteria:
+- Docs reference current split-validation module path.
+- Function snippet and parameter names match the current implementation.
+- Docs include at least one concrete call example that stays in sync with current API.
+
+Estimate: 0.5 day
+
+### T-36: Align Data Contract Doc With Canonical Schema Source + Gold Paths (TD-063)
+
+Priority: P1
+
+Description: Data contract documentation still points Silver schema ownership at `heber/writer/silver.py` and uses abstract Gold path notation that drifts from concrete key-value partition paths.
+
+Scope:
+- `docs/data_contract.md`
+- `heber/schemas/silver.py`
+- `heber/sdk/client.py`
+- `heber/watch/writer.py`
+
+Acceptance Criteria:
+- Doc references `heber/schemas/silver.py` as canonical Silver Arrow schema source.
+- Gold layout section includes concrete path examples in `dataset=.../project=.../version=.../dt=...` form.
+- Contract examples align with SDK/label writer output conventions.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -614,3 +685,7 @@ Estimate: 1 day
 30. T-30 (ClickHouse backup S3 destination alignment)
 31. T-31 (Catalog backup cleanup trap)
 32. T-32 (Security scan filesystem exit enforcement)
+33. T-33 (Tracing optional-dependency hardening)
+34. T-34 (Cross-platform volume init script)
+35. T-35 (Labeling strategy doc refresh)
+36. T-36 (Data contract doc alignment)

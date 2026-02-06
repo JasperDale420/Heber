@@ -227,10 +227,16 @@ Audit Pass 15 (2026-02-06, files reviewed directly):
 - scripts/backup/validate-catalog-backup.sh
 - scripts/security-scan.sh
 
+Audit Pass 16 (2026-02-06, files reviewed directly):
+- heber/ops/tracing.py
+- scripts/init_volume.sh
+- docs/labeling_strategy.md
+- docs/data_contract.md
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/tracing.py (`TD-039`) re-audit after lifecycle/logging follow-up changes.
-- scripts/init_volume.sh (`TD-061`) cross-platform behavior re-audit.
-- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs drift re-audit.
+- heber/versioning/__init__.py (`TD-066`, `TD-067`) follow-up re-audit after namespace/metrics fixes.
+- k8s/base/hpa/*.yaml and k8s/base/deployments/*.yaml (`TD-075`, `TD-076`) runtime-conformance re-audit.
+- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) follow-up re-audit after observability fixes.
 
 ## Remediation Updates
 
@@ -334,7 +340,7 @@ Severity key: High, Medium, Low
 | TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
-| TD-063 | Low | Docs | Data contract claims a Gold layout that doesn’t match the label writer’s on-disk layout. |
+| TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
 | TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
 | TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
@@ -520,6 +526,7 @@ Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetim
 **TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
 Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
+Revalidated 2026-02-06 (Pass 16): Still open. `traced()` still initializes `span_kind` with `SpanKind` before the OpenTelemetry availability guard.
 
 **TD-040: Async shutdown wait can hang if shutdown is signaled early.**
 Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
@@ -612,16 +619,19 @@ Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle valida
 Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
 
 **TD-061: Volume init script assumes macOS tooling.**
-Evidence: `scripts/init_volume.sh` calls `dot_clean` unconditionally, which is macOS-only. On Linux, the script fails even if directory creation succeeded.
+Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
 Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
+Revalidated 2026-02-06 (Pass 16): Still open. Script still runs `dot_clean` unconditionally and relies on `|| true` rather than explicit platform detection.
 
 **TD-062: Labeling docs reference outdated API location/signature.**
 Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
 Recommendation: Update the docs to match the current module path and function signature.
+Revalidated 2026-02-06 (Pass 16): Still open. The snippet still points to `heber/firewall/splits.py` with stale parameter names.
 
-**TD-063: Data contract Gold layout doesn’t match label writer layout.**
-Evidence: `docs/data_contract.md` states Gold is partitioned as `dataset/project/version/dt`, but label writes use `dataset={name}/type=label/version={version}` without `project` or `dt`.
-Recommendation: Align docs with actual Gold write layout, or update the writer to match the documented layout.
+**TD-063: Data contract docs drift from current schema sources and concrete Gold partition path conventions.**
+Evidence: `docs/data_contract.md` still lists `heber/writer/silver.py` as the Silver schema source, while canonical Arrow schemas are now defined in `heber/schemas/silver.py`. It also documents Gold partitioning in abstract (`dataset/project/version/dt`) without the key-value path convention used by writers (`dataset=.../project=.../version=.../dt=...`), which creates avoidable interpretation drift.
+Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silver.py` as the canonical schema source and show concrete key-value Gold path examples that match `write_gold()` / label-writer output.
+Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
 Evidence: `docs/UW_endpoints.md` summary says “Complete (11)” while the tables above list many more endpoints as ✅. This makes the summary unreliable.
