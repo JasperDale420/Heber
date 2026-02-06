@@ -252,10 +252,15 @@ Audit Pass 17 (2026-02-06, files reviewed directly):
 - heber/hotstore/sync.py
 - heber/backfill/__init__.py
 
+Audit Pass 18 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- heber/ops/reliability.py
+- docs/UW_endpoints.md
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) follow-up re-audit after observability fixes.
-- docs/UW_endpoints.md (`TD-064`) docs-consistency re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-fix runtime conformance re-audit.
+- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-fix re-audit.
+- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-fix re-audit.
 
 ## Remediation Updates
 
@@ -287,6 +292,7 @@ Updated: 2026-02-06
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
+- Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 
 ## Executive Summary
 
@@ -564,11 +570,13 @@ Update 2026-02-06: Remediated in `T-25` by reporting timeout status in metrics/l
 Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
 Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
 Revalidated 2026-02-06 (Pass 13): Still open. `configure_logging()` continues to ignore `log_level` and uses `PrintLoggerFactory` without level filtering.
+Revalidated 2026-02-06 (Pass 18): Still open. `configure_logging()` still accepts but does not consume `log_level` in logger/filter configuration.
 
 **TD-043: Bloom filter deduplication has no TTL/rotation.**
 Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
 Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
 Revalidated 2026-02-06 (Pass 13): Still open. `EventDeduplicator` does not rotate/reset Bloom state and has no default persistent backing store implementation.
+Revalidated 2026-02-06 (Pass 18): Still open. Reliability module still has unbounded in-memory Bloom lifetime with hard-drop behavior in no-backing-store mode.
 
 **TD-044: In-memory DLQ is non-persistent.**
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
@@ -656,8 +664,9 @@ Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silve
 Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
-Evidence: `docs/UW_endpoints.md` summary says “Complete (11)” while the tables above list many more endpoints as ✅. This makes the summary unreliable.
-Recommendation: Recompute totals automatically or remove summary counts to avoid drift.
+Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
+Recommendation: Derive summary counts from the table data (or remove manual totals/status buckets) to avoid recurrent drift.
+Revalidated 2026-02-06 (Pass 18): Still open. Summary totals and status buckets still conflict with table-level status rows.
 
 **TD-065: Security scan doesn’t fail on filesystem findings.**
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.

@@ -37,6 +37,7 @@ Updated: 2026-02-06
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086`/`TD-087` for non-running k8s worker entrypoints.
+- Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging filter wiring, dedupe rotation policy, UW endpoint summary drift).
 
 ## Prioritization Approach
 
@@ -612,6 +613,23 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-39: Reconcile UW Endpoint Tracker Summary With Table Statuses (TD-064)
+
+Priority: P1
+
+Description: `docs/UW_endpoints.md` summary totals and status buckets are manually maintained and now diverge from endpoint table rows, reducing trust in integration coverage tracking.
+
+Scope:
+- `docs/UW_endpoints.md`
+- Optional helper script/check that derives summary counts from table status cells
+
+Acceptance Criteria:
+- Summary counts match table row statuses exactly.
+- “In Progress” and “Not Started” sections only include endpoints actually marked that way in tables.
+- Add a lightweight repeatable check or generation note to prevent future drift.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -728,3 +746,4 @@ Estimate: 1 day
 36. T-36 (Data contract doc alignment)
 37. T-37 (Backfill deployment entrypoint fix)
 38. T-38 (Hotloader runtime entrypoint)
+39. T-39 (UW endpoint tracker summary reconciliation)
