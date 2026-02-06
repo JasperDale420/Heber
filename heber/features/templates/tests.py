@@ -180,6 +180,44 @@ class TestFlowFeatures:
 
         assert ts_available.iloc[1] == base + pd.Timedelta(hours=2)
 
+    def test_flow_rolling_window_is_time_based(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        base = pd.Timestamp("2024-01-01 09:30", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL", "AAPL"],
+                "ts_event": [base, base + pd.Timedelta(hours=25)],
+                "premium": [100.0, 40.0],
+                "put_call": ["C", "C"],
+                "alert_type": ["SWEEP", "SWEEP"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+
+        # Second point should exclude the first event (>24h apart).
+        second = features.sort_values("ts_event").iloc[-1]
+        assert second["total_premium_24h"] == 40.0
+
+    def test_flow_normalizes_string_timestamps_to_utc(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL", "AAPL"],
+                # 09:30 ET and 15:00 UTC should normalize to the same UTC instant.
+                "ts_event": ["2024-01-01T09:30:00-05:00", "2024-01-01T15:00:00Z"],
+                "premium": [100.0, 50.0],
+                "put_call": ["C", "P"],
+                "alert_type": ["SWEEP", "BLOCK"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+
+        assert str(features["ts_event"].dtype).startswith("datetime64[ns, UTC]")
+
 
 class TestMicrostructureFeatures:
     """Test microstructure feature computation."""

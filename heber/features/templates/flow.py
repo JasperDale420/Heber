@@ -42,9 +42,14 @@ def compute_flow_features(
     result_frames = []
 
     for underlying, group in flow_df.groupby("underlying"):
-        df = group.sort_values("ts_event").copy()
-        ts_available = _derive_ts_available(df, lookback_hours)
+        df = group.copy()
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+        df = df.dropna(subset=["ts_event"]).sort_values("ts_event")
+
+        if df.empty:
+            continue
+
+        ts_available = _derive_ts_available(df, lookback_hours)
         df = df.set_index("ts_event")
 
         # Premium aggregates

@@ -235,6 +235,7 @@ Updated: 2026-02-05
 - `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
 - `TD-035` and `TD-036` addressed via `T-21`: alert labels pipeline now normalizes underlying symbols to canonical instrument keys and reads intraday bars from `bars` using `timeframe=5Min` filtering instead of querying a non-existent `bars_5min` dataset.
 - `TD-037` addressed via `T-22`: alert-label intraday windows now use minute-based durations (5-minute bars) for `ts_available` and SPY-relative return horizons instead of day-based offsets.
+- `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 
 ## Executive Summary
 
@@ -489,6 +490,7 @@ Update 2026-02-06: Remediated in `T-22` by deriving intraday windows from 5-minu
 **TD-038: Flow feature rolling windows may be incorrect.**
 Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
 Recommendation: Convert `ts_event` to datetime and use DataFrame-level rolling with `on=ts_event`, or set a DatetimeIndex for correct time-window rolling.
+Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetimes before indexing/rolling and adding regression tests that enforce true 24-hour time-window behavior.
 
 **TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.

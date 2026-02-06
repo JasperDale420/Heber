@@ -30,6 +30,7 @@ Updated: 2026-02-05
 - `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
 - `T-21` complete (`TD-035`, `TD-036`): alert labels pipeline now canonicalizes underlying instrument keys for bar joins and loads intraday data from `bars` with `5Min` timeframe filtering (with daily fallback), replacing the stale `bars_5min` read path.
 - `T-22` complete (`TD-037`): alert-label intraday windows now use minute-based 5-minute bar durations for `ts_available` and SPY-relative windows instead of day-based offsets.
+- `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 
 ## Prioritization Approach
 
@@ -320,6 +321,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-23: Harden Flow Feature Time-Window Rolling (TD-038)
+
+Priority: P1
+
+Description: Flow-feature rolling windows needed stronger guarantees around timestamp normalization and time-window correctness to avoid subtle drift with string/invalid timestamps.
+
+Scope:
+- `heber/features/templates/flow.py`
+- `heber/features/templates/tests.py`
+
+Acceptance Criteria:
+- `compute_flow_features` normalizes `ts_event` to UTC datetimes before sorting/indexing.
+- Invalid `ts_event` rows are dropped before rolling-window calculations.
+- Rolling premium/sweep aggregates are verified to be true time-windowed (not row-count based).
+- Regression tests verify UTC timestamp normalization and 24-hour boundary behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -420,3 +439,4 @@ Estimate: 1 day
 20. T-20 (Stream naming convention unification)
 21. T-21 (Alert label bar key + intraday dataset wiring)
 22. T-22 (Intraday label window unit correction)
+23. T-23 (Flow feature time-window hardening)

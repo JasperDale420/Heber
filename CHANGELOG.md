@@ -241,6 +241,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Corrected intraday horizon window math to use 5-minute bar durations instead of day-based offsets
   - `ts_available` and SPY-relative return windows now share the same minute-based intraday horizon timing
   - Added regression tests for intraday/daily window duration behavior (`tests/test_alert_label_intraday_windows.py`)
+- **Flow Feature Rolling Window Hardening** (`heber/features/templates/flow.py`)
+  - Normalized flow `ts_event` values to UTC and dropped invalid timestamps before time-window rolling
+  - Added regression checks that 24-hour aggregates are time-windowed (not row-count based)
+  - Added regression checks for UTC normalization of string timestamps in flow feature outputs (`heber/features/templates/tests.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
