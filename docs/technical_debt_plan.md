@@ -32,6 +32,7 @@ Updated: 2026-02-05
 - `T-22` complete (`TD-037`): alert-label intraday windows now use minute-based 5-minute bar durations for `ts_available` and SPY-relative windows instead of day-based offsets.
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
+- `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
 
 ## Prioritization Approach
 
@@ -357,6 +358,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-25: Report Shutdown Timeouts Correctly (TD-041)
+
+Priority: P1
+
+Description: Shutdown drains that exceed timeout were logged as timeouts but still emitted success metrics and success return codes. Align return status + metrics with actual timeout behavior.
+
+Scope:
+- `heber/ops/lifecycle.py`
+- `tests/test_lifecycle_shutdown_timeout.py`
+
+Acceptance Criteria:
+- `execute_shutdown()` increments `shutdown_completed{status=\"timeout\"}` and returns `False` when drain timeout occurs.
+- `async_execute_shutdown()` matches the same timeout behavior.
+- Success path still emits `status=\"success\"` and returns `True`.
+- Regression tests cover sync timeout, async timeout, and non-timeout success behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -459,3 +478,4 @@ Estimate: 1 day
 22. T-22 (Intraday label window unit correction)
 23. T-23 (Flow feature time-window hardening)
 24. T-24 (Lifecycle async shutdown wait hang fix)
+25. T-25 (Lifecycle shutdown timeout status fix)

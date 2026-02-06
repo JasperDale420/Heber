@@ -237,6 +237,7 @@ Updated: 2026-02-05
 - `TD-037` addressed via `T-22`: alert-label intraday windows now use minute-based durations (5-minute bars) for `ts_available` and SPY-relative return horizons instead of day-based offsets.
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
+- `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 
 ## Executive Summary
 
@@ -505,6 +506,7 @@ Update 2026-02-06: Remediated in `T-24` by returning immediately when shutdown i
 **TD-041: Shutdown timeouts are logged but still reported as success.**
 Evidence: `execute_shutdown()` logs `drain_timeout` when the deadline passes but still increments `shutdown_completed` with status `success` and returns True.
 Recommendation: Increment `shutdown_completed` with `status="timeout"` and return False (or a distinct status) when draining exceeds the configured deadline.
+Update 2026-02-06: Remediated in `T-25` by reporting timeout status in metrics/logging and returning `False` when in-flight draining exceeds the shutdown deadline.
 
 **TD-042: `configure_logging()` accepts a log level but does not apply it.**
 Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.

@@ -281,8 +281,9 @@ class LifecycleManager:
 
             drain_duration = time.time() - start_time
             drain_duration_seconds.set(drain_duration)
+            timed_out = self._in_flight_count > 0
 
-            if self._in_flight_count > 0:
+            if timed_out:
                 logger.warning(
                     "drain_timeout",
                     remaining=self._in_flight_count,
@@ -309,13 +310,15 @@ class LifecycleManager:
             with self._lock:
                 self._state = LifecycleState.STOPPED
 
-            shutdown_completed.labels(status="success").inc()
+            status = "timeout" if timed_out else "success"
+            shutdown_completed.labels(status=status).inc()
             logger.info(
                 "shutdown_complete",
                 service=self.service_name,
+                status=status,
                 duration=time.time() - start_time,
             )
-            return True
+            return not timed_out
 
         except Exception as e:
             shutdown_completed.labels(status="error").inc()
@@ -338,6 +341,14 @@ class LifecycleManager:
 
             drain_duration = time.time() - start_time
             drain_duration_seconds.set(drain_duration)
+            timed_out = self._in_flight_count > 0
+
+            if timed_out:
+                logger.warning(
+                    "drain_timeout",
+                    remaining=self._in_flight_count,
+                    duration=drain_duration,
+                )
 
             if self._callbacks.on_drain_complete:
                 self._callbacks.on_drain_complete()
@@ -357,8 +368,15 @@ class LifecycleManager:
             with self._lock:
                 self._state = LifecycleState.STOPPED
 
-            shutdown_completed.labels(status="success").inc()
-            return True
+            status = "timeout" if timed_out else "success"
+            shutdown_completed.labels(status=status).inc()
+            logger.info(
+                "shutdown_complete",
+                service=self.service_name,
+                status=status,
+                duration=time.time() - start_time,
+            )
+            return not timed_out
 
         except Exception as e:
             shutdown_completed.labels(status="error").inc()

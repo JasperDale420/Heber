@@ -249,6 +249,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `async_wait_for_shutdown` now returns immediately when shutdown is already signaled
   - Added race-safe async shutdown-event initialization to prevent hung waits
   - Added regression coverage for pre-signaled and late-signaled async shutdown waits (`tests/test_lifecycle_shutdown_wait.py`)
+- **Lifecycle Shutdown Timeout Status Fix** (`heber/ops/lifecycle.py`)
+  - Shutdown timeout paths now report `status="timeout"` instead of `status="success"` in lifecycle metrics
+  - Sync/async shutdown methods now return `False` when drain timeout occurs and `True` only on successful drain
+  - Added regression coverage for sync timeout, async timeout, and successful drain behavior (`tests/test_lifecycle_shutdown_timeout.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
