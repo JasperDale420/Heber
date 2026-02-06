@@ -132,6 +132,28 @@ class BackfillJob:
             symbols=definition.symbols,
         )
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "BackfillJob":
+        started_at = payload.get("started_at")
+        completed_at = payload.get("completed_at")
+
+        return cls(
+            backfill_id=payload["backfill_id"],
+            provider=payload["provider"],
+            feed=payload["feed"],
+            date_range_start=date.fromisoformat(payload["date_range_start"]),
+            date_range_end=date.fromisoformat(payload["date_range_end"]),
+            ts_available_policy=TsAvailablePolicy(payload["ts_available_policy"]),
+            started_at=datetime.fromisoformat(started_at) if started_at else None,
+            completed_at=datetime.fromisoformat(completed_at) if completed_at else None,
+            rows_written=int(payload.get("rows_written", 0)),
+            files_written=int(payload.get("files_written", 0)),
+            status=BackfillStatus(payload.get("status", BackfillStatus.PENDING.value)),
+            error_message=payload.get("error_message"),
+            progress_dates_completed=list(payload.get("progress_dates_completed", [])),
+            symbols=payload.get("symbols"),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "backfill_id": self.backfill_id,
@@ -146,6 +168,7 @@ class BackfillJob:
             "files_written": self.files_written,
             "status": self.status.value,
             "error_message": self.error_message,
+            "progress_dates_completed": list(self.progress_dates_completed),
             "symbols": self.symbols,
         }
 
@@ -444,16 +467,48 @@ class BackfillCoordinator:
         | None = None,
     ):
         self.storage_root = storage_root
+        self._storage_root_path = Path(storage_root)
+        self._state_dir = self._storage_root_path / "backfill" / "jobs"
         self.data_fetcher = data_fetcher
         self.writer_factory = writer_factory
         self.catalog_metadata_updater = catalog_metadata_updater
         self._jobs: dict[str, BackfillJob] = {}
         self._active_job: str | None = None
+        self._load_jobs()
+
+    def _job_state_path(self, backfill_id: str) -> Path:
+        return self._state_dir / f"{backfill_id}.json"
+
+    def _persist_job(self, job: BackfillJob) -> None:
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        self._job_state_path(job.backfill_id).write_text(
+            json.dumps(job.to_dict(), default=str, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    def _load_jobs(self) -> None:
+        if not self._state_dir.exists():
+            return
+
+        for path in sorted(self._state_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                job = BackfillJob.from_dict(payload)
+                if job.status == BackfillStatus.RUNNING:
+                    # A running job from a prior process should be resumed explicitly.
+                    job.status = BackfillStatus.PENDING
+                    if not job.error_message:
+                        job.error_message = "Recovered after restart; resume required."
+                    self._persist_job(job)
+                self._jobs[job.backfill_id] = job
+            except Exception as exc:
+                logger.warning("backfill_state_load_failed", path=str(path), error=str(exc))
 
     def create_job(self, definition: BackfillJobDefinition) -> BackfillJob:
         """Create a new backfill job."""
         job = BackfillJob.from_definition(definition)
         self._jobs[job.backfill_id] = job
+        self._persist_job(job)
 
         backfill_jobs_total.labels(
             provider=job.provider,
@@ -483,7 +538,8 @@ class BackfillCoordinator:
         jobs = list(self._jobs.values())
         if status:
             jobs = [j for j in jobs if j.status == status]
-        return sorted(jobs, key=lambda j: j.started_at or datetime.min, reverse=True)
+        oldest = datetime.min.replace(tzinfo=UTC)
+        return sorted(jobs, key=lambda j: j.started_at or oldest, reverse=True)
 
     def _generate_chunks(
         self,
@@ -634,7 +690,10 @@ class BackfillCoordinator:
         # Start job
         job.status = BackfillStatus.RUNNING
         job.started_at = datetime.now(UTC)
+        job.completed_at = None
+        job.error_message = None
         self._active_job = backfill_id
+        self._persist_job(job)
         backfill_active_jobs.inc()
 
         writer = self.writer_factory(
@@ -669,6 +728,7 @@ class BackfillCoordinator:
                 job.rows_written += rows
                 job.files_written += 1
                 job.progress_dates_completed.append(chunk.chunk_date.isoformat())
+                self._persist_job(job)
 
                 progress = (i + 1) / total_chunks * 100
                 backfill_progress_percent.labels(backfill_id=backfill_id).set(progress)
@@ -706,9 +766,11 @@ class BackfillCoordinator:
                 files=job.files_written,
                 duration_seconds=duration,
             )
+            self._persist_job(job)
 
         except Exception as e:
             job.status = BackfillStatus.FAILED
+            job.completed_at = datetime.now(UTC)
             job.error_message = str(e)
 
             backfill_jobs_total.labels(
@@ -723,6 +785,7 @@ class BackfillCoordinator:
                 error=str(e),
                 exc_info=True,
             )
+            self._persist_job(job)
             raise
 
         finally:
@@ -740,6 +803,7 @@ class BackfillCoordinator:
         if job.status == BackfillStatus.RUNNING:
             job.status = BackfillStatus.CANCELLED
             job.completed_at = datetime.now(UTC)
+            self._persist_job(job)
 
         return job
 

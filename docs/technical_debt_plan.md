@@ -55,6 +55,7 @@ Updated: 2026-02-06
 - `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
 - `T-46` complete (`TD-079`): Terraform environment modules now accept `aws_region` variables, backend blocks are partial, and per-env backend configuration moved to `backend.hcl` without hardcoded region keys.
 - `T-47` complete (`TD-080`, `TD-082`): backfill chunk writes now produce Bronze raw output, update catalog dataset/coverage metadata, and fail fast when `pyarrow` is unavailable.
+- `T-48` complete (`TD-081`): backfill jobs now persist to disk with progress checkpoints and are reloaded on coordinator startup for restart-safe resume behavior.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -84,6 +85,7 @@ Updated: 2026-02-06
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
 - Audit Pass 41 revalidated `TD-079` as resolved via `T-46`.
 - Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`.
+- Audit Pass 43 revalidated `TD-081` as resolved via `T-48`.
 
 ## Prioritization Approach
 
@@ -820,6 +822,25 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-48: Persist Backfill Jobs and Resume Progress After Restart (TD-081)
+
+Priority: P1
+
+Description: Backfill coordinator state was process-local only. Persist job state and per-date progress so restarts do not drop active/incomplete backfills.
+
+Scope:
+- `heber/backfill/__init__.py`
+- `tests/test_backfill_job_persistence.py`
+
+Acceptance Criteria:
+- Backfill jobs are persisted on create/start/progress/complete/failure/cancel transitions.
+- Coordinator startup reloads persisted jobs from disk.
+- Persisted progress drives `_generate_chunks()` so resumed runs skip completed dates.
+- Stale persisted `running` jobs recover to a resume-safe status on startup.
+- Regression tests verify reload, failure + restart resume, and stale-running recovery semantics.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -945,3 +966,4 @@ Estimate: 1 day
 45. T-45 (lakeFS operation metrics coverage)
 46. T-46 (Terraform environment region/backend parameterization)
 47. T-47 (Backfill Bronze/catalog write reliability)
+48. T-48 (Backfill job persistence and resume)

@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
 - Expanded technical debt audit (pass 41: Terraform environment region/backend parameterization re-audit)
 - Expanded technical debt audit (pass 42: backfill Bronze/catalog write reliability remediation re-audit)
+- Expanded technical debt audit (pass 43: backfill job persistence and resume remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -308,6 +309,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Backfill coordinator now performs catalog dataset + coverage metadata updates after successful chunk writes (best effort when catalog is unavailable)
   - Missing `pyarrow` in backfill parquet writes now raises a runtime failure instead of silently skipping writes
   - Added regression coverage for Bronze+Silver writes, pyarrow failure handling, and catalog metadata updater invocation (`tests/test_backfill_writer_reliability.py`)
+- **Backfill Job Persistence and Resume** (`heber/backfill/__init__.py`)
+  - Backfill job state now persists under storage-root job state files and reloads automatically when coordinator starts
+  - Progress checkpoints are persisted during run, enabling resumed backfills to skip already completed dates after restart
+  - Persisted stale `running` jobs are recovered into resume-safe status instead of remaining blocked forever
+  - Added regression coverage for persisted job reload, fail+restart resume, and stale-running recovery (`tests/test_backfill_job_persistence.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

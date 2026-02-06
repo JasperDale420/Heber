@@ -391,8 +391,12 @@ Audit Pass 42 (2026-02-06, files reviewed directly):
 - heber/backfill/__init__.py
 - tests/test_backfill_writer_reliability.py
 
+Audit Pass 43 (2026-02-06, files reviewed directly):
+- heber/backfill/__init__.py
+- tests/test_backfill_job_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/backfill/__init__.py (`TD-081`) in-memory job persistence and resume semantics re-audit.
+- heber/backfill/__init__.py (`TD-083`) gap-detector storage-layout assumptions re-audit.
 
 ## Remediation Updates
 
@@ -438,6 +442,7 @@ Updated: 2026-02-06
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
+- `TD-081` addressed via `T-48`: backfill jobs and chunk progress now persist to disk and reload on startup, including resume-friendly recovery of stale `running` state after process restarts.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -471,6 +476,7 @@ Updated: 2026-02-06
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
 - Audit Pass 41 revalidated `TD-079` as resolved via `T-46`; Terraform environment region/backend settings now support override without editing `main.tf`.
 - Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`; backfill now writes Bronze + catalog coverage metadata and no longer silently succeeds without `pyarrow`.
+- Audit Pass 43 revalidated `TD-081` as resolved via `T-48`; backfill job state now survives restarts and resumes from persisted progress.
 
 ## Executive Summary
 
@@ -964,6 +970,8 @@ Revalidated 2026-02-06 (Pass 42): Resolved. Backfill chunks now produce Bronze a
 **TD-081: Backfill jobs are in-memory only.**
 Evidence: `BackfillCoordinator` stores jobs in a process-local dict. On restart, in-flight jobs and progress are lost; the API is described as in-memory only in docs.
 Recommendation: Persist backfill state in the catalog DB or Redis and add resume/retry support.
+Update 2026-02-06: Remediated in `T-48` by persisting backfill jobs/progress to disk under the storage root and loading them at coordinator startup.
+Revalidated 2026-02-06 (Pass 43): Resolved. Restarted coordinators now recover prior jobs and continue incomplete chunks.
 
 **TD-082: Missing `pyarrow` silently drops backfill writes.**
 Evidence: `_write_parquet()` catches `ImportError` and logs `pyarrow_not_available` but does not raise, so the backfill job continues and reports progress even though nothing was written.
@@ -1010,7 +1018,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
