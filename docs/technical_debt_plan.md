@@ -56,6 +56,7 @@ Updated: 2026-02-06
 - `T-46` complete (`TD-079`): Terraform environment modules now accept `aws_region` variables, backend blocks are partial, and per-env backend configuration moved to `backend.hcl` without hardcoded region keys.
 - `T-47` complete (`TD-080`, `TD-082`): backfill chunk writes now produce Bronze raw output, update catalog dataset/coverage metadata, and fail fast when `pyarrow` is unavailable.
 - `T-48` complete (`TD-081`): backfill jobs now persist to disk with progress checkpoints and are reloaded on coordinator startup for restart-safe resume behavior.
+- `T-49` complete (`TD-083`): gap detection now scans both legacy and canonical Silver partition layouts for `dt=*` coverage, preventing false full-gap reports when storage layout differs.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -86,6 +87,7 @@ Updated: 2026-02-06
 - Audit Pass 41 revalidated `TD-079` as resolved via `T-46`.
 - Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`.
 - Audit Pass 43 revalidated `TD-081` as resolved via `T-48`.
+- Audit Pass 44 revalidated `TD-083` as resolved via `T-49`.
 
 ## Prioritization Approach
 
@@ -841,6 +843,23 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-49: Align Backfill Gap Detection With Silver Layout Variants (TD-083)
+
+Priority: P1
+
+Description: `GapDetector` only scanned legacy `silver/{provider}_{feed}/dt=*` paths, while canonical Silver writes use `silver/feed={feed}/instrument_type=.../dt=*`. This caused false positives for missing coverage.
+
+Scope:
+- `heber/backfill/__init__.py`
+- `tests/test_backfill_gap_detector_layout.py`
+
+Acceptance Criteria:
+- Gap detection discovers `dt=*` partitions under both legacy provider-feed and canonical feed/instrument-type Silver trees.
+- Date coverage is unioned across discovered layouts for the same provider/feed query.
+- Regression tests cover legacy-only, canonical-only, and mixed-layout scenarios.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -967,3 +986,4 @@ Estimate: 1 day
 46. T-46 (Terraform environment region/backend parameterization)
 47. T-47 (Backfill Bronze/catalog write reliability)
 48. T-48 (Backfill job persistence and resume)
+49. T-49 (Backfill gap-detection layout conformance)

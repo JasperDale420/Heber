@@ -191,6 +191,29 @@ class GapDetector:
     def __init__(self, storage_root: str = DEFAULT_STORAGE_ROOT):
         self.storage_root = Path(storage_root)
 
+    def _candidate_silver_roots(self, provider: str, feed: str) -> list[Path]:
+        silver_root = self.storage_root / "silver"
+        return [
+            silver_root / f"{provider}_{feed}",
+            silver_root / f"feed={feed}",
+        ]
+
+    def _collect_existing_dates(self, provider: str, feed: str) -> set[date]:
+        existing_dates: set[date] = set()
+
+        for root in self._candidate_silver_roots(provider, feed):
+            if not root.exists():
+                continue
+
+            for dt_dir in root.glob("**/dt=*"):
+                try:
+                    dt_str = dt_dir.name.replace("dt=", "")
+                    existing_dates.add(date.fromisoformat(dt_str))
+                except ValueError:
+                    continue
+
+        return existing_dates
+
     def detect_gaps(
         self,
         provider: str,
@@ -202,20 +225,9 @@ class GapDetector:
 
         Returns list of (gap_start, gap_end) date ranges.
         """
-        silver_path = self.storage_root / "silver" / f"{provider}_{feed}"
-
-        if not silver_path.exists():
-            # No data at all - entire range is a gap
+        existing_dates = self._collect_existing_dates(provider, feed)
+        if not existing_dates:
             return [(start_date, end_date)]
-
-        # Find existing dates
-        existing_dates = set()
-        for dt_dir in silver_path.glob("dt=*"):
-            try:
-                dt_str = dt_dir.name.replace("dt=", "")
-                existing_dates.add(date.fromisoformat(dt_str))
-            except ValueError:
-                continue
 
         # Find gaps
         gaps = []
