@@ -86,6 +86,7 @@ from heber.ops.metrics import (
     set_hotstore_lag,
     set_service_info,
     start_metrics_server,
+    start_metrics_server_from_env,
 )
 from heber.ops.reliability import (
     BloomFilter,
@@ -129,6 +130,7 @@ __all__ = [
     "log_retry",
     # Metrics (§12.5.1-12.5.3)
     "start_metrics_server",
+    "start_metrics_server_from_env",
     "set_service_info",
     "record_event_received",
     "record_event_processed",

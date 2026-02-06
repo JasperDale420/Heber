@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from heber.backfill import create_backfill_router
+from heber.ops.metrics import start_metrics_server_from_env
 
 
 def create_app() -> FastAPI:
@@ -52,8 +53,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, run_server: Callable[..., Any] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    run_server: Callable[..., Any] | None = None,
+    metrics_server_starter: Callable[..., int | None] = start_metrics_server_from_env,
+) -> int:
     """CLI entrypoint for `python -m heber.backfill`."""
+    metrics_server_starter(default_port=9090)
     args = _build_parser().parse_args(argv)
     runner = run_server
     if runner is None:

@@ -3,6 +3,7 @@
 See PRD Section 11.7 for API contract.
 """
 
+import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from heber.catalog.db import Base
 from heber.catalog.service import CatalogService
 from heber.config import settings
+from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +36,9 @@ def _should_auto_create_catalog_tables() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    if os.getenv("HEBER_METRICS_PORT"):
+        start_metrics_server_from_env(default_port=9090)
+
     if _should_auto_create_catalog_tables():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

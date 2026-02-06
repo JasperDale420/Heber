@@ -47,6 +47,7 @@ Updated: 2026-02-06
 - `T-37` complete (`TD-086`): backfill package now provides an executable `python -m heber.backfill` service entrypoint with API/probe routes.
 - `T-38` complete (`TD-087`): hotloader facade now provides a real service CLI (`python -m heber.writer.hotstore`) with continuous sync-loop and one-shot mode.
 - `T-39` complete (`TD-064`): UW endpoint tracker summary now reports table-derived status counts and no longer contains stale manual buckets.
+- `T-40` complete (`TD-088`): scrape-annotated services now start metrics exporters via `start_metrics_server_from_env`, and regression tests validate deployment-to-entrypoint metrics alignment.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
@@ -76,6 +77,7 @@ Updated: 2026-02-06
 - Audit Pass 36 revalidated `TD-039` as resolved via `T-33`.
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
+- Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
 
 ## Prioritization Approach
 

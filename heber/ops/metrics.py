@@ -6,6 +6,8 @@ and anti-leakage latency monitoring.
 Naming convention: heber_<service>_<metric_name>{<labels>}
 """
 
+import os
+
 import structlog
 from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
 
@@ -323,6 +325,32 @@ def start_metrics_server(port: int = METRICS_PORT) -> None:
     except Exception as e:
         logger.error("metrics_server_failed", port=port, error=str(e))
         raise
+
+
+def start_metrics_server_from_env(
+    env_var: str = "HEBER_METRICS_PORT",
+    default_port: int | None = None,
+) -> int | None:
+    """Start metrics server from environment configuration.
+
+    Returns:
+        The bound port when started, otherwise None.
+    """
+    raw_port = os.getenv(env_var)
+    if raw_port:
+        try:
+            port = int(raw_port)
+        except ValueError:
+            logger.warning("metrics_server_skipped", reason="invalid_port", env_var=env_var, value=raw_port)
+            return None
+    elif default_port is not None:
+        port = default_port
+    else:
+        logger.debug("metrics_server_skipped", reason="env_not_set", env_var=env_var)
+        return None
+
+    start_metrics_server(port)
+    return port
 
 
 def set_service_info(

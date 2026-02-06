@@ -28,6 +28,7 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_API_PORT` | `8080` | Catalog API port |
 | `HEBER_CATALOG_URL` | `http://localhost:8085/api/v1` | SDK Catalog API base URL |
 | `HEBER_ENVIRONMENT` | `dev` | `dev`, `staging`, or `prod` |
+| `HEBER_METRICS_PORT` | `9090` | Prometheus exporter port for service entrypoints |
 
 ## Writer Tuning
 

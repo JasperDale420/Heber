@@ -24,6 +24,7 @@ def test_backfill_main_invokes_server_runner_with_app() -> None:
     exit_code = backfill_main.main(
         ["--host", "127.0.0.1", "--port", "8099", "--log-level", "warning"],
         run_server=fake_run,
+        metrics_server_starter=lambda **_kwargs: None,
     )
 
     assert exit_code == 0
@@ -76,6 +77,7 @@ def test_hotloader_once_mode_runs_sync_and_exits() -> None:
             "/tmp/silver",
         ],
         syncer_factory=fake_factory,
+        metrics_server_starter=lambda **_kwargs: None,
     )
 
     assert exit_code == 0
@@ -115,6 +117,7 @@ def test_hotloader_service_mode_invokes_sync_loop() -> None:
     exit_code = hotstore_main.main(
         ["--datasets", "quotes"],
         syncer_factory=fake_factory,
+        metrics_server_starter=lambda **_kwargs: None,
     )
 
     assert exit_code == 0

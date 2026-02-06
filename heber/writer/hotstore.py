@@ -24,6 +24,7 @@ from heber.hotstore.sync import (
     SyncState,
     create_hot_store_syncer,
 )
+from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -102,8 +103,10 @@ async def _run_hotloader(
 def main(
     argv: list[str] | None = None,
     syncer_factory: Callable[..., HotStoreSync] = create_hot_store_syncer,
+    metrics_server_starter: Callable[..., int | None] = start_metrics_server_from_env,
 ) -> int:
     """CLI entrypoint for `python -m heber.writer.hotstore`."""
+    metrics_server_starter(default_port=9090)
     args = _build_parser().parse_args(argv)
     datasets = _parse_datasets(args.datasets)
     if not datasets:

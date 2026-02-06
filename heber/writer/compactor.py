@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -187,6 +188,7 @@ class Compactor:
 
 async def main():
     """Entry point for the compactor."""
+    start_metrics_server_from_env(default_port=9090)
     compactor = Compactor()
 
     loop = asyncio.get_event_loop()

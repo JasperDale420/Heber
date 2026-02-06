@@ -365,8 +365,17 @@ Audit Pass 38 (2026-02-06, files reviewed directly):
 - tests/test_worker_entrypoint_services.py
 - tests/test_runtime_entrypoints.py
 
+Audit Pass 39 (2026-02-06, files reviewed directly):
+- heber/ops/metrics.py
+- heber/catalog/api.py
+- heber/writer/consumer.py
+- heber/writer/compactor.py
+- heber/writer/hotstore.py
+- heber/backfill/__main__.py
+- tests/test_metrics_exporter_alignment.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
+- heber/versioning/__init__.py (`TD-067`) operation-metrics coverage re-audit.
 
 ## Remediation Updates
 
@@ -402,6 +411,7 @@ Updated: 2026-02-06
 - `TD-039` addressed via `T-33`: tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, and a regression test confirms `@traced` execution works with tracing disabled.
 - `TD-061` addressed via `T-34`: `init_volume.sh` now checks host OS and `dot_clean` availability explicitly before cleanup, emits explicit skip reasons on unsupported hosts, and avoids implicit `|| true` fallback semantics.
 - `TD-086` and `TD-087` addressed via `T-37`/`T-38`: backfill now has an executable `python -m heber.backfill` service module, and hotloader now exposes a real long-running CLI runtime in `python -m heber.writer.hotstore` with one-shot sync mode for controlled runs/tests.
+- `TD-088` addressed via `T-40`: all deployments marked for Prometheus scraping are now backed by entrypoints that call `start_metrics_server_from_env`, with static conformance tests tying scrape annotations/ports to metrics-enabled runtimes.
 - `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
 - `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
@@ -437,6 +447,7 @@ Updated: 2026-02-06
 - Audit Pass 36 revalidated `TD-039` as resolved via `T-33`; tracing decorators now remain safe without OpenTelemetry.
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
+- Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
 
 ## Executive Summary
 
@@ -958,6 +969,8 @@ Revalidated 2026-02-06 (Pass 38): Resolved. `python -m heber.writer.hotstore` no
 **TD-088: Prometheus scrape annotations/ports are not backed by running exporters.**
 Evidence: Deployments annotate `prometheus.io/scrape: "true"` with `prometheus.io/port: "9090"` (catalog/consumer/writer and other workers), but runtime entrypoints do not call `start_metrics_server()` from `heber.ops.metrics`. Catalog runs only Uvicorn on 8080, and worker modules run non-HTTP loops without starting a Prometheus HTTP endpoint.
 Recommendation: Start a metrics server on the advertised port in each service entrypoint (or remove/adjust scrape annotations/ports to match reality), and add an integration check that verifies `/metrics` reachability per deployment.
+Update 2026-02-06: Remediated in `T-40` by wiring `start_metrics_server_from_env` into catalog lifecycle and worker entrypoints (`consumer`, `compactor`, `hotloader`, `backfill`) that are annotated for scrape.
+Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map to metrics-enabled runtime entrypoints, with regression tests guarding deployment-to-entrypoint alignment.
 
 ## Suggested Remediation Plan
 

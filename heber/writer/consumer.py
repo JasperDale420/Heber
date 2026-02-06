@@ -14,6 +14,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.metrics import start_metrics_server_from_env
 from heber.writer.bronze import BronzeWriter
 from heber.writer.silver import SilverWriter
 
@@ -440,6 +441,7 @@ class EventConsumer:
 
 async def main():
     """Entry point for the consumer."""
+    start_metrics_server_from_env(default_port=9090)
     consumer = EventConsumer()
 
     # Handle signals
