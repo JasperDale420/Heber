@@ -9,10 +9,12 @@ Provides:
 """
 
 import asyncio
+import gzip
+import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -253,10 +255,12 @@ class BackfillWriter:
         storage_root: str = DEFAULT_STORAGE_ROOT,
         ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT,
         custom_delay_seconds: int | None = None,
+        parquet_writer: Callable[[list[dict[str, Any]], Path], None] | None = None,
     ):
         self.storage_root = Path(storage_root)
         self.ts_available_policy = ts_available_policy
         self.custom_delay_seconds = custom_delay_seconds
+        self._parquet_writer = parquet_writer
 
     def set_ts_available(
         self,
@@ -310,6 +314,9 @@ class BackfillWriter:
             record["backfill_id"] = job.backfill_id
             processed.append(record)
 
+        # Preserve raw payloads in Bronze alongside Silver backfill writes.
+        self._write_bronze(job, processed, chunk_date)
+
         # Write to temp partition per PRD §13.6
         temp_path = self._get_temp_path(job, chunk_date)
         self._write_parquet(processed, temp_path)
@@ -334,6 +341,66 @@ class BackfillWriter:
             / f"_backfill_{job.backfill_id}"
         )
 
+    def _get_bronze_partition_path(
+        self,
+        job: BackfillJob,
+        partition_date: date,
+        hour: int,
+    ) -> Path:
+        return (
+            self.storage_root
+            / "bronze"
+            / f"provider={job.provider}"
+            / f"feed={job.feed}"
+            / f"dt={partition_date.isoformat()}"
+            / f"hour={hour:02d}"
+        )
+
+    @staticmethod
+    def _parse_ts_event(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            normalized = value
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return None
+
+    def _write_bronze(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+    ) -> int:
+        partitions: dict[tuple[date, int], list[dict[str, Any]]] = {}
+        for record in records:
+            ts_event = self._parse_ts_event(record.get("ts_event"))
+            if ts_event is None:
+                partition_date = chunk_date
+                hour = 0
+            else:
+                ts_utc = ts_event.astimezone(UTC)
+                partition_date = ts_utc.date()
+                hour = ts_utc.hour
+            partitions.setdefault((partition_date, hour), []).append(record)
+
+        files_written = 0
+        for (partition_date, hour), partition_records in partitions.items():
+            partition_path = self._get_bronze_partition_path(job, partition_date, hour)
+            partition_path.mkdir(parents=True, exist_ok=True)
+            output_file = partition_path / f"events-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}.jsonl.gz"
+            with gzip.open(output_file, "wt", encoding="utf-8") as handle:
+                for record in partition_records:
+                    handle.write(json.dumps(record, default=str) + "\n")
+            files_written += 1
+
+        return files_written
+
     def _write_parquet(
         self,
         records: list[dict[str, Any]],
@@ -343,14 +410,21 @@ class BackfillWriter:
         path.mkdir(parents=True, exist_ok=True)
         output_file = path / f"{uuid.uuid4()}.parquet"
 
+        if self._parquet_writer is not None:
+            self._parquet_writer(records, output_file)
+            return
+
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
 
             table = pa.Table.from_pylist(records)
             pq.write_table(table, str(output_file))
-        except ImportError:
-            logger.warning("pyarrow_not_available")
+        except ImportError as exc:
+            logger.error("pyarrow_not_available", path=str(output_file))
+            raise RuntimeError(
+                "Backfill write failed because pyarrow is not installed. Install pyarrow to enable parquet writes."
+            ) from exc
 
 
 class BackfillCoordinator:
@@ -365,9 +439,14 @@ class BackfillCoordinator:
         self,
         storage_root: str = DEFAULT_STORAGE_ROOT,
         data_fetcher: Callable | None = None,
+        writer_factory: Callable[..., BackfillWriter] = BackfillWriter,
+        catalog_metadata_updater: Callable[[BackfillJob, list[dict[str, Any]], date, int], Awaitable[None]]
+        | None = None,
     ):
         self.storage_root = storage_root
         self.data_fetcher = data_fetcher
+        self.writer_factory = writer_factory
+        self.catalog_metadata_updater = catalog_metadata_updater
         self._jobs: dict[str, BackfillJob] = {}
         self._active_job: str | None = None
 
@@ -428,6 +507,117 @@ class BackfillCoordinator:
 
         return chunks
 
+    @staticmethod
+    def _coverage_dataset_names(job: BackfillJob) -> tuple[str, str]:
+        return f"{job.provider}_{job.feed}", f"{job.provider}_{job.feed}_raw"
+
+    @staticmethod
+    def _coverage_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in records:
+            instrument_key = str(record.get("instrument_key") or record.get("symbol") or "*")
+            counts[instrument_key] = counts.get(instrument_key, 0) + 1
+        return counts
+
+    async def _default_catalog_metadata_updater(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+        rows_written: int,
+    ) -> None:
+        if rows_written <= 0:
+            return
+
+        try:
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+            from heber.catalog.service import CatalogService
+            from heber.config import settings
+
+            engine = create_async_engine(settings.postgres_url, echo=False)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            silver_dataset, bronze_dataset = self._coverage_dataset_names(job)
+            coverage_counts = self._coverage_counts(records)
+
+            async with session_factory() as session:
+                service = CatalogService(session)
+
+                silver = await service.get_dataset(silver_dataset)
+                if silver is None:
+                    await service.create_dataset(
+                        name=silver_dataset,
+                        layer="silver",
+                        owner="shared",
+                        storage_root=str(Path(self.storage_root) / "silver"),
+                        description=f"Backfilled Silver dataset for {job.provider}/{job.feed}",
+                        path_template=f"silver/{job.provider}_{job.feed}/dt={{date}}",
+                        partition_cols=["dt"],
+                    )
+
+                bronze = await service.get_dataset(bronze_dataset)
+                if bronze is None:
+                    await service.create_dataset(
+                        name=bronze_dataset,
+                        layer="bronze",
+                        owner="shared",
+                        storage_root=str(Path(self.storage_root) / "bronze"),
+                        description=f"Backfilled Bronze dataset for {job.provider}/{job.feed}",
+                        path_template=f"bronze/provider={job.provider}/feed={job.feed}/dt={{date}}/hour={{hour}}",
+                        partition_cols=["dt", "hour"],
+                    )
+
+                dt_start = datetime.combine(chunk_date, time.min, tzinfo=UTC)
+                dt_end = datetime.combine(chunk_date, time.max, tzinfo=UTC)
+                for instrument_key, count in coverage_counts.items():
+                    await service.update_coverage(
+                        dataset_name=silver_dataset,
+                        instrument_key=instrument_key,
+                        dt_min=dt_start,
+                        dt_max=dt_end,
+                        approx_row_count=count,
+                    )
+                    await service.update_coverage(
+                        dataset_name=bronze_dataset,
+                        instrument_key=instrument_key,
+                        dt_min=dt_start,
+                        dt_max=dt_end,
+                        approx_row_count=count,
+                    )
+
+            await engine.dispose()
+            logger.info(
+                "backfill_catalog_metadata_updated",
+                backfill_id=job.backfill_id,
+                date=chunk_date.isoformat(),
+                rows=rows_written,
+                coverage_keys=len(coverage_counts),
+            )
+        except Exception as exc:
+            # Catalog metadata updates are best effort; data writes must still complete.
+            logger.warning(
+                "backfill_catalog_metadata_update_failed",
+                backfill_id=job.backfill_id,
+                date=chunk_date.isoformat(),
+                error=str(exc),
+            )
+
+    async def _update_catalog_metadata(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+        rows_written: int,
+    ) -> None:
+        if rows_written <= 0:
+            return
+
+        if self.catalog_metadata_updater is not None:
+            await self.catalog_metadata_updater(job, records, chunk_date, rows_written)
+            return
+
+        await self._default_catalog_metadata_updater(job, records, chunk_date, rows_written)
+
     async def run_job(
         self,
         backfill_id: str,
@@ -447,7 +637,7 @@ class BackfillCoordinator:
         self._active_job = backfill_id
         backfill_active_jobs.inc()
 
-        writer = BackfillWriter(
+        writer = self.writer_factory(
             storage_root=self.storage_root,
             ts_available_policy=job.ts_available_policy,
             custom_delay_seconds=definition.custom_delay_seconds,
@@ -473,6 +663,7 @@ class BackfillCoordinator:
                 await asyncio.sleep(1.0 / definition.rate_limit_per_second)
 
                 rows = writer.write_batch(job, records, chunk.chunk_date)
+                await self._update_catalog_metadata(job, records, chunk.chunk_date, rows)
 
                 # Update progress
                 job.rows_written += rows

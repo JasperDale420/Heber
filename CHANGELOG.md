@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
 - Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
 - Expanded technical debt audit (pass 41: Terraform environment region/backend parameterization re-audit)
+- Expanded technical debt audit (pass 42: backfill Bronze/catalog write reliability remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -302,6 +303,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Replaced hardcoded environment module region literals with `var.aws_region` in `dev`/`staging`/`prod` Terraform entrypoints
   - Converted environment S3 backend blocks to partial configuration and moved backend defaults into per-environment `backend.hcl` files
   - Removed hardcoded backend region keys and added regression checks for overrideable Terraform env wiring (`tests/test_terraform_environment_config.py`)
+- **Backfill Bronze/Catalog Write Reliability** (`heber/backfill/__init__.py`)
+  - Backfill writes now persist raw records into Bronze partitioned paths in addition to Silver temp parquet outputs
+  - Backfill coordinator now performs catalog dataset + coverage metadata updates after successful chunk writes (best effort when catalog is unavailable)
+  - Missing `pyarrow` in backfill parquet writes now raises a runtime failure instead of silently skipping writes
+  - Added regression coverage for Bronze+Silver writes, pyarrow failure handling, and catalog metadata updater invocation (`tests/test_backfill_writer_reliability.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

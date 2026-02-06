@@ -387,8 +387,12 @@ Audit Pass 41 (2026-02-06, files reviewed directly):
 - infrastructure/terraform/environments/prod/backend.hcl
 - tests/test_terraform_environment_config.py
 
+Audit Pass 42 (2026-02-06, files reviewed directly):
+- heber/backfill/__init__.py
+- tests/test_backfill_writer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/backfill/writer.py (`TD-080`, `TD-082`) Bronze/catalog update + missing-pyarrow failure-path re-audit.
+- heber/backfill/__init__.py (`TD-081`) in-memory job persistence and resume semantics re-audit.
 
 ## Remediation Updates
 
@@ -433,6 +437,7 @@ Updated: 2026-02-06
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
+- `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -465,6 +470,7 @@ Updated: 2026-02-06
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
 - Audit Pass 41 revalidated `TD-079` as resolved via `T-46`; Terraform environment region/backend settings now support override without editing `main.tf`.
+- Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`; backfill now writes Bronze + catalog coverage metadata and no longer silently succeeds without `pyarrow`.
 
 ## Executive Summary
 
@@ -952,6 +958,8 @@ Revalidated 2026-02-06 (Pass 41): Resolved. Environment configs now support regi
 **TD-080: Backfill does not update Bronze or Catalog metadata.**
 Evidence: `BackfillWriter.write_batch()` writes only to Silver temp partitions and logs that compactor will merge. It does not write Bronze, nor does it update catalog coverage or schema metadata.
 Recommendation: Add an explicit Bronze write path (or document why it’s skipped), and update catalog coverage once backfill completes.
+Update 2026-02-06: Remediated in `T-47` by adding Bronze raw-write output in `BackfillWriter.write_batch()` and catalog metadata/coverage updates during chunk processing in `BackfillCoordinator`.
+Revalidated 2026-02-06 (Pass 42): Resolved. Backfill chunks now produce Bronze artifacts and trigger catalog dataset/coverage updates on successful writes.
 
 **TD-081: Backfill jobs are in-memory only.**
 Evidence: `BackfillCoordinator` stores jobs in a process-local dict. On restart, in-flight jobs and progress are lost; the API is described as in-memory only in docs.
@@ -960,6 +968,8 @@ Recommendation: Persist backfill state in the catalog DB or Redis and add resume
 **TD-082: Missing `pyarrow` silently drops backfill writes.**
 Evidence: `_write_parquet()` catches `ImportError` and logs `pyarrow_not_available` but does not raise, so the backfill job continues and reports progress even though nothing was written.
 Recommendation: Fail fast when `pyarrow` is missing, or track a failed write and mark the job as failed.
+Update 2026-02-06: Remediated in `T-47` by changing `_write_parquet()` to raise a runtime failure when `pyarrow` is unavailable.
+Revalidated 2026-02-06 (Pass 42): Resolved. Missing `pyarrow` now fails the write path instead of silently reporting success.
 
 **TD-083: Gap detection assumes a storage layout that may not exist.**
 Evidence: `GapDetector.detect_gaps()` reads `silver/{provider}_{feed}/dt=*`, while other components use feed/instrument_type/dt or dataset-based layouts. This can incorrectly report full gaps.
@@ -1000,11 +1010,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

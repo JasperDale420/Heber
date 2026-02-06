@@ -54,6 +54,7 @@ Updated: 2026-02-06
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
 - `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
 - `T-46` complete (`TD-079`): Terraform environment modules now accept `aws_region` variables, backend blocks are partial, and per-env backend configuration moved to `backend.hcl` without hardcoded region keys.
+- `T-47` complete (`TD-080`, `TD-082`): backfill chunk writes now produce Bronze raw output, update catalog dataset/coverage metadata, and fail fast when `pyarrow` is unavailable.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -82,6 +83,7 @@ Updated: 2026-02-06
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
 - Audit Pass 41 revalidated `TD-079` as resolved via `T-46`.
+- Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`.
 
 ## Prioritization Approach
 
@@ -800,6 +802,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-47: Harden Backfill Bronze/Catalog Writes and PyArrow Failure Path (TD-080, TD-082)
+
+Priority: P1
+
+Description: Backfill writes previously only produced Silver temp files and silently continued when `pyarrow` was missing. Add Bronze persistence + catalog coverage updates and fail-fast semantics for missing parquet dependencies.
+
+Scope:
+- `heber/backfill/__init__.py`
+- `tests/test_backfill_writer_reliability.py`
+
+Acceptance Criteria:
+- `BackfillWriter.write_batch()` writes raw records to Bronze partitions in addition to Silver temp outputs.
+- Backfill coordinator updates catalog dataset entries and coverage metadata for completed chunks (best effort when catalog DB is unavailable).
+- Missing `pyarrow` now raises a runtime error so backfill jobs fail instead of silently reporting progress.
+- Regression tests cover Bronze+Silver write behavior, missing-`pyarrow` failure behavior, and catalog metadata updater invocation.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -924,3 +944,4 @@ Estimate: 1 day
 44. T-44 (Additional schema test stability)
 45. T-45 (lakeFS operation metrics coverage)
 46. T-46 (Terraform environment region/backend parameterization)
+47. T-47 (Backfill Bronze/catalog write reliability)
