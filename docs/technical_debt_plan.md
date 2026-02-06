@@ -29,6 +29,7 @@ Updated: 2026-02-05
 - `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
 - `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
 - `T-21` complete (`TD-035`, `TD-036`): alert labels pipeline now canonicalizes underlying instrument keys for bar joins and loads intraday data from `bars` with `5Min` timeframe filtering (with daily fallback), replacing the stale `bars_5min` read path.
+- `T-22` complete (`TD-037`): alert-label intraday windows now use minute-based 5-minute bar durations for `ts_available` and SPY-relative windows instead of day-based offsets.
 
 ## Prioritization Approach
 
@@ -301,6 +302,24 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-22: Correct Intraday Label Window Units (TD-037)
+
+Priority: P1
+
+Description: Intraday label calculations previously converted bar counts into day offsets, causing `ts_available` and SPY-relative windows to drift by up to days. Use bar-duration-aware intraday windows.
+
+Scope:
+- `heber/features/templates/alert_labels.py`
+- `tests/test_alert_label_intraday_windows.py`
+
+Acceptance Criteria:
+- Intraday horizon window length is computed in minutes from the configured 5-minute bar count.
+- `ts_available` for intraday labels advances by the correct intraday duration (e.g., 24 bars -> 2 hours).
+- SPY-relative return end-time uses the same intraday duration for intraday labels.
+- Regression tests verify intraday and daily horizon window behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -400,3 +419,4 @@ Estimate: 1 day
 19. T-19 (Watch consumer retry + DLQ policy)
 20. T-20 (Stream naming convention unification)
 21. T-21 (Alert label bar key + intraday dataset wiring)
+22. T-22 (Intraday label window unit correction)

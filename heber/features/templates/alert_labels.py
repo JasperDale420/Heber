@@ -469,7 +469,7 @@ def _process_single_alert(
 
     # Compute beta-neutral return
     raw_return = outcome["mfe"] if outcome["hit_tp_first"] == 1 else outcome["mae"]
-    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config.max_window_bars, raw_return)
+    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config, raw_return)
 
     return {
         "alert_id": alert_id,
@@ -492,7 +492,7 @@ def _process_single_alert(
         "beta_neutral_return": beta_neutral_return,
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
-        "ts_available": ts_alert + timedelta(days=max(1, config.max_window_bars // 24)),
+        "ts_available": ts_alert + _window_delta_for_config(config),
     }
 
 
@@ -520,10 +520,18 @@ def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> 
     return float(vix_before.iloc[-1]["close"])
 
 
+def _window_delta_for_config(config: BarrierConfig) -> timedelta:
+    """Compute forward label window duration for a horizon config."""
+    if config.horizon == AlertHorizon.INTRADAY:
+        # Intraday config assumes 5-minute bars (see BarrierConfig.intraday()).
+        return timedelta(minutes=config.max_window_bars * 5)
+    return timedelta(days=config.max_window_bars)
+
+
 def _compute_spy_relative_return(
     spy_bars: pd.DataFrame | None,
     ts_alert: pd.Timestamp,
-    max_window_bars: int,
+    config: BarrierConfig,
     raw_return: float,
 ) -> float | None:
     """Compute SPY-relative beta-neutral return."""
@@ -531,7 +539,7 @@ def _compute_spy_relative_return(
         return None
 
     spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
-    end_time = ts_alert + timedelta(days=max_window_bars)
+    end_time = ts_alert + _window_delta_for_config(config)
     spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
 
     if not spy_at_alert or not spy_at_end or spy_at_alert <= 0:

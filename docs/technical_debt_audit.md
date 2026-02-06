@@ -234,6 +234,7 @@ Updated: 2026-02-05
 - `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
 - `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
 - `TD-035` and `TD-036` addressed via `T-21`: alert labels pipeline now normalizes underlying symbols to canonical instrument keys and reads intraday bars from `bars` using `timeframe=5Min` filtering instead of querying a non-existent `bars_5min` dataset.
+- `TD-037` addressed via `T-22`: alert-label intraday windows now use minute-based durations (5-minute bars) for `ts_available` and SPY-relative return horizons instead of day-based offsets.
 
 ## Executive Summary
 
@@ -483,6 +484,7 @@ Update 2026-02-06: Remediated in `T-21` by switching intraday loads to `dataset=
 **TD-037: Intraday label windows are computed in days, not minutes.**
 Evidence: In `alert_labels.py`, `ts_available` uses `timedelta(days=max_window_bars // 24)` and SPY-relative returns use `timedelta(days=max_window_bars)`. For intraday horizons (24 five-minute bars), this becomes 1–24 days instead of ~2 hours.
 Recommendation: Track bar duration explicitly and compute windows in minutes/hours for intraday labels.
+Update 2026-02-06: Remediated in `T-22` by deriving intraday windows from 5-minute bar counts for both `ts_available` and SPY-relative end-time calculations.
 
 **TD-038: Flow feature rolling windows may be incorrect.**
 Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
