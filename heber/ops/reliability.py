@@ -22,6 +22,7 @@ logger = structlog.get_logger(__name__)
 # Default Bloom filter constants (per PRD §12.2)
 BLOOM_FILTER_SIZE = 10_000_000  # 10M bits default
 BLOOM_FILTER_HASHES = 7
+BLOOM_ROTATION_SECONDS = 3600.0
 
 
 class BloomFilter:
@@ -91,10 +92,39 @@ class EventDeduplicator:
         self,
         bloom_size: int = BLOOM_FILTER_SIZE,
         backing_store: Any = None,
+        bloom_rotation_seconds: float = BLOOM_ROTATION_SECONDS,
+        now_fn: Callable[[], float] | None = None,
     ):
         self.bloom = BloomFilter(size=bloom_size)
+        self._previous_bloom: BloomFilter | None = None
         self.backing_store = backing_store  # Redis client or similar
-        self._stats = {"checked": 0, "duplicates": 0}
+        self.bloom_rotation_seconds = bloom_rotation_seconds
+        self._now_fn = now_fn or time.time
+        self._last_rotation_epoch = self._now_fn()
+        self._stats = {"checked": 0, "duplicates": 0, "rotations": 0}
+
+    def _rotate_if_needed(self) -> None:
+        """Rotate Bloom filters to keep false-positive risk bounded over time."""
+        if self.bloom_rotation_seconds <= 0:
+            return
+
+        now = self._now_fn()
+        elapsed = now - self._last_rotation_epoch
+        if elapsed < self.bloom_rotation_seconds:
+            return
+
+        windows_elapsed = int(elapsed // self.bloom_rotation_seconds)
+        self._previous_bloom = self.bloom if windows_elapsed == 1 else None
+        self.bloom = BloomFilter(size=self.bloom.size, num_hashes=self.bloom.num_hashes)
+        self._last_rotation_epoch = now
+        self._stats["rotations"] += 1
+
+        logger.info(
+            "dedupe_bloom_rotated",
+            rotations=self._stats["rotations"],
+            windows_elapsed=windows_elapsed,
+            rotation_seconds=self.bloom_rotation_seconds,
+        )
 
     def check_and_register(self, event_id: str) -> DeduplicationResult:
         """Check if event is duplicate, register if new.
@@ -103,9 +133,14 @@ class EventDeduplicator:
             DeduplicationResult with is_duplicate flag
         """
         self._stats["checked"] += 1
+        self._rotate_if_needed()
 
         # Fast path: Bloom filter check
-        if self.bloom.contains(event_id):
+        bloom_match = self.bloom.contains(event_id)
+        if not bloom_match and self._previous_bloom is not None:
+            bloom_match = self._previous_bloom.contains(event_id)
+
+        if bloom_match:
             # Possible duplicate - verify with backing store if available
             if self.backing_store:
                 if self._backing_contains(event_id):
@@ -146,6 +181,9 @@ class EventDeduplicator:
         return {
             **self._stats,
             "bloom_count": self.bloom.count,
+            "previous_bloom_count": self._previous_bloom.count if self._previous_bloom else 0,
+            "bloom_rotation_seconds": self.bloom_rotation_seconds,
+            "last_rotation_epoch": self._last_rotation_epoch,
         }
 
 

@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 30: labeling/data-contract docs alignment re-audit)
 - Expanded technical debt audit (pass 31: UW endpoint summary reconciliation re-audit)
 - Expanded technical debt audit (pass 32: log-level filtering remediation re-audit)
+- Expanded technical debt audit (pass 33: dedupe Bloom-rotation remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -277,6 +278,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `configure_logging(log_level=...)` now validates level names and fails fast on invalid values
   - Logging level now applies to both stdlib root logger configuration and structlog filtering wrappers
   - Added regression tests for INFO/DEBUG behavior in JSON and console render modes (`tests/test_logging_level_filtering.py`)
+- **Dedupe Bloom Rotation Bounding** (`heber/ops/reliability.py`)
+  - `EventDeduplicator` now rotates Bloom filters on a configured interval to bound long-lived false-positive buildup
+  - Duplicate checks now include active and previous Bloom windows, so recent duplicates are still caught across a rotation boundary
+  - Added regression tests covering in-window duplicate detection and post-rotation aging behavior (`tests/test_event_deduplicator_rotation.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
