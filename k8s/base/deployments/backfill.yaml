@@ -59,15 +59,19 @@ spec:
               cpu: 2000m
               memory: 4Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: http
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.backfill' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.backfill' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:

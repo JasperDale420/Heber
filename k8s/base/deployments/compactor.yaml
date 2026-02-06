@@ -57,15 +57,19 @@ spec:
               cpu: 4000m
               memory: 8Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.compactor' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 30
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.compactor' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 10
             periodSeconds: 10
           securityContext:

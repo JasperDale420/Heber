@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 32: log-level filtering remediation re-audit)
 - Expanded technical debt audit (pass 33: dedupe Bloom-rotation remediation re-audit)
 - Expanded technical debt audit (pass 34: lakeFS namespace configurability remediation re-audit)
+- Expanded technical debt audit (pass 35: k8s HPA/probe conformance remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -287,6 +288,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added configurable storage namespace resolution via `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`
   - Repository creation now uses config-driven namespace resolution instead of hardcoded `s3://heber-lakehouse/{repo}`
   - Added regression tests for namespace resolution and repository create-path wiring (`tests/test_lakefs_namespace_config.py`)
+- **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
+  - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
+  - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
+  - Added regression checks for HPA metric type and worker probe mode (`tests/test_k8s_hpa_probe_conformance.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 

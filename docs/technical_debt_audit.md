@@ -339,6 +339,17 @@ Audit Pass 34 (2026-02-06, files reviewed directly):
 - tests/test_lakefs_namespace_config.py
 - docs/configuration.md
 
+Audit Pass 35 (2026-02-06, files reviewed directly):
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- tests/test_k8s_hpa_probe_conformance.py
+
 Not yet audited in this run (recommend a future pass):
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
@@ -374,6 +385,7 @@ Updated: 2026-02-06
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
 - `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
+- `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
 - `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
@@ -404,6 +416,7 @@ Updated: 2026-02-06
 - Audit Pass 32 revalidated `TD-042` as resolved via `T-26`; log-level filtering is now enforced and covered by regression tests.
 - Audit Pass 33 revalidated `TD-043` as resolved via `T-27`; dedupe Bloom state is now bounded by rotation with regression coverage.
 - Audit Pass 34 revalidated `TD-066` as resolved via `T-28`; lakeFS repository creation now uses configurable storage namespace resolution.
+- Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`; HPA metric sources and worker probe types now match runtime behavior.
 
 ## Executive Summary
 
@@ -856,6 +869,8 @@ Recommendation: Export the needed metrics or change the HPA configuration to CPU
 Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
 Revalidated 2026-02-06 (Pass 17): Still open. Metrics module still does not define `heber_writer_pending_batch_rows` or `heber_catalog_request_latency_p99_seconds`.
 Revalidated 2026-02-06 (Pass 21): Still open. HPA manifests continue to reference unavailable writer/catalog custom metrics.
+Update 2026-02-06: Remediated in `T-29` by replacing custom pod-metric targets with built-in CPU/memory resource metrics across catalog/consumer/writer HPAs and adding regression checks for metric-type drift.
+Revalidated 2026-02-06 (Pass 35): Resolved. HPA manifests no longer depend on missing custom metrics.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
@@ -863,6 +878,8 @@ Recommendation: Add health endpoints or update probes to use a TCP or exec check
 Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
 Revalidated 2026-02-06 (Pass 17): Still open. Catalog exposes `/health`, but worker modules still do not run HTTP health servers on probed ports.
 Revalidated 2026-02-06 (Pass 21): Still open. Consumer/writer deployments still probe HTTP health endpoints on a metrics port with no health server process.
+Update 2026-02-06: Remediated in `T-29` by switching worker liveness/readiness probes to exec checks that validate the expected process entrypoint in `/proc/1/cmdline`, with regression coverage to prevent HTTP-probe drift.
+Revalidated 2026-02-06 (Pass 35): Resolved. Worker manifests no longer probe non-existent HTTP health endpoints.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.

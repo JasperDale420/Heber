@@ -55,15 +55,19 @@ spec:
               cpu: 2000m
               memory: 2Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.hotstore' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.hotstore' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:

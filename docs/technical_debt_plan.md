@@ -36,6 +36,7 @@ Updated: 2026-02-06
 - `T-26` complete (`TD-042`): logging setup now validates and applies `log_level` to both stdlib and structlog filtering, with regression tests for INFO/DEBUG behavior across JSON and console renderers.
 - `T-27` complete (`TD-043`): dedupe now uses rolling Bloom-filter rotation with bounded windows and emits rotation stats, with regression tests that cover duplicate behavior before and after rotation boundaries.
 - `T-28` complete (`TD-066`): lakeFS repository creation now resolves storage namespace from configurable base/template settings (`LAKEFS_STORAGE_NAMESPACE_BASE` / `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`) with regression tests.
+- `T-29` complete (`TD-075`, `TD-076`): HPA manifests now use CPU/memory resource metrics and worker probes now use exec checks matching real process entrypoints, with k8s manifest regression tests.
 - `T-30` complete (`TD-059`): clickhouse backup script output now aligns with effective destination behavior by reporting config-managed remote destination/entries instead of an unenforced hardcoded S3 path.
 - `T-31` complete (`TD-060`): catalog backup validation script now guarantees test-instance cleanup via `EXIT` trap and preserves failure status on restore/query errors.
 - `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
@@ -67,6 +68,7 @@ Updated: 2026-02-06
 - Audit Pass 32 revalidated `TD-042` as resolved via `T-26`.
 - Audit Pass 33 revalidated `TD-043` as resolved via `T-27`.
 - Audit Pass 34 revalidated `TD-066` as resolved via `T-28`.
+- Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`.
 
 ## Prioritization Approach
 
