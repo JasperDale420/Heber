@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
-from heber.hotstore.tables import create_all_tables
+from heber.hotstore.tables import BARS_HOT_DDL, QUOTES_HOT_DDL, TRADES_HOT_DDL, create_all_tables
 
 
 @dataclass
@@ -74,6 +74,48 @@ def test_hotstore_sync_write_batch_uses_unified_insert_path() -> None:
     assert len(rows) == 1
     assert "bid_px" in columns
     assert "ask_px" in columns
+    assert "quality_flags" in columns
+    assert "lineage" in columns
+    row = rows[0]
+    assert row[columns.index("quality_flags")] == []
+    assert row[columns.index("lineage")] is None
+
+
+def test_hotstore_ddl_includes_quality_and_lineage_columns() -> None:
+    assert "quality_flags Array(String)" in QUOTES_HOT_DDL
+    assert "lineage Nullable(String)" in QUOTES_HOT_DDL
+    assert "quality_flags Array(String)" in TRADES_HOT_DDL
+    assert "lineage Nullable(String)" in TRADES_HOT_DDL
+    assert "quality_flags Array(String)" in BARS_HOT_DDL
+    assert "lineage Nullable(String)" in BARS_HOT_DDL
+
+
+def test_hotstore_sync_serializes_lineage_dict() -> None:
+    client = _StubHotStoreClient()
+    syncer = HotStoreSync(client=client)
+
+    rows_written = syncer.write_batch(
+        "quotes",
+        [
+            {
+                "event_id": "evt-1",
+                "provider": "alpaca",
+                "feed": "quotes",
+                "instrument_type": "equity",
+                "instrument_key": "equity:AAPL",
+                "symbol": "AAPL",
+                "quality_flags": ["validated", "deduped"],
+                "lineage": {"source_event_id": "raw-1"},
+                "payload": {"bid_px": 180.0, "ask_px": 180.1},
+            }
+        ],
+    )
+
+    assert rows_written == 1
+    _, rows, columns = client.client.inserts[0]
+    row = rows[0]
+    assert row[columns.index("quality_flags")] == ["validated", "deduped"]
+    assert row[columns.index("lineage")] == '{"source_event_id": "raw-1"}'
 
 
 def test_hotstore_sync_metrics_no_await_mismatch() -> None:

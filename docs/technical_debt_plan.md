@@ -35,6 +35,7 @@ Updated: 2026-02-06
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
+- `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
@@ -48,6 +49,7 @@ Updated: 2026-02-06
 - Audit Pass 23 revalidated `TD-068` as resolved via `T-41`; `TD-069`, `TD-070`, and `TD-072` remain open.
 - Audit Pass 24 revalidated `TD-072` as resolved via `T-44`; `TD-069` and `TD-070` remain open.
 - Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; `TD-070` remains open.
+- Audit Pass 26 revalidated `TD-070` as resolved via `T-43`.
 
 ## Prioritization Approach
 

@@ -8,6 +8,7 @@ wrappers for event-driven callers.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -137,12 +138,33 @@ class HotStoreSync:
             "ts_available",
             "source",
             "schema_version",
+            "quality_flags",
+            "lineage",
         ]
         if table == HotStoreTable.QUOTES:
             return common + ["bid_px", "bid_sz", "ask_px", "ask_sz", "bid_exchange", "ask_exchange"]
         if table == HotStoreTable.TRADES:
             return common + ["price", "size", "trade_id", "exchange", "tape"]
         return common + ["timeframe", "bar_start_ts", "open", "high", "low", "close", "volume", "trade_count", "vwap"]
+
+    @staticmethod
+    def _normalize_quality_flags(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [str(value)]
+
+    @staticmethod
+    def _normalize_lineage(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except TypeError:
+            return str(value)
 
     def _build_row(self, table: HotStoreTable, record: dict[str, Any]) -> tuple[Any, ...]:
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
@@ -157,6 +179,8 @@ class HotStoreSync:
         instrument_type = record.get("instrument_type") or payload.get("instrument_type") or "equity"
         source = record.get("source") or payload.get("source") or "unknown"
         schema_version = record.get("schema_version") or payload.get("schema_version") or "v1"
+        quality_flags = self._normalize_quality_flags(record.get("quality_flags", payload.get("quality_flags")))
+        lineage = self._normalize_lineage(record.get("lineage", payload.get("lineage")))
         event_id = record.get("event_id") or payload.get("event_id") or ""
 
         common = (
@@ -171,6 +195,8 @@ class HotStoreSync:
             ts_available,
             source,
             schema_version,
+            quality_flags,
+            lineage,
         )
 
         if table == HotStoreTable.QUOTES:

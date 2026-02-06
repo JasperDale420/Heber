@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 23: MarketCalendar timezone hardening + regression-test re-audit)
 - Expanded technical debt audit (pass 24: additional schema registry test hardening re-audit)
 - Expanded technical debt audit (pass 25: include_extended behavior hardening re-audit)
+- Expanded technical debt audit (pass 26: Hot Store base-column conformance re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

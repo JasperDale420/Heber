@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS quotes_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Quote-specific
     bid_px Float64,
@@ -61,6 +63,8 @@ CREATE TABLE IF NOT EXISTS trades_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Trade-specific
     price Float64,
@@ -94,6 +98,8 @@ CREATE TABLE IF NOT EXISTS bars_hot (
     ts_available DateTime64(6, 'UTC'),
     source LowCardinality(String),
     schema_version LowCardinality(String),
+    quality_flags Array(String),
+    lineage Nullable(String),
 
     -- Bar-specific
     timeframe LowCardinality(String),

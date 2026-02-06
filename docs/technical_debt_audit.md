@@ -298,13 +298,17 @@ Audit Pass 25 (2026-02-06, files reviewed directly):
 - heber/calendar/market.py
 - tests/test_market_calendar_timezones.py
 
+Audit Pass 26 (2026-02-06, files reviewed directly):
+- heber/hotstore/tables.py
+- heber/hotstore/sync.py
+- tests/test_hotstore_unification.py
+
 Not yet audited in this run (recommend a future pass):
 - scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
-- heber/hotstore/tables.py (`TD-070`) post-remediation re-audit.
 
 ## Remediation Updates
 
@@ -337,6 +341,7 @@ Updated: 2026-02-06
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
+- `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
@@ -348,10 +353,11 @@ Updated: 2026-02-06
 - Audit Pass 23 revalidated `TD-068` as resolved via `T-41` and focused timezone regression coverage.
 - Audit Pass 24 revalidated `TD-072` as resolved via `T-44`; schema registry tests are now growth-tolerant.
 - Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; extended-hours mode is now explicit and non-silent.
+- Audit Pass 26 revalidated `TD-070` as resolved via `T-43`; Hot Store DDL and insert mappings now include provenance/quality base fields.
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. Finally, Hot Store DDL still contains schema drift with omitted provenance fields. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -428,7 +434,7 @@ Severity key: High, Medium, Low
 | TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
 | TD-068 | Medium | Calendar | Market calendar naive datetime handling was remediated in `T-41` via UTC normalization and regression tests. |
 | TD-069 | Low | Calendar | `include_extended=True` is now explicitly rejected to avoid silent no-op behavior. |
-| TD-070 | Low | Hot Store | Hot Store DDL omits columns present in Silver schemas (e.g., `quality_flags`, `lineage`). |
+| TD-070 | Low | Hot Store | Hot Store DDL and sync mappings now preserve base provenance/quality fields (`quality_flags`, `lineage`). |
 | TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
 | TD-072 | Low | Testing | Additional schema registry tests are now growth-tolerant and verify required schema contracts. |
 | TD-073 | High | Infra | Terraform root module references local modules (`./modules/*`) that are not present. |
@@ -761,6 +767,7 @@ Revalidated 2026-02-06 (Pass 25): Resolved. `include_extended=True` now raises a
 Evidence: `heber/hotstore/tables.py` defines Hot Store tables without `quality_flags` or `lineage` columns that exist in Silver base schema. This prevents storing provenance/quality flags in Hot Store and creates schema drift.
 Recommendation: Decide which base columns must be preserved in Hot Store and add them (or document the intentional omission).
 Revalidated 2026-02-06 (Pass 22): Still open. Current DDL still omits `quality_flags` and `lineage`.
+Revalidated 2026-02-06 (Pass 26): Resolved. Hot Store DDL and sync inserts now include `quality_flags` and `lineage`.
 
 **TD-071: Hot Store DDL creation assumes async client.**
 Evidence: `create_all_tables()` is `async` and calls `await client.execute(stmt)`, but the repo’s primary ClickHouse client (`clickhouse_connect`) is synchronous. This mismatch can lead to runtime errors depending on which client is passed.
@@ -856,7 +863,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-070, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
