@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T15:48:39*
+*Generated: 2026-02-05T16:48:59*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 236
+Files analyzed: 237
 
-Estimated tokens: 394.2k
+Estimated tokens: 394.9k
 
 ---
 
@@ -311,6 +311,7 @@ Directory structure:
     │   ├── test_sdk_catalog_defaults.py
     │   ├── test_silver_flush_config.py
     │   ├── test_silver_schema_source.py
+    │   ├── test_stream_naming_conventions.py
     │   ├── test_terraform_module_sources.py
     │   ├── test_utcnow_regression.py
     │   ├── test_watch_async_redis.py
@@ -809,6 +810,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Updated ACK policy to acknowledge only on successful processing or successful DLQ write
   - Retains pending messages when DLQ write fails, avoiding silent drops
   - Added regression tests for retry count, DLQ routing, and ACK decision behavior (`tests/test_watch_consumer_reliability.py`)
+- **Stream Naming Convention Unification** (`heber/bus/__init__.py`, `heber/bus/streams.py`, `heber/watch/consumer.py`)
+  - Standardized event-bus stream naming to `heber:events:*` across stream enum values and registry helpers
+  - Watch consumer now defaults to `settings.redis_stream_name` instead of hardcoded stream literals
+  - Updated operations runbook/troubleshooting Redis commands to use aligned event and DLQ stream keys
+  - Added regression coverage for stream naming consistency (`tests/test_stream_naming_conventions.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -11667,6 +11673,7 @@ Updated: 2026-02-05
 - `TD-012` addressed via `T-17`: Catalog startup now runs SQLAlchemy `create_all` only in `dev`, and Alembic migration scaffolding with an initial baseline revision is included for non-dev schema management.
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
 - `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
+- `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
 
 ## Executive Summary
 
@@ -11885,6 +11892,7 @@ Recommendation: Use top-level fields or normalize envelope format before quarant
 **TD-030: Stream naming diverges across modules and docs.**
 Evidence: `heber/bus` uses `stream:*` names, writer/consumer uses `heber:events`, and ops docs reference `stream:market.bars`. This split-brain naming leads to non-wired components.
 Recommendation: Standardize on one stream naming convention and update docs, bus config, and consumers together.
+Update 2026-02-05: Remediated in `T-20` by standardizing bus and stream registry keys to `heber:events:*` and aligning watch/ops references.
 
 **TD-031: Watch model timestamps use naive `datetime.utcnow()` defaults.**
 Evidence: `heber/watch/models.py` sets `created_at` and `updated_at` with `datetime.utcnow()` (naive), while other parts expect timezone-aware UTC.
@@ -12160,6 +12168,7 @@ Updated: 2026-02-05
 - `T-17` complete (`TD-012`): Catalog startup now limits SQLAlchemy `create_all` bootstrapping to `dev` only; Alembic migration scaffolding and baseline revision were added with regression tests.
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 - `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
+- `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
 
 ## Prioritization Approach
 
@@ -12389,6 +12398,30 @@ Acceptance Criteria:
 
 Estimate: 1 day
 
+### T-20: Unify Stream Naming Convention (TD-030)
+
+Priority: P1
+
+Description: Stream names diverged between `stream:*`, `heber:stream:*`, and `heber:events`, creating wiring and ops confusion. Standardize stream naming under a single `heber:events` namespace.
+
+Scope:
+- `heber/bus/__init__.py`
+- `heber/bus/streams.py`
+- `heber/watch/consumer.py`
+- `heber/sre/runbooks.py`
+- `docs/operations/troubleshooting.md`
+- `heber/ops/tests_remaining.py`
+- `tests/test_stream_naming_conventions.py`
+
+Acceptance Criteria:
+- Event bus stream enum values use `heber:events:*` names.
+- Stream registry helper keys use `heber:events:{name}`.
+- Watch consumer defaults to `settings.redis_stream_name` instead of hardcoded stream literals.
+- Ops runbook/troubleshooting commands reference the same namespace for backlog and DLQ checks.
+- Regression tests guard stream naming conventions against drift.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -12486,6 +12519,7 @@ Estimate: 1 day
 17. T-17 (Catalog migration baseline + non-dev startup guard)
 18. T-18 (Watch async Redis non-blocking refactor)
 19. T-19 (Watch consumer retry + DLQ policy)
+20. T-20 (Stream naming convention unification)
 
 
 
@@ -13529,7 +13563,7 @@ docker logs heber-catalog --since 5m 2>&1 | grep -E "(ERROR|Exception)"
 docker logs heber-consumer --tail 100
 
 # Check Redis stream length
-docker exec heber-redis redis-cli XLEN heber:events:bars
+docker exec heber-redis redis-cli XLEN heber:events
 ```
 
 **Resolution**:
@@ -13614,7 +13648,7 @@ docker logs heber-consumer --tail 50 | grep -i hotstore
 docker exec heber-catalog python -m heber.quality.soda_scanner
 
 # Check dead letter queue
-docker exec heber-redis redis-cli LLEN heber:dlq
+docker exec heber-redis redis-cli XLEN heber:events:dlq
 ```
 
 **Resolution**:
@@ -31615,7 +31649,7 @@ class TestStreamRegistry:
     def test_stream_key(self):
         config = StreamConfig("test", "test_dataset", StreamPriority.NORMAL, "test-consumer")
 
-        assert config.stream_key == "heber:stream:test"
+        assert config.stream_key == "heber:events:test"
 
     def test_generate_report(self):
         registry = StreamRegistry()
@@ -38476,7 +38510,7 @@ CONSUMER_LAG_RUNBOOK = Runbook(
     ],
     triage_steps=[
         TriageStep(1, "kubectl get pods -l app=heber-consumer", "Check consumer pod health"),
-        TriageStep(2, "redis-cli XPENDING stream:market.bars heber-writers", "Check Redis Streams backlog"),
+        TriageStep(2, "redis-cli XPENDING heber:events heber-writers", "Check Redis Streams backlog"),
         TriageStep(3, "kubectl logs -l app=heber-consumer | grep rebalance", "Check if rebalancing"),
     ],
     common_causes=[
@@ -44957,8 +44991,8 @@ from heber.watch.models import WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
-# Stream configuration - matches Data Gateway's HEBER_STREAM
-HEBER_EVENTS_STREAM = "heber:events"
+# Stream configuration
+DEFAULT_EVENTS_STREAM = settings.redis_stream_name
 FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
@@ -44978,7 +45012,8 @@ def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
 class AlertWatchConsumer:
     """Consumes flow alerts and creates watches.
 
-    Runs as a background service, listening to the flow_alerts Redis stream.
+    Runs as a background service, listening to the events stream and filtering
+    for the flow_alerts feed.
     """
 
     def __init__(
@@ -44988,6 +45023,7 @@ class AlertWatchConsumer:
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
         async_redis: redis.asyncio.Redis | None = None,
+        stream_name: str | None = None,
         dlq_stream_name: str | None = None,
         max_process_retries: int | None = None,
         retry_backoff_seconds: float | None = None,
@@ -45000,6 +45036,7 @@ class AlertWatchConsumer:
             contract_config: Barrier configuration for contracts
             gateway_url: Data Gateway URL for fetching entry prices
             async_redis: Async Redis client for feature storage (optional)
+            stream_name: Redis stream to consume events from
             dlq_stream_name: Redis stream for watch processing failures
             max_process_retries: Retry attempts before dead-lettering
             retry_backoff_seconds: Base retry backoff delay in seconds
@@ -45009,6 +45046,7 @@ class AlertWatchConsumer:
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
         self.max_process_retries = max_process_retries or settings.redis_process_max_retries
         self.retry_backoff_seconds = retry_backoff_seconds or settings.redis_retry_backoff_seconds
@@ -45024,14 +45062,14 @@ class AlertWatchConsumer:
         """Create consumer group if it doesn't exist."""
         try:
             self.redis.xgroup_create(
-                HEBER_EVENTS_STREAM,
+                self.stream_name,
                 CONSUMER_GROUP,
                 id="0",
                 mkstream=True,
             )
             logger.info(
                 "Created consumer group",
-                stream=HEBER_EVENTS_STREAM,
+                stream=self.stream_name,
                 group=CONSUMER_GROUP,
             )
         except redis.ResponseError as e:
@@ -45051,14 +45089,14 @@ class AlertWatchConsumer:
             self.redis.xreadgroup,
             CONSUMER_GROUP,
             CONSUMER_NAME,
-            {HEBER_EVENTS_STREAM: ">"},
+            {self.stream_name: ">"},
             count=100,
             block=5000,
         )
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""
-        await asyncio.to_thread(self.redis.xack, HEBER_EVENTS_STREAM, CONSUMER_GROUP, msg_id)
+        await asyncio.to_thread(self.redis.xack, self.stream_name, CONSUMER_GROUP, msg_id)
 
     @staticmethod
     def _normalize_stream_data(data: dict[Any, Any]) -> dict[str, Any]:
@@ -45074,7 +45112,7 @@ class AlertWatchConsumer:
     async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
         """Write failed message to DLQ stream."""
         dlq_payload = {
-            "origin_stream": HEBER_EVENTS_STREAM,
+            "origin_stream": self.stream_name,
             "origin_message_id": msg_id,
             "attempts": str(attempts),
             "error": error,
@@ -45130,7 +45168,7 @@ class AlertWatchConsumer:
 
         logger.info(
             "Starting alert watch consumer",
-            stream=HEBER_EVENTS_STREAM,
+            stream=self.stream_name,
             group=CONSUMER_GROUP,
         )
 
@@ -45158,8 +45196,8 @@ class AlertWatchConsumer:
     def _is_flow_alert(self, data: dict) -> bool:
         """Check if the event is a flow_alerts feed event.
 
-        The heber:events stream contains multiple feed types (flow_alerts,
-        darkpool, market_tide, etc.). We only process flow_alerts.
+        The configured events stream contains multiple feed types
+        (flow_alerts, darkpool, market_tide, etc.). We only process flow_alerts.
         """
         # The 'data' field contains JSON string with event envelope
         if b"data" in data:
@@ -52058,6 +52096,40 @@ def test_writer_silver_does_not_define_inline_schema_constants() -> None:
 
     assert "SILVER_SCHEMAS = {" not in silver_writer_source
     assert "DEFAULT_SCHEMA = pa.schema(" not in silver_writer_source
+
+
+
+================================================
+FILE: tests/test_stream_naming_conventions.py
+================================================
+"""Regression tests for stream naming consistency."""
+
+from __future__ import annotations
+
+from heber.bus import StreamName
+from heber.bus.streams import StreamConfig, StreamPriority
+from heber.config import settings
+from heber.watch.consumer import AlertWatchConsumer
+
+
+class _NoopManager:
+    async def create_watch_async(self, **kwargs):  # noqa: ANN003
+        return None
+
+
+def test_event_bus_stream_names_share_namespace() -> None:
+    expected_prefix = "heber:events:"
+    assert all(stream.value.startswith(expected_prefix) for stream in StreamName)
+
+
+def test_stream_registry_uses_events_namespace() -> None:
+    config = StreamConfig("test", "test_dataset", StreamPriority.NORMAL, "test-consumer")
+    assert config.stream_key == "heber:events:test"
+
+
+def test_watch_consumer_defaults_to_configured_stream_name() -> None:
+    consumer = AlertWatchConsumer(redis_client=object(), watch_manager=_NoopManager())
+    assert consumer.stream_name == settings.redis_stream_name
 
 
 

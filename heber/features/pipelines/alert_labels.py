@@ -34,8 +34,8 @@ from heber.sdk import HeberClient
 logger = structlog.get_logger(__name__)
 
 # Constants
-MARKET_PROXY = "SPY"
-VIX_PROXY = "UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
+MARKET_PROXY = "equity:SPY"
+VIX_PROXY = "equity:UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
 LOOKBACK_DAYS = 30  # Days of bar history needed for ATR
 DATA_GATEWAY_URL = "http://localhost:8000"  # Data Gateway API
 
@@ -76,6 +76,53 @@ class AlertLabelsPipeline:
         self.project = project
         self.version = version
         self.gateway_url = gateway_url
+
+    @staticmethod
+    def _canonical_equity_key(symbol: Any) -> str:
+        """Convert plain ticker symbols to canonical equity instrument keys."""
+        value = str(symbol).strip()
+        if ":" in value:
+            return value
+        return f"equity:{value}"
+
+    @classmethod
+    def _expand_equity_keys(cls, symbols: list[str]) -> list[str]:
+        """Expand symbol filters to include both canonical and legacy raw keys."""
+        expanded: list[str] = []
+        for symbol in symbols:
+            raw = str(symbol).strip()
+            if raw.lower().startswith("equity:"):
+                candidates = (raw.split(":", 1)[1], raw)
+            elif ":" in raw:
+                candidates = (raw,)
+            else:
+                candidates = (raw, cls._canonical_equity_key(raw))
+            for candidate in candidates:
+                if candidate not in expanded:
+                    expanded.append(candidate)
+        return expanded
+
+    @classmethod
+    def _normalize_bar_instrument_keys(cls, bars: pd.DataFrame) -> pd.DataFrame:
+        """Normalize bar instrument keys to canonical format for joins."""
+        if bars.empty or "instrument_key" not in bars.columns:
+            return bars
+        normalized = bars.copy()
+        normalized["instrument_key"] = normalized["instrument_key"].map(
+            lambda value: cls._canonical_equity_key(value) if pd.notna(value) else value
+        )
+        return normalized
+
+    @classmethod
+    def _normalize_alert_underlyings(cls, alerts: pd.DataFrame) -> pd.DataFrame:
+        """Normalize alert underlyings to canonical format for label joins."""
+        if alerts.empty or "underlying" not in alerts.columns:
+            return alerts
+        normalized = alerts.copy()
+        normalized["underlying"] = normalized["underlying"].map(
+            lambda value: cls._canonical_equity_key(value) if pd.notna(value) else value
+        )
+        return normalized
 
     def run(
         self,
@@ -120,7 +167,9 @@ class AlertLabelsPipeline:
         logger.info("Loaded flow alerts", count=len(flow_alerts))
 
         # Step 2: Get unique underlyings
-        underlyings = flow_alerts["underlying"].unique().tolist()
+        flow_alerts = self._normalize_alert_underlyings(flow_alerts)
+
+        underlyings = flow_alerts["underlying"].dropna().unique().tolist()
         all_symbols = list(set(underlyings + [MARKET_PROXY, VIX_PROXY]))
 
         logger.info("Fetching bars for symbols", count=len(all_symbols))
@@ -390,9 +439,18 @@ class AlertLabelsPipeline:
         bars = self.client.read_silver(
             dataset="bars",
             time_range=(start_date, end_date),
-            instrument_keys=symbols,
+            instrument_keys=self._expand_equity_keys(symbols),
         )
-        return bars
+
+        # Keep joins stable even when historical files used raw tickers.
+        bars = self._normalize_bar_instrument_keys(bars)
+
+        if bars.empty or "timeframe" not in bars.columns:
+            return bars
+
+        timeframe = bars["timeframe"].astype(str).str.lower().str.replace(" ", "", regex=False)
+        daily = bars[timeframe.isin({"1day", "1d", "day"})]
+        return daily if not daily.empty else bars
 
     def _load_intraday_bars(
         self,
@@ -402,16 +460,28 @@ class AlertLabelsPipeline:
     ) -> pd.DataFrame:
         """Load intraday (5-min) bars from Silver."""
         bars = self.client.read_silver(
-            dataset="bars_5min",
+            dataset="bars",
             time_range=(start_date, end_date),
-            instrument_keys=symbols,
+            instrument_keys=self._expand_equity_keys(symbols),
         )
+
+        bars = self._normalize_bar_instrument_keys(bars)
 
         if bars.empty:
             logger.warning("No intraday bars found, using daily bars")
             return self._load_bars(symbols, start_date, end_date)
 
-        return bars
+        if "timeframe" not in bars.columns:
+            logger.warning("Bars missing timeframe column, using daily bars")
+            return self._load_bars(symbols, start_date, end_date)
+
+        timeframe = bars["timeframe"].astype(str).str.lower().str.replace(" ", "", regex=False)
+        intraday = bars[timeframe.isin({"5min", "5m"})]
+        if intraday.empty:
+            logger.warning("No 5-minute bars found, using daily bars")
+            return self._load_bars(symbols, start_date, end_date)
+
+        return intraday
 
     def _prepare_for_gold(self, labels: pd.DataFrame) -> pd.DataFrame:
         """Prepare labels DataFrame for Gold write."""

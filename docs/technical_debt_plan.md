@@ -28,6 +28,7 @@ Updated: 2026-02-05
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 - `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
 - `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
+- `T-21` complete (`TD-035`, `TD-036`): alert labels pipeline now canonicalizes underlying instrument keys for bar joins and loads intraday data from `bars` with `5Min` timeframe filtering (with daily fallback), replacing the stale `bars_5min` read path.
 
 ## Prioritization Approach
 
@@ -281,6 +282,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-21: Fix Alert Label Bar Key + Intraday Dataset Wiring (TD-035, TD-036)
+
+Priority: P1
+
+Description: Alert labeling used raw symbols for bar reads and queried a non-existent `bars_5min` dataset. This caused empty joins and missing intraday labels. Normalize to canonical instrument keys and query `bars` with timeframe filtering.
+
+Scope:
+- `heber/features/pipelines/alert_labels.py`
+- `heber/features/templates/alert_labels.py`
+- `tests/test_alert_labels_pipeline_keys.py`
+
+Acceptance Criteria:
+- Pipeline normalizes alert underlyings to canonical `equity:*` keys for bar joins.
+- Silver bar reads include both canonical and legacy raw symbol filters for backward compatibility.
+- Intraday path reads `dataset=\"bars\"` and filters to 5-minute timeframe values, with a daily fallback when intraday bars are unavailable.
+- Regression tests verify key normalization, intraday dataset selection, and fallback behavior.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -379,3 +399,4 @@ Estimate: 1 day
 18. T-18 (Watch async Redis non-blocking refactor)
 19. T-19 (Watch consumer retry + DLQ policy)
 20. T-20 (Stream naming convention unification)
+21. T-21 (Alert label bar key + intraday dataset wiring)

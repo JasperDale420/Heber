@@ -233,6 +233,7 @@ Updated: 2026-02-05
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
 - `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
 - `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
+- `TD-035` and `TD-036` addressed via `T-21`: alert labels pipeline now normalizes underlying symbols to canonical instrument keys and reads intraday bars from `bars` using `timeframe=5Min` filtering instead of querying a non-existent `bars_5min` dataset.
 
 ## Executive Summary
 
@@ -472,10 +473,12 @@ Recommendation: Derive `ts_available` from input data (e.g., max of input `ts_av
 **TD-035: Alert labels pipeline queries bars using raw symbols, not canonical instrument keys.**
 Evidence: `AlertLabelsPipeline._load_bars()` passes `instrument_keys=symbols` where symbols are `["AAPL", "SPY", ...]`, but Silver bars use canonical keys like `equity:AAPL`.
 Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberClient.resolve_instrument`) before querying Silver.
+Update 2026-02-06: Remediated in `T-21` by canonicalizing alert underlyings and normalizing bar `instrument_key` values to `equity:*` keys with legacy fallback filters.
 
 **TD-036: Alert labels pipeline references a non-existent dataset.**
 Evidence: `_load_intraday_bars()` queries dataset `bars_5min`, which is not present in Silver schemas or writer outputs.
 Recommendation: Either implement `bars_5min` ingestion or use existing bars with a timeframe column/filter.
+Update 2026-02-06: Remediated in `T-21` by switching intraday loads to `dataset=\"bars\"` and filtering for 5-minute `timeframe` values.
 
 **TD-037: Intraday label windows are computed in days, not minutes.**
 Evidence: In `alert_labels.py`, `ts_available` uses `timedelta(days=max_window_bars // 24)` and SPY-relative returns use `timedelta(days=max_window_bars)`. For intraday horizons (24 five-minute bars), this becomes 1–24 days instead of ~2 hours.

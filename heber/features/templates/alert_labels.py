@@ -35,7 +35,7 @@ DEFAULT_SLIPPAGE_PCT = 0.001  # 0.1% round-trip slippage
 DEFAULT_COMMISSION_PER_CONTRACT = 0.65  # Per contract fee
 
 # SPY as market proxy for beta-neutral calculation
-MARKET_PROXY = "SPY"
+MARKET_PROXY = "equity:SPY"
 
 # VIX thresholds for regime classification
 VIX_LOW = 15.0
