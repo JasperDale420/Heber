@@ -206,7 +206,7 @@ def traced(
             if extract_lineage and "lineage" in kwargs:
                 context = extract_trace_context(kwargs["lineage"])
 
-            span_kind = SpanKind.INTERNAL
+            span_kind = None
             if OTEL_AVAILABLE:
                 kind_map = {
                     "internal": SpanKind.INTERNAL,

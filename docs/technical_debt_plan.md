@@ -40,6 +40,7 @@ Updated: 2026-02-06
 - `T-30` complete (`TD-059`): clickhouse backup script output now aligns with effective destination behavior by reporting config-managed remote destination/entries instead of an unenforced hardcoded S3 path.
 - `T-31` complete (`TD-060`): catalog backup validation script now guarantees test-instance cleanup via `EXIT` trap and preserves failure status on restore/query errors.
 - `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
+- `T-33` complete (`TD-039`): tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, with regression coverage for `@traced` no-OTEL execution.
 - `T-35` complete (`TD-062`): labeling strategy docs now reference `heber/firewall/validation.py` and current split-validation parameter names.
 - `T-36` complete (`TD-063`): data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK and label writers.
 - `T-39` complete (`TD-064`): UW endpoint tracker summary now reports table-derived status counts and no longer contains stale manual buckets.
@@ -69,6 +70,7 @@ Updated: 2026-02-06
 - Audit Pass 33 revalidated `TD-043` as resolved via `T-27`.
 - Audit Pass 34 revalidated `TD-066` as resolved via `T-28`.
 - Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`.
+- Audit Pass 36 revalidated `TD-039` as resolved via `T-33`.
 
 ## Prioritization Approach
 

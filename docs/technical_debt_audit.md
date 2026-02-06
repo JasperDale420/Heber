@@ -350,6 +350,10 @@ Audit Pass 35 (2026-02-06, files reviewed directly):
 - k8s/base/deployments/hotloader.yaml
 - tests/test_k8s_hpa_probe_conformance.py
 
+Audit Pass 36 (2026-02-06, files reviewed directly):
+- heber/ops/tracing.py
+- tests/test_tracing_no_otel.py
+
 Not yet audited in this run (recommend a future pass):
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
@@ -385,6 +389,7 @@ Updated: 2026-02-06
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 - `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
 - `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
+- `TD-039` addressed via `T-33`: tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, and a regression test confirms `@traced` execution works with tracing disabled.
 - `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
 - `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
@@ -417,6 +422,7 @@ Updated: 2026-02-06
 - Audit Pass 33 revalidated `TD-043` as resolved via `T-27`; dedupe Bloom state is now bounded by rotation with regression coverage.
 - Audit Pass 34 revalidated `TD-066` as resolved via `T-28`; lakeFS repository creation now uses configurable storage namespace resolution.
 - Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`; HPA metric sources and worker probe types now match runtime behavior.
+- Audit Pass 36 revalidated `TD-039` as resolved via `T-33`; tracing decorators now remain safe without OpenTelemetry.
 
 ## Executive Summary
 
@@ -680,6 +686,8 @@ Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetim
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
 Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
 Revalidated 2026-02-06 (Pass 16): Still open. `traced()` still initializes `span_kind` with `SpanKind` before the OpenTelemetry availability guard.
+Update 2026-02-06: Remediated in `T-33` by deferring `SpanKind` assignment until after `OTEL_AVAILABLE` checks and defaulting to `None` in no-OpenTelemetry mode.
+Revalidated 2026-02-06 (Pass 36): Resolved. `@traced` functions execute safely when OpenTelemetry is unavailable.
 
 **TD-040: Async shutdown wait can hang if shutdown is signaled early.**
 Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
