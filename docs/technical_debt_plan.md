@@ -6,7 +6,7 @@ This plan converts high-severity audit items into ticket-ready tasks with clear 
 
 ## Implementation Status
 
-Updated: 2026-02-05
+Updated: 2026-02-06
 
 - `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
 - `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
@@ -376,6 +376,44 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-26: Apply Effective Log-Level Filtering (TD-042)
+
+Priority: P1
+
+Description: `configure_logging()` accepts `log_level` but does not apply it to either stdlib logging or structlog filtering. Implement consistent level parsing/application for production and dev outputs.
+
+Scope:
+- `heber/ops/logging.py`
+- New regression tests for level filtering behavior
+- `docs/configuration.md` (if env var/value expectations are documented)
+
+Acceptance Criteria:
+- `configure_logging(log_level=...)` enforces filtering for emitted logs.
+- Invalid log level values fail fast with a clear error (or are normalized deterministically).
+- Behavior is consistent between JSON and console renderers.
+- Regression tests validate that DEBUG messages are suppressed at INFO and emitted at DEBUG.
+
+Estimate: 0.5 day
+
+### T-27: Add Dedupe Rotation / Backing-Store Policy (TD-043)
+
+Priority: P1
+
+Description: In-memory Bloom dedupe currently accumulates false positives without rotation and treats Bloom matches as hard duplicates when no backing store exists. Add bounded-state dedupe behavior with safer fallback semantics.
+
+Scope:
+- `heber/ops/reliability.py`
+- New regression tests for dedupe rollover/reset behavior
+- Runtime config/docs for dedupe strategy selection
+
+Acceptance Criteria:
+- Deduper uses a bounded-time strategy (rotation/reset/TTL) to limit Bloom saturation effects.
+- No-backing-store mode does not permanently increase hard-drop risk over long runtimes.
+- Dedupe stats expose rollover/reset events for observability.
+- Regression tests cover duplicate detection before and after rotation boundaries.
+
+Estimate: 1-2 days
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -479,3 +517,5 @@ Estimate: 1 day
 23. T-23 (Flow feature time-window hardening)
 24. T-24 (Lifecycle async shutdown wait hang fix)
 25. T-25 (Lifecycle shutdown timeout status fix)
+26. T-26 (Logging level filtering)
+27. T-27 (Dedupe rotation/backing-store policy)

@@ -206,12 +206,18 @@ Audit Pass 12 (2026-02-05, files reviewed directly):
 - heber/backtest/integration.py
 - heber/backtest/tests.py
 
+Audit Pass 13 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- heber/ops/reliability.py
+
 Not yet audited in this run (recommend a future pass):
-None.
+- heber/ops/tracing.py (`TD-039`) re-audit after lifecycle/logging follow-up changes.
+- k8s/base/hpa/*.yaml and k8s/base/deployments/*.yaml (`TD-075`, `TD-076`) runtime conformance re-check.
+- heber/versioning/__init__.py (`TD-066`) config-driven storage namespace verification pass.
 
 ## Remediation Updates
 
-Updated: 2026-02-05
+Updated: 2026-02-06
 
 - `TD-015` addressed via `T-01`: Redis pending claims are consumed instead of dropped.
 - `TD-016` addressed via `T-02`: meta-label writer and dataset builder columns are aligned.
@@ -511,10 +517,12 @@ Update 2026-02-06: Remediated in `T-25` by reporting timeout status in metrics/l
 **TD-042: `configure_logging()` accepts a log level but does not apply it.**
 Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
 Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
+Revalidated 2026-02-06 (Pass 13): Still open. `configure_logging()` continues to ignore `log_level` and uses `PrintLoggerFactory` without level filtering.
 
 **TD-043: Bloom filter deduplication has no TTL/rotation.**
 Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
 Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
+Revalidated 2026-02-06 (Pass 13): Still open. `EventDeduplicator` does not rotate/reset Bloom state and has no default persistent backing store implementation.
 
 **TD-044: In-memory DLQ is non-persistent.**
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.

@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T16:48:59*
+*Generated: 2026-02-05T17:49:21*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 237
+Files analyzed: 241
 
-Estimated tokens: 394.9k
+Estimated tokens: 400.3k
 
 ---
 
@@ -299,12 +299,16 @@ Directory structure:
     │       └── quotes.yaml
     ├── tests/
     │   ├── __init__.py
+    │   ├── test_alert_label_intraday_windows.py
+    │   ├── test_alert_labels_pipeline_keys.py
     │   ├── test_catalog_migrations.py
     │   ├── test_compactor_safety.py
     │   ├── test_edge_cases.py
     │   ├── test_event_bus_claim.py
     │   ├── test_feature_view_alignment.py
     │   ├── test_hotstore_unification.py
+    │   ├── test_lifecycle_shutdown_timeout.py
+    │   ├── test_lifecycle_shutdown_wait.py
     │   ├── test_meta_label_alignment.py
     │   ├── test_placeholder.py
     │   ├── test_runtime_entrypoints.py
@@ -815,6 +819,27 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Watch consumer now defaults to `settings.redis_stream_name` instead of hardcoded stream literals
   - Updated operations runbook/troubleshooting Redis commands to use aligned event and DLQ stream keys
   - Added regression coverage for stream naming consistency (`tests/test_stream_naming_conventions.py`)
+- **Alert Label Pipeline Bar-Key + Intraday Wiring** (`heber/features/pipelines/alert_labels.py`, `heber/features/templates/alert_labels.py`)
+  - Alert-label bar reads now canonicalize equity symbols (`equity:*`) and include legacy raw-key filters for compatibility
+  - Intraday labeling now reads from `bars` and filters `timeframe` to 5-minute bars instead of querying stale `bars_5min`
+  - Added fallback to daily bars when intraday data is unavailable or timeframe metadata is missing
+  - Added regression tests for key normalization, intraday dataset selection, and fallback behavior (`tests/test_alert_labels_pipeline_keys.py`)
+- **Intraday Label Window Unit Fix** (`heber/features/templates/alert_labels.py`)
+  - Corrected intraday horizon window math to use 5-minute bar durations instead of day-based offsets
+  - `ts_available` and SPY-relative return windows now share the same minute-based intraday horizon timing
+  - Added regression tests for intraday/daily window duration behavior (`tests/test_alert_label_intraday_windows.py`)
+- **Flow Feature Rolling Window Hardening** (`heber/features/templates/flow.py`)
+  - Normalized flow `ts_event` values to UTC and dropped invalid timestamps before time-window rolling
+  - Added regression checks that 24-hour aggregates are time-windowed (not row-count based)
+  - Added regression checks for UTC normalization of string timestamps in flow feature outputs (`heber/features/templates/tests.py`)
+- **Lifecycle Async Shutdown Wait Race Fix** (`heber/ops/lifecycle.py`)
+  - `async_wait_for_shutdown` now returns immediately when shutdown is already signaled
+  - Added race-safe async shutdown-event initialization to prevent hung waits
+  - Added regression coverage for pre-signaled and late-signaled async shutdown waits (`tests/test_lifecycle_shutdown_wait.py`)
+- **Lifecycle Shutdown Timeout Status Fix** (`heber/ops/lifecycle.py`)
+  - Shutdown timeout paths now report `status="timeout"` instead of `status="success"` in lifecycle metrics
+  - Sync/async shutdown methods now return `False` when drain timeout occurs and `True` only on successful drain
+  - Added regression coverage for sync timeout, async timeout, and successful drain behavior (`tests/test_lifecycle_shutdown_timeout.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -11674,6 +11699,11 @@ Updated: 2026-02-05
 - `TD-017` addressed via `T-18`: watch consumer/poller async flows now offload blocking Redis/manager operations via async wrappers and `asyncio.to_thread`, reducing event-loop stall risk.
 - `TD-018` addressed via `T-19`: watch consumer now applies bounded retry/backoff for flow-alert processing, dead-letters terminal failures to Redis, and only ACKs after processing success or successful DLQ write.
 - `TD-030` addressed via `T-20`: stream keys now use the unified `heber:events` namespace across bus enums/config helpers, watch consumer stream defaults, and operations runbook/troubleshooting commands.
+- `TD-035` and `TD-036` addressed via `T-21`: alert labels pipeline now normalizes underlying symbols to canonical instrument keys and reads intraday bars from `bars` using `timeframe=5Min` filtering instead of querying a non-existent `bars_5min` dataset.
+- `TD-037` addressed via `T-22`: alert-label intraday windows now use minute-based durations (5-minute bars) for `ts_available` and SPY-relative return horizons instead of day-based offsets.
+- `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
+- `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
+- `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
 
 ## Executive Summary
 
@@ -11913,18 +11943,22 @@ Recommendation: Derive `ts_available` from input data (e.g., max of input `ts_av
 **TD-035: Alert labels pipeline queries bars using raw symbols, not canonical instrument keys.**
 Evidence: `AlertLabelsPipeline._load_bars()` passes `instrument_keys=symbols` where symbols are `["AAPL", "SPY", ...]`, but Silver bars use canonical keys like `equity:AAPL`.
 Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberClient.resolve_instrument`) before querying Silver.
+Update 2026-02-06: Remediated in `T-21` by canonicalizing alert underlyings and normalizing bar `instrument_key` values to `equity:*` keys with legacy fallback filters.
 
 **TD-036: Alert labels pipeline references a non-existent dataset.**
 Evidence: `_load_intraday_bars()` queries dataset `bars_5min`, which is not present in Silver schemas or writer outputs.
 Recommendation: Either implement `bars_5min` ingestion or use existing bars with a timeframe column/filter.
+Update 2026-02-06: Remediated in `T-21` by switching intraday loads to `dataset=\"bars\"` and filtering for 5-minute `timeframe` values.
 
 **TD-037: Intraday label windows are computed in days, not minutes.**
 Evidence: In `alert_labels.py`, `ts_available` uses `timedelta(days=max_window_bars // 24)` and SPY-relative returns use `timedelta(days=max_window_bars)`. For intraday horizons (24 five-minute bars), this becomes 1–24 days instead of ~2 hours.
 Recommendation: Track bar duration explicitly and compute windows in minutes/hours for intraday labels.
+Update 2026-02-06: Remediated in `T-22` by deriving intraday windows from 5-minute bar counts for both `ts_available` and SPY-relative end-time calculations.
 
 **TD-038: Flow feature rolling windows may be incorrect.**
 Evidence: `compute_flow_features()` uses `df["premium"].rolling(..., on="ts_event")` on a Series (the `on` parameter is ignored or invalid for Series) and does not normalize `ts_event` to datetime.
 Recommendation: Convert `ts_event` to datetime and use DataFrame-level rolling with `on=ts_event`, or set a DatetimeIndex for correct time-window rolling.
+Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetimes before indexing/rolling and adding regression tests that enforce true 24-hour time-window behavior.
 
 **TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
@@ -11933,10 +11967,12 @@ Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `N
 **TD-040: Async shutdown wait can hang if shutdown is signaled early.**
 Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
 Recommendation: In `async_wait_for_shutdown()`, return immediately if `self._shutdown_event.is_set()` or create `_async_shutdown_event` and set it when shutdown is already in progress.
+Update 2026-02-06: Remediated in `T-24` by returning immediately when shutdown is already signaled and by setting newly created async shutdown events if a shutdown race occurred before creation.
 
 **TD-041: Shutdown timeouts are logged but still reported as success.**
 Evidence: `execute_shutdown()` logs `drain_timeout` when the deadline passes but still increments `shutdown_completed` with status `success` and returns True.
 Recommendation: Increment `shutdown_completed` with `status="timeout"` and return False (or a distinct status) when draining exceeds the configured deadline.
+Update 2026-02-06: Remediated in `T-25` by reporting timeout status in metrics/logging and returning `False` when in-flight draining exceeds the shutdown deadline.
 
 **TD-042: `configure_logging()` accepts a log level but does not apply it.**
 Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
@@ -12169,6 +12205,11 @@ Updated: 2026-02-05
 - `T-18` complete (`TD-017`): watch service async loops now offload Redis-bound sync calls via async wrappers / `asyncio.to_thread`, reducing event-loop blocking risk with regression tests.
 - `T-19` complete (`TD-018`): watch consumer now retries flow-alert processing and routes terminal failures to a Redis DLQ, acknowledging only after success or successful dead-lettering.
 - `T-20` complete (`TD-030`): stream naming now uses a unified `heber:events` namespace across bus stream constants, stream registry keys, watch-consumer defaults, and SRE troubleshooting/runbook commands.
+- `T-21` complete (`TD-035`, `TD-036`): alert labels pipeline now canonicalizes underlying instrument keys for bar joins and loads intraday data from `bars` with `5Min` timeframe filtering (with daily fallback), replacing the stale `bars_5min` read path.
+- `T-22` complete (`TD-037`): alert-label intraday windows now use minute-based 5-minute bar durations for `ts_available` and SPY-relative windows instead of day-based offsets.
+- `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
+- `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
+- `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
 
 ## Prioritization Approach
 
@@ -12422,6 +12463,96 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-21: Fix Alert Label Bar Key + Intraday Dataset Wiring (TD-035, TD-036)
+
+Priority: P1
+
+Description: Alert labeling used raw symbols for bar reads and queried a non-existent `bars_5min` dataset. This caused empty joins and missing intraday labels. Normalize to canonical instrument keys and query `bars` with timeframe filtering.
+
+Scope:
+- `heber/features/pipelines/alert_labels.py`
+- `heber/features/templates/alert_labels.py`
+- `tests/test_alert_labels_pipeline_keys.py`
+
+Acceptance Criteria:
+- Pipeline normalizes alert underlyings to canonical `equity:*` keys for bar joins.
+- Silver bar reads include both canonical and legacy raw symbol filters for backward compatibility.
+- Intraday path reads `dataset=\"bars\"` and filters to 5-minute timeframe values, with a daily fallback when intraday bars are unavailable.
+- Regression tests verify key normalization, intraday dataset selection, and fallback behavior.
+
+Estimate: 1 day
+
+### T-22: Correct Intraday Label Window Units (TD-037)
+
+Priority: P1
+
+Description: Intraday label calculations previously converted bar counts into day offsets, causing `ts_available` and SPY-relative windows to drift by up to days. Use bar-duration-aware intraday windows.
+
+Scope:
+- `heber/features/templates/alert_labels.py`
+- `tests/test_alert_label_intraday_windows.py`
+
+Acceptance Criteria:
+- Intraday horizon window length is computed in minutes from the configured 5-minute bar count.
+- `ts_available` for intraday labels advances by the correct intraday duration (e.g., 24 bars -> 2 hours).
+- SPY-relative return end-time uses the same intraday duration for intraday labels.
+- Regression tests verify intraday and daily horizon window behavior.
+
+Estimate: 0.5 day
+
+### T-23: Harden Flow Feature Time-Window Rolling (TD-038)
+
+Priority: P1
+
+Description: Flow-feature rolling windows needed stronger guarantees around timestamp normalization and time-window correctness to avoid subtle drift with string/invalid timestamps.
+
+Scope:
+- `heber/features/templates/flow.py`
+- `heber/features/templates/tests.py`
+
+Acceptance Criteria:
+- `compute_flow_features` normalizes `ts_event` to UTC datetimes before sorting/indexing.
+- Invalid `ts_event` rows are dropped before rolling-window calculations.
+- Rolling premium/sweep aggregates are verified to be true time-windowed (not row-count based).
+- Regression tests verify UTC timestamp normalization and 24-hour boundary behavior.
+
+Estimate: 0.5 day
+
+### T-24: Fix Async Shutdown Wait Hang Path (TD-040)
+
+Priority: P1
+
+Description: `async_wait_for_shutdown()` could hang forever when shutdown was initiated before the async event existed. Add pre-signaled checks and race-safe async event initialization.
+
+Scope:
+- `heber/ops/lifecycle.py`
+- `tests/test_lifecycle_shutdown_wait.py`
+
+Acceptance Criteria:
+- `async_wait_for_shutdown()` returns immediately if shutdown is already signaled.
+- If shutdown is signaled during async event creation, waiters are still released.
+- Regression tests cover both pre-signaled and late-signaled async wait scenarios.
+
+Estimate: 0.5 day
+
+### T-25: Report Shutdown Timeouts Correctly (TD-041)
+
+Priority: P1
+
+Description: Shutdown drains that exceed timeout were logged as timeouts but still emitted success metrics and success return codes. Align return status + metrics with actual timeout behavior.
+
+Scope:
+- `heber/ops/lifecycle.py`
+- `tests/test_lifecycle_shutdown_timeout.py`
+
+Acceptance Criteria:
+- `execute_shutdown()` increments `shutdown_completed{status=\"timeout\"}` and returns `False` when drain timeout occurs.
+- `async_execute_shutdown()` matches the same timeout behavior.
+- Success path still emits `status=\"success\"` and returns `True`.
+- Regression tests cover sync timeout, async timeout, and non-timeout success behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -12520,6 +12651,11 @@ Estimate: 1 day
 18. T-18 (Watch async Redis non-blocking refactor)
 19. T-19 (Watch consumer retry + DLQ policy)
 20. T-20 (Stream naming convention unification)
+21. T-21 (Alert label bar key + intraday dataset wiring)
+22. T-22 (Intraday label window unit correction)
+23. T-23 (Flow feature time-window hardening)
+24. T-24 (Lifecycle async shutdown wait hang fix)
+25. T-25 (Lifecycle shutdown timeout status fix)
 
 
 
@@ -21140,8 +21276,8 @@ from heber.sdk import HeberClient
 logger = structlog.get_logger(__name__)
 
 # Constants
-MARKET_PROXY = "SPY"
-VIX_PROXY = "UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
+MARKET_PROXY = "equity:SPY"
+VIX_PROXY = "equity:UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
 LOOKBACK_DAYS = 30  # Days of bar history needed for ATR
 DATA_GATEWAY_URL = "http://localhost:8000"  # Data Gateway API
 
@@ -21182,6 +21318,53 @@ class AlertLabelsPipeline:
         self.project = project
         self.version = version
         self.gateway_url = gateway_url
+
+    @staticmethod
+    def _canonical_equity_key(symbol: Any) -> str:
+        """Convert plain ticker symbols to canonical equity instrument keys."""
+        value = str(symbol).strip()
+        if ":" in value:
+            return value
+        return f"equity:{value}"
+
+    @classmethod
+    def _expand_equity_keys(cls, symbols: list[str]) -> list[str]:
+        """Expand symbol filters to include both canonical and legacy raw keys."""
+        expanded: list[str] = []
+        for symbol in symbols:
+            raw = str(symbol).strip()
+            if raw.lower().startswith("equity:"):
+                candidates = (raw.split(":", 1)[1], raw)
+            elif ":" in raw:
+                candidates = (raw,)
+            else:
+                candidates = (raw, cls._canonical_equity_key(raw))
+            for candidate in candidates:
+                if candidate not in expanded:
+                    expanded.append(candidate)
+        return expanded
+
+    @classmethod
+    def _normalize_bar_instrument_keys(cls, bars: pd.DataFrame) -> pd.DataFrame:
+        """Normalize bar instrument keys to canonical format for joins."""
+        if bars.empty or "instrument_key" not in bars.columns:
+            return bars
+        normalized = bars.copy()
+        normalized["instrument_key"] = normalized["instrument_key"].map(
+            lambda value: cls._canonical_equity_key(value) if pd.notna(value) else value
+        )
+        return normalized
+
+    @classmethod
+    def _normalize_alert_underlyings(cls, alerts: pd.DataFrame) -> pd.DataFrame:
+        """Normalize alert underlyings to canonical format for label joins."""
+        if alerts.empty or "underlying" not in alerts.columns:
+            return alerts
+        normalized = alerts.copy()
+        normalized["underlying"] = normalized["underlying"].map(
+            lambda value: cls._canonical_equity_key(value) if pd.notna(value) else value
+        )
+        return normalized
 
     def run(
         self,
@@ -21226,7 +21409,9 @@ class AlertLabelsPipeline:
         logger.info("Loaded flow alerts", count=len(flow_alerts))
 
         # Step 2: Get unique underlyings
-        underlyings = flow_alerts["underlying"].unique().tolist()
+        flow_alerts = self._normalize_alert_underlyings(flow_alerts)
+
+        underlyings = flow_alerts["underlying"].dropna().unique().tolist()
         all_symbols = list(set(underlyings + [MARKET_PROXY, VIX_PROXY]))
 
         logger.info("Fetching bars for symbols", count=len(all_symbols))
@@ -21496,9 +21681,18 @@ class AlertLabelsPipeline:
         bars = self.client.read_silver(
             dataset="bars",
             time_range=(start_date, end_date),
-            instrument_keys=symbols,
+            instrument_keys=self._expand_equity_keys(symbols),
         )
-        return bars
+
+        # Keep joins stable even when historical files used raw tickers.
+        bars = self._normalize_bar_instrument_keys(bars)
+
+        if bars.empty or "timeframe" not in bars.columns:
+            return bars
+
+        timeframe = bars["timeframe"].astype(str).str.lower().str.replace(" ", "", regex=False)
+        daily = bars[timeframe.isin({"1day", "1d", "day"})]
+        return daily if not daily.empty else bars
 
     def _load_intraday_bars(
         self,
@@ -21508,16 +21702,28 @@ class AlertLabelsPipeline:
     ) -> pd.DataFrame:
         """Load intraday (5-min) bars from Silver."""
         bars = self.client.read_silver(
-            dataset="bars_5min",
+            dataset="bars",
             time_range=(start_date, end_date),
-            instrument_keys=symbols,
+            instrument_keys=self._expand_equity_keys(symbols),
         )
+
+        bars = self._normalize_bar_instrument_keys(bars)
 
         if bars.empty:
             logger.warning("No intraday bars found, using daily bars")
             return self._load_bars(symbols, start_date, end_date)
 
-        return bars
+        if "timeframe" not in bars.columns:
+            logger.warning("Bars missing timeframe column, using daily bars")
+            return self._load_bars(symbols, start_date, end_date)
+
+        timeframe = bars["timeframe"].astype(str).str.lower().str.replace(" ", "", regex=False)
+        intraday = bars[timeframe.isin({"5min", "5m"})]
+        if intraday.empty:
+            logger.warning("No 5-minute bars found, using daily bars")
+            return self._load_bars(symbols, start_date, end_date)
+
+        return intraday
 
     def _prepare_for_gold(self, labels: pd.DataFrame) -> pd.DataFrame:
         """Prepare labels DataFrame for Gold write."""
@@ -21655,7 +21861,7 @@ DEFAULT_SLIPPAGE_PCT = 0.001  # 0.1% round-trip slippage
 DEFAULT_COMMISSION_PER_CONTRACT = 0.65  # Per contract fee
 
 # SPY as market proxy for beta-neutral calculation
-MARKET_PROXY = "SPY"
+MARKET_PROXY = "equity:SPY"
 
 # VIX thresholds for regime classification
 VIX_LOW = 15.0
@@ -22089,7 +22295,7 @@ def _process_single_alert(
 
     # Compute beta-neutral return
     raw_return = outcome["mfe"] if outcome["hit_tp_first"] == 1 else outcome["mae"]
-    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config.max_window_bars, raw_return)
+    beta_neutral_return = _compute_spy_relative_return(spy_bars, ts_alert, config, raw_return)
 
     return {
         "alert_id": alert_id,
@@ -22112,7 +22318,7 @@ def _process_single_alert(
         "beta_neutral_return": beta_neutral_return,
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
-        "ts_available": ts_alert + timedelta(days=max(1, config.max_window_bars // 24)),
+        "ts_available": ts_alert + _window_delta_for_config(config),
     }
 
 
@@ -22140,10 +22346,18 @@ def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> 
     return float(vix_before.iloc[-1]["close"])
 
 
+def _window_delta_for_config(config: BarrierConfig) -> timedelta:
+    """Compute forward label window duration for a horizon config."""
+    if config.horizon == AlertHorizon.INTRADAY:
+        # Intraday config assumes 5-minute bars (see BarrierConfig.intraday()).
+        return timedelta(minutes=config.max_window_bars * 5)
+    return timedelta(days=config.max_window_bars)
+
+
 def _compute_spy_relative_return(
     spy_bars: pd.DataFrame | None,
     ts_alert: pd.Timestamp,
-    max_window_bars: int,
+    config: BarrierConfig,
     raw_return: float,
 ) -> float | None:
     """Compute SPY-relative beta-neutral return."""
@@ -22151,7 +22365,7 @@ def _compute_spy_relative_return(
         return None
 
     spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
-    end_time = ts_alert + timedelta(days=max_window_bars)
+    end_time = ts_alert + _window_delta_for_config(config)
     spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
 
     if not spy_at_alert or not spy_at_end or spy_at_alert <= 0:
@@ -22565,9 +22779,14 @@ def compute_flow_features(
     result_frames = []
 
     for underlying, group in flow_df.groupby("underlying"):
-        df = group.sort_values("ts_event").copy()
-        ts_available = _derive_ts_available(df, lookback_hours)
+        df = group.copy()
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+        df = df.dropna(subset=["ts_event"]).sort_values("ts_event")
+
+        if df.empty:
+            continue
+
+        ts_available = _derive_ts_available(df, lookback_hours)
         df = df.set_index("ts_event")
 
         # Premium aggregates
@@ -23030,6 +23249,44 @@ class TestFlowFeatures:
         ts_available = features["ts_available"].reset_index(drop=True)
 
         assert ts_available.iloc[1] == base + pd.Timedelta(hours=2)
+
+    def test_flow_rolling_window_is_time_based(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        base = pd.Timestamp("2024-01-01 09:30", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL", "AAPL"],
+                "ts_event": [base, base + pd.Timedelta(hours=25)],
+                "premium": [100.0, 40.0],
+                "put_call": ["C", "C"],
+                "alert_type": ["SWEEP", "SWEEP"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+
+        # Second point should exclude the first event (>24h apart).
+        second = features.sort_values("ts_event").iloc[-1]
+        assert second["total_premium_24h"] == 40.0
+
+    def test_flow_normalizes_string_timestamps_to_utc(self):
+        from heber.features.templates.flow import compute_flow_features
+
+        df = pd.DataFrame(
+            {
+                "underlying": ["AAPL", "AAPL"],
+                # 09:30 ET and 15:00 UTC should normalize to the same UTC instant.
+                "ts_event": ["2024-01-01T09:30:00-05:00", "2024-01-01T15:00:00Z"],
+                "premium": [100.0, 50.0],
+                "put_call": ["C", "P"],
+                "alert_type": ["SWEEP", "BLOCK"],
+            }
+        )
+
+        features = compute_flow_features(df, lookback_hours=24)
+
+        assert str(features["ts_event"].dtype).startswith("datetime64[ns, UTC]")
 
 
 class TestMicrostructureFeatures:
@@ -30223,8 +30480,16 @@ class LifecycleManager:
 
     async def async_wait_for_shutdown(self) -> None:
         """Async wait for shutdown signal."""
+        if self._shutdown_event.is_set():
+            return
+
         if not self._async_shutdown_event:
             self._async_shutdown_event = asyncio.Event()
+
+            # Handle race where shutdown was signaled before async event creation.
+            if self._shutdown_event.is_set():
+                self._async_shutdown_event.set()
+
         await self._async_shutdown_event.wait()
 
     def execute_shutdown(self) -> bool:
@@ -30246,8 +30511,9 @@ class LifecycleManager:
 
             drain_duration = time.time() - start_time
             drain_duration_seconds.set(drain_duration)
+            timed_out = self._in_flight_count > 0
 
-            if self._in_flight_count > 0:
+            if timed_out:
                 logger.warning(
                     "drain_timeout",
                     remaining=self._in_flight_count,
@@ -30274,13 +30540,15 @@ class LifecycleManager:
             with self._lock:
                 self._state = LifecycleState.STOPPED
 
-            shutdown_completed.labels(status="success").inc()
+            status = "timeout" if timed_out else "success"
+            shutdown_completed.labels(status=status).inc()
             logger.info(
                 "shutdown_complete",
                 service=self.service_name,
+                status=status,
                 duration=time.time() - start_time,
             )
-            return True
+            return not timed_out
 
         except Exception as e:
             shutdown_completed.labels(status="error").inc()
@@ -30303,6 +30571,14 @@ class LifecycleManager:
 
             drain_duration = time.time() - start_time
             drain_duration_seconds.set(drain_duration)
+            timed_out = self._in_flight_count > 0
+
+            if timed_out:
+                logger.warning(
+                    "drain_timeout",
+                    remaining=self._in_flight_count,
+                    duration=drain_duration,
+                )
 
             if self._callbacks.on_drain_complete:
                 self._callbacks.on_drain_complete()
@@ -30322,8 +30598,15 @@ class LifecycleManager:
             with self._lock:
                 self._state = LifecycleState.STOPPED
 
-            shutdown_completed.labels(status="success").inc()
-            return True
+            status = "timeout" if timed_out else "success"
+            shutdown_completed.labels(status=status).inc()
+            logger.info(
+                "shutdown_complete",
+                service=self.service_name,
+                status=status,
+                duration=time.time() - start_time,
+            )
+            return not timed_out
 
         except Exception as e:
             shutdown_completed.labels(status="error").inc()
@@ -50927,6 +51210,202 @@ FILE: tests/__init__.py
 
 
 ================================================
+FILE: tests/test_alert_label_intraday_windows.py
+================================================
+"""Regression tests for intraday alert-label window durations."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import pandas as pd
+import pytest
+
+from heber.features.templates.alert_labels import (
+    MARKET_PROXY,
+    BarrierConfig,
+    _compute_spy_relative_return,
+    _process_single_alert,
+    _window_delta_for_config,
+)
+
+
+def test_window_delta_for_intraday_uses_minutes() -> None:
+    config = BarrierConfig.intraday()
+    assert _window_delta_for_config(config) == timedelta(hours=2)
+
+
+def test_window_delta_for_swing_uses_days() -> None:
+    config = BarrierConfig.swing()
+    assert _window_delta_for_config(config) == timedelta(days=5)
+
+
+def test_spy_relative_return_uses_intraday_end_time() -> None:
+    ts_alert = pd.Timestamp("2026-01-02T14:30:00Z")
+    config = BarrierConfig.intraday()
+    spy_bars = pd.DataFrame(
+        {
+            "instrument_key": [MARKET_PROXY, MARKET_PROXY, MARKET_PROXY],
+            "bar_start_ts": [
+                ts_alert,
+                ts_alert + pd.Timedelta(hours=2),
+                ts_alert + pd.Timedelta(days=1),
+            ],
+            "close": [100.0, 110.0, 120.0],
+        }
+    )
+
+    beta_neutral = _compute_spy_relative_return(spy_bars, ts_alert, config, raw_return=0.10)
+
+    # Uses +2h spy return (10%), not +1d return (20%).
+    assert beta_neutral == pytest.approx(0.0)
+
+
+def test_process_single_alert_sets_intraday_ts_available_in_minutes() -> None:
+    ts_alert = pd.Timestamp("2026-01-02T14:30:00Z")
+    alert = pd.Series(
+        {
+            "event_id": "evt-1",
+            "underlying": "equity:AAPL",
+            "ts_event": ts_alert,
+            "put_call": "C",
+            "expiry": (ts_alert + pd.Timedelta(days=1)).date(),
+            "spot_px": 100.0,
+        }
+    )
+    bars = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL", "equity:AAPL"],
+            "bar_start_ts": [
+                ts_alert - pd.Timedelta(minutes=5),
+                ts_alert + pd.Timedelta(minutes=5),
+                ts_alert + pd.Timedelta(minutes=10),
+            ],
+            "high": [101.0, 102.0, 103.0],
+            "low": [99.0, 100.0, 101.0],
+            "close": [100.0, 101.0, 102.0],
+            "atr": [1.0, 1.0, 1.0],
+        }
+    )
+
+    result = _process_single_alert(
+        alert=alert,
+        bars=bars,
+        spy_bars=None,
+        vix_data=None,
+        config=BarrierConfig.intraday(),
+        slippage_model=None,
+    )
+
+    assert result["ts_available"] == ts_alert + pd.Timedelta(hours=2)
+
+
+
+================================================
+FILE: tests/test_alert_labels_pipeline_keys.py
+================================================
+"""Regression tests for alert label pipeline instrument-key handling."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pandas as pd
+
+from heber.features.pipelines.alert_labels import AlertLabelsPipeline
+
+
+class _StubClient:
+    def __init__(self, response_df: pd.DataFrame) -> None:
+        self._response_df = response_df
+        self.calls: list[dict] = []
+
+    def read_silver(self, **kwargs) -> pd.DataFrame:  # noqa: ANN003
+        self.calls.append(kwargs)
+        return self._response_df.copy()
+
+
+def _window() -> tuple[datetime, datetime]:
+    return (
+        datetime(2026, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+
+def test_load_bars_expands_raw_and_canonical_keys() -> None:
+    client = _StubClient(
+        pd.DataFrame(
+            {
+                "instrument_key": ["AAPL", "equity:SPY"],
+                "timeframe": ["1Day", "1Day"],
+            }
+        )
+    )
+    pipeline = AlertLabelsPipeline(client=client)
+    start, end = _window()
+
+    bars = pipeline._load_bars(["equity:AAPL", "equity:SPY"], start, end)
+
+    read_call = client.calls[0]
+    assert read_call["dataset"] == "bars"
+    assert "AAPL" in read_call["instrument_keys"]
+    assert "equity:AAPL" in read_call["instrument_keys"]
+    assert set(bars["instrument_key"]) == {"equity:AAPL", "equity:SPY"}
+
+
+def test_load_intraday_bars_reads_bars_dataset_and_filters_5min() -> None:
+    client = _StubClient(
+        pd.DataFrame(
+            {
+                "instrument_key": ["AAPL", "AAPL"],
+                "timeframe": ["5Min", "1Day"],
+            }
+        )
+    )
+    pipeline = AlertLabelsPipeline(client=client)
+    start, end = _window()
+
+    bars = pipeline._load_intraday_bars(["equity:AAPL"], start, end)
+
+    read_call = client.calls[0]
+    assert read_call["dataset"] == "bars"
+    assert len(bars) == 1
+    assert bars.iloc[0]["timeframe"] == "5Min"
+    assert bars.iloc[0]["instrument_key"] == "equity:AAPL"
+
+
+def test_load_intraday_bars_falls_back_to_daily_when_5min_missing(monkeypatch) -> None:
+    client = _StubClient(
+        pd.DataFrame(
+            {
+                "instrument_key": ["AAPL"],
+                "timeframe": ["1Day"],
+            }
+        )
+    )
+    pipeline = AlertLabelsPipeline(client=client)
+    start, end = _window()
+    fallback = pd.DataFrame({"instrument_key": ["equity:AAPL"], "timeframe": ["1Day"]})
+
+    monkeypatch.setattr(pipeline, "_load_bars", lambda symbols, s, e: fallback)  # noqa: ARG005
+
+    bars = pipeline._load_intraday_bars(["equity:AAPL"], start, end)
+
+    assert bars.equals(fallback)
+
+
+def test_normalize_alert_underlyings_converts_raw_symbols() -> None:
+    alerts = pd.DataFrame({"underlying": ["AAPL", "equity:MSFT", None]})
+
+    normalized = AlertLabelsPipeline._normalize_alert_underlyings(alerts)
+
+    assert normalized.iloc[0]["underlying"] == "equity:AAPL"
+    assert normalized.iloc[1]["underlying"] == "equity:MSFT"
+    assert pd.isna(normalized.iloc[2]["underlying"])
+
+
+
+================================================
 FILE: tests/test_catalog_migrations.py
 ================================================
 """Regression tests for Catalog migration strategy and startup behavior."""
@@ -51847,6 +52326,93 @@ def test_hotstore_event_sync_stop_flushes_pending_buffer() -> None:
     table, rows, _ = client.client.inserts[0]
     assert table == "trades_hot"
     assert len(rows) == 1
+
+
+
+================================================
+FILE: tests/test_lifecycle_shutdown_timeout.py
+================================================
+"""Regression tests for lifecycle shutdown timeout status behavior."""
+
+from __future__ import annotations
+
+import pytest
+
+from heber.ops.lifecycle import LifecycleManager, LifecycleState, ShutdownConfig
+
+
+def test_execute_shutdown_returns_false_on_timeout() -> None:
+    lifecycle = LifecycleManager(
+        service_name="test-lifecycle-timeout-sync",
+        config=ShutdownConfig(timeout_seconds=0, drain_poll_interval=0.0),
+    )
+    lifecycle._in_flight_count = 1
+
+    success = lifecycle.execute_shutdown()
+
+    assert success is False
+    assert lifecycle.state == LifecycleState.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_async_execute_shutdown_returns_false_on_timeout() -> None:
+    lifecycle = LifecycleManager(
+        service_name="test-lifecycle-timeout-async",
+        config=ShutdownConfig(timeout_seconds=0, drain_poll_interval=0.0),
+    )
+    lifecycle._in_flight_count = 1
+
+    success = await lifecycle.async_execute_shutdown()
+
+    assert success is False
+    assert lifecycle.state == LifecycleState.STOPPED
+
+
+def test_execute_shutdown_returns_true_when_drained() -> None:
+    lifecycle = LifecycleManager(
+        service_name="test-lifecycle-drained",
+        config=ShutdownConfig(timeout_seconds=0, drain_poll_interval=0.0),
+    )
+    lifecycle._in_flight_count = 0
+
+    success = lifecycle.execute_shutdown()
+
+    assert success is True
+    assert lifecycle.state == LifecycleState.STOPPED
+
+
+
+================================================
+FILE: tests/test_lifecycle_shutdown_wait.py
+================================================
+"""Regression tests for lifecycle async shutdown wait behavior."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from heber.ops.lifecycle import LifecycleManager
+
+
+@pytest.mark.asyncio
+async def test_async_wait_returns_when_shutdown_already_signaled() -> None:
+    lifecycle = LifecycleManager(service_name="test-lifecycle")
+    lifecycle.initiate_shutdown(reason="unit_test")
+
+    await asyncio.wait_for(lifecycle.async_wait_for_shutdown(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_async_wait_unblocks_after_late_shutdown_signal() -> None:
+    lifecycle = LifecycleManager(service_name="test-lifecycle")
+    wait_task = asyncio.create_task(lifecycle.async_wait_for_shutdown())
+    await asyncio.sleep(0)
+
+    lifecycle.initiate_shutdown(reason="unit_test")
+
+    await asyncio.wait_for(wait_task, timeout=0.1)
 
 
 
