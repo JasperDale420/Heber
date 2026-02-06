@@ -44,3 +44,8 @@ def test_pandas_timestamp_inputs_are_supported(calendar: MarketCalendar) -> None
 def test_invalid_datetime_input_raises_clear_error(calendar: MarketCalendar) -> None:
     with pytest.raises(TypeError, match="datetime or pandas.Timestamp"):
         calendar.is_market_open("2026-01-05")  # type: ignore[arg-type]
+
+
+def test_include_extended_true_is_explicitly_rejected() -> None:
+    with pytest.raises(NotImplementedError, match="include_extended=True"):
+        MarketCalendar(include_extended=True)

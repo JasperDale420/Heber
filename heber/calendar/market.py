@@ -49,12 +49,16 @@ class MarketCalendar:
 
         Args:
             exchange: Exchange code (ISO-10383), default XNYS (NYSE)
-            include_extended: Include extended hours (pre/post market).
-                             Default False since options liquidity is poor
-                             outside regular hours.
+            include_extended: Extended-hours support switch. Only regular sessions
+                             are currently supported. Setting this to True raises.
         """
+        if include_extended:
+            raise NotImplementedError(
+                "MarketCalendar does not currently support include_extended=True. "
+                "Use regular session hours or add explicit extended-session logic."
+            )
+
         self.exchange = exchange
-        self.include_extended = include_extended
         self._cal = xcals.get_calendar(exchange)
 
     def is_market_open(self, dt: datetime | None = None) -> bool:
