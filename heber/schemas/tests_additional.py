@@ -251,12 +251,41 @@ class TestForexCrypto:
 class TestSchemaRegistry:
     """Test schema registry."""
 
+    REQUIRED_SCHEMA_NAMES = {
+        # Market + options
+        "bars_daily",
+        "option_quotes",
+        "option_trades",
+        # Alternative
+        "congress_trades",
+        "lobbying",
+        # Fundamentals
+        "company_info",
+        "income_statement",
+        "balance_sheet",
+        "cash_flow",
+        "ratios",
+        # Macro + rates
+        "economic_indicators",
+        "interest_rate",
+        "treasury_yield",
+        # FX + crypto
+        "forex_rates",
+        "crypto_bars",
+        "crypto_quotes",
+    }
+
     def test_list_additional_schemas(self):
         schemas = list_additional_schemas()
 
-        assert len(schemas) == 16
-        assert "bars_daily" in schemas
-        assert "option_quotes" in schemas
+        # Registry can grow over time; assert required contracts rather than exact size.
+        assert set(schemas) >= self.REQUIRED_SCHEMA_NAMES
+        assert len(schemas) == len(set(schemas))
+
+    def test_required_schema_classes_are_registered(self):
+        for schema_name in self.REQUIRED_SCHEMA_NAMES:
+            schema_cls = get_schema_class(schema_name)
+            assert schema_cls is not None
 
     def test_get_schema_class(self):
         cls = get_schema_class("congress_trades")
