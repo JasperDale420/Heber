@@ -24,16 +24,12 @@ fi
 
 # Run vulnerability scan
 echo "Scanning for vulnerabilities..."
-trivy image \
+if trivy image \
     --config .trivy.yaml \
     --severity CRITICAL,HIGH \
     --exit-code 1 \
     --ignore-unfixed \
-    "${IMAGE}"
-
-SCAN_RESULT=$?
-
-if [ ${SCAN_RESULT} -eq 0 ]; then
+    "${IMAGE}"; then
     echo ""
     echo "============================================"
     echo "✅ No CRITICAL or HIGH vulnerabilities found"
@@ -49,10 +45,22 @@ fi
 # Additional checks
 echo ""
 echo "Running filesystem scan..."
-trivy fs \
+if trivy fs \
     --scanners secret,misconfig \
     --severity HIGH,CRITICAL \
-    .
+    --exit-code 1 \
+    .; then
+    echo ""
+    echo "============================================"
+    echo "✅ No HIGH/CRITICAL filesystem secrets or misconfigurations found"
+    echo "============================================"
+else
+    echo ""
+    echo "============================================"
+    echo "❌ Filesystem security findings detected! Fix before push."
+    echo "============================================"
+    exit 1
+fi
 
 echo ""
 echo "============================================"

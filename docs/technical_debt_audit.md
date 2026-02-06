@@ -303,8 +303,12 @@ Audit Pass 26 (2026-02-06, files reviewed directly):
 - heber/hotstore/sync.py
 - tests/test_hotstore_unification.py
 
+Audit Pass 27 (2026-02-06, files reviewed directly):
+- scripts/security-scan.sh
+- README.md
+
 Not yet audited in this run (recommend a future pass):
-- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
+- scripts/backup/clickhouse-backup.sh and scripts/backup/validate-catalog-backup.sh (`TD-059`, `TD-060`) post-remediation re-audit.
 - docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
@@ -343,6 +347,7 @@ Updated: 2026-02-06
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -354,6 +359,7 @@ Updated: 2026-02-06
 - Audit Pass 24 revalidated `TD-072` as resolved via `T-44`; schema registry tests are now growth-tolerant.
 - Audit Pass 25 revalidated `TD-069` as resolved via `T-42`; extended-hours mode is now explicit and non-silent.
 - Audit Pass 26 revalidated `TD-070` as resolved via `T-43`; Hot Store DDL and insert mappings now include provenance/quality base fields.
+- Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
 
 ## Executive Summary
 
@@ -429,7 +435,7 @@ Severity key: High, Medium, Low
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
 | TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
 | TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
-| TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
+| TD-065 | Low | Scripts | Filesystem security scan now fails on HIGH/CRITICAL secret/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
 | TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
 | TD-068 | Medium | Calendar | Market calendar naive datetime handling was remediated in `T-41` via UTC normalization and regression tests. |
@@ -739,6 +745,7 @@ Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so s
 Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
 Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but `trivy fs` invocation still omits it.
 Revalidated 2026-02-06 (Pass 19): Still open. Filesystem scan path still omits `--exit-code`, so high/critical findings will not block execution.
+Revalidated 2026-02-06 (Pass 27): Resolved. `trivy fs` now uses `--exit-code 1` with explicit failure handling.
 
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
@@ -863,7 +870,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-065, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-059, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

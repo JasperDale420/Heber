@@ -195,7 +195,7 @@ GitHub Actions workflow (`.github/workflows/ci.yaml`) runs:
 
 1. **Build** - Docker image creation
 2. **Test** - Linting (ruff, mypy) + pytest with coverage
-3. **Scan** - Trivy security scanning for vulnerabilities
+3. **Scan** - Trivy security scanning for vulnerabilities and filesystem secrets/misconfigurations (fails on HIGH/CRITICAL findings)
 4. **Push** - Container registry push (main branch only)
 5. **Deploy** - Staging -> Production (main branch only)
 
