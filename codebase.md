@@ -1,6 +1,6 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T17:49:21*
+*Generated: 2026-02-05T18:50:10*
 
 ---
 
@@ -9,7 +9,7 @@
 Directory: Users/jacobmcmillan/Empire/Heber
 Files analyzed: 241
 
-Estimated tokens: 400.3k
+Estimated tokens: 407.2k
 
 ---
 
@@ -617,6 +617,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 10: hotstore/schemas review)
 - Expanded technical debt audit (pass 11: infra/k8s review)
 - Expanded technical debt audit (pass 12: backfill/backtest review)
+- Expanded technical debt audit (pass 13: ops logging/reliability re-audit)
+- Expanded technical debt audit (pass 14: versioning + k8s runtime conformance re-audit)
+- Expanded technical debt audit (pass 15: backup/security scripts re-audit)
+- Expanded technical debt audit (pass 16: tracing + init/docs drift re-audit)
+- Expanded technical debt audit (pass 17: versioning/k8s runtime re-audit + worker entrypoint findings)
+- Expanded technical debt audit (pass 18: ops logging/reliability + UW coverage-doc re-audit)
+- Expanded technical debt audit (pass 19: backup/security scripts + labeling/data contract docs re-audit)
+- Expanded technical debt audit (pass 20: backfill/hotloader runtime conformance re-audit)
+- Expanded technical debt audit (pass 21: observability/runtime wiring + k8s metrics conformance re-audit)
+- Expanded technical debt audit (pass 22: calendar/hotstore/schema conformance re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -11672,12 +11682,98 @@ Audit Pass 12 (2026-02-05, files reviewed directly):
 - heber/backtest/integration.py
 - heber/backtest/tests.py
 
+Audit Pass 13 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- heber/ops/reliability.py
+
+Audit Pass 14 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/backfill.yaml
+
+Audit Pass 15 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/security-scan.sh
+
+Audit Pass 16 (2026-02-06, files reviewed directly):
+- heber/ops/tracing.py
+- scripts/init_volume.sh
+- docs/labeling_strategy.md
+- docs/data_contract.md
+
+Audit Pass 17 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- k8s/base/deployments/backfill.yaml
+- heber/catalog/api.py
+- heber/ops/metrics.py
+- heber/writer/consumer.py
+- heber/writer/compactor.py
+- heber/writer/hotstore.py
+- heber/hotstore/sync.py
+- heber/backfill/__init__.py
+
+Audit Pass 18 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- heber/ops/reliability.py
+- docs/UW_endpoints.md
+
+Audit Pass 19 (2026-02-06, files reviewed directly):
+- scripts/backup/clickhouse-backup.sh
+- scripts/backup/validate-catalog-backup.sh
+- scripts/security-scan.sh
+- docs/labeling_strategy.md
+- docs/data_contract.md
+
+Audit Pass 20 (2026-02-06, files reviewed directly):
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/hotloader.yaml
+- heber/backfill/__init__.py
+- heber/writer/hotstore.py
+
+Audit Pass 21 (2026-02-06, files reviewed directly):
+- heber/ops/health.py
+- heber/ops/metrics.py
+- heber/ops/alerting.py
+- heber/ops/__init__.py
+- k8s/base/deployments/catalog.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+
+Audit Pass 22 (2026-02-06, files reviewed directly):
+- heber/calendar/market.py
+- heber/hotstore/tables.py
+- heber/schemas/tests_additional.py
+
 Not yet audited in this run (recommend a future pass):
-None.
+- scripts/backup/clickhouse-backup.sh, scripts/backup/validate-catalog-backup.sh, and scripts/security-scan.sh (`TD-059`, `TD-060`, `TD-065`) post-remediation re-audit.
+- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
+- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
+- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
+- heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
+- heber/calendar/market.py, heber/hotstore/tables.py, and heber/schemas/tests_additional.py (`TD-068`, `TD-069`, `TD-070`, `TD-072`) post-remediation re-audit.
 
 ## Remediation Updates
 
-Updated: 2026-02-05
+Updated: 2026-02-06
 
 - `TD-015` addressed via `T-01`: Redis pending claims are consumed instead of dropped.
 - `TD-016` addressed via `T-02`: meta-label writer and dataset builder columns are aligned.
@@ -11704,10 +11800,17 @@ Updated: 2026-02-05
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
+- Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
+- Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
+- Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
+- Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (k8s worker entrypoints still fail/exit immediately).
+- Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-server wiring drift.
+- Audit Pass 22 revalidated `TD-068`, `TD-069`, `TD-070`, and `TD-072` as still open (calendar timezone handling, unused market-hours flag, Hot Store provenance-column drift, and brittle schema-count assertions).
+- Audit Pass 22 revalidated `TD-071` as resolved via `T-09` (`create_all_tables()` now supports sync clients and `create_all_tables_async()` handles awaitable execution).
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. Finally, Hot Store DDL and schema tests contain drift: tables omit some schema fields and async DDL creation assumes an async client while other modules use sync clients; schema tests are hardcoded to a count and can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, label reads can bypass ts_available if datasets are malformed, version selection is lexicographic, and retention scanning does not align to the Gold layout, so retention/version pruning is likely ineffective. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning and calendar logic, repository creation is hardcoded to a fixed S3 namespace and the calendar assumes tz-aware inputs, which can crash on naive datetimes. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. Finally, Hot Store DDL and schema tests still contain drift: tables omit some schema fields and schema tests are hardcoded to a count that can drift as schemas evolve. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -11777,7 +11880,7 @@ Severity key: High, Medium, Low
 | TD-060 | Medium | Scripts | Catalog backup validation can leak the test DB instance when any step fails. |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
-| TD-063 | Low | Docs | Data contract claims a Gold layout that doesn’t match the label writer’s on-disk layout. |
+| TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
 | TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
 | TD-065 | Low | Scripts | Security scan does not fail the build on filesystem secrets/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
@@ -11800,6 +11903,9 @@ Severity key: High, Medium, Low
 | TD-083 | Low | Backfill | Gap detection assumes `silver/{provider}_{feed}/dt=*` layout, which may not match actual partitions. |
 | TD-084 | Low | Backtest | Label reads use `read_gold()` without a version parameter, which may load unintended versions. |
 | TD-085 | Low | Backtest | Experiment results omit dataset as-of timestamps, weakening reproducibility. |
+| TD-086 | Medium | K8s | Backfill deployment runs `python -m heber.backfill`, but the package has no `__main__`, so the container exits immediately with module-execution errors. |
+| TD-087 | Medium | K8s | Hotloader deployment runs `python -m heber.writer.hotstore`, but that module is a compatibility facade with no long-running entrypoint, so the container exits immediately. |
+| TD-088 | Medium | Observability | Deployments advertise Prometheus scraping on port 9090, but service entrypoints do not start a metrics HTTP server, so scrape targets are non-functional. |
 
 ## Detailed Findings
 
@@ -11963,6 +12069,7 @@ Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetim
 **TD-039: Tracing decorator crashes when OpenTelemetry is not installed.**
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
 Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
+Revalidated 2026-02-06 (Pass 16): Still open. `traced()` still initializes `span_kind` with `SpanKind` before the OpenTelemetry availability guard.
 
 **TD-040: Async shutdown wait can hang if shutdown is signaled early.**
 Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
@@ -11977,10 +12084,14 @@ Update 2026-02-06: Remediated in `T-25` by reporting timeout status in metrics/l
 **TD-042: `configure_logging()` accepts a log level but does not apply it.**
 Evidence: `configure_logging()` has a `log_level` argument but does not set stdlib logging levels or apply it to structlog. This results in no effective filtering.
 Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
+Revalidated 2026-02-06 (Pass 13): Still open. `configure_logging()` continues to ignore `log_level` and uses `PrintLoggerFactory` without level filtering.
+Revalidated 2026-02-06 (Pass 18): Still open. `configure_logging()` still accepts but does not consume `log_level` in logger/filter configuration.
 
 **TD-043: Bloom filter deduplication has no TTL/rotation.**
 Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
 Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
+Revalidated 2026-02-06 (Pass 13): Still open. `EventDeduplicator` does not rotate/reset Bloom state and has no default persistent backing store implementation.
+Revalidated 2026-02-06 (Pass 18): Still open. Reliability module still has unbounded in-memory Bloom lifetime with hard-drop behavior in no-backing-store mode.
 
 **TD-044: In-memory DLQ is non-persistent.**
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
@@ -12045,58 +12156,78 @@ Recommendation: Support key:value tag filters or compare against values explicit
 **TD-059: ClickHouse backup script logs S3 bucket/prefix but doesn’t enforce them.**
 Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
 Recommendation: Pass bucket/prefix via the clickhouse-backup config/env or remove the misleading output.
+Revalidated 2026-02-06 (Pass 15): Still open. Script output advertises `S3_BUCKET/S3_PREFIX`, but backup/upload commands still rely on external clickhouse-backup config only.
+Revalidated 2026-02-06 (Pass 19): Still open. Script still only logs bucket/prefix while `create`/`upload` calls do not pass destination overrides.
 
 **TD-060: Catalog backup validation can leak the test DB instance on failure.**
 Evidence: `validate-catalog-backup.sh` uses `set -euo pipefail`, so if restore or validation queries fail, the cleanup section that deletes the test instance is skipped. This can leave `heber-catalog-backup-test` running indefinitely.
 Recommendation: Add a `trap` to ensure cleanup on exit and capture/handle validation failures before teardown.
+Revalidated 2026-02-06 (Pass 15): Still open. Script still lacks a `trap`/finally cleanup guard around restore and validation steps.
+Revalidated 2026-02-06 (Pass 19): Still open. Cleanup still only runs on success path; no guaranteed teardown trap exists.
 
 **TD-061: Volume init script assumes macOS tooling.**
-Evidence: `scripts/init_volume.sh` calls `dot_clean` unconditionally, which is macOS-only. On Linux, the script fails even if directory creation succeeded.
+Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
 Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
+Revalidated 2026-02-06 (Pass 16): Still open. Script still runs `dot_clean` unconditionally and relies on `|| true` rather than explicit platform detection.
 
 **TD-062: Labeling docs reference outdated API location/signature.**
 Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
 Recommendation: Update the docs to match the current module path and function signature.
+Revalidated 2026-02-06 (Pass 16): Still open. The snippet still points to `heber/firewall/splits.py` with stale parameter names.
+Revalidated 2026-02-06 (Pass 19): Still open. Train/test split snippet still references the stale module path and signature.
 
-**TD-063: Data contract Gold layout doesn’t match label writer layout.**
-Evidence: `docs/data_contract.md` states Gold is partitioned as `dataset/project/version/dt`, but label writes use `dataset={name}/type=label/version={version}` without `project` or `dt`.
-Recommendation: Align docs with actual Gold write layout, or update the writer to match the documented layout.
+**TD-063: Data contract docs drift from current schema sources and concrete Gold partition path conventions.**
+Evidence: `docs/data_contract.md` still lists `heber/writer/silver.py` as the Silver schema source, while canonical Arrow schemas are now defined in `heber/schemas/silver.py`. It also documents Gold partitioning in abstract (`dataset/project/version/dt`) without the key-value path convention used by writers (`dataset=.../project=.../version=.../dt=...`), which creates avoidable interpretation drift.
+Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silver.py` as the canonical schema source and show concrete key-value Gold path examples that match `write_gold()` / label-writer output.
+Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
+Revalidated 2026-02-06 (Pass 19): Still open. Schema source reference and Gold path notation remain unaligned with current implementation conventions.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
-Evidence: `docs/UW_endpoints.md` summary says “Complete (11)” while the tables above list many more endpoints as ✅. This makes the summary unreliable.
-Recommendation: Recompute totals automatically or remove summary counts to avoid drift.
+Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
+Recommendation: Derive summary counts from the table data (or remove manual totals/status buckets) to avoid recurrent drift.
+Revalidated 2026-02-06 (Pass 18): Still open. Summary totals and status buckets still conflict with table-level status rows.
 
 **TD-065: Security scan doesn’t fail on filesystem findings.**
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
 Recommendation: Add `--exit-code 1` and optionally `--severity` to make failures actionable in CI.
+Revalidated 2026-02-06 (Pass 15): Still open. Image scan uses `--exit-code`, but `trivy fs` invocation still omits it.
+Revalidated 2026-02-06 (Pass 19): Still open. Filesystem scan path still omits `--exit-code`, so high/critical findings will not block execution.
 
 **TD-066: lakeFS repo creation hardcodes the storage namespace.**
 Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `storage_namespace="s3://heber-lakehouse/{repo}"`, ignoring environment or configuration (e.g., MinIO, different bucket, or lakeFS defaults).
 Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
+Revalidated 2026-02-06 (Pass 14): Still open. Repository creation path still hardcodes `s3://heber-lakehouse/{repo}` and `LakeFSConfig` has no storage namespace field.
+Revalidated 2026-02-06 (Pass 17): Still open. Version manager continues to hardcode `storage_namespace` and lacks a configurable namespace field in `LakeFSConfig`.
 
 **TD-067: lakeFS metrics coverage is incomplete.**
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
 Recommendation: Instrument all lakeFS operations (success/failure/duration) consistently.
+Revalidated 2026-02-06 (Pass 17): Still open. `lakefs_operations`/`lakefs_operation_duration` remain wired only for `create_branch` and `commit`.
 
 **TD-068: Market calendar crashes on naive datetimes.**
 Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
 Recommendation: Normalize inputs by assuming UTC when tzinfo is missing (or require tz-aware inputs and validate early with a clear error).
+Revalidated 2026-02-06 (Pass 22): Still open. Converting naive timestamps still raises `TypeError` (`tz-naive Timestamp`).
 
 **TD-069: `include_extended` flag is unused.**
 Evidence: `MarketCalendar.include_extended` is stored but never used to expand the trading session to include pre/post-market. Methods always rely on the default exchange calendar schedule.
 Recommendation: Either wire in extended hours support or remove the flag to avoid misleading behavior.
+Revalidated 2026-02-06 (Pass 22): Still open. `include_extended` appears in constructor/docs state only and is not used by session logic.
 
 **TD-070: Hot Store DDL omits some base columns.**
 Evidence: `heber/hotstore/tables.py` defines Hot Store tables without `quality_flags` or `lineage` columns that exist in Silver base schema. This prevents storing provenance/quality flags in Hot Store and creates schema drift.
 Recommendation: Decide which base columns must be preserved in Hot Store and add them (or document the intentional omission).
+Revalidated 2026-02-06 (Pass 22): Still open. Current DDL still omits `quality_flags` and `lineage`.
 
 **TD-071: Hot Store DDL creation assumes async client.**
 Evidence: `create_all_tables()` is `async` and calls `await client.execute(stmt)`, but the repo’s primary ClickHouse client (`clickhouse_connect`) is synchronous. This mismatch can lead to runtime errors depending on which client is passed.
 Recommendation: Provide separate sync/async helpers or normalize on a single client and call pattern.
+Revalidated 2026-02-06 (Pass 22): Resolved. `create_all_tables()` now supports sync clients and `create_all_tables_async()` handles awaitable execution.
 
 **TD-072: Additional schema tests hardcode the schema count.**
 Evidence: `tests_additional.py` asserts `len(schemas) == 16`. As new schemas are added, the test will fail even if behavior is correct.
 Recommendation: Assert on minimum required schemas or specific known names rather than total count.
+Revalidated 2026-02-06 (Pass 22): Still open. Test continues to assert an exact schema count.
 
 **TD-073: Terraform references modules that are missing from the repo.**
 Evidence: `infrastructure/terraform/main.tf` references `./modules/vpc`, `./modules/s3`, `./modules/rds`, etc., but there is no `modules/` directory under `infrastructure/terraform/`. Terraform will fail at init/plan.
@@ -12109,10 +12240,16 @@ Recommendation: Update commands to valid module paths (e.g., `heber.writer.consu
 **TD-075: HPA targets custom metrics that are not exported.**
 Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
 Recommendation: Export the needed metrics or change the HPA configuration to CPU/memory scaling or existing metrics.
+Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
+Revalidated 2026-02-06 (Pass 17): Still open. Metrics module still does not define `heber_writer_pending_batch_rows` or `heber_catalog_request_latency_p99_seconds`.
+Revalidated 2026-02-06 (Pass 21): Still open. HPA manifests continue to reference unavailable writer/catalog custom metrics.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
 Recommendation: Add health endpoints or update probes to use a TCP or exec check, or to an actual HTTP server if one exists.
+Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
+Revalidated 2026-02-06 (Pass 17): Still open. Catalog exposes `/health`, but worker modules still do not run HTTP health servers on probed ports.
+Revalidated 2026-02-06 (Pass 21): Still open. Consumer/writer deployments still probe HTTP health endpoints on a metrics port with no health server process.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
@@ -12150,6 +12287,20 @@ Recommendation: Add a label version parameter (or reuse `label_version`) and pas
 Evidence: `ExperimentConfig` and results capture dataset names and versions but do not persist the as-of timestamp used for feature/label reads, which is critical for reproducibility.
 Recommendation: Record `asof_time` per split or overall experiment in the config/results metadata.
 
+**TD-086: Backfill deployment entrypoint is not executable.**
+Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
+Recommendation: Add a concrete executable backfill entrypoint (e.g., `heber.backfill.main`) and update the deployment command to that module; then align probes with the actual service mode.
+Revalidated 2026-02-06 (Pass 20): Still open. Deployment command is unchanged and module execution still fails with missing `__main__`.
+
+**TD-087: Hotloader deployment command exits immediately.**
+Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hotstore`, but `heber/writer/hotstore.py` is a compatibility re-export with no `main()` loop. Executing it exits immediately, so pods will churn under restart policy.
+Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
+Revalidated 2026-02-06 (Pass 20): Still open. Deployment still invokes facade module, and `python -m heber.writer.hotstore` still exits immediately.
+
+**TD-088: Prometheus scrape annotations/ports are not backed by running exporters.**
+Evidence: Deployments annotate `prometheus.io/scrape: "true"` with `prometheus.io/port: "9090"` (catalog/consumer/writer and other workers), but runtime entrypoints do not call `start_metrics_server()` from `heber.ops.metrics`. Catalog runs only Uvicorn on 8080, and worker modules run non-HTTP loops without starting a Prometheus HTTP endpoint.
+Recommendation: Start a metrics server on the advertised port in each service entrypoint (or remove/adjust scrape annotations/ports to match reality), and add an integration check that verifies `/metrics` reachability per deployment.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -12157,7 +12308,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-060, TD-066, TD-068, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
@@ -12183,7 +12334,7 @@ This plan converts high-severity audit items into ticket-ready tasks with clear 
 
 ## Implementation Status
 
-Updated: 2026-02-05
+Updated: 2026-02-06
 
 - `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
 - `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
@@ -12210,6 +12361,15 @@ Updated: 2026-02-05
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
+- Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
+- Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
+- Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
+- Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086`/`TD-087` for non-running k8s worker entrypoints.
+- Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging filter wiring, dedupe rotation policy, UW endpoint summary drift).
+- Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
+- Audit Pass 20 revalidated `TD-086` and `TD-087` as still open (backfill/hotloader deployment entrypoints remain non-runnable).
+- Audit Pass 21 revalidated `TD-075` and `TD-076` as still open, and added `TD-088` for Prometheus scrape/metrics-exporter wiring drift.
+- Audit Pass 22 revalidated `TD-068`, `TD-069`, `TD-070`, and `TD-072` as still open; `TD-071` was confirmed resolved by the `T-09` Hot Store table-helper refactor.
 
 ## Prioritization Approach
 
@@ -12553,6 +12713,343 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-26: Apply Effective Log-Level Filtering (TD-042)
+
+Priority: P1
+
+Description: `configure_logging()` accepts `log_level` but does not apply it to either stdlib logging or structlog filtering. Implement consistent level parsing/application for production and dev outputs.
+
+Scope:
+- `heber/ops/logging.py`
+- New regression tests for level filtering behavior
+- `docs/configuration.md` (if env var/value expectations are documented)
+
+Acceptance Criteria:
+- `configure_logging(log_level=...)` enforces filtering for emitted logs.
+- Invalid log level values fail fast with a clear error (or are normalized deterministically).
+- Behavior is consistent between JSON and console renderers.
+- Regression tests validate that DEBUG messages are suppressed at INFO and emitted at DEBUG.
+
+Estimate: 0.5 day
+
+### T-27: Add Dedupe Rotation / Backing-Store Policy (TD-043)
+
+Priority: P1
+
+Description: In-memory Bloom dedupe currently accumulates false positives without rotation and treats Bloom matches as hard duplicates when no backing store exists. Add bounded-state dedupe behavior with safer fallback semantics.
+
+Scope:
+- `heber/ops/reliability.py`
+- New regression tests for dedupe rollover/reset behavior
+- Runtime config/docs for dedupe strategy selection
+
+Acceptance Criteria:
+- Deduper uses a bounded-time strategy (rotation/reset/TTL) to limit Bloom saturation effects.
+- No-backing-store mode does not permanently increase hard-drop risk over long runtimes.
+- Dedupe stats expose rollover/reset events for observability.
+- Regression tests cover duplicate detection before and after rotation boundaries.
+
+Estimate: 1-2 days
+
+### T-28: Make lakeFS Storage Namespace Configurable (TD-066)
+
+Priority: P1
+
+Description: lakeFS repository creation currently hardcodes `s3://heber-lakehouse/{repo}`, which prevents environment-specific storage namespace configuration (e.g., MinIO/staging buckets).
+
+Scope:
+- `heber/versioning/__init__.py`
+- Versioning docs/config references for new namespace setting
+- Regression tests for config/env resolution
+
+Acceptance Criteria:
+- `LakeFSConfig` supports configurable storage namespace template or base namespace.
+- Repository creation uses the configured namespace value instead of hardcoded literals.
+- Default behavior remains backward-compatible when new env vars are unset.
+- Regression tests validate repository namespace selection from env/config.
+
+Estimate: 0.5-1 day
+
+### T-29: Align K8s HPA Metrics and Probes With Runtime Reality (TD-075, TD-076)
+
+Priority: P1
+
+Description: HPA specs reference metrics that are not emitted, and several deployments probe HTTP endpoints that worker processes do not expose. Align manifests with exported metrics and actual health-check surfaces.
+
+Scope:
+- `k8s/base/hpa/*.yaml`
+- `k8s/base/deployments/*.yaml` (consumer, writer, compactor, hotloader, and related workers)
+- Optional runtime metrics/health wiring if preferred over manifest-only changes
+
+Acceptance Criteria:
+- HPA rules use existing/exported metrics or fallback to CPU/memory autoscaling.
+- Liveness/readiness probes target real endpoints/check mechanisms for each worker type.
+- Updated manifests pass a dry-run schema validation (`kubectl kustomize`/`kubectl apply --dry-run=client`).
+- Added regression/static checks to prevent future drift between manifests and runtime endpoints/metrics.
+
+Estimate: 1-2 days
+
+### T-30: Align ClickHouse Backup Script With Effective S3 Destination (TD-059)
+
+Priority: P1
+
+Description: Backup script currently prints `S3_BUCKET/S3_PREFIX` values but does not apply them to `clickhouse-backup` commands, creating misleading operational output.
+
+Scope:
+- `scripts/backup/clickhouse-backup.sh`
+- Backup/runbook docs referencing S3 backup path behavior
+
+Acceptance Criteria:
+- Script either applies bucket/prefix via clickhouse-backup config/env integration or removes misleading destination output.
+- Verification output reflects the actual remote destination used by `clickhouse-backup`.
+- Regression/smoke checks verify backup list/verification path consistency.
+
+Estimate: 0.5 day
+
+### T-31: Guarantee Catalog Backup Cleanup on Failure (TD-060)
+
+Priority: P1
+
+Description: Validation script may leak the temporary restored RDS instance when restore/query steps fail due to `set -e` exit before cleanup.
+
+Scope:
+- `scripts/backup/validate-catalog-backup.sh`
+
+Acceptance Criteria:
+- Script uses a `trap` (or equivalent) to always delete the test instance on exit/failure.
+- Failure paths still preserve enough logs/output for diagnosis.
+- Success/failure runs both exercise cleanup path deterministically.
+
+Estimate: 0.5 day
+
+### T-32: Enforce Failure on Filesystem Secret/Misconfig Findings (TD-065)
+
+Priority: P1
+
+Description: `trivy fs` scan in `security-scan.sh` currently does not set a non-zero exit code on findings, reducing CI gate effectiveness.
+
+Scope:
+- `scripts/security-scan.sh`
+- Any CI docs that describe security scan failure behavior
+
+Acceptance Criteria:
+- Filesystem scan uses explicit non-zero exit behavior (`--exit-code 1`) for configured severities.
+- Script exits non-zero when critical/high filesystem findings are present.
+- Documentation reflects expected blocking behavior.
+
+Estimate: 0.5 day
+
+### T-33: Harden Optional OpenTelemetry Tracing Path (TD-039)
+
+Priority: P1
+
+Description: `traced()` still dereferences `SpanKind` before checking OpenTelemetry availability. In environments without OTel installed, decorated functions raise `NameError` instead of safely falling back to noop tracing.
+
+Scope:
+- `heber/ops/tracing.py`
+- Regression tests covering OTel-missing fallback behavior
+
+Acceptance Criteria:
+- `@traced` functions execute without error when OpenTelemetry packages are absent.
+- Span kind resolution is guarded behind availability checks and defaults safely in noop mode.
+- Regression tests simulate OTel-unavailable import/runtime path and verify no `NameError` is raised.
+
+Estimate: 0.5 day
+
+### T-34: Make Volume Init Script Explicitly Cross-Platform (TD-061)
+
+Priority: P1
+
+Description: `init_volume.sh` always invokes macOS `dot_clean` and relies on `|| true` fallback. Replace implicit shell fallback with explicit platform/tool detection and clear logging.
+
+Scope:
+- `scripts/init_volume.sh`
+- `docs/operations/deployment.md` (or relevant setup docs if script behavior is documented)
+
+Acceptance Criteria:
+- Script checks OS/tool availability before invoking `dot_clean`.
+- Non-macOS runs emit explicit skip messaging rather than implicit command fallback behavior.
+- macOS behavior remains unchanged for AppleDouble cleanup.
+
+Estimate: 0.5 day
+
+### T-35: Refresh Labeling Strategy API References (TD-062)
+
+Priority: P1
+
+Description: Labeling documentation still references `heber/firewall/splits.py` and stale split-validation parameters that no longer match runtime code.
+
+Scope:
+- `docs/labeling_strategy.md`
+- `heber/firewall/validation.py` (for signature/source-of-truth cross-check only)
+
+Acceptance Criteria:
+- Docs reference current split-validation module path.
+- Function snippet and parameter names match the current implementation.
+- Docs include at least one concrete call example that stays in sync with current API.
+
+Estimate: 0.5 day
+
+### T-36: Align Data Contract Doc With Canonical Schema Source + Gold Paths (TD-063)
+
+Priority: P1
+
+Description: Data contract documentation still points Silver schema ownership at `heber/writer/silver.py` and uses abstract Gold path notation that drifts from concrete key-value partition paths.
+
+Scope:
+- `docs/data_contract.md`
+- `heber/schemas/silver.py`
+- `heber/sdk/client.py`
+- `heber/watch/writer.py`
+
+Acceptance Criteria:
+- Doc references `heber/schemas/silver.py` as canonical Silver Arrow schema source.
+- Gold layout section includes concrete path examples in `dataset=.../project=.../version=.../dt=...` form.
+- Contract examples align with SDK/label writer output conventions.
+
+Estimate: 0.5 day
+
+### T-37: Make Backfill Deployment Entrypoint Executable (TD-086)
+
+Priority: P1
+
+Description: Backfill deployment currently runs `python -m heber.backfill`, but the package has no `__main__` module, so pods fail at startup.
+
+Scope:
+- `k8s/base/deployments/backfill.yaml`
+- Backfill runtime module(s) under `heber/backfill/` (add executable entrypoint)
+- Optional docs for backfill runtime mode
+
+Acceptance Criteria:
+- `python -m ...` command used by deployment resolves to an executable module with a running process model.
+- Backfill pod no longer exits immediately due to module execution error.
+- Probes/ports in deployment match the actual backfill runtime mode.
+
+Estimate: 0.5-1 day
+
+### T-38: Add Real Hotloader Service Entrypoint (TD-087)
+
+Priority: P1
+
+Description: Hotloader deployment runs a compatibility facade module that exits immediately. Add a long-running hotloader entrypoint and align deployment command/probes.
+
+Scope:
+- `heber/hotstore/sync.py` (or new dedicated service module)
+- `heber/writer/hotstore.py` (if keeping compatibility facade separate)
+- `k8s/base/deployments/hotloader.yaml`
+
+Acceptance Criteria:
+- Deployment command targets a long-running hotloader process (not a facade import module).
+- Hotloader process performs continuous sync/event handling as intended.
+- Probe strategy reflects real runtime behavior (HTTP if exposed, otherwise tcp/exec).
+
+Estimate: 1 day
+
+### T-39: Reconcile UW Endpoint Tracker Summary With Table Statuses (TD-064)
+
+Priority: P1
+
+Description: `docs/UW_endpoints.md` summary totals and status buckets are manually maintained and now diverge from endpoint table rows, reducing trust in integration coverage tracking.
+
+Scope:
+- `docs/UW_endpoints.md`
+- Optional helper script/check that derives summary counts from table status cells
+
+Acceptance Criteria:
+- Summary counts match table row statuses exactly.
+- “In Progress” and “Not Started” sections only include endpoints actually marked that way in tables.
+- Add a lightweight repeatable check or generation note to prevent future drift.
+
+Estimate: 0.5 day
+
+### T-40: Align Prometheus Scrape Targets With Running Metrics Exporters (TD-088)
+
+Priority: P1
+
+Description: Deployments advertise Prometheus scrape on port `9090`, but runtime entrypoints do not start a metrics HTTP server, so scrape targets and related dashboards/alerts are partially non-functional.
+
+Scope:
+- Service entrypoints for catalog/consumer/writer/compactor/hotloader/backfill
+- `heber/ops/metrics.py` usage (`start_metrics_server`)
+- `k8s/base/deployments/*.yaml` scrape annotations and metrics container ports
+
+Acceptance Criteria:
+- Each deployment with `prometheus.io/scrape: "true"` exposes a reachable `/metrics` endpoint on the declared port.
+- Service entrypoints either start metrics exporters or deployment annotations/ports are corrected to match actual runtime behavior.
+- Add a lightweight validation check (script/test) that confirms metrics endpoint reachability assumptions stay in sync with manifests.
+
+Estimate: 1 day
+
+### T-41: Harden MarketCalendar Timezone Input Handling (TD-068)
+
+Priority: P1
+
+Description: `MarketCalendar` converts input timestamps with `tz_convert()` without handling naive datetimes, which raises at runtime and can break watch/calendar flows.
+
+Scope:
+- `heber/calendar/market.py`
+- Calendar-related unit tests in `heber/watch/` and/or new focused calendar tests
+
+Acceptance Criteria:
+- All public `MarketCalendar` methods either accept naive timestamps by localizing with documented semantics (for example assume UTC) or reject them with deterministic, explicit validation errors.
+- Regression tests cover naive `datetime`, timezone-aware `datetime`, and `pd.Timestamp` inputs.
+- Behavior is documented in class/module docstrings.
+
+Estimate: 0.5 day
+
+### T-42: Implement or Remove Extended-Hours Calendar Flag (TD-069)
+
+Priority: P1
+
+Description: `include_extended` is currently configuration-only and does not alter scheduling/trading-window logic, which is misleading for callers.
+
+Scope:
+- `heber/calendar/market.py`
+- Any watch-service callsites that construct `MarketCalendar`
+- Documentation for calendar behavior
+
+Acceptance Criteria:
+- `include_extended=True` produces a materially different, tested session window behavior (pre/post-market) OR the flag is removed and callers/docs are updated.
+- Constructor/docs accurately reflect supported behavior.
+- Regression tests assert the chosen behavior.
+
+Estimate: 0.5 day
+
+### T-43: Resolve Hot Store Base-Column Drift in DDL (TD-070)
+
+Priority: P1
+
+Description: Hot Store tables omit base provenance/quality columns (`quality_flags`, `lineage`) that exist in Silver schemas, causing schema drift and reduced traceability.
+
+Scope:
+- `heber/hotstore/tables.py`
+- `heber/schemas/silver.py` (contract reference)
+- Any writers/sync code that inserts into Hot Store
+
+Acceptance Criteria:
+- Hot Store DDL either includes required base columns with compatible types or explicitly documents a deliberate omission in code/docs.
+- Insert paths are updated (or validated) so writes remain successful with the selected schema.
+- A schema-conformance regression test checks expected base columns for each hot table definition.
+
+Estimate: 0.5-1 day
+
+### T-44: Make Additional Schema Tests Growth-Tolerant (TD-072)
+
+Priority: P1
+
+Description: `tests_additional.py` asserts a fixed total schema count (`16`), creating brittle failures when valid schemas are added.
+
+Scope:
+- `heber/schemas/tests_additional.py`
+- Optional schema-registry docs if test expectations are codified
+
+Acceptance Criteria:
+- Tests assert required schema names/contracts rather than an exact global count.
+- Adding a valid new schema does not fail unrelated assertions.
+- Test output remains clear about which required schema contract failed when a regression occurs.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -12656,6 +13153,25 @@ Estimate: 1 day
 23. T-23 (Flow feature time-window hardening)
 24. T-24 (Lifecycle async shutdown wait hang fix)
 25. T-25 (Lifecycle shutdown timeout status fix)
+26. T-26 (Logging level filtering)
+27. T-27 (Dedupe rotation/backing-store policy)
+28. T-28 (lakeFS storage namespace configurability)
+29. T-29 (K8s HPA/probe conformance)
+30. T-30 (ClickHouse backup S3 destination alignment)
+31. T-31 (Catalog backup cleanup trap)
+32. T-32 (Security scan filesystem exit enforcement)
+33. T-33 (Tracing optional-dependency hardening)
+34. T-34 (Cross-platform volume init script)
+35. T-35 (Labeling strategy doc refresh)
+36. T-36 (Data contract doc alignment)
+37. T-37 (Backfill deployment entrypoint fix)
+38. T-38 (Hotloader runtime entrypoint)
+39. T-39 (UW endpoint tracker summary reconciliation)
+40. T-40 (Prometheus scrape/exporter alignment)
+41. T-41 (MarketCalendar timezone input hardening)
+42. T-42 (Extended-hours calendar flag behavior)
+43. T-43 (Hot Store DDL base-column conformance)
+44. T-44 (Additional schema test stability)
 
 
 

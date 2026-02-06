@@ -61,16 +61,12 @@ class MarketCalendar:
         """Check if market is currently open.
 
         Args:
-            dt: Datetime to check (default: now)
+            dt: Datetime to check (default: now). Naive values are treated as UTC.
 
         Returns:
             True if market is open for trading
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        # Convert to pandas Timestamp for exchange-calendars
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         try:
             return self._cal.is_open_on_minute(ts)
@@ -78,19 +74,16 @@ class MarketCalendar:
             # Date out of calendar range
             return False
 
-    def is_trading_day(self, dt: datetime | None = None) -> bool:
+    def is_trading_day(self, dt: datetime | pd.Timestamp | None = None) -> bool:
         """Check if date is a trading day (not weekend/holiday).
 
         Args:
-            dt: Datetime to check (default: now)
+            dt: Datetime to check (default: now). Naive values are treated as UTC.
 
         Returns:
             True if the date has a trading session
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         date = ts.date()
 
         try:
@@ -98,19 +91,16 @@ class MarketCalendar:
         except ValueError:
             return False
 
-    def session_open(self, dt: datetime | None = None) -> datetime:
+    def session_open(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get market open time for the session containing dt.
 
         Args:
-            dt: Datetime within the session (default: now)
+            dt: Datetime within the session (default: now). Naive values are treated as UTC.
 
         Returns:
             Market open time as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         session = self._get_session(ts)
 
         if session is None:
@@ -120,21 +110,18 @@ class MarketCalendar:
         open_time = self._cal.session_open(session)
         return open_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def session_close(self, dt: datetime | None = None) -> datetime:
+    def session_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get market close time for the session containing dt.
 
         Handles early closes (e.g., day after Thanksgiving at 1pm).
 
         Args:
-            dt: Datetime within the session (default: now)
+            dt: Datetime within the session (default: now). Naive values are treated as UTC.
 
         Returns:
             Market close time as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
         session = self._get_session(ts)
 
         if session is None:
@@ -144,21 +131,18 @@ class MarketCalendar:
         close_time = self._cal.session_close(session)
         return close_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def next_open(self, dt: datetime | None = None) -> datetime:
+    def next_open(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market open time.
 
         If market is currently open, returns the open time of the next session.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Next market open as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         # Find next session
         next_session = self._next_session(ts)
@@ -166,22 +150,19 @@ class MarketCalendar:
 
         return open_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def next_close(self, dt: datetime | None = None) -> datetime:
+    def next_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market close time.
 
         If market is currently open, returns close time of current session.
         If market is closed, returns close time of next session.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Next market close as UTC datetime
         """
-        if dt is None:
-            dt = datetime.now(UTC)
-
-        ts = pd.Timestamp(dt).tz_convert(ET)
+        ts = self._to_exchange_timestamp(dt)
 
         if self.is_market_open(dt):
             # Return current session's close
@@ -195,7 +176,7 @@ class MarketCalendar:
         close_time = self._cal.session_close(next_session)
         return close_time.to_pydatetime().replace(tzinfo=UTC)
 
-    def add_trading_hours(self, dt: datetime, hours: float) -> datetime:
+    def add_trading_hours(self, dt: datetime | pd.Timestamp, hours: float) -> datetime:
         """Add trading hours to a timestamp, skipping non-trading time.
 
         Essential for calculating watch window_end in *market time* rather
@@ -203,14 +184,14 @@ class MarketCalendar:
         actual trading, not calendar time.
 
         Args:
-            dt: Starting datetime
+            dt: Starting datetime. Naive values are treated as UTC.
             hours: Number of trading hours to add
 
         Returns:
             Datetime after the specified trading hours have elapsed
         """
         minutes_remaining = int(hours * 60)
-        current = pd.Timestamp(dt).tz_convert(ET)
+        current = self._to_exchange_timestamp(dt)
 
         while minutes_remaining > 0:
             # If not during trading hours, advance to next open
@@ -244,8 +225,8 @@ class MarketCalendar:
 
     def trading_minutes_until(
         self,
-        start: datetime,
-        end: datetime,
+        start: datetime | pd.Timestamp,
+        end: datetime | pd.Timestamp,
     ) -> int:
         """Count trading minutes between two times.
 
@@ -253,14 +234,14 @@ class MarketCalendar:
         how long a trade actually took in *market time*.
 
         Args:
-            start: Start datetime
-            end: End datetime
+            start: Start datetime. Naive values are treated as UTC.
+            end: End datetime. Naive values are treated as UTC.
 
         Returns:
             Number of trading minutes between start and end
         """
-        start_ts = pd.Timestamp(start).tz_convert(ET)
-        end_ts = pd.Timestamp(end).tz_convert(ET)
+        start_ts = self._to_exchange_timestamp(start)
+        end_ts = self._to_exchange_timestamp(end)
 
         if end_ts <= start_ts:
             return 0
@@ -319,25 +300,43 @@ class MarketCalendar:
 
         return end_ts, minutes
 
-    def seconds_until_open(self, dt: datetime | None = None) -> float:
+    def seconds_until_open(self, dt: datetime | pd.Timestamp | None = None) -> float:
         """Get seconds until market opens.
 
         Returns 0 if market is currently open.
 
         Args:
-            dt: Reference time (default: now)
+            dt: Reference time (default: now). Naive values are treated as UTC.
 
         Returns:
             Seconds until next market open, or 0 if already open
         """
-        if dt is None:
-            dt = datetime.now(UTC)
+        dt_utc = self._to_utc_timestamp(dt).to_pydatetime()
 
-        if self.is_market_open(dt):
+        if self.is_market_open(dt_utc):
             return 0.0
 
-        next_open = self.next_open(dt)
-        return max(0.0, (next_open - dt).total_seconds())
+        next_open = self.next_open(dt_utc)
+        return max(0.0, (next_open - dt_utc).total_seconds())
+
+    def _to_utc_timestamp(self, dt: datetime | pd.Timestamp | None) -> pd.Timestamp:
+        """Normalize supported datetime inputs to timezone-aware UTC pandas timestamp.
+
+        Naive datetime-like values are interpreted as UTC.
+        """
+        if dt is None:
+            return pd.Timestamp(datetime.now(UTC))
+        if not isinstance(dt, datetime | pd.Timestamp):
+            raise TypeError(f"MarketCalendar expects datetime or pandas.Timestamp, got {type(dt).__name__}")
+
+        ts = pd.Timestamp(dt)
+        if ts.tz is None:
+            return ts.tz_localize(UTC)
+        return ts.tz_convert(UTC)
+
+    def _to_exchange_timestamp(self, dt: datetime | pd.Timestamp | None) -> pd.Timestamp:
+        """Convert supported inputs to exchange timezone timestamp for calendar checks."""
+        return self._to_utc_timestamp(dt).tz_convert(ET)
 
     def _get_session(self, ts: pd.Timestamp) -> pd.Timestamp | None:
         """Get the trading session for a timestamp."""
