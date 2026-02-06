@@ -9,20 +9,21 @@
 # =============================================================================
 
 terraform {
-  backend "s3" {
-    bucket         = "heber-terraform-state"
-    key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "heber-terraform-locks"
-    encrypt        = true
-  }
+  # Intentionally partial: pass backend settings at init time, e.g.
+  # terraform init -backend-config=backend.hcl
+  backend "s3" {}
+}
+
+variable "aws_region" {
+  description = "AWS region for production infrastructure"
+  type        = string
 }
 
 module "heber" {
   source = "../../"
 
   environment        = "prod"
-  region             = "us-east-1"
+  region             = var.aws_region
   eks_node_count     = 6
   rds_instance_class = "db.r6g.large"
   redis_node_type    = "cache.r6g.large"

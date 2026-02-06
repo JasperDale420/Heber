@@ -378,8 +378,16 @@ Audit Pass 40 (2026-02-06, files reviewed directly):
 - heber/versioning/__init__.py
 - tests/test_lakefs_operation_metrics.py
 
+Audit Pass 41 (2026-02-06, files reviewed directly):
+- infrastructure/terraform/environments/dev/main.tf
+- infrastructure/terraform/environments/staging/main.tf
+- infrastructure/terraform/environments/prod/main.tf
+- infrastructure/terraform/environments/dev/backend.hcl
+- infrastructure/terraform/environments/staging/backend.hcl
+- infrastructure/terraform/environments/prod/backend.hcl
+- tests/test_terraform_environment_config.py
+
 Not yet audited in this run (recommend a future pass):
-- infrastructure/terraform/environments/dev/main.tf (`TD-079`) hardcoded region/backend re-audit.
 - heber/backfill/writer.py (`TD-080`, `TD-082`) Bronze/catalog update + missing-pyarrow failure-path re-audit.
 
 ## Remediation Updates
@@ -424,6 +432,7 @@ Updated: 2026-02-06
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
+- `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -455,6 +464,7 @@ Updated: 2026-02-06
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
+- Audit Pass 41 revalidated `TD-079` as resolved via `T-46`; Terraform environment region/backend settings now support override without editing `main.tf`.
 
 ## Executive Summary
 
@@ -936,6 +946,8 @@ Recommendation: Add namespace-scoped secrets/serviceaccounts per overlay or docu
 **TD-079: Terraform environment settings are hardcoded.**
 Evidence: Each env `main.tf` pins `region = "us-east-1"` and backend config is fixed. This makes multi-region deployment or account reuse harder.
 Recommendation: Parameterize region and backend settings via variables or separate workspace configs.
+Update 2026-02-06: Remediated in `T-46` by switching env modules to `var.aws_region`, making backend blocks partial, and moving per-env backend defaults into `backend.hcl` files without hardcoded region keys.
+Revalidated 2026-02-06 (Pass 41): Resolved. Environment configs now support region/backend override workflows without changing source manifests.
 
 **TD-080: Backfill does not update Bronze or Catalog metadata.**
 Evidence: `BackfillWriter.write_batch()` writes only to Silver temp partitions and logs that compactor will merge. It does not write Bronze, nor does it update catalog coverage or schema metadata.
@@ -992,7 +1004,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

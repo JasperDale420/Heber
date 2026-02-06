@@ -53,6 +53,7 @@ Updated: 2026-02-06
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
 - `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
+- `T-46` complete (`TD-079`): Terraform environment modules now accept `aws_region` variables, backend blocks are partial, and per-env backend configuration moved to `backend.hcl` without hardcoded region keys.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -80,6 +81,7 @@ Updated: 2026-02-06
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
+- Audit Pass 41 revalidated `TD-079` as resolved via `T-46`.
 
 ## Prioritization Approach
 
@@ -777,6 +779,27 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-46: Parameterize Terraform Environment Region/Backend Wiring (TD-079)
+
+Priority: P1
+
+Description: Environment Terraform configs hardcoded `us-east-1` in module inputs and S3 backend blocks, reducing portability across regions/accounts.
+
+Scope:
+- `infrastructure/terraform/environments/dev/main.tf`
+- `infrastructure/terraform/environments/staging/main.tf`
+- `infrastructure/terraform/environments/prod/main.tf`
+- `infrastructure/terraform/environments/*/backend.hcl`
+- `tests/test_terraform_environment_config.py`
+
+Acceptance Criteria:
+- Environment module region inputs use `var.aws_region` instead of hardcoded region literals.
+- Environment `main.tf` files use partial backend blocks (`backend "s3" {}`) and backend settings are provided via per-env config files.
+- Backend config files keep bucket/key/lock defaults but do not hardcode `region`.
+- Regression tests verify env Terraform wiring remains overrideable.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -900,3 +923,4 @@ Estimate: 1 day
 43. T-43 (Hot Store DDL base-column conformance)
 44. T-44 (Additional schema test stability)
 45. T-45 (lakeFS operation metrics coverage)
+46. T-46 (Terraform environment region/backend parameterization)

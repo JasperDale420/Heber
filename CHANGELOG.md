@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 38: worker entrypoint runtime remediation re-audit)
 - Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
 - Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
+- Expanded technical debt audit (pass 41: Terraform environment region/backend parameterization re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -297,6 +298,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added success/error counter and duration histogram instrumentation for `create_tag`, `list_tags`, `merge`, and `diff`
   - Error paths now include repository-resolution and branch-resolution failures for these operations
   - Added regression tests for operation metrics coverage across success and error paths (`tests/test_lakefs_operation_metrics.py`)
+- **Terraform Environment Region/Backend Parameterization** (`infrastructure/terraform/environments/*`)
+  - Replaced hardcoded environment module region literals with `var.aws_region` in `dev`/`staging`/`prod` Terraform entrypoints
+  - Converted environment S3 backend blocks to partial configuration and moved backend defaults into per-environment `backend.hcl` files
+  - Removed hardcoded backend region keys and added regression checks for overrideable Terraform env wiring (`tests/test_terraform_environment_config.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

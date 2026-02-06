@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-06T12:56:18*
+*Generated: 2026-02-06T13:56:38*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 251
+Files analyzed: 252
 
-Estimated tokens: 421.0k
+Estimated tokens: 423.9k
 
 ---
 
@@ -312,6 +312,7 @@ Directory structure:
     │   ├── test_init_volume_platform_guard.py
     │   ├── test_k8s_hpa_probe_conformance.py
     │   ├── test_lakefs_namespace_config.py
+    │   ├── test_lakefs_operation_metrics.py
     │   ├── test_lifecycle_shutdown_timeout.py
     │   ├── test_lifecycle_shutdown_wait.py
     │   ├── test_logging_level_filtering.py
@@ -654,6 +655,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 37: cross-platform init-volume remediation re-audit)
 - Expanded technical debt audit (pass 38: worker entrypoint runtime remediation re-audit)
 - Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
+- Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -889,6 +891,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added configurable storage namespace resolution via `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`
   - Repository creation now uses config-driven namespace resolution instead of hardcoded `s3://heber-lakehouse/{repo}`
   - Added regression tests for namespace resolution and repository create-path wiring (`tests/test_lakefs_namespace_config.py`)
+- **lakeFS Operation Metrics Coverage** (`heber/versioning/__init__.py`)
+  - Added success/error counter and duration histogram instrumentation for `create_tag`, `list_tags`, `merge`, and `diff`
+  - Error paths now include repository-resolution and branch-resolution failures for these operations
+  - Added regression tests for operation metrics coverage across success and error paths (`tests/test_lakefs_operation_metrics.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
@@ -11942,8 +11948,13 @@ Audit Pass 39 (2026-02-06, files reviewed directly):
 - heber/backfill/__main__.py
 - tests/test_metrics_exporter_alignment.py
 
+Audit Pass 40 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- tests/test_lakefs_operation_metrics.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/versioning/__init__.py (`TD-067`) operation-metrics coverage re-audit.
+- infrastructure/terraform/environments/dev/main.tf (`TD-079`) hardcoded region/backend re-audit.
+- heber/backfill/writer.py (`TD-080`, `TD-082`) Bronze/catalog update + missing-pyarrow failure-path re-audit.
 
 ## Remediation Updates
 
@@ -11986,6 +11997,7 @@ Updated: 2026-02-06
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -12016,6 +12028,7 @@ Updated: 2026-02-06
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
+- Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
 
 ## Executive Summary
 
@@ -12428,6 +12441,8 @@ Revalidated 2026-02-06 (Pass 34): Resolved. Repository creation no longer hardco
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
 Recommendation: Instrument all lakeFS operations (success/failure/duration) consistently.
 Revalidated 2026-02-06 (Pass 17): Still open. `lakefs_operations`/`lakefs_operation_duration` remain wired only for `create_branch` and `commit`.
+Update 2026-02-06: Remediated in `T-45` by adding consistent operation metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths, with dedicated regression coverage.
+Revalidated 2026-02-06 (Pass 40): Resolved. The remaining lakeFS operations now emit success/error counters and duration histograms consistently.
 
 **TD-068: Market calendar crashes on naive datetimes.**
 Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
@@ -12551,7 +12566,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
@@ -12619,6 +12634,7 @@ Updated: 2026-02-06
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
+- `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -12645,6 +12661,7 @@ Updated: 2026-02-06
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
+- Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
 
 ## Prioritization Approach
 
@@ -13325,6 +13342,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-45: Complete lakeFS Operation Metrics Coverage (TD-067)
+
+Priority: P1
+
+Description: lakeFS metrics existed for `create_branch`/`commit`, but `create_tag`, `list_tags`, `merge`, and `diff` lacked complete operation instrumentation (especially error paths), leaving observability partial.
+
+Scope:
+- `heber/versioning/__init__.py`
+- `tests/test_lakefs_operation_metrics.py`
+
+Acceptance Criteria:
+- `create_tag`, `list_tags`, `merge`, and `diff` all emit `lakefs_operations` success/error counters and `lakefs_operation_duration` histogram observations.
+- Error metrics are emitted for operation failures including repository-resolution failures.
+- Regression tests assert success and error metric behavior for all four operations.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -13447,6 +13481,7 @@ Estimate: 1 day
 42. T-42 (Extended-hours calendar flag behavior)
 43. T-43 (Hot Store DDL base-column conformance)
 44. T-44 (Additional schema test stability)
+45. T-45 (lakeFS operation metrics coverage)
 
 
 
@@ -45700,10 +45735,20 @@ class LakeFSVersionManager:
         Returns:
             GoldTag with tag details
         """
-        repository = self._get_repo(repo)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
 
         try:
+            repository = self._get_repo(repo)
             repository.tag(tag_name).create(commit_id)
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="create_tag",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="create_tag").observe(duration)
 
             logger.info(
                 "lakefs_tag_created",
@@ -45713,6 +45758,13 @@ class LakeFSVersionManager:
 
             return GoldTag(name=tag_name, commit_id=commit_id)
         except Exception as e:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="create_tag",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="create_tag").observe(duration)
             logger.error("lakefs_tag_create_failed", error=str(e))
             raise
 
@@ -45725,8 +45777,30 @@ class LakeFSVersionManager:
         Returns:
             List of GoldTag objects
         """
-        repository = self._get_repo(repo)
-        return [GoldTag(name=t.id, commit_id=t.commit_id) for t in repository.tags()]
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
+
+        try:
+            repository = self._get_repo(repo)
+            tags = [GoldTag(name=t.id, commit_id=t.commit_id) for t in repository.tags()]
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="list_tags",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="list_tags").observe(duration)
+            return tags
+        except Exception:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="list_tags",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="list_tags").observe(duration)
+            raise
 
     def get_commit(
         self,
@@ -45770,11 +45844,21 @@ class LakeFSVersionManager:
         Returns:
             GoldCommit of the merge commit
         """
-        repository = self._get_repo(repo)
-        dest = repository.branch(dest_branch)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
 
         try:
+            repository = self._get_repo(repo)
+            dest = repository.branch(dest_branch)
             result = dest.merge(source_branch)
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="merge",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="merge").observe(duration)
 
             logger.info(
                 "lakefs_merge_completed",
@@ -45785,6 +45869,13 @@ class LakeFSVersionManager:
 
             return self.get_commit(result, repo)
         except Exception as e:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="merge",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="merge").observe(duration)
             logger.error(
                 "lakefs_merge_failed",
                 source=source_branch,
@@ -45809,10 +45900,30 @@ class LakeFSVersionManager:
         Returns:
             List of changed paths with their types
         """
-        repository = self._get_repo(repo)
-        changes = repository.ref(ref1).diff(ref2)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
+        try:
+            repository = self._get_repo(repo)
+            changes = repository.ref(ref1).diff(ref2)
+            formatted = [{"path": change.path, "type": change.type} for change in changes]
 
-        return [{"path": change.path, "type": change.type} for change in changes]
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="diff",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="diff").observe(duration)
+            return formatted
+        except Exception:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="diff",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="diff").observe(duration)
+            raise
 
     def checkout(
         self,
@@ -53792,6 +53903,260 @@ def test_get_repo_creation_uses_resolved_storage_namespace(monkeypatch) -> None:
     assert created["repo_name"] == "repo-3"
     assert created["storage_namespace"] == "s3://bucket-c/team/repo-3"
     assert created["default_branch"] == "main"
+
+
+
+================================================
+FILE: tests/test_lakefs_operation_metrics.py
+================================================
+"""Regression tests for lakeFS operation metrics coverage."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+
+from heber.versioning import GoldCommit, GoldTag, LakeFSConfig, LakeFSVersionManager
+
+
+class _CounterHandle:
+    def __init__(self, records: list[dict[str, str]], labels: dict[str, str]) -> None:
+        self._records = records
+        self._labels = labels
+
+    def inc(self) -> None:
+        self._records.append(dict(self._labels))
+
+
+class _CounterMetric:
+    def __init__(self) -> None:
+        self.records: list[dict[str, str]] = []
+
+    def labels(self, **labels: str) -> _CounterHandle:
+        return _CounterHandle(self.records, labels)
+
+
+class _DurationHandle:
+    def __init__(self, records: list[dict[str, float | str]], operation: str) -> None:
+        self._records = records
+        self._operation = operation
+
+    def observe(self, value: float) -> None:
+        self._records.append({"operation": self._operation, "value": value})
+
+
+class _DurationMetric:
+    def __init__(self) -> None:
+        self.records: list[dict[str, float | str]] = []
+
+    def labels(self, **labels: str) -> _DurationHandle:
+        return _DurationHandle(self.records, labels["operation"])
+
+
+@pytest.fixture
+def metric_spies(monkeypatch):
+    counter = _CounterMetric()
+    duration = _DurationMetric()
+
+    monkeypatch.setattr("heber.versioning.lakefs_operations", counter)
+    monkeypatch.setattr("heber.versioning.lakefs_operation_duration", duration)
+
+    return counter.records, duration.records
+
+
+def _new_manager() -> LakeFSVersionManager:
+    return LakeFSVersionManager(config=LakeFSConfig(default_repo="repo-default"))
+
+
+def _assert_metrics(
+    counter_records: list[dict[str, str]],
+    duration_records: list[dict[str, float | str]],
+    *,
+    operation: str,
+    status: str,
+    repository: str,
+) -> None:
+    assert counter_records == [
+        {
+            "operation": operation,
+            "repository": repository,
+            "status": status,
+        }
+    ]
+
+    assert len(duration_records) == 1
+    assert duration_records[0]["operation"] == operation
+    assert float(duration_records[0]["value"]) >= 0.0
+
+
+def test_create_tag_records_success_metrics(monkeypatch, metric_spies) -> None:
+    counter_records, duration_records = metric_spies
+    manager = _new_manager()
+    created: dict[str, str] = {}
+
+    class _FakeTag:
+        def __init__(self, tag_name: str) -> None:
+            self.tag_name = tag_name
+
+        def create(self, commit_id: str) -> None:
+            created["tag_name"] = self.tag_name
+            created["commit_id"] = commit_id
+
+    class _FakeRepo:
+        def tag(self, tag_name: str) -> _FakeTag:
+            return _FakeTag(tag_name)
+
+    monkeypatch.setattr(manager, "_get_repo", lambda _repo=None: _FakeRepo())
+
+    tag = manager.create_tag("v1.2.3", "commit-1", repo="repo-a")
+
+    assert tag == GoldTag(name="v1.2.3", commit_id="commit-1")
+    assert created == {"tag_name": "v1.2.3", "commit_id": "commit-1"}
+    _assert_metrics(
+        counter_records,
+        duration_records,
+        operation="create_tag",
+        status="success",
+        repository="repo-a",
+    )
+
+
+def test_list_tags_records_success_metrics(monkeypatch, metric_spies) -> None:
+    counter_records, duration_records = metric_spies
+    manager = _new_manager()
+
+    class _FakeRepo:
+        def tags(self):
+            return [
+                SimpleNamespace(id="v1.0.0", commit_id="commit-a"),
+                SimpleNamespace(id="v1.1.0", commit_id="commit-b"),
+            ]
+
+    monkeypatch.setattr(manager, "_get_repo", lambda _repo=None: _FakeRepo())
+
+    tags = manager.list_tags(repo="repo-a")
+
+    assert [(tag.name, tag.commit_id) for tag in tags] == [
+        ("v1.0.0", "commit-a"),
+        ("v1.1.0", "commit-b"),
+    ]
+    _assert_metrics(
+        counter_records,
+        duration_records,
+        operation="list_tags",
+        status="success",
+        repository="repo-a",
+    )
+
+
+def test_merge_records_success_metrics(monkeypatch, metric_spies) -> None:
+    counter_records, duration_records = metric_spies
+    manager = _new_manager()
+    merge_calls: list[str] = []
+
+    class _FakeBranch:
+        def merge(self, source_branch: str) -> str:
+            merge_calls.append(source_branch)
+            return "merge-commit-123"
+
+    class _FakeRepo:
+        def branch(self, name: str) -> _FakeBranch:
+            assert name == "main"
+            return _FakeBranch()
+
+    expected_commit = GoldCommit(
+        commit_id="merge-commit-123",
+        message="merge",
+        committer="bot",
+        creation_date=datetime.now(UTC),
+    )
+
+    monkeypatch.setattr(manager, "_get_repo", lambda _repo=None: _FakeRepo())
+    monkeypatch.setattr(manager, "get_commit", lambda _ref, _repo=None: expected_commit)
+
+    commit = manager.merge("feature", repo="repo-a")
+
+    assert commit == expected_commit
+    assert merge_calls == ["feature"]
+    _assert_metrics(
+        counter_records,
+        duration_records,
+        operation="merge",
+        status="success",
+        repository="repo-a",
+    )
+
+
+def test_diff_records_success_metrics(monkeypatch, metric_spies) -> None:
+    counter_records, duration_records = metric_spies
+    manager = _new_manager()
+
+    class _FakeRef:
+        def diff(self, other_ref: str):
+            assert other_ref == "main"
+            return [
+                SimpleNamespace(path="gold/foo.parquet", type="added"),
+                SimpleNamespace(path="gold/bar.parquet", type="modified"),
+            ]
+
+    class _FakeRepo:
+        def ref(self, ref_name: str) -> _FakeRef:
+            assert ref_name == "feature"
+            return _FakeRef()
+
+    monkeypatch.setattr(manager, "_get_repo", lambda _repo=None: _FakeRepo())
+
+    changes = manager.diff("feature", "main", repo="repo-a")
+
+    assert changes == [
+        {"path": "gold/foo.parquet", "type": "added"},
+        {"path": "gold/bar.parquet", "type": "modified"},
+    ]
+    _assert_metrics(
+        counter_records,
+        duration_records,
+        operation="diff",
+        status="success",
+        repository="repo-a",
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "invoke"),
+    [
+        ("create_tag", lambda manager: manager.create_tag("v1.0.0", "commit-1", repo="repo-a")),
+        ("list_tags", lambda manager: manager.list_tags(repo="repo-a")),
+        ("merge", lambda manager: manager.merge("feature", repo="repo-a")),
+        ("diff", lambda manager: manager.diff("feature", "main", repo="repo-a")),
+    ],
+)
+def test_operation_metrics_record_error_when_repo_resolution_fails(
+    monkeypatch,
+    metric_spies,
+    operation: str,
+    invoke: Callable[[LakeFSVersionManager], object],
+) -> None:
+    counter_records, duration_records = metric_spies
+    manager = _new_manager()
+
+    def _raise_repo_error(_repo=None):
+        raise RuntimeError("lakefs unavailable")
+
+    monkeypatch.setattr(manager, "_get_repo", _raise_repo_error)
+
+    with pytest.raises(RuntimeError, match="lakefs unavailable"):
+        invoke(manager)
+
+    _assert_metrics(
+        counter_records,
+        duration_records,
+        operation=operation,
+        status="error",
+        repository="repo-a",
+    )
 
 
 
