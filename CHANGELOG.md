@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 37: cross-platform init-volume remediation re-audit)
 - Expanded technical debt audit (pass 38: worker entrypoint runtime remediation re-audit)
 - Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
+- Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -292,6 +293,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added configurable storage namespace resolution via `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`
   - Repository creation now uses config-driven namespace resolution instead of hardcoded `s3://heber-lakehouse/{repo}`
   - Added regression tests for namespace resolution and repository create-path wiring (`tests/test_lakefs_namespace_config.py`)
+- **lakeFS Operation Metrics Coverage** (`heber/versioning/__init__.py`)
+  - Added success/error counter and duration histogram instrumentation for `create_tag`, `list_tags`, `merge`, and `diff`
+  - Error paths now include repository-resolution and branch-resolution failures for these operations
+  - Added regression tests for operation metrics coverage across success and error paths (`tests/test_lakefs_operation_metrics.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

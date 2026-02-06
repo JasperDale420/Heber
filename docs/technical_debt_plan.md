@@ -52,6 +52,7 @@ Updated: 2026-02-06
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
+- `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -78,6 +79,7 @@ Updated: 2026-02-06
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
+- Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
 
 ## Prioritization Approach
 
@@ -758,6 +760,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-45: Complete lakeFS Operation Metrics Coverage (TD-067)
+
+Priority: P1
+
+Description: lakeFS metrics existed for `create_branch`/`commit`, but `create_tag`, `list_tags`, `merge`, and `diff` lacked complete operation instrumentation (especially error paths), leaving observability partial.
+
+Scope:
+- `heber/versioning/__init__.py`
+- `tests/test_lakefs_operation_metrics.py`
+
+Acceptance Criteria:
+- `create_tag`, `list_tags`, `merge`, and `diff` all emit `lakefs_operations` success/error counters and `lakefs_operation_duration` histogram observations.
+- Error metrics are emitted for operation failures including repository-resolution failures.
+- Regression tests assert success and error metric behavior for all four operations.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -880,3 +899,4 @@ Estimate: 1 day
 42. T-42 (Extended-hours calendar flag behavior)
 43. T-43 (Hot Store DDL base-column conformance)
 44. T-44 (Additional schema test stability)
+45. T-45 (lakeFS operation metrics coverage)

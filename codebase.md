@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-05T19:50:31*
+*Generated: 2026-02-06T12:56:18*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 242
+Files analyzed: 251
 
-Estimated tokens: 410.5k
+Estimated tokens: 421.0k
 
 ---
 
@@ -76,7 +76,8 @@ Directory structure:
     │   ├── cli.py
     │   ├── config.py
     │   ├── backfill/
-    │   │   └── __init__.py
+    │   │   ├── __init__.py
+    │   │   └── __main__.py
     │   ├── backtest/
     │   │   ├── __init__.py
     │   │   ├── integration.py
@@ -305,12 +306,18 @@ Directory structure:
     │   ├── test_compactor_safety.py
     │   ├── test_edge_cases.py
     │   ├── test_event_bus_claim.py
+    │   ├── test_event_deduplicator_rotation.py
     │   ├── test_feature_view_alignment.py
     │   ├── test_hotstore_unification.py
+    │   ├── test_init_volume_platform_guard.py
+    │   ├── test_k8s_hpa_probe_conformance.py
+    │   ├── test_lakefs_namespace_config.py
     │   ├── test_lifecycle_shutdown_timeout.py
     │   ├── test_lifecycle_shutdown_wait.py
+    │   ├── test_logging_level_filtering.py
     │   ├── test_market_calendar_timezones.py
     │   ├── test_meta_label_alignment.py
+    │   ├── test_metrics_exporter_alignment.py
     │   ├── test_placeholder.py
     │   ├── test_runtime_entrypoints.py
     │   ├── test_sdk_catalog_defaults.py
@@ -318,9 +325,11 @@ Directory structure:
     │   ├── test_silver_schema_source.py
     │   ├── test_stream_naming_conventions.py
     │   ├── test_terraform_module_sources.py
+    │   ├── test_tracing_no_otel.py
     │   ├── test_utcnow_regression.py
     │   ├── test_watch_async_redis.py
     │   ├── test_watch_consumer_reliability.py
+    │   ├── test_worker_entrypoint_services.py
     │   └── test_writer_consumer_reliability.py
     └── .claude/
         └── settings.local.json
@@ -635,6 +644,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 27: filesystem security scan gate hardening re-audit)
 - Expanded technical debt audit (pass 28: catalog backup cleanup-trap hardening re-audit)
 - Expanded technical debt audit (pass 29: clickhouse-backup destination-output alignment re-audit)
+- Expanded technical debt audit (pass 30: labeling/data-contract docs alignment re-audit)
+- Expanded technical debt audit (pass 31: UW endpoint summary reconciliation re-audit)
+- Expanded technical debt audit (pass 32: log-level filtering remediation re-audit)
+- Expanded technical debt audit (pass 33: dedupe Bloom-rotation remediation re-audit)
+- Expanded technical debt audit (pass 34: lakeFS namespace configurability remediation re-audit)
+- Expanded technical debt audit (pass 35: k8s HPA/probe conformance remediation re-audit)
+- Expanded technical debt audit (pass 36: tracing optional-dependency safety remediation re-audit)
+- Expanded technical debt audit (pass 37: cross-platform init-volume remediation re-audit)
+- Expanded technical debt audit (pass 38: worker entrypoint runtime remediation re-audit)
+- Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -858,6 +877,38 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Shutdown timeout paths now report `status="timeout"` instead of `status="success"` in lifecycle metrics
   - Sync/async shutdown methods now return `False` when drain timeout occurs and `True` only on successful drain
   - Added regression coverage for sync timeout, async timeout, and successful drain behavior (`tests/test_lifecycle_shutdown_timeout.py`)
+- **Structured Logging Level Filtering** (`heber/ops/logging.py`)
+  - `configure_logging(log_level=...)` now validates level names and fails fast on invalid values
+  - Logging level now applies to both stdlib root logger configuration and structlog filtering wrappers
+  - Added regression tests for INFO/DEBUG behavior in JSON and console render modes (`tests/test_logging_level_filtering.py`)
+- **Dedupe Bloom Rotation Bounding** (`heber/ops/reliability.py`)
+  - `EventDeduplicator` now rotates Bloom filters on a configured interval to bound long-lived false-positive buildup
+  - Duplicate checks now include active and previous Bloom windows, so recent duplicates are still caught across a rotation boundary
+  - Added regression tests covering in-window duplicate detection and post-rotation aging behavior (`tests/test_event_deduplicator_rotation.py`)
+- **lakeFS Storage Namespace Configurability** (`heber/versioning/__init__.py`)
+  - Added configurable storage namespace resolution via `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`
+  - Repository creation now uses config-driven namespace resolution instead of hardcoded `s3://heber-lakehouse/{repo}`
+  - Added regression tests for namespace resolution and repository create-path wiring (`tests/test_lakefs_namespace_config.py`)
+- **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
+  - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
+  - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
+  - Added regression checks for HPA metric type and worker probe mode (`tests/test_k8s_hpa_probe_conformance.py`)
+- **Tracing No-OTEL Decorator Safety** (`heber/ops/tracing.py`)
+  - `traced()` now avoids unconditional `SpanKind` access when OpenTelemetry is unavailable
+  - No-OpenTelemetry paths now pass `kind=None` to noop tracing context safely
+  - Added regression coverage for `@traced` execution with `OTEL_AVAILABLE=False` (`tests/test_tracing_no_otel.py`)
+- **Cross-Platform Volume Init Guarding** (`scripts/init_volume.sh`)
+  - Added explicit OS/tool checks before invoking macOS-only `dot_clean`
+  - Non-macOS and missing-tool paths now emit clear skip messages instead of implicit fallback
+  - Added regression checks for explicit platform guards and removal of `dot_clean ... || true` behavior (`tests/test_init_volume_platform_guard.py`)
+- **Worker Entrypoint Service Modes** (`heber/backfill/__main__.py`, `heber/writer/hotstore.py`)
+  - Added executable `python -m heber.backfill` service entrypoint with backfill API and `/health`/`/ready` routes
+  - Added real hotloader CLI runtime for `python -m heber.writer.hotstore` with continuous sync-loop mode and `--once` mode
+  - Added regression coverage for entrypoint execution paths and runtime module availability (`tests/test_worker_entrypoint_services.py`, `tests/test_runtime_entrypoints.py`)
+- **Metrics Exporter Wiring Alignment** (`heber/ops/metrics.py`, service entrypoints)
+  - Added `start_metrics_server_from_env` helper and wired it into catalog, consumer/writer, compactor, hotloader, and backfill entrypoint paths
+  - Kept deployment scrape annotations/ports aligned with runtime behavior by ensuring scraped entrypoints start metrics exporters
+  - Added regression checks for deployment-to-entrypoint metrics alignment (`tests/test_metrics_exporter_alignment.py`)
 
 \n\n#### SonarQube Code Quality Remediation\n\n- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` in `writer.py` and `writer/consumer.py`\n- Extracted constants for duplicate literals: `DEFAULT_GATEWAY_URL`, `DEFAULT_STORAGE_ROOT`\n- Refactored complex functions by extracting helpers in `consumer.py` and `alert_labels.py`\n- Removed async from functions without await in `hotstore/client.py`, `backfill`, `retention`\n- Removed unused parameters in `openmetadata_client.py` and `backfill/__init__.py`\n- Fixed asyncio.create_task GC issue in `backfill/__init__.py`\n\n### Added
 
@@ -10458,6 +10509,7 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_API_PORT` | `8080` | Catalog API port |
 | `HEBER_CATALOG_URL` | `http://localhost:8085/api/v1` | SDK Catalog API base URL |
 | `HEBER_ENVIRONMENT` | `dev` | `dev`, `staging`, or `prod` |
+| `HEBER_METRICS_PORT` | `9090` | Prometheus exporter port for service entrypoints |
 
 ## Writer Tuning
 
@@ -10469,6 +10521,18 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_SILVER_MAX_ROWS_PER_FILE` | `1000000` | Max rows per Silver file |
 | `HEBER_SILVER_MAX_FLUSH_TIME_SECONDS` | `30` | Max time before Silver flush |
 | `HEBER_SILVER_ROW_GROUP_SIZE_MB` | `128` | Parquet row group size |
+
+## Logging Levels
+
+`heber.ops.configure_logging(log_level=...)` accepts:
+
+- `DEBUG`
+- `INFO`
+- `WARNING`
+- `ERROR`
+- `CRITICAL`
+
+Values are normalized case-insensitively (for example, `info` -> `INFO`). Invalid values raise `ValueError`.
 
 ## Local vs Container URLs
 
@@ -10501,12 +10565,16 @@ From `docker-compose.yml`:
 - `data/bronze`, `data/silver`, `data/gold`
 - `postgres/data`, `clickhouse/data`, `clickhouse/logs`, `redis/data`
 
+On macOS hosts, the script also runs `dot_clean` to remove AppleDouble `._*` files after permissions are set. On non-macOS hosts (or if `dot_clean` is missing), it emits an explicit skip message and continues.
+
 ## OSS Migration Settings (Optional)
 
 These are read by modules in `heber/storage/`, `heber/versioning/`, and `heber/schema/`:
 
 - `ICEBERG_*` for Iceberg catalog + warehouse
 - `LAKEFS_*` for Gold versioning
+  - `LAKEFS_STORAGE_NAMESPACE_BASE` (default `s3://heber-lakehouse`)
+  - `LAKEFS_STORAGE_NAMESPACE_TEMPLATE` (optional, supports `{repo}` placeholder)
 - `SCHEMA_REGISTRY_*` for schema registry
 - `MINIO_*` for S3-compatible storage
 
@@ -10562,11 +10630,12 @@ Regex validation in `validate_instrument_key()`:
 
 - Bronze: raw envelope (JSONL.gz) partitioned by `provider/feed/dt/hour`
 - Silver: normalized Parquet partitioned by `feed/instrument_type/dt` (and `hour` for quotes/trades)
-- Gold: Parquet partitioned by `dataset/project/version/dt`
+- Gold (SDK writer): Parquet partitioned by `dataset={name}/project={name}/version={version}/dt={date}`
+- Gold (label writer): Parquet partitioned by `dataset={name}/type=label/version={version}`
 
 ## Silver Schemas (Parquet Writer)
 
-Source: `heber/writer/silver.py`
+Source: `heber/schemas/silver.py`
 
 All feeds include base fields:
 
@@ -10603,7 +10672,15 @@ Gold writes require:
 
 - `instrument_key`, `ts_event`, `ts_available`
 
-Partition key: `dt` derived from `ts_event`. The SDK enforces `ts_available >= ts_event`.
+SDK path convention:
+
+- `gold/dataset={dataset}/project={project}/version={version}/dt={YYYY-MM-DD}/part-*.parquet`
+
+Label path convention:
+
+- `gold/dataset={dataset}/type=label/version={version}/data.parquet`
+
+Partition key for SDK writer: `dt` derived from `ts_event`. The SDK enforces `ts_available >= ts_event`.
 
 ## SDK Semantics
 
@@ -10881,9 +10958,16 @@ This ensures you never use information that wasn't available at prediction time.
 ### Train/Test Split
 
 ```python
-# heber/firewall/splits.py
-def validate_train_test_split(train_end, test_start, label_horizon, purge_days, embargo_days):
-    """Ensure no information leakage between train and test."""
+# heber/firewall/validation.py
+from heber.firewall.validation import validate_train_test_split
+
+# purge_window / embargo_window are seconds
+validate_train_test_split(
+    train_end=train_end,
+    test_start=test_start,
+    purge_window=purge_seconds,
+    embargo_window=embargo_seconds,
+)
 ```
 
 - **Purge**: Remove training samples whose label windows overlap test period
@@ -11798,11 +11882,68 @@ Audit Pass 29 (2026-02-06, files reviewed directly):
 - scripts/backup/clickhouse-backup.sh
 - docs/operations/backup-dr-runbook.md
 
+Audit Pass 30 (2026-02-06, files reviewed directly):
+- docs/labeling_strategy.md
+- docs/data_contract.md
+- heber/firewall/validation.py
+- heber/schemas/silver.py
+- heber/sdk/client.py
+- heber/watch/writer.py
+
+Audit Pass 31 (2026-02-06, files reviewed directly):
+- docs/UW_endpoints.md
+
+Audit Pass 32 (2026-02-06, files reviewed directly):
+- heber/ops/logging.py
+- tests/test_logging_level_filtering.py
+- docs/configuration.md
+
+Audit Pass 33 (2026-02-06, files reviewed directly):
+- heber/ops/reliability.py
+- tests/test_event_deduplicator_rotation.py
+
+Audit Pass 34 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- tests/test_lakefs_namespace_config.py
+- docs/configuration.md
+
+Audit Pass 35 (2026-02-06, files reviewed directly):
+- k8s/base/hpa/catalog.yaml
+- k8s/base/hpa/consumer.yaml
+- k8s/base/hpa/writer.yaml
+- k8s/base/deployments/backfill.yaml
+- k8s/base/deployments/consumer.yaml
+- k8s/base/deployments/writer.yaml
+- k8s/base/deployments/compactor.yaml
+- k8s/base/deployments/hotloader.yaml
+- tests/test_k8s_hpa_probe_conformance.py
+
+Audit Pass 36 (2026-02-06, files reviewed directly):
+- heber/ops/tracing.py
+- tests/test_tracing_no_otel.py
+
+Audit Pass 37 (2026-02-06, files reviewed directly):
+- scripts/init_volume.sh
+- docs/configuration.md
+- tests/test_init_volume_platform_guard.py
+
+Audit Pass 38 (2026-02-06, files reviewed directly):
+- heber/backfill/__main__.py
+- heber/writer/hotstore.py
+- tests/test_worker_entrypoint_services.py
+- tests/test_runtime_entrypoints.py
+
+Audit Pass 39 (2026-02-06, files reviewed directly):
+- heber/ops/metrics.py
+- heber/catalog/api.py
+- heber/writer/consumer.py
+- heber/writer/compactor.py
+- heber/writer/hotstore.py
+- heber/backfill/__main__.py
+- tests/test_metrics_exporter_alignment.py
+
 Not yet audited in this run (recommend a future pass):
-- docs/labeling_strategy.md and docs/data_contract.md (`TD-062`, `TD-063`) docs-alignment post-remediation re-audit.
-- heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
-- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
-- heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
+- heber/versioning/__init__.py (`TD-067`) operation-metrics coverage re-audit.
 
 ## Remediation Updates
 
@@ -11833,6 +11974,14 @@ Updated: 2026-02-06
 - `TD-038` addressed via `T-23`: flow-feature windows now operate on normalized UTC `ts_event` values with time-window rolling semantics and regression coverage for timestamp normalization + 24h window boundaries.
 - `TD-040` addressed via `T-24`: lifecycle async shutdown waits now short-circuit on pre-signaled shutdown and handle event-creation races so waits do not hang.
 - `TD-041` addressed via `T-25`: lifecycle shutdown timeout paths now emit `shutdown_completed{status=\"timeout\"}` and return failure status instead of reporting success.
+- `TD-042` addressed via `T-26`: `configure_logging()` now validates/normalizes `log_level`, applies stdlib root logger level, and enforces structlog filtering with regression tests for INFO/DEBUG behavior across JSON and console output modes.
+- `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
+- `TD-039` addressed via `T-33`: tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, and a regression test confirms `@traced` execution works with tracing disabled.
+- `TD-061` addressed via `T-34`: `init_volume.sh` now checks host OS and `dot_clean` availability explicitly before cleanup, emits explicit skip reasons on unsupported hosts, and avoids implicit `|| true` fallback semantics.
+- `TD-086` and `TD-087` addressed via `T-37`/`T-38`: backfill now has an executable `python -m heber.backfill` service module, and hotloader now exposes a real long-running CLI runtime in `python -m heber.writer.hotstore` with one-shot sync mode for controlled runs/tests.
+- `TD-088` addressed via `T-40`: all deployments marked for Prometheus scraping are now backed by entrypoints that call `start_metrics_server_from_env`, with static conformance tests tying scrape annotations/ports to metrics-enabled runtimes.
+- `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
+- `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
@@ -11840,6 +11989,9 @@ Updated: 2026-02-06
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
+- `TD-062` addressed via `T-35`: labeling strategy docs now reference `heber/firewall/validation.py` and the current `validate_train_test_split` argument contract.
+- `TD-063` addressed via `T-36`: data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK/label writers.
+- `TD-064` addressed via `T-39`: UW endpoint summary now derives from table statuses and no longer claims stale in-progress/not-started totals.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -11854,6 +12006,16 @@ Updated: 2026-02-06
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`; filesystem security findings now fail the scan script.
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
+- Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35`/`T-36`; labeling and data-contract docs now match current code paths and path conventions.
+- Audit Pass 31 revalidated `TD-064` as resolved via `T-39`; UW endpoint summary counts now match table rows.
+- Audit Pass 32 revalidated `TD-042` as resolved via `T-26`; log-level filtering is now enforced and covered by regression tests.
+- Audit Pass 33 revalidated `TD-043` as resolved via `T-27`; dedupe Bloom state is now bounded by rotation with regression coverage.
+- Audit Pass 34 revalidated `TD-066` as resolved via `T-28`; lakeFS repository creation now uses configurable storage namespace resolution.
+- Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`; HPA metric sources and worker probe types now match runtime behavior.
+- Audit Pass 36 revalidated `TD-039` as resolved via `T-33`; tracing decorators now remain safe without OpenTelemetry.
+- Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
+- Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
+- Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
 
 ## Executive Summary
 
@@ -11926,9 +12088,9 @@ Severity key: High, Medium, Low
 | TD-059 | Low | Scripts | ClickHouse backup script output now reflects config-managed remote destination without misleading hardcoded S3 path. |
 | TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
-| TD-062 | Low | Docs | Labeling docs reference an outdated module path and function signature for split validation. |
-| TD-063 | Low | Docs | Data contract docs drift from current schema sources and concrete Gold partition path conventions. |
-| TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
+| TD-062 | Low | Docs | Labeling strategy docs now reference the current split-validation module and signature. |
+| TD-063 | Low | Docs | Data contract docs now reference canonical Silver schema source and concrete Gold path conventions. |
+| TD-064 | Low | Docs | UW endpoint summary counts now match table statuses (`✅ 76`, `⚪ 1`, `🔄 0`, `❌ 0`). |
 | TD-065 | Low | Scripts | Filesystem security scan now fails on HIGH/CRITICAL secret/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
 | TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
@@ -12117,6 +12279,8 @@ Update 2026-02-06: Remediated in `T-23` by normalizing `ts_event` to UTC datetim
 Evidence: In `heber/ops/tracing.py`, the `traced()` decorator sets `span_kind = SpanKind.INTERNAL` before checking `OTEL_AVAILABLE`. When OpenTelemetry is missing, `SpanKind` is undefined and any call to a `@traced` function raises `NameError`, despite the `_NoopTracer` fallback.
 Recommendation: Guard `SpanKind` usage behind `OTEL_AVAILABLE` and default to `None` for noop tracing, or define a safe fallback enum when OpenTelemetry is not installed.
 Revalidated 2026-02-06 (Pass 16): Still open. `traced()` still initializes `span_kind` with `SpanKind` before the OpenTelemetry availability guard.
+Update 2026-02-06: Remediated in `T-33` by deferring `SpanKind` assignment until after `OTEL_AVAILABLE` checks and defaulting to `None` in no-OpenTelemetry mode.
+Revalidated 2026-02-06 (Pass 36): Resolved. `@traced` functions execute safely when OpenTelemetry is unavailable.
 
 **TD-040: Async shutdown wait can hang if shutdown is signaled early.**
 Evidence: `LifecycleManager.initiate_shutdown()` sets `_async_shutdown_event` only if it already exists. If shutdown happens before `async_wait_for_shutdown()` is called, a new event is created and awaited forever even though shutdown already occurred.
@@ -12133,12 +12297,16 @@ Evidence: `configure_logging()` has a `log_level` argument but does not set stdl
 Recommendation: Wire log level into Python `logging` configuration (or structlog filtering) and document expected values.
 Revalidated 2026-02-06 (Pass 13): Still open. `configure_logging()` continues to ignore `log_level` and uses `PrintLoggerFactory` without level filtering.
 Revalidated 2026-02-06 (Pass 18): Still open. `configure_logging()` still accepts but does not consume `log_level` in logger/filter configuration.
+Update 2026-02-06: Remediated in `T-26` by validating/normalizing `log_level`, applying root logger level configuration, and using structlog filtering (`make_filtering_bound_logger`) with regression tests for INFO/DEBUG behavior in JSON and console output modes.
+Revalidated 2026-02-06 (Pass 32): Resolved. `configure_logging(log_level=...)` now enforces effective filtering and fails fast on invalid level names.
 
 **TD-043: Bloom filter deduplication has no TTL/rotation.**
 Evidence: `EventDeduplicator` uses a Bloom filter that grows in false-positive rate over time. When no backing store is configured, Bloom matches are treated as hard duplicates, which will drop valid events increasingly as the filter saturates.
 Recommendation: Add time-based rotation (rolling Bloom filters), a TTL backing store, or a periodic reset strategy. If no backing store is configured, consider treating Bloom matches as “suspect” instead of hard duplicates.
 Revalidated 2026-02-06 (Pass 13): Still open. `EventDeduplicator` does not rotate/reset Bloom state and has no default persistent backing store implementation.
 Revalidated 2026-02-06 (Pass 18): Still open. Reliability module still has unbounded in-memory Bloom lifetime with hard-drop behavior in no-backing-store mode.
+Update 2026-02-06: Remediated in `T-27` by adding rolling Bloom-filter rotation with bounded memory windows, rotation telemetry, and regression tests validating duplicate detection before and after rotation boundaries.
+Revalidated 2026-02-06 (Pass 33): Resolved. No-backing-store mode now bounds hard-drop risk to the active/previous rotation windows instead of an unbounded process lifetime.
 
 **TD-044: In-memory DLQ is non-persistent.**
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
@@ -12218,23 +12386,28 @@ Revalidated 2026-02-06 (Pass 28): Resolved. Script now uses `EXIT` trap cleanup 
 Evidence: `scripts/init_volume.sh` always executes `dot_clean` for multiple directories without checking platform/tool availability. On non-macOS hosts the cleanup is effectively skipped with shell errors suppressed by `|| true`, and there is no explicit cross-platform branch.
 Recommendation: Guard `dot_clean` behind an OS/tool check or provide a no-op fallback for non-macOS hosts.
 Revalidated 2026-02-06 (Pass 16): Still open. Script still runs `dot_clean` unconditionally and relies on `|| true` rather than explicit platform detection.
+Update 2026-02-06: Remediated in `T-34` by adding explicit host OS and `dot_clean` detection, explicit skip messaging, and non-fatal per-directory cleanup handling without implicit shell fallback.
+Revalidated 2026-02-06 (Pass 37): Resolved. macOS cleanup is now guarded explicitly, and non-macOS hosts skip cleanly with clear logs.
 
 **TD-062: Labeling docs reference outdated API location/signature.**
 Evidence: `docs/labeling_strategy.md` points to `heber/firewall/splits.py` and shows a `validate_train_test_split` signature that does not exist; the current function lives in `heber/firewall/validation.py` with different parameters.
 Recommendation: Update the docs to match the current module path and function signature.
 Revalidated 2026-02-06 (Pass 16): Still open. The snippet still points to `heber/firewall/splits.py` with stale parameter names.
 Revalidated 2026-02-06 (Pass 19): Still open. Train/test split snippet still references the stale module path and signature.
+Revalidated 2026-02-06 (Pass 30): Resolved. Snippet now references `heber/firewall/validation.py` with current `purge_window`/`embargo_window` parameters.
 
 **TD-063: Data contract docs drift from current schema sources and concrete Gold partition path conventions.**
 Evidence: `docs/data_contract.md` still lists `heber/writer/silver.py` as the Silver schema source, while canonical Arrow schemas are now defined in `heber/schemas/silver.py`. It also documents Gold partitioning in abstract (`dataset/project/version/dt`) without the key-value path convention used by writers (`dataset=.../project=.../version=.../dt=...`), which creates avoidable interpretation drift.
 Recommendation: Update `docs/data_contract.md` to reference `heber/schemas/silver.py` as the canonical schema source and show concrete key-value Gold path examples that match `write_gold()` / label-writer output.
 Revalidated 2026-02-06 (Pass 16): Still open. Source-module references and Gold path notation remain partially stale.
 Revalidated 2026-02-06 (Pass 19): Still open. Schema source reference and Gold path notation remain unaligned with current implementation conventions.
+Revalidated 2026-02-06 (Pass 30): Resolved. Doc now references `heber/schemas/silver.py` and concrete Gold key-value path conventions.
 
 **TD-064: UW endpoint coverage summary conflicts with its own tables.**
 Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
 Recommendation: Derive summary counts from the table data (or remove manual totals/status buckets) to avoid recurrent drift.
 Revalidated 2026-02-06 (Pass 18): Still open. Summary totals and status buckets still conflict with table-level status rows.
+Revalidated 2026-02-06 (Pass 31): Resolved. Summary now reflects current table-derived status counts.
 
 **TD-065: Security scan doesn’t fail on filesystem findings.**
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
@@ -12248,6 +12421,8 @@ Evidence: `LakeFSVersionManager._get_repo()` always creates repositories with `s
 Recommendation: Add a configurable storage namespace (e.g., `LAKEFS_STORAGE_NAMESPACE`) and use it when creating repositories.
 Revalidated 2026-02-06 (Pass 14): Still open. Repository creation path still hardcodes `s3://heber-lakehouse/{repo}` and `LakeFSConfig` has no storage namespace field.
 Revalidated 2026-02-06 (Pass 17): Still open. Version manager continues to hardcode `storage_namespace` and lacks a configurable namespace field in `LakeFSConfig`.
+Update 2026-02-06: Remediated in `T-28` by adding `LAKEFS_STORAGE_NAMESPACE_BASE` and `LAKEFS_STORAGE_NAMESPACE_TEMPLATE` support in `LakeFSConfig` and routing repository creation through config-driven namespace resolution.
+Revalidated 2026-02-06 (Pass 34): Resolved. Repository creation no longer hardcodes `s3://heber-lakehouse/{repo}` and now respects configuration for environment-specific namespaces.
 
 **TD-067: lakeFS metrics coverage is incomplete.**
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
@@ -12297,6 +12472,8 @@ Recommendation: Export the needed metrics or change the HPA configuration to CPU
 Revalidated 2026-02-06 (Pass 14): Still open. HPA manifests still reference missing `heber_writer_pending_batch_rows` and `heber_catalog_request_latency_p99_seconds` metrics.
 Revalidated 2026-02-06 (Pass 17): Still open. Metrics module still does not define `heber_writer_pending_batch_rows` or `heber_catalog_request_latency_p99_seconds`.
 Revalidated 2026-02-06 (Pass 21): Still open. HPA manifests continue to reference unavailable writer/catalog custom metrics.
+Update 2026-02-06: Remediated in `T-29` by replacing custom pod-metric targets with built-in CPU/memory resource metrics across catalog/consumer/writer HPAs and adding regression checks for metric-type drift.
+Revalidated 2026-02-06 (Pass 35): Resolved. HPA manifests no longer depend on missing custom metrics.
 
 **TD-076: Probes target endpoints that are not implemented.**
 Evidence: Deployments probe `/health` and `/ready` on the metrics port for consumer/writer/compactor/hotloader. Those services do not expose HTTP health endpoints in the codebase.
@@ -12304,6 +12481,8 @@ Recommendation: Add health endpoints or update probes to use a TCP or exec check
 Revalidated 2026-02-06 (Pass 14): Still open. Writer/consumer/compactor/hotloader processes still run non-HTTP module entrypoints while deployments continue probing HTTP `/health` and `/ready` on metrics ports.
 Revalidated 2026-02-06 (Pass 17): Still open. Catalog exposes `/health`, but worker modules still do not run HTTP health servers on probed ports.
 Revalidated 2026-02-06 (Pass 21): Still open. Consumer/writer deployments still probe HTTP health endpoints on a metrics port with no health server process.
+Update 2026-02-06: Remediated in `T-29` by switching worker liveness/readiness probes to exec checks that validate the expected process entrypoint in `/proc/1/cmdline`, with regression coverage to prevent HTTP-probe drift.
+Revalidated 2026-02-06 (Pass 35): Resolved. Worker manifests no longer probe non-existent HTTP health endpoints.
 
 **TD-077: Image references do not align with kustomize image rewrite.**
 Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
@@ -12345,15 +12524,21 @@ Recommendation: Record `asof_time` per split or overall experiment in the config
 Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
 Recommendation: Add a concrete executable backfill entrypoint (e.g., `heber.backfill.main`) and update the deployment command to that module; then align probes with the actual service mode.
 Revalidated 2026-02-06 (Pass 20): Still open. Deployment command is unchanged and module execution still fails with missing `__main__`.
+Update 2026-02-06: Remediated in `T-37` by adding `heber/backfill/__main__.py` with a runnable FastAPI service entrypoint (including `/health` and `/ready`) for `python -m heber.backfill`.
+Revalidated 2026-02-06 (Pass 38): Resolved. Backfill deployment module now executes in service mode instead of failing at startup.
 
 **TD-087: Hotloader deployment command exits immediately.**
 Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hotstore`, but `heber/writer/hotstore.py` is a compatibility re-export with no `main()` loop. Executing it exits immediately, so pods will churn under restart policy.
 Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
 Revalidated 2026-02-06 (Pass 20): Still open. Deployment still invokes facade module, and `python -m heber.writer.hotstore` still exits immediately.
+Update 2026-02-06: Remediated in `T-38` by adding a real CLI runtime in `heber.writer.hotstore` that executes a continuous sync loop (plus `--once` mode), instead of exiting after import/re-export.
+Revalidated 2026-02-06 (Pass 38): Resolved. `python -m heber.writer.hotstore` now runs as a service entrypoint with sync-loop behavior.
 
 **TD-088: Prometheus scrape annotations/ports are not backed by running exporters.**
 Evidence: Deployments annotate `prometheus.io/scrape: "true"` with `prometheus.io/port: "9090"` (catalog/consumer/writer and other workers), but runtime entrypoints do not call `start_metrics_server()` from `heber.ops.metrics`. Catalog runs only Uvicorn on 8080, and worker modules run non-HTTP loops without starting a Prometheus HTTP endpoint.
 Recommendation: Start a metrics server on the advertised port in each service entrypoint (or remove/adjust scrape annotations/ports to match reality), and add an integration check that verifies `/metrics` reachability per deployment.
+Update 2026-02-06: Remediated in `T-40` by wiring `start_metrics_server_from_env` into catalog lifecycle and worker entrypoints (`consumer`, `compactor`, `hotloader`, `backfill`) that are annotated for scrape.
+Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map to metrics-enabled runtime entrypoints, with regression tests guarding deployment-to-entrypoint alignment.
 
 ## Suggested Remediation Plan
 
@@ -12366,7 +12551,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061..TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
@@ -12415,9 +12600,21 @@ Updated: 2026-02-06
 - `T-23` complete (`TD-038`): flow-feature computation now normalizes `ts_event` to UTC before indexing, drops invalid timestamps, and enforces rolling 24-hour time-window behavior with regression tests.
 - `T-24` complete (`TD-040`): lifecycle async shutdown wait now returns immediately when shutdown is already signaled and handles async event creation races to prevent hung waits.
 - `T-25` complete (`TD-041`): lifecycle shutdown timeout paths now report `timeout` status in metrics/logs and return `False` instead of reporting successful shutdown.
+- `T-26` complete (`TD-042`): logging setup now validates and applies `log_level` to both stdlib and structlog filtering, with regression tests for INFO/DEBUG behavior across JSON and console renderers.
+- `T-27` complete (`TD-043`): dedupe now uses rolling Bloom-filter rotation with bounded windows and emits rotation stats, with regression tests that cover duplicate behavior before and after rotation boundaries.
+- `T-28` complete (`TD-066`): lakeFS repository creation now resolves storage namespace from configurable base/template settings (`LAKEFS_STORAGE_NAMESPACE_BASE` / `LAKEFS_STORAGE_NAMESPACE_TEMPLATE`) with regression tests.
+- `T-29` complete (`TD-075`, `TD-076`): HPA manifests now use CPU/memory resource metrics and worker probes now use exec checks matching real process entrypoints, with k8s manifest regression tests.
 - `T-30` complete (`TD-059`): clickhouse backup script output now aligns with effective destination behavior by reporting config-managed remote destination/entries instead of an unenforced hardcoded S3 path.
 - `T-31` complete (`TD-060`): catalog backup validation script now guarantees test-instance cleanup via `EXIT` trap and preserves failure status on restore/query errors.
 - `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
+- `T-33` complete (`TD-039`): tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, with regression coverage for `@traced` no-OTEL execution.
+- `T-34` complete (`TD-061`): volume init now performs explicit host/tool checks before running `dot_clean`, with explicit skip behavior on non-macOS hosts and regression checks guarding against implicit fallback.
+- `T-35` complete (`TD-062`): labeling strategy docs now reference `heber/firewall/validation.py` and current split-validation parameter names.
+- `T-36` complete (`TD-063`): data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK and label writers.
+- `T-37` complete (`TD-086`): backfill package now provides an executable `python -m heber.backfill` service entrypoint with API/probe routes.
+- `T-38` complete (`TD-087`): hotloader facade now provides a real service CLI (`python -m heber.writer.hotstore`) with continuous sync-loop and one-shot mode.
+- `T-39` complete (`TD-064`): UW endpoint tracker summary now reports table-derived status counts and no longer contains stale manual buckets.
+- `T-40` complete (`TD-088`): scrape-annotated services now start metrics exporters via `start_metrics_server_from_env`, and regression tests validate deployment-to-entrypoint metrics alignment.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
@@ -12438,6 +12635,16 @@ Updated: 2026-02-06
 - Audit Pass 27 revalidated `TD-065` as resolved via `T-32`.
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`.
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`.
+- Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35` and `T-36`.
+- Audit Pass 31 revalidated `TD-064` as resolved via `T-39`.
+- Audit Pass 32 revalidated `TD-042` as resolved via `T-26`.
+- Audit Pass 33 revalidated `TD-043` as resolved via `T-27`.
+- Audit Pass 34 revalidated `TD-066` as resolved via `T-28`.
+- Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`.
+- Audit Pass 36 revalidated `TD-039` as resolved via `T-33`.
+- Audit Pass 37 revalidated `TD-061` as resolved via `T-34`.
+- Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
+- Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
 
 ## Prioritization Approach
 
@@ -13464,33 +13671,16 @@ This document tracks all UW API endpoints and their integration status with Data
 
 ## Summary
 
-### Complete (11)
+Status counts (derived from table rows above):
 
-- ✅ **User Alerts** (`/api/alerts`) - uses `user_alerts` table
-- ✅ Congress Trades (`/api/congress/recent-trades`)
-- ✅ Darkpool (`/api/darkpool/*`)
-- ✅ Flow Alerts (`/api/option-trades/flow-alerts`)
-- ✅ Insider Trades (`/api/insider/transactions`)
-- ✅ Market Tide (`/api/market/tide`)
-- ✅ Sector Tide (`/api/market/sector-tide`) - uses `market_tide` table
-- ✅ ETF Tide (`/api/market/etf-tide`) - uses `market_tide` table
-- ✅ Greek Exposure (`/api/stock/{ticker}/greek-exposure`) - uses `greek_exposure` table
-- ✅ Greek Exposure by Expiry - uses `greek_exposure` table
-- ✅ Greek Exposure by Strike - uses `greek_exposure` table
+- ✅ **Complete:** 76
+- 🔄 **In Progress:** 0
+- ❌ **Not Started:** 0
+- ⚪ **Not Needed:** 1
 
-### In Progress (8)
+Not Needed endpoint:
 
-- 🔄 Congress Late Reports
-- 🔄 FDA Calendar
-- 🔄 Greek Exposure (3 endpoints)
-- 🔄 Hottest Chains
-- 🔄 News Headlines
-- 🔄 Analyst Ratings
-- 🔄 Institution Holdings
-
-### Not Started (~80+)
-
-See individual sections above
+- ⚪ `/api/alerts/configuration` (alert configuration metadata; no Heber storage table required)
 
 ---
 
@@ -15849,6 +16039,87 @@ def create_backfill_router():
         )
 
     return router
+
+
+
+================================================
+FILE: heber/backfill/__main__.py
+================================================
+"""Executable backfill service entrypoint."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from collections.abc import Callable
+from typing import Any
+
+from fastapi import FastAPI
+
+from heber.backfill import create_backfill_router
+from heber.ops.metrics import start_metrics_server_from_env
+
+
+def create_app() -> FastAPI:
+    """Build the backfill API app."""
+    app = FastAPI(title="Heber Backfill Service", version="0.1.0")
+    app.include_router(create_backfill_router())
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready() -> dict[str, str]:
+        return {"status": "ready"}
+
+    return app
+
+
+app = create_app()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run Heber backfill service.")
+    parser.add_argument(
+        "--host",
+        default=os.getenv("HEBER_BACKFILL_HOST", os.getenv("HEBER_API_HOST", "0.0.0.0")),
+        help="Bind host",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("HEBER_BACKFILL_PORT", "8080")),
+        help="Bind port",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.getenv("HEBER_BACKFILL_LOG_LEVEL", "info"),
+        help="Uvicorn log level",
+    )
+    return parser
+
+
+def main(
+    argv: list[str] | None = None,
+    run_server: Callable[..., Any] | None = None,
+    metrics_server_starter: Callable[..., int | None] = start_metrics_server_from_env,
+) -> int:
+    """CLI entrypoint for `python -m heber.backfill`."""
+    metrics_server_starter(default_port=9090)
+    args = _build_parser().parse_args(argv)
+    runner = run_server
+    if runner is None:
+        import uvicorn
+
+        runner = uvicorn.run
+
+    runner(app, host=args.host, port=args.port, log_level=args.log_level)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 
@@ -18947,6 +19218,7 @@ FILE: heber/catalog/api.py
 See PRD Section 11.7 for API contract.
 """
 
+import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -18959,6 +19231,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from heber.catalog.db import Base
 from heber.catalog.service import CatalogService
 from heber.config import settings
+from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -18978,6 +19251,9 @@ def _should_auto_create_catalog_tables() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    if os.getenv("HEBER_METRICS_PORT"):
+        start_metrics_server_from_env(default_port=9090)
+
     if _should_auto_create_catalog_tables():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -29508,6 +29784,7 @@ from heber.ops.metrics import (
     set_hotstore_lag,
     set_service_info,
     start_metrics_server,
+    start_metrics_server_from_env,
 )
 from heber.ops.reliability import (
     BloomFilter,
@@ -29551,6 +29828,7 @@ __all__ = [
     "log_retry",
     # Metrics (§12.5.1-12.5.3)
     "start_metrics_server",
+    "start_metrics_server_from_env",
     "set_service_info",
     "record_event_received",
     "record_event_processed",
@@ -31404,6 +31682,7 @@ Provides:
 - Trace context propagation
 """
 
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -31451,11 +31730,20 @@ def configure_logging(
 
     Args:
         service_name: Override service name
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         json_output: If True, output JSON; otherwise, dev-friendly format
     """
     if service_name:
         os.environ["SERVICE_NAME"] = service_name
+
+    normalized_level = log_level.strip().upper()
+    level_value = logging.getLevelName(normalized_level)
+    if not isinstance(level_value, int):
+        valid_levels = "DEBUG, INFO, WARNING, ERROR, CRITICAL"
+        raise ValueError(f"Invalid log level '{log_level}'. Expected one of: {valid_levels}.")
+
+    # Keep stdlib and structlog filtering aligned for consistent behavior.
+    logging.getLogger().setLevel(level_value)
 
     # Shared processors
     shared_processors = [
@@ -31475,7 +31763,7 @@ def configure_logging(
 
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.stdlib.BoundLogger,
+        wrapper_class=structlog.make_filtering_bound_logger(level_value),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
@@ -31604,6 +31892,8 @@ and anti-leakage latency monitoring.
 
 Naming convention: heber_<service>_<metric_name>{<labels>}
 """
+
+import os
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
@@ -31924,6 +32214,32 @@ def start_metrics_server(port: int = METRICS_PORT) -> None:
         raise
 
 
+def start_metrics_server_from_env(
+    env_var: str = "HEBER_METRICS_PORT",
+    default_port: int | None = None,
+) -> int | None:
+    """Start metrics server from environment configuration.
+
+    Returns:
+        The bound port when started, otherwise None.
+    """
+    raw_port = os.getenv(env_var)
+    if raw_port:
+        try:
+            port = int(raw_port)
+        except ValueError:
+            logger.warning("metrics_server_skipped", reason="invalid_port", env_var=env_var, value=raw_port)
+            return None
+    elif default_port is not None:
+        port = default_port
+    else:
+        logger.debug("metrics_server_skipped", reason="env_not_set", env_var=env_var)
+        return None
+
+    start_metrics_server(port)
+    return port
+
+
 def set_service_info(
     version: str,
     service: str,
@@ -31967,6 +32283,7 @@ logger = structlog.get_logger(__name__)
 # Default Bloom filter constants (per PRD §12.2)
 BLOOM_FILTER_SIZE = 10_000_000  # 10M bits default
 BLOOM_FILTER_HASHES = 7
+BLOOM_ROTATION_SECONDS = 3600.0
 
 
 class BloomFilter:
@@ -32036,10 +32353,39 @@ class EventDeduplicator:
         self,
         bloom_size: int = BLOOM_FILTER_SIZE,
         backing_store: Any = None,
+        bloom_rotation_seconds: float = BLOOM_ROTATION_SECONDS,
+        now_fn: Callable[[], float] | None = None,
     ):
         self.bloom = BloomFilter(size=bloom_size)
+        self._previous_bloom: BloomFilter | None = None
         self.backing_store = backing_store  # Redis client or similar
-        self._stats = {"checked": 0, "duplicates": 0}
+        self.bloom_rotation_seconds = bloom_rotation_seconds
+        self._now_fn = now_fn or time.time
+        self._last_rotation_epoch = self._now_fn()
+        self._stats = {"checked": 0, "duplicates": 0, "rotations": 0}
+
+    def _rotate_if_needed(self) -> None:
+        """Rotate Bloom filters to keep false-positive risk bounded over time."""
+        if self.bloom_rotation_seconds <= 0:
+            return
+
+        now = self._now_fn()
+        elapsed = now - self._last_rotation_epoch
+        if elapsed < self.bloom_rotation_seconds:
+            return
+
+        windows_elapsed = int(elapsed // self.bloom_rotation_seconds)
+        self._previous_bloom = self.bloom if windows_elapsed == 1 else None
+        self.bloom = BloomFilter(size=self.bloom.size, num_hashes=self.bloom.num_hashes)
+        self._last_rotation_epoch = now
+        self._stats["rotations"] += 1
+
+        logger.info(
+            "dedupe_bloom_rotated",
+            rotations=self._stats["rotations"],
+            windows_elapsed=windows_elapsed,
+            rotation_seconds=self.bloom_rotation_seconds,
+        )
 
     def check_and_register(self, event_id: str) -> DeduplicationResult:
         """Check if event is duplicate, register if new.
@@ -32048,9 +32394,14 @@ class EventDeduplicator:
             DeduplicationResult with is_duplicate flag
         """
         self._stats["checked"] += 1
+        self._rotate_if_needed()
 
         # Fast path: Bloom filter check
-        if self.bloom.contains(event_id):
+        bloom_match = self.bloom.contains(event_id)
+        if not bloom_match and self._previous_bloom is not None:
+            bloom_match = self._previous_bloom.contains(event_id)
+
+        if bloom_match:
             # Possible duplicate - verify with backing store if available
             if self.backing_store:
                 if self._backing_contains(event_id):
@@ -32091,6 +32442,9 @@ class EventDeduplicator:
         return {
             **self._stats,
             "bloom_count": self.bloom.count,
+            "previous_bloom_count": self._previous_bloom.count if self._previous_bloom else 0,
+            "bloom_rotation_seconds": self.bloom_rotation_seconds,
+            "last_rotation_epoch": self._last_rotation_epoch,
         }
 
 
@@ -32892,7 +33246,7 @@ def traced(
             if extract_lineage and "lineage" in kwargs:
                 context = extract_trace_context(kwargs["lineage"])
 
-            span_kind = SpanKind.INTERNAL
+            span_kind = None
             if OTEL_AVAILABLE:
                 kind_map = {
                     "internal": SpanKind.INTERNAL,
@@ -45088,12 +45442,16 @@ class LakeFSConfig:
         LAKEFS_ACCESS_KEY: Access key ID
         LAKEFS_SECRET_KEY: Secret access key
         LAKEFS_DEFAULT_REPO: Default repository name
+        LAKEFS_STORAGE_NAMESPACE_BASE: Storage namespace base (default: s3://heber-lakehouse)
+        LAKEFS_STORAGE_NAMESPACE_TEMPLATE: Optional template with {repo} placeholder
     """
 
     endpoint: str = "http://localhost:8000"
     access_key: str = ""
     secret_key: str = ""
     default_repo: str = "heber-gold"
+    storage_namespace_base: str = "s3://heber-lakehouse"
+    storage_namespace_template: str | None = None
 
     @classmethod
     def from_env(cls) -> LakeFSConfig:
@@ -45103,7 +45461,18 @@ class LakeFSConfig:
             access_key=os.getenv("LAKEFS_ACCESS_KEY", ""),
             secret_key=os.getenv("LAKEFS_SECRET_KEY", ""),
             default_repo=os.getenv("LAKEFS_DEFAULT_REPO", "heber-gold"),
+            storage_namespace_base=os.getenv("LAKEFS_STORAGE_NAMESPACE_BASE", "s3://heber-lakehouse"),
+            storage_namespace_template=os.getenv("LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
         )
+
+    def resolve_storage_namespace(self, repo_name: str) -> str:
+        """Resolve storage namespace for repository creation."""
+        if self.storage_namespace_template:
+            if "{repo}" in self.storage_namespace_template:
+                return self.storage_namespace_template.format(repo=repo_name)
+            return f"{self.storage_namespace_template.rstrip('/')}/{repo_name}"
+
+        return f"{self.storage_namespace_base.rstrip('/')}/{repo_name}"
 
 
 @dataclass
@@ -45196,7 +45565,7 @@ class LakeFSVersionManager:
             # Repository doesn't exist, create it
             logger.info("creating_lakefs_repository", repo=repo_name)
             return lakefs.Repository(repo_name, client=client).create(
-                storage_namespace=f"s3://heber-lakehouse/{repo_name}",
+                storage_namespace=self.config.resolve_storage_namespace(repo_name),
                 default_branch="main",
             )
 
@@ -48148,6 +48517,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -48321,6 +48691,7 @@ class Compactor:
 
 async def main():
     """Entry point for the compactor."""
+    start_metrics_server_from_env(default_port=9090)
     compactor = Compactor()
 
     loop = asyncio.get_event_loop()
@@ -48354,6 +48725,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.metrics import start_metrics_server_from_env
 from heber.writer.bronze import BronzeWriter
 from heber.writer.silver import SilverWriter
 
@@ -48780,6 +49152,7 @@ class EventConsumer:
 
 async def main():
     """Entry point for the consumer."""
+    start_metrics_server_from_env(default_port=9090)
     consumer = EventConsumer()
 
     # Handle signals
@@ -48807,6 +49180,14 @@ implementation and `clickhouse-connect` client stack.
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import os
+import signal
+from collections.abc import Callable
+
+import structlog
+
 from heber.hotstore.sync import (
     HotStoreReader,
     HotStoreSync,
@@ -48816,10 +49197,106 @@ from heber.hotstore.sync import (
     SyncState,
     create_hot_store_syncer,
 )
+from heber.ops.metrics import start_metrics_server_from_env
+
+logger = structlog.get_logger(__name__)
 
 # Backward-compatible aliases
 HotStoreWriter = HotStoreSync
 HotStoreSyncer = HotStoreSync
+
+
+def _parse_datasets(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run Heber hotloader service.")
+    parser.add_argument(
+        "--datasets",
+        default=os.getenv("HEBER_HOTLOADER_DATASETS", "quotes,trades,bars"),
+        help="Comma-separated datasets to sync",
+    )
+    parser.add_argument(
+        "--silver-base-path",
+        default=os.getenv("HEBER_HOTLOADER_SILVER_BASE_PATH"),
+        help="Optional Silver base path override",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one sync pass and exit",
+    )
+    return parser
+
+
+async def _run_hotloader(
+    datasets: list[str],
+    silver_base_path: str | None,
+    once: bool,
+    syncer_factory: Callable[..., HotStoreSync],
+) -> int:
+    syncer = syncer_factory(silver_base_path=silver_base_path)
+    syncer.ensure_tables()
+
+    if once:
+        for dataset in datasets:
+            syncer.sync_from_silver(dataset, silver_path=silver_base_path)
+        syncer.flush()
+        return 0
+
+    stop_event: asyncio.Event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def request_stop() -> None:
+        syncer.stop()
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, request_stop)
+        except (NotImplementedError, RuntimeError, ValueError):
+            # Not all runtimes allow custom signal handlers.
+            pass
+
+    sync_task = asyncio.create_task(syncer.run_sync_loop(datasets, silver_base_path))
+    sync_task.add_done_callback(lambda _task: stop_event.set())
+    logger.info("hotloader_started", datasets=datasets, silver_base_path=silver_base_path)
+
+    try:
+        await stop_event.wait()
+    finally:
+        syncer.stop()
+        await sync_task
+        logger.info("hotloader_stopped")
+
+    return 0
+
+
+def main(
+    argv: list[str] | None = None,
+    syncer_factory: Callable[..., HotStoreSync] = create_hot_store_syncer,
+    metrics_server_starter: Callable[..., int | None] = start_metrics_server_from_env,
+) -> int:
+    """CLI entrypoint for `python -m heber.writer.hotstore`."""
+    metrics_server_starter(default_port=9090)
+    args = _build_parser().parse_args(argv)
+    datasets = _parse_datasets(args.datasets)
+    if not datasets:
+        raise ValueError("At least one dataset must be provided for hotloader sync.")
+
+    try:
+        return asyncio.run(
+            _run_hotloader(
+                datasets=datasets,
+                silver_base_path=args.silver_base_path,
+                once=args.once,
+                syncer_factory=syncer_factory,
+            )
+        )
+    except KeyboardInterrupt:
+        return 0
+
 
 __all__ = [
     "QueryType",
@@ -48831,7 +49308,12 @@ __all__ = [
     "HotStoreSyncer",
     "HotStoreReader",
     "create_hot_store_syncer",
+    "main",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 
@@ -50202,15 +50684,19 @@ spec:
               cpu: 2000m
               memory: 4Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: http
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.backfill' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.backfill' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:
@@ -50379,15 +50865,19 @@ spec:
               cpu: 4000m
               memory: 8Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.compactor' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 30
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.compactor' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 10
             periodSeconds: 10
           securityContext:
@@ -50466,15 +50956,19 @@ spec:
               cpu: 2000m
               memory: 2Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.consumer' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.consumer' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:
@@ -50552,15 +51046,19 @@ spec:
               cpu: 2000m
               memory: 2Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.hotstore' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.hotstore' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:
@@ -50638,15 +51136,19 @@ spec:
               cpu: 2000m
               memory: 4Gi
           livenessProbe:
-            httpGet:
-              path: /health
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.consumer' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: metrics
+            exec:
+              command:
+                - python
+                - -c
+                - "import pathlib,sys; sys.exit(0 if b'heber.writer.consumer' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)"
             initialDelaySeconds: 5
             periodSeconds: 5
           securityContext:
@@ -50668,7 +51170,7 @@ spec:
 FILE: k8s/base/hpa/catalog.yaml
 ================================================
 # Heber Catalog HorizontalPodAutoscaler per PRD §20.4
-# Scales based on request latency P99
+# Uses built-in resource metrics (CPU/memory) to avoid custom-metric drift.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -50683,13 +51185,18 @@ spec:
   minReplicas: 2
   maxReplicas: 6
   metrics:
-    - type: Pods
-      pods:
-        metric:
-          name: heber_catalog_request_latency_p99_seconds
+    - type: Resource
+      resource:
+        name: cpu
         target:
-          type: AverageValue
-          averageValue: "0.5"  # 500ms threshold
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300
@@ -50710,7 +51217,7 @@ spec:
 FILE: k8s/base/hpa/consumer.yaml
 ================================================
 # Heber Consumer HorizontalPodAutoscaler per PRD §20.4
-# Scales based on consumer lag metric
+# Uses built-in resource metrics (CPU/memory) to avoid custom-metric drift.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -50725,13 +51232,18 @@ spec:
   minReplicas: 3
   maxReplicas: 10
   metrics:
-    - type: Pods
-      pods:
-        metric:
-          name: heber_consumer_lag_seconds
+    - type: Resource
+      resource:
+        name: cpu
         target:
-          type: AverageValue
-          averageValue: "30"
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300  # Prevent flapping
@@ -50752,7 +51264,7 @@ spec:
 FILE: k8s/base/hpa/writer.yaml
 ================================================
 # Heber Writer HorizontalPodAutoscaler per PRD §20.4
-# Scales based on pending batch rows metric
+# Uses built-in resource metrics (CPU/memory) to avoid custom-metric drift.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -50767,13 +51279,18 @@ spec:
   minReplicas: 3
   maxReplicas: 10
   metrics:
-    - type: Pods
-      pods:
-        metric:
-          name: heber_writer_pending_batch_rows
+    - type: Resource
+      resource:
+        name: cpu
         target:
-          type: AverageValue
-          averageValue: "100000"
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300
@@ -51413,11 +51930,23 @@ chmod -R 755 "$VOLUME_ROOT/redis"
 # These cause "Operation not permitted" errors that crash postgres, redis, and
 # clickhouse on startup. This MUST run after chmod since chmod itself creates
 # ._* files on non-HFS+ filesystems.
-echo "Cleaning macOS resource fork files..."
-for dir in postgres redis clickhouse elasticsearch minio data; do
-    dot_clean -m "$VOLUME_ROOT/$dir" 2>/dev/null || true
-done
-echo "Resource fork cleanup complete"
+HOST_OS="$(uname -s)"
+if [ "$HOST_OS" = "Darwin" ]; then
+    if command -v dot_clean >/dev/null 2>&1; then
+        echo "Cleaning macOS resource fork files with dot_clean..."
+        for dir in postgres redis clickhouse elasticsearch minio data; do
+            target="$VOLUME_ROOT/$dir"
+            if ! dot_clean -m "$target" 2>/dev/null; then
+                echo "Warning: dot_clean failed for $target; continuing"
+            fi
+        done
+        echo "Resource fork cleanup complete"
+    else
+        echo "Skipping resource fork cleanup: dot_clean is not installed"
+    fi
+else
+    echo "Skipping resource fork cleanup: host OS is $HOST_OS (dot_clean is macOS-only)"
+fi
 
 echo ""
 echo "Heber storage initialized at $VOLUME_ROOT"
@@ -52657,6 +53186,56 @@ def test_consume_yields_claimed_messages():
 
 
 ================================================
+FILE: tests/test_event_deduplicator_rotation.py
+================================================
+"""Regression tests for Bloom filter dedupe rotation behavior."""
+
+from __future__ import annotations
+
+from heber.ops.reliability import EventDeduplicator
+
+
+def test_duplicate_detected_within_same_rotation_window() -> None:
+    now = [0.0]
+    deduper = EventDeduplicator(
+        bloom_size=100_000,
+        bloom_rotation_seconds=60.0,
+        now_fn=lambda: now[0],
+    )
+
+    first = deduper.check_and_register("event-1")
+    second = deduper.check_and_register("event-1")
+
+    assert first.is_duplicate is False
+    assert second.is_duplicate is True
+    assert second.reason == "bloom_filter_match"
+
+
+def test_event_ages_out_after_two_rotation_windows_without_backing_store() -> None:
+    now = [0.0]
+    deduper = EventDeduplicator(
+        bloom_size=100_000,
+        bloom_rotation_seconds=10.0,
+        now_fn=lambda: now[0],
+    )
+
+    assert deduper.check_and_register("event-2").is_duplicate is False
+
+    now[0] = 11.0
+    assert deduper.check_and_register("event-2").is_duplicate is True
+
+    now[0] = 22.0
+    aged_out = deduper.check_and_register("event-2")
+    stats = deduper.stats
+
+    assert aged_out.is_duplicate is False
+    assert stats["rotations"] == 2
+    assert stats["bloom_rotation_seconds"] == 10.0
+    assert stats["previous_bloom_count"] == 0
+
+
+
+================================================
 FILE: tests/test_feature_view_alignment.py
 ================================================
 """Regression tests for Feast feature-view schema/path alignment."""
@@ -53057,6 +53636,166 @@ def test_hotstore_event_sync_stop_flushes_pending_buffer() -> None:
 
 
 ================================================
+FILE: tests/test_init_volume_platform_guard.py
+================================================
+"""Regression tests for cross-platform init_volume behavior."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_init_volume_uses_explicit_platform_and_tool_checks() -> None:
+    script = (ROOT / "scripts/init_volume.sh").read_text(encoding="utf-8")
+
+    assert 'HOST_OS="$(uname -s)"' in script
+    assert 'if [ "$HOST_OS" = "Darwin" ]; then' in script
+    assert "command -v dot_clean" in script
+    assert "Skipping resource fork cleanup" in script
+
+
+def test_init_volume_does_not_use_implicit_dot_clean_fallback() -> None:
+    script = (ROOT / "scripts/init_volume.sh").read_text(encoding="utf-8")
+
+    assert "dot_clean -m" in script
+    assert "|| true" not in script
+
+
+
+================================================
+FILE: tests/test_k8s_hpa_probe_conformance.py
+================================================
+"""Regression tests for Kubernetes HPA metric and probe conformance."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_hpas_use_resource_metrics_only() -> None:
+    hpa_paths = [
+        ROOT / "k8s/base/hpa/catalog.yaml",
+        ROOT / "k8s/base/hpa/consumer.yaml",
+        ROOT / "k8s/base/hpa/writer.yaml",
+    ]
+
+    for path in hpa_paths:
+        hpa = _load_yaml(path)
+        metrics = hpa["spec"]["metrics"]
+        assert metrics, f"No metrics configured in {path}"
+
+        for metric in metrics:
+            assert metric["type"] == "Resource", f"Unexpected metric type in {path}: {metric}"
+            assert metric["resource"]["name"] in {"cpu", "memory"}, (
+                f"Unexpected resource metric in {path}: {metric['resource']['name']}"
+            )
+
+
+def test_worker_deployments_use_exec_probes() -> None:
+    worker_expectations = {
+        ROOT / "k8s/base/deployments/consumer.yaml": "heber.writer.consumer",
+        ROOT / "k8s/base/deployments/writer.yaml": "heber.writer.consumer",
+        ROOT / "k8s/base/deployments/compactor.yaml": "heber.writer.compactor",
+        ROOT / "k8s/base/deployments/hotloader.yaml": "heber.writer.hotstore",
+        ROOT / "k8s/base/deployments/backfill.yaml": "heber.backfill",
+    }
+
+    for path, expected_entrypoint in worker_expectations.items():
+        deployment = _load_yaml(path)
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+
+        for probe_name in ("livenessProbe", "readinessProbe"):
+            probe = container[probe_name]
+            assert "exec" in probe, f"Expected exec probe in {path}::{probe_name}"
+            assert "httpGet" not in probe, f"Unexpected HTTP probe in {path}::{probe_name}"
+
+            command = " ".join(probe["exec"]["command"])
+            assert expected_entrypoint in command, (
+                f"Probe command in {path}::{probe_name} does not match expected entrypoint "
+                f"{expected_entrypoint!r}: {command!r}"
+            )
+
+
+
+================================================
+FILE: tests/test_lakefs_namespace_config.py
+================================================
+"""Regression tests for configurable lakeFS storage namespaces."""
+
+from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
+
+from heber.versioning import LakeFSConfig, LakeFSVersionManager
+
+
+def test_resolve_storage_namespace_uses_base_by_default() -> None:
+    config = LakeFSConfig(storage_namespace_base="s3://bucket-a/lake")
+
+    namespace = config.resolve_storage_namespace("repo-1")
+
+    assert namespace == "s3://bucket-a/lake/repo-1"
+
+
+def test_resolve_storage_namespace_uses_template_when_provided() -> None:
+    config = LakeFSConfig(
+        storage_namespace_base="s3://ignored-base",
+        storage_namespace_template="s3://bucket-b/env/prod/{repo}",
+    )
+
+    namespace = config.resolve_storage_namespace("repo-2")
+
+    assert namespace == "s3://bucket-b/env/prod/repo-2"
+
+
+def test_get_repo_creation_uses_resolved_storage_namespace(monkeypatch) -> None:
+    created: dict[str, str] = {}
+    attempts = {"count": 0}
+
+    class _FakeRepo:
+        def __init__(self, repo_name: str) -> None:
+            self.repo_name = repo_name
+
+        def create(self, storage_namespace: str, default_branch: str) -> _FakeRepo:
+            created["repo_name"] = self.repo_name
+            created["storage_namespace"] = storage_namespace
+            created["default_branch"] = default_branch
+            return self
+
+    def _repository_factory(repo_name: str, client=None):  # noqa: ANN001
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("repo missing")
+        return _FakeRepo(repo_name)
+
+    fake_lakefs = SimpleNamespace(
+        Client=lambda **_kwargs: object(),
+        Repository=_repository_factory,
+    )
+    monkeypatch.setitem(sys.modules, "lakefs", fake_lakefs)
+
+    config = LakeFSConfig(storage_namespace_template="s3://bucket-c/team/{repo}")
+    manager = LakeFSVersionManager(config=config)
+    manager._get_repo("repo-3")
+
+    assert created["repo_name"] == "repo-3"
+    assert created["storage_namespace"] == "s3://bucket-c/team/repo-3"
+    assert created["default_branch"] == "main"
+
+
+
+================================================
 FILE: tests/test_lifecycle_shutdown_timeout.py
 ================================================
 """Regression tests for lifecycle shutdown timeout status behavior."""
@@ -53140,6 +53879,62 @@ async def test_async_wait_unblocks_after_late_shutdown_signal() -> None:
     lifecycle.initiate_shutdown(reason="unit_test")
 
     await asyncio.wait_for(wait_task, timeout=0.1)
+
+
+
+================================================
+FILE: tests/test_logging_level_filtering.py
+================================================
+"""Regression tests for structured logging level filtering."""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+import structlog
+
+from heber.ops.logging import configure_logging, get_logger
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging_state() -> None:
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    yield
+    structlog.reset_defaults()
+    root_logger.setLevel(original_level)
+
+
+@pytest.mark.parametrize("json_output", [True, False])
+def test_info_level_filters_debug_messages(capsys: pytest.CaptureFixture[str], json_output: bool) -> None:
+    configure_logging(log_level="INFO", json_output=json_output)
+    logger = get_logger("test-info-filter")
+
+    logger.debug("debug_should_be_filtered")
+    logger.info("info_should_be_emitted")
+
+    output = capsys.readouterr().out
+    assert "info_should_be_emitted" in output
+    assert "debug_should_be_filtered" not in output
+    assert logging.getLogger().level == logging.INFO
+
+
+@pytest.mark.parametrize("json_output", [True, False])
+def test_debug_level_emits_debug_messages(capsys: pytest.CaptureFixture[str], json_output: bool) -> None:
+    configure_logging(log_level="DEBUG", json_output=json_output)
+    logger = get_logger("test-debug-filter")
+
+    logger.debug("debug_should_be_emitted")
+
+    output = capsys.readouterr().out
+    assert "debug_should_be_emitted" in output
+    assert logging.getLogger().level == logging.DEBUG
+
+
+def test_invalid_level_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="Invalid log level"):
+        configure_logging(log_level="TRACE")
 
 
 
@@ -53282,6 +54077,60 @@ def test_meta_label_builder_normalizes_legacy_columns():
 
 
 ================================================
+FILE: tests/test_metrics_exporter_alignment.py
+================================================
+"""Regression tests for metrics exporter and deployment scrape alignment."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def test_scraped_deployments_map_to_metrics_enabled_entrypoints() -> None:
+    deployments = {
+        "catalog": ROOT / "k8s/base/deployments/catalog.yaml",
+        "consumer": ROOT / "k8s/base/deployments/consumer.yaml",
+        "writer": ROOT / "k8s/base/deployments/writer.yaml",
+        "compactor": ROOT / "k8s/base/deployments/compactor.yaml",
+        "hotloader": ROOT / "k8s/base/deployments/hotloader.yaml",
+        "backfill": ROOT / "k8s/base/deployments/backfill.yaml",
+    }
+
+    source_files = {
+        "catalog": ROOT / "heber/catalog/api.py",
+        "consumer": ROOT / "heber/writer/consumer.py",
+        "writer": ROOT / "heber/writer/consumer.py",
+        "compactor": ROOT / "heber/writer/compactor.py",
+        "hotloader": ROOT / "heber/writer/hotstore.py",
+        "backfill": ROOT / "heber/backfill/__main__.py",
+    }
+
+    for name, deployment_path in deployments.items():
+        deployment = _load_yaml(deployment_path)
+        template = deployment["spec"]["template"]
+        annotations = template["metadata"]["annotations"]
+        container = template["spec"]["containers"][0]
+
+        assert annotations.get("prometheus.io/scrape") == "true", f"{name} scrape annotation missing"
+        assert annotations.get("prometheus.io/port") == "9090", f"{name} scrape port drifted"
+        assert any(port["containerPort"] == 9090 for port in container.get("ports", [])), (
+            f"{name} no longer exposes metrics container port"
+        )
+
+        source = source_files[name].read_text(encoding="utf-8")
+        assert "start_metrics_server_from_env" in source, f"{name} entrypoint does not start metrics server"
+
+
+
+================================================
 FILE: tests/test_placeholder.py
 ================================================
 """Placeholder test to ensure pytest runs successfully."""
@@ -53327,6 +54176,7 @@ def test_runtime_entrypoint_modules_exist() -> None:
         "heber.writer.consumer",
         "heber.writer.compactor",
         "heber.writer.hotstore",
+        "heber.backfill.__main__",
     ]
 
     missing = [name for name in expected_modules if importlib.util.find_spec(name) is None]
@@ -53518,6 +54368,28 @@ def test_expected_module_entrypoints_have_main_tf() -> None:
             missing.append(str(module_main))
 
     assert not missing, f"Missing Terraform module files: {missing}"
+
+
+
+================================================
+FILE: tests/test_tracing_no_otel.py
+================================================
+"""Regression tests for tracing behavior when OpenTelemetry is unavailable."""
+
+from __future__ import annotations
+
+from heber.ops import tracing
+
+
+def test_traced_decorator_no_otel_does_not_require_spankind(monkeypatch) -> None:
+    monkeypatch.setattr(tracing, "OTEL_AVAILABLE", False)
+    monkeypatch.delattr(tracing, "SpanKind", raising=False)
+
+    @tracing.traced(span_name="unit-test-no-otel")
+    def _sample(value: int) -> int:
+        return value + 1
+
+    assert _sample(41) == 42
 
 
 
@@ -53766,6 +54638,138 @@ async def test_handle_message_skips_non_flow_alerts_with_ack() -> None:
     should_ack = await consumer._handle_message("3-0", {b"data": b"{}"})
 
     assert should_ack is True
+
+
+
+================================================
+FILE: tests/test_worker_entrypoint_services.py
+================================================
+"""Regression tests for executable worker entrypoint service modes."""
+
+from __future__ import annotations
+
+import importlib.util
+
+from heber.backfill import __main__ as backfill_main
+from heber.writer import hotstore as hotstore_main
+
+
+def test_backfill_package_has_executable_module() -> None:
+    assert importlib.util.find_spec("heber.backfill.__main__") is not None
+
+
+def test_backfill_main_invokes_server_runner_with_app() -> None:
+    calls: dict[str, object] = {}
+
+    def fake_run(app, host: str, port: int, log_level: str) -> None:  # noqa: ANN001
+        calls["app"] = app
+        calls["host"] = host
+        calls["port"] = port
+        calls["log_level"] = log_level
+
+    exit_code = backfill_main.main(
+        ["--host", "127.0.0.1", "--port", "8099", "--log-level", "warning"],
+        run_server=fake_run,
+        metrics_server_starter=lambda **_kwargs: None,
+    )
+
+    assert exit_code == 0
+    assert calls["host"] == "127.0.0.1"
+    assert calls["port"] == 8099
+    assert calls["log_level"] == "warning"
+    paths = {route.path for route in calls["app"].routes}  # type: ignore[attr-defined]
+    assert "/health" in paths
+    assert "/ready" in paths
+    assert any(path.startswith("/backfill") for path in paths)
+
+
+def test_hotloader_once_mode_runs_sync_and_exits() -> None:
+    class _FakeSyncer:
+        def __init__(self) -> None:
+            self.ensure_tables_called = False
+            self.synced: list[tuple[str, str | None]] = []
+            self.flush_called = False
+            self.run_sync_loop_called = False
+
+        def ensure_tables(self) -> None:
+            self.ensure_tables_called = True
+
+        def sync_from_silver(self, dataset: str, silver_path: str | None = None) -> int:
+            self.synced.append((dataset, silver_path))
+            return 0
+
+        def flush(self) -> int:
+            self.flush_called = True
+            return 0
+
+        async def run_sync_loop(self, datasets, silver_base_path):  # noqa: ANN001
+            self.run_sync_loop_called = True
+
+        def stop(self) -> None:
+            return None
+
+    fake_syncer = _FakeSyncer()
+
+    def fake_factory(*, silver_base_path: str | None = None, **_kwargs) -> _FakeSyncer:
+        assert silver_base_path == "/tmp/silver"
+        return fake_syncer
+
+    exit_code = hotstore_main.main(
+        [
+            "--once",
+            "--datasets",
+            "quotes,bars",
+            "--silver-base-path",
+            "/tmp/silver",
+        ],
+        syncer_factory=fake_factory,
+        metrics_server_starter=lambda **_kwargs: None,
+    )
+
+    assert exit_code == 0
+    assert fake_syncer.ensure_tables_called is True
+    assert fake_syncer.synced == [("quotes", "/tmp/silver"), ("bars", "/tmp/silver")]
+    assert fake_syncer.flush_called is True
+    assert fake_syncer.run_sync_loop_called is False
+
+
+def test_hotloader_service_mode_invokes_sync_loop() -> None:
+    class _FakeSyncer:
+        def __init__(self) -> None:
+            self.ensure_tables_called = False
+            self.run_sync_loop_called = False
+            self.stop_called = False
+
+        def ensure_tables(self) -> None:
+            self.ensure_tables_called = True
+
+        def sync_from_silver(self, dataset: str, silver_path: str | None = None) -> int:
+            return 0
+
+        def flush(self) -> int:
+            return 0
+
+        async def run_sync_loop(self, datasets, silver_base_path):  # noqa: ANN001
+            self.run_sync_loop_called = True
+
+        def stop(self) -> None:
+            self.stop_called = True
+
+    fake_syncer = _FakeSyncer()
+
+    def fake_factory(*, silver_base_path: str | None = None, **_kwargs) -> _FakeSyncer:
+        return fake_syncer
+
+    exit_code = hotstore_main.main(
+        ["--datasets", "quotes"],
+        syncer_factory=fake_factory,
+        metrics_server_starter=lambda **_kwargs: None,
+    )
+
+    assert exit_code == 0
+    assert fake_syncer.ensure_tables_called is True
+    assert fake_syncer.run_sync_loop_called is True
+    assert fake_syncer.stop_called is True
 
 
 

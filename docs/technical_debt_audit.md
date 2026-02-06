@@ -374,8 +374,13 @@ Audit Pass 39 (2026-02-06, files reviewed directly):
 - heber/backfill/__main__.py
 - tests/test_metrics_exporter_alignment.py
 
+Audit Pass 40 (2026-02-06, files reviewed directly):
+- heber/versioning/__init__.py
+- tests/test_lakefs_operation_metrics.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/versioning/__init__.py (`TD-067`) operation-metrics coverage re-audit.
+- infrastructure/terraform/environments/dev/main.tf (`TD-079`) hardcoded region/backend re-audit.
+- heber/backfill/writer.py (`TD-080`, `TD-082`) Bronze/catalog update + missing-pyarrow failure-path re-audit.
 
 ## Remediation Updates
 
@@ -418,6 +423,7 @@ Updated: 2026-02-06
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -448,6 +454,7 @@ Updated: 2026-02-06
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
+- Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
 
 ## Executive Summary
 
@@ -860,6 +867,8 @@ Revalidated 2026-02-06 (Pass 34): Resolved. Repository creation no longer hardco
 Evidence: Metrics are emitted for `create_branch` and `commit`, but not for `create_tag`, `list_tags`, `diff`, or `merge` error paths. This makes operational monitoring partial and inconsistent.
 Recommendation: Instrument all lakeFS operations (success/failure/duration) consistently.
 Revalidated 2026-02-06 (Pass 17): Still open. `lakefs_operations`/`lakefs_operation_duration` remain wired only for `create_branch` and `commit`.
+Update 2026-02-06: Remediated in `T-45` by adding consistent operation metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths, with dedicated regression coverage.
+Revalidated 2026-02-06 (Pass 40): Resolved. The remaining lakeFS operations now emit success/error counters and duration histograms consistently.
 
 **TD-068: Market calendar crashes on naive datetimes.**
 Evidence: `MarketCalendar` calls `pd.Timestamp(dt).tz_convert(ET)` in multiple methods. If `dt` is naive (no timezone), pandas raises. Callers may pass naive datetimes (common in this repo).
@@ -983,7 +992,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

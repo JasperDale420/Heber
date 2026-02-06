@@ -301,10 +301,20 @@ class LakeFSVersionManager:
         Returns:
             GoldTag with tag details
         """
-        repository = self._get_repo(repo)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
 
         try:
+            repository = self._get_repo(repo)
             repository.tag(tag_name).create(commit_id)
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="create_tag",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="create_tag").observe(duration)
 
             logger.info(
                 "lakefs_tag_created",
@@ -314,6 +324,13 @@ class LakeFSVersionManager:
 
             return GoldTag(name=tag_name, commit_id=commit_id)
         except Exception as e:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="create_tag",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="create_tag").observe(duration)
             logger.error("lakefs_tag_create_failed", error=str(e))
             raise
 
@@ -326,8 +343,30 @@ class LakeFSVersionManager:
         Returns:
             List of GoldTag objects
         """
-        repository = self._get_repo(repo)
-        return [GoldTag(name=t.id, commit_id=t.commit_id) for t in repository.tags()]
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
+
+        try:
+            repository = self._get_repo(repo)
+            tags = [GoldTag(name=t.id, commit_id=t.commit_id) for t in repository.tags()]
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="list_tags",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="list_tags").observe(duration)
+            return tags
+        except Exception:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="list_tags",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="list_tags").observe(duration)
+            raise
 
     def get_commit(
         self,
@@ -371,11 +410,21 @@ class LakeFSVersionManager:
         Returns:
             GoldCommit of the merge commit
         """
-        repository = self._get_repo(repo)
-        dest = repository.branch(dest_branch)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
 
         try:
+            repository = self._get_repo(repo)
+            dest = repository.branch(dest_branch)
             result = dest.merge(source_branch)
+
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="merge",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="merge").observe(duration)
 
             logger.info(
                 "lakefs_merge_completed",
@@ -386,6 +435,13 @@ class LakeFSVersionManager:
 
             return self.get_commit(result, repo)
         except Exception as e:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="merge",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="merge").observe(duration)
             logger.error(
                 "lakefs_merge_failed",
                 source=source_branch,
@@ -410,10 +466,30 @@ class LakeFSVersionManager:
         Returns:
             List of changed paths with their types
         """
-        repository = self._get_repo(repo)
-        changes = repository.ref(ref1).diff(ref2)
+        start_time = datetime.now(UTC)
+        repo_name = repo or self.config.default_repo
+        try:
+            repository = self._get_repo(repo)
+            changes = repository.ref(ref1).diff(ref2)
+            formatted = [{"path": change.path, "type": change.type} for change in changes]
 
-        return [{"path": change.path, "type": change.type} for change in changes]
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="diff",
+                repository=repo_name,
+                status="success",
+            ).inc()
+            lakefs_operation_duration.labels(operation="diff").observe(duration)
+            return formatted
+        except Exception:
+            duration = (datetime.now(UTC) - start_time).total_seconds()
+            lakefs_operations.labels(
+                operation="diff",
+                repository=repo_name,
+                status="error",
+            ).inc()
+            lakefs_operation_duration.labels(operation="diff").observe(duration)
+            raise
 
     def checkout(
         self,
