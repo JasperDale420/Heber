@@ -44,6 +44,8 @@ Updated: 2026-02-06
 - `T-34` complete (`TD-061`): volume init now performs explicit host/tool checks before running `dot_clean`, with explicit skip behavior on non-macOS hosts and regression checks guarding against implicit fallback.
 - `T-35` complete (`TD-062`): labeling strategy docs now reference `heber/firewall/validation.py` and current split-validation parameter names.
 - `T-36` complete (`TD-063`): data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK and label writers.
+- `T-37` complete (`TD-086`): backfill package now provides an executable `python -m heber.backfill` service entrypoint with API/probe routes.
+- `T-38` complete (`TD-087`): hotloader facade now provides a real service CLI (`python -m heber.writer.hotstore`) with continuous sync-loop and one-shot mode.
 - `T-39` complete (`TD-064`): UW endpoint tracker summary now reports table-derived status counts and no longer contains stale manual buckets.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
@@ -73,6 +75,7 @@ Updated: 2026-02-06
 - Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`.
 - Audit Pass 36 revalidated `TD-039` as resolved via `T-33`.
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`.
+- Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
 
 ## Prioritization Approach
 

@@ -359,8 +359,13 @@ Audit Pass 37 (2026-02-06, files reviewed directly):
 - docs/configuration.md
 - tests/test_init_volume_platform_guard.py
 
+Audit Pass 38 (2026-02-06, files reviewed directly):
+- heber/backfill/__main__.py
+- heber/writer/hotstore.py
+- tests/test_worker_entrypoint_services.py
+- tests/test_runtime_entrypoints.py
+
 Not yet audited in this run (recommend a future pass):
-- k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
 - heber/ops/metrics.py and k8s/base/deployments/*.yaml (`TD-088`) post-remediation metrics-exporter re-audit.
 
 ## Remediation Updates
@@ -396,6 +401,7 @@ Updated: 2026-02-06
 - `TD-043` addressed via `T-27`: `EventDeduplicator` now rotates Bloom filters on a bounded interval, carries at most one prior window for recent duplicate detection, and exports rotation stats with regression coverage for pre-/post-rotation behavior.
 - `TD-039` addressed via `T-33`: tracing decorators now avoid unconditional `SpanKind` access when OpenTelemetry is unavailable, and a regression test confirms `@traced` execution works with tracing disabled.
 - `TD-061` addressed via `T-34`: `init_volume.sh` now checks host OS and `dot_clean` availability explicitly before cleanup, emits explicit skip reasons on unsupported hosts, and avoids implicit `|| true` fallback semantics.
+- `TD-086` and `TD-087` addressed via `T-37`/`T-38`: backfill now has an executable `python -m heber.backfill` service module, and hotloader now exposes a real long-running CLI runtime in `python -m heber.writer.hotstore` with one-shot sync mode for controlled runs/tests.
 - `TD-075` and `TD-076` addressed via `T-29`: k8s HPA manifests now use built-in CPU/memory resource metrics (removing stale custom-metric dependencies), and worker deployments now use exec-based probes tied to actual process entrypoints instead of non-existent HTTP health routes.
 - `TD-066` addressed via `T-28`: `LakeFSConfig` now supports configurable storage namespace base/template fields and repository creation resolves namespaces from config/env instead of hardcoded literals, with regression tests for namespace resolution.
 - `TD-068` addressed via `T-41`: `MarketCalendar` now normalizes datetime inputs to UTC before exchange conversion (naive inputs assumed UTC), and calendar timezone regression tests cover naive/aware/pandas timestamp inputs.
@@ -430,6 +436,7 @@ Updated: 2026-02-06
 - Audit Pass 35 revalidated `TD-075` and `TD-076` as resolved via `T-29`; HPA metric sources and worker probe types now match runtime behavior.
 - Audit Pass 36 revalidated `TD-039` as resolved via `T-33`; tracing decorators now remain safe without OpenTelemetry.
 - Audit Pass 37 revalidated `TD-061` as resolved via `T-34`; volume-init cleanup now uses explicit cross-platform/tool checks.
+- Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
 
 ## Executive Summary
 
@@ -938,11 +945,15 @@ Recommendation: Record `asof_time` per split or overall experiment in the config
 Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
 Recommendation: Add a concrete executable backfill entrypoint (e.g., `heber.backfill.main`) and update the deployment command to that module; then align probes with the actual service mode.
 Revalidated 2026-02-06 (Pass 20): Still open. Deployment command is unchanged and module execution still fails with missing `__main__`.
+Update 2026-02-06: Remediated in `T-37` by adding `heber/backfill/__main__.py` with a runnable FastAPI service entrypoint (including `/health` and `/ready`) for `python -m heber.backfill`.
+Revalidated 2026-02-06 (Pass 38): Resolved. Backfill deployment module now executes in service mode instead of failing at startup.
 
 **TD-087: Hotloader deployment command exits immediately.**
 Evidence: `k8s/base/deployments/hotloader.yaml` runs `python -m heber.writer.hotstore`, but `heber/writer/hotstore.py` is a compatibility re-export with no `main()` loop. Executing it exits immediately, so pods will churn under restart policy.
 Recommendation: Add a real hotloader service entrypoint (e.g., sync loop wrapper around `HotStoreSync.run_sync_loop`) and point deployment command/probes to that runtime.
 Revalidated 2026-02-06 (Pass 20): Still open. Deployment still invokes facade module, and `python -m heber.writer.hotstore` still exits immediately.
+Update 2026-02-06: Remediated in `T-38` by adding a real CLI runtime in `heber.writer.hotstore` that executes a continuous sync loop (plus `--once` mode), instead of exiting after import/re-export.
+Revalidated 2026-02-06 (Pass 38): Resolved. `python -m heber.writer.hotstore` now runs as a service entrypoint with sync-loop behavior.
 
 **TD-088: Prometheus scrape annotations/ports are not backed by running exporters.**
 Evidence: Deployments annotate `prometheus.io/scrape: "true"` with `prometheus.io/port: "9090"` (catalog/consumer/writer and other workers), but runtime entrypoints do not call `start_metrics_server()` from `heber.ops.metrics`. Catalog runs only Uvicorn on 8080, and worker modules run non-HTTP loops without starting a Prometheus HTTP endpoint.

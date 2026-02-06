@@ -28,6 +28,7 @@ def test_runtime_entrypoint_modules_exist() -> None:
         "heber.writer.consumer",
         "heber.writer.compactor",
         "heber.writer.hotstore",
+        "heber.backfill.__main__",
     ]
 
     missing = [name for name in expected_modules if importlib.util.find_spec(name) is None]
