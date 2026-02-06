@@ -38,6 +38,7 @@ Updated: 2026-02-06
 - `T-32` complete (`TD-065`): `scripts/security-scan.sh` now enforces filesystem `trivy fs` failure gating with `--exit-code 1` and explicit failure handling for HIGH/CRITICAL findings.
 - `T-35` complete (`TD-062`): labeling strategy docs now reference `heber/firewall/validation.py` and current split-validation parameter names.
 - `T-36` complete (`TD-063`): data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK and label writers.
+- `T-39` complete (`TD-064`): UW endpoint tracker summary now reports table-derived status counts and no longer contains stale manual buckets.
 - `T-41` complete (`TD-068`): `MarketCalendar` now normalizes all supported datetime inputs to UTC before exchange conversion, assumes naive inputs are UTC, and includes regression tests for naive/aware/pandas timestamp handling.
 - `T-42` complete (`TD-069`): `MarketCalendar` now fails fast for `include_extended=True` with explicit unsupported-mode messaging instead of silently ignoring the flag.
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
@@ -59,6 +60,7 @@ Updated: 2026-02-06
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`.
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`.
 - Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35` and `T-36`.
+- Audit Pass 31 revalidated `TD-064` as resolved via `T-39`.
 
 ## Prioritization Approach
 

@@ -216,33 +216,16 @@ This document tracks all UW API endpoints and their integration status with Data
 
 ## Summary
 
-### Complete (11)
+Status counts (derived from table rows above):
 
-- ✅ **User Alerts** (`/api/alerts`) - uses `user_alerts` table
-- ✅ Congress Trades (`/api/congress/recent-trades`)
-- ✅ Darkpool (`/api/darkpool/*`)
-- ✅ Flow Alerts (`/api/option-trades/flow-alerts`)
-- ✅ Insider Trades (`/api/insider/transactions`)
-- ✅ Market Tide (`/api/market/tide`)
-- ✅ Sector Tide (`/api/market/sector-tide`) - uses `market_tide` table
-- ✅ ETF Tide (`/api/market/etf-tide`) - uses `market_tide` table
-- ✅ Greek Exposure (`/api/stock/{ticker}/greek-exposure`) - uses `greek_exposure` table
-- ✅ Greek Exposure by Expiry - uses `greek_exposure` table
-- ✅ Greek Exposure by Strike - uses `greek_exposure` table
+- ✅ **Complete:** 76
+- 🔄 **In Progress:** 0
+- ❌ **Not Started:** 0
+- ⚪ **Not Needed:** 1
 
-### In Progress (8)
+Not Needed endpoint:
 
-- 🔄 Congress Late Reports
-- 🔄 FDA Calendar
-- 🔄 Greek Exposure (3 endpoints)
-- 🔄 Hottest Chains
-- 🔄 News Headlines
-- 🔄 Analyst Ratings
-- 🔄 Institution Holdings
-
-### Not Started (~80+)
-
-See individual sections above
+- ⚪ `/api/alerts/configuration` (alert configuration metadata; no Heber storage table required)
 
 ---
 

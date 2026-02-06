@@ -322,6 +322,9 @@ Audit Pass 30 (2026-02-06, files reviewed directly):
 - heber/sdk/client.py
 - heber/watch/writer.py
 
+Audit Pass 31 (2026-02-06, files reviewed directly):
+- docs/UW_endpoints.md
+
 Not yet audited in this run (recommend a future pass):
 - heber/ops/logging.py and heber/ops/reliability.py (`TD-042`, `TD-043`) post-remediation re-audit.
 - k8s/base/deployments/backfill.yaml and k8s/base/deployments/hotloader.yaml (`TD-086`, `TD-087`) post-remediation runtime re-audit.
@@ -365,6 +368,7 @@ Updated: 2026-02-06
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
 - `TD-062` addressed via `T-35`: labeling strategy docs now reference `heber/firewall/validation.py` and the current `validate_train_test_split` argument contract.
 - `TD-063` addressed via `T-36`: data contract docs now reference `heber/schemas/silver.py` and concrete Gold key-value path conventions used by SDK/label writers.
+- `TD-064` addressed via `T-39`: UW endpoint summary now derives from table statuses and no longer claims stale in-progress/not-started totals.
 - Audit Pass 17 revalidated `TD-066`, `TD-067`, `TD-075`, and `TD-076` as still open, and added `TD-086` and `TD-087` for k8s worker entrypoint runtime failures.
 - Audit Pass 18 revalidated `TD-042`, `TD-043`, and `TD-064` as still open (logging level filtering, dedupe rotation policy, and UW endpoint tracker drift).
 - Audit Pass 19 revalidated `TD-059`, `TD-060`, `TD-062`, `TD-063`, and `TD-065` as still open (backup/security script hardening + docs alignment drift).
@@ -380,6 +384,7 @@ Updated: 2026-02-06
 - Audit Pass 28 revalidated `TD-060` as resolved via `T-31`; backup-validation test instances are now cleaned up on failure.
 - Audit Pass 29 revalidated `TD-059` as resolved via `T-30`; remote-destination output now reflects effective clickhouse-backup behavior.
 - Audit Pass 30 revalidated `TD-062` and `TD-063` as resolved via `T-35`/`T-36`; labeling and data-contract docs now match current code paths and path conventions.
+- Audit Pass 31 revalidated `TD-064` as resolved via `T-39`; UW endpoint summary counts now match table rows.
 
 ## Executive Summary
 
@@ -454,7 +459,7 @@ Severity key: High, Medium, Low
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
 | TD-062 | Low | Docs | Labeling strategy docs now reference the current split-validation module and signature. |
 | TD-063 | Low | Docs | Data contract docs now reference canonical Silver schema source and concrete Gold path conventions. |
-| TD-064 | Low | Docs | UW endpoint coverage summary counts conflict with its own tables. |
+| TD-064 | Low | Docs | UW endpoint summary counts now match table statuses (`✅ 76`, `⚪ 1`, `🔄 0`, `❌ 0`). |
 | TD-065 | Low | Scripts | Filesystem security scan now fails on HIGH/CRITICAL secret/misconfig findings. |
 | TD-066 | Medium | Versioning | lakeFS repo creation hardcodes S3 namespace (`s3://heber-lakehouse/{repo}`) and ignores config. |
 | TD-067 | Low | Versioning | lakeFS metrics are missing for tag/list/diff operations and error paths are not consistently instrumented. |
@@ -763,6 +768,7 @@ Revalidated 2026-02-06 (Pass 30): Resolved. Doc now references `heber/schemas/si
 Evidence: `docs/UW_endpoints.md` summary section still reports “Complete (11)”, “In Progress (8)”, and “Not Started (~80+)”, but the endpoint tables above are overwhelmingly marked ✅. The summary buckets are not synchronized with table statuses.
 Recommendation: Derive summary counts from the table data (or remove manual totals/status buckets) to avoid recurrent drift.
 Revalidated 2026-02-06 (Pass 18): Still open. Summary totals and status buckets still conflict with table-level status rows.
+Revalidated 2026-02-06 (Pass 31): Resolved. Summary now reflects current table-derived status counts.
 
 **TD-065: Security scan doesn’t fail on filesystem findings.**
 Evidence: `scripts/security-scan.sh` runs `trivy fs` without `--exit-code`, so secrets/misconfig findings do not fail the script.
@@ -894,7 +900,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-064, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-067, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
