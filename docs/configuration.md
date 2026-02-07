@@ -42,6 +42,13 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_SILVER_MAX_FLUSH_TIME_SECONDS` | `30` | Max time before Silver flush |
 | `HEBER_SILVER_ROW_GROUP_SIZE_MB` | `128` | Parquet row group size |
 
+## Watch Service Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATA_GATEWAY_URL` | `http://localhost:8000` | Data Gateway URL for option quote polling |
+| `HEBER_GOLD_PATH` | *derived from `HEBER_DATA_ROOT`* | Gold layer output path for watch labels |
+
 ## Logging Levels
 
 `heber.ops.configure_logging(log_level=...)` accepts:

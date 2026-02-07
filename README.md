@@ -146,7 +146,9 @@ heber versions momentum_features
 - `docs/hot_store.md` - Hot Store usage and sync notes
 - `docs/configuration.md` - environment variables and local vs container settings
 - `docs/sdk.md` - SDK usage and semantics
-- `docs/operations/` - runbooks (deployment, monitoring, backup/DR)
+- `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
+- `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
+- `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
 
 ## Development
 

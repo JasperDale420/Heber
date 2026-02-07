@@ -30,6 +30,8 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
   - Periodic Parquet compaction for lake partitions.
 - **heber-catalog** (`heber/catalog/api.py`)
   - FastAPI service with dataset, instrument, feed mapping, and backfill endpoints.
+- **heber-watch** (`heber/watch/`)
+  - Tracks flow alert outcomes via triple-barrier labeling for ML Gold layer; polls option quotes from Data Gateway.
 - **hot store helpers** (`heber/hotstore/`)
   - ClickHouse tables + query client; sync helpers are provided but not deployed in `docker-compose.yml`.
 

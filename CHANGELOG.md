@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documentation
 
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
+- Added missing documentation links to `README.md`: `labeling_strategy.md`, `schemaaudit.md`
+- Added watch service to `docs/architecture.md` Core Services section
+- Added Watch Service Settings section to `docs/configuration.md` (`DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`)
+- Added missing env vars to `.env.example`: `HEBER_CATALOG_URL`, `HEBER_CLICKHOUSE_DATABASE`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
 
 ### Fixed
 
