@@ -552,8 +552,17 @@ Audit Pass 71 (2026-02-07, files reviewed directly):
 - heber/ops/tests_remaining.py
 - tests/test_ops_health_checks.py
 
+Audit Pass 72 (2026-02-07, files reviewed directly):
+- heber/watch/manager.py
+- heber/watch/models.py
+- heber/watch/consumer.py
+- heber/watch/poller.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/manager.py line-by-line re-audit for lifecycle/state edge cases.
+- heber/watch/checker.py line-by-line re-audit for barrier/outcome edge cases.
 
 ## Remediation Updates
 
@@ -687,6 +696,7 @@ Updated: 2026-02-07
 - Audit Pass 69 revalidated `TD-074` as resolved via `T-06`/`T-73`; deployment runtime-entrypoint commands remain aligned with importable modules across all base worker/service deployments.
 - Audit Pass 70 revalidated `TD-071` as resolved via `T-09`/`T-74`; sync and async Hot Store table-creation helpers now enforce execution-mode boundaries with regression coverage.
 - Audit Pass 71 revalidated and remediated `TD-089`; PostgreSQL readiness checks now execute SQLAlchemy 2.x-compatible statements with regression coverage.
+- Audit Pass 72 revalidated and remediated `TD-090`; watch lookups now normalize Redis byte IDs so active/symbol watch queries remain correct with default Redis client decoding behavior.
 
 ## Executive Summary
 
@@ -787,6 +797,7 @@ Severity key: High, Medium, Low
 | TD-087 | Medium | K8s | Hotloader deployment runs `python -m heber.writer.hotstore`, but that module is a compatibility facade with no long-running entrypoint, so the container exits immediately. |
 | TD-088 | Medium | Observability | Deployments advertise Prometheus scraping on port 9090, but service entrypoints do not start a metrics HTTP server, so scrape targets are non-functional. |
 | TD-089 | Medium | Ops Health | PostgreSQL readiness check executed raw SQL string (`conn.execute(\"SELECT 1\")`), which fails under SQLAlchemy 2.x and can report false `not_ready` status. |
+| TD-090 | Medium | Watch Service | Watch manager assumed Redis set members were `str`; default `redis.from_url` responses are often `bytes`, which can silently break active/symbol watch retrieval. |
 
 ## Detailed Findings
 
@@ -1304,6 +1315,12 @@ Recommendation: Execute a SQLAlchemy `text()` statement (`conn.execute(text("SEL
 Update 2026-02-07: Remediated in `T-75` by switching readiness SQL execution to `text("SELECT 1")` and adding targeted regression tests for success/failure paths.
 Revalidated 2026-02-07 (Pass 71): Resolved. PostgreSQL checks now succeed with SQLAlchemy 2.x-compatible execution semantics.
 
+**TD-090: WatchManager does not normalize Redis byte IDs.**
+Evidence: `WatchManager.get_active_watches()` / `get_watches_for_symbol()` iterate `smembers(...)` results and pass member IDs directly into `get_watch()`. With `redis.from_url(...)` default response decoding, set members are returned as `bytes`, which produced malformed watch keys (`b'...'`) and lookup misses.
+Recommendation: Normalize watch IDs from Redis set membership (`bytes` -> UTF-8 `str`) before key construction, and add regression coverage for byte-response Redis clients.
+Update 2026-02-07: Remediated in `T-76` by normalizing Redis IDs in `WatchManager` and adding regression tests covering active/symbol lookups with byte-set responses.
+Revalidated 2026-02-07 (Pass 72): Resolved. Active watch and symbol index queries now remain correct under byte-decoding Redis clients.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1311,7 +1328,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

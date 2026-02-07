@@ -155,8 +155,15 @@ class WatchManager:
             atr_at_alert,
         )
 
-    def get_watch(self, watch_id: str) -> AlertWatch | None:
+    @staticmethod
+    def _normalize_redis_id(value: str | bytes) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        return value
+
+    def get_watch(self, watch_id: str | bytes) -> AlertWatch | None:
         """Get a watch by ID."""
+        watch_id = self._normalize_redis_id(watch_id)
         key = WatchKeys.watch_key(watch_id)
         data = self.redis.get(key)
 
@@ -171,6 +178,7 @@ class WatchManager:
 
         watches = []
         for watch_id in watch_ids:
+            watch_id = self._normalize_redis_id(watch_id)
             watch = self.get_watch(watch_id)
             if watch and watch.status == WatchStatus.WATCHING:
                 watches.append(watch)
@@ -188,6 +196,7 @@ class WatchManager:
 
         watches = []
         for watch_id in watch_ids:
+            watch_id = self._normalize_redis_id(watch_id)
             watch = self.get_watch(watch_id)
             if watch:
                 watches.append(watch)
