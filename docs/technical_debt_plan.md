@@ -76,6 +76,7 @@ Updated: 2026-02-07
 - `T-66` complete (`TD-024`, `TD-025`): Soda scanner defaults now resolve from shared Silver-root settings and contract non-null reporting now uses each contract threshold.
 - `T-67` complete (`TD-026`, `TD-027`): framework schedule API presence is now explicitly regression-tested and testing environment local-service defaults now align with docker-compose host port mappings.
 - `T-68` complete (`TD-028`): Iceberg Silver table creation now builds a concrete PyIceberg `PartitionSpec` for day-partitioning on `ts_event`, with regression coverage preventing list-based partition drift.
+- `T-69` complete (`TD-029`): quarantine partition routing now reads canonical envelope top-level `provider`/`feed` first, with legacy `meta` fallback retained for compatibility.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -126,6 +127,7 @@ Updated: 2026-02-07
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`.
 - Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`.
 - Audit Pass 63 revalidated `TD-028` as resolved via `T-68`.
+- Audit Pass 64 revalidated `TD-029` as resolved via `T-69`.
 
 ## Prioritization Approach
 
@@ -1260,6 +1262,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-69: Align Quarantine Partition Keys With Canonical Envelope Fields (TD-029)
+
+Priority: P1
+
+Description: Quarantine writes previously partitioned using only `envelope.meta.provider/feed`, but canonical `EventEnvelope` stores these fields at the top level. This caused partition path drift when `meta` was absent.
+
+Scope:
+- `heber/bus/backpressure.py`
+- `tests/test_backpressure_quarantine_paths.py`
+
+Acceptance Criteria:
+- Quarantine partition extraction prefers top-level `provider`/`feed` fields.
+- Legacy `meta.provider/feed` fallback remains supported for older payload shapes.
+- Regression tests cover canonical and legacy envelope partition-path behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1406,3 +1425,4 @@ Estimate: 1 day
 66. T-66 (Soda path + contract-threshold quality alignment)
 67. T-67 (Framework schedule API + test-environment port alignment)
 68. T-68 (Iceberg partition-spec object alignment)
+69. T-69 (Quarantine partition-key envelope alignment)

@@ -236,6 +236,21 @@ class DLQHandler:
         self.bus = bus
         self.quarantine_base_path = Path(quarantine_base_path)
 
+    @staticmethod
+    def _extract_partition_value(envelope: dict[str, Any], field: str) -> str:
+        """Resolve partition value from canonical envelope keys with legacy fallback."""
+        value = envelope.get(field)
+        if value is not None and str(value).strip():
+            return str(value)
+
+        legacy_meta = envelope.get("meta")
+        if isinstance(legacy_meta, dict):
+            legacy_value = legacy_meta.get(field)
+            if legacy_value is not None and str(legacy_value).strip():
+                return str(legacy_value)
+
+        return "unknown"
+
     async def send_to_dlq(
         self,
         envelope: dict[str, Any],
@@ -304,8 +319,8 @@ class DLQHandler:
             Path to quarantine file
         """
         # Extract partition info from envelope
-        provider = envelope.get("meta", {}).get("provider", "unknown")
-        feed = envelope.get("meta", {}).get("feed", "unknown")
+        provider = self._extract_partition_value(envelope, "provider")
+        feed = self._extract_partition_value(envelope, "feed")
         dt = datetime.now(UTC).strftime("%Y-%m-%d")
         event_id = envelope.get("event_id", f"unknown_{int(time.time() * 1000)}")
 

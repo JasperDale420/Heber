@@ -496,8 +496,12 @@ Audit Pass 63 (2026-02-07, files reviewed directly):
 - heber/storage/iceberg_catalog.py
 - tests/test_iceberg_partition_spec_contract.py
 
+Audit Pass 64 (2026-02-07, files reviewed directly):
+- heber/bus/backpressure.py
+- tests/test_backpressure_quarantine_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/bus/backpressure.py (`TD-029`) Quarantine envelope field-path alignment re-audit.
+- heber/writer/hotstore.py (`TD-004`) Hot Store implementation divergence re-audit.
 
 ## Remediation Updates
 
@@ -564,6 +568,7 @@ Updated: 2026-02-07
 - `TD-024` and `TD-025` addressed via `T-66`: Soda scanner default Silver path now resolves from shared settings (`settings.silver_path`) and non-null per-column reporting now uses each contract threshold.
 - `TD-026` and `TD-027` addressed via `T-67`: E2E framework schedule API is now verified present by regression tests, and testing-environment local service defaults now align with docker-compose host port mappings.
 - `TD-028` addressed via `T-68`: Iceberg Silver table creation now passes a concrete `PartitionSpec`/`DayTransform` object instead of list-form partition definitions, with regression coverage to prevent API drift.
+- `TD-029` addressed via `T-69`: quarantine partition extraction now prefers canonical top-level envelope `provider`/`feed` fields with legacy `meta` fallback, with regression tests for both payload shapes.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -618,6 +623,7 @@ Updated: 2026-02-07
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`; Soda scanner defaults now follow configured Silver root semantics and completeness reporting now uses contract-specific thresholds.
 - Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`; framework schedule API coverage is now explicit and testing environment defaults now match compose host-port expectations.
 - Audit Pass 63 revalidated `TD-028` as resolved via `T-68`; Iceberg Silver table creation now builds partition specs with PyIceberg `PartitionSpec` objects.
+- Audit Pass 64 revalidated `TD-029` as resolved via `T-69`; quarantine partition paths now align with canonical envelope fields and preserve legacy fallback compatibility.
 
 ## Executive Summary
 
@@ -657,7 +663,7 @@ Severity key: High, Medium, Low
 | TD-026 | Low | Testing | `E2ETestSuite.get_schedule()` is present and now explicitly covered by regression tests. |
 | TD-027 | Low | Environment | Testing environment local-service defaults now align with docker-compose host port mappings. |
 | TD-028 | Low | Iceberg | `create_silver_table` now builds a concrete PyIceberg `PartitionSpec` with `DayTransform` for `ts_event`. |
-| TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
+| TD-029 | Low | Backpressure | Quarantine partition routing now uses canonical top-level envelope `provider`/`feed` with legacy fallback. |
 | TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
 | TD-031 | Low | Watch Models | Watch model timestamp defaults now use timezone-aware UTC values with regression coverage. |
 | TD-032 | Low | Watch Poller | Poller quote fetches now honor per-horizon cadence gates to avoid long-horizon over-polling. |
@@ -859,6 +865,8 @@ Revalidated 2026-02-07 (Pass 63): Resolved. Partition spec wiring now follows Py
 **TD-029: Quarantine paths read provider/feed from `envelope.meta`.**
 Evidence: `heber/bus/backpressure.py` expects `envelope["meta"]["provider"]`/`["feed"]`, but `EventEnvelope` stores `provider` and `feed` at the top level.
 Recommendation: Use top-level fields or normalize envelope format before quarantine writes.
+Update 2026-02-07: Remediated in `T-69` by resolving quarantine partition keys from top-level `provider`/`feed` first, with compatibility fallback to legacy `meta` fields when needed.
+Revalidated 2026-02-07 (Pass 64): Resolved. Quarantine path partitioning now aligns with canonical envelope structure without breaking legacy payloads.
 
 **TD-030: Stream naming diverges across modules and docs.**
 Evidence: `heber/bus` uses `stream:*` names, writer/consumer uses `heber:events`, and ops docs reference `stream:market.bars`. This split-brain naming leads to non-wired components.
@@ -1227,7 +1235,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
