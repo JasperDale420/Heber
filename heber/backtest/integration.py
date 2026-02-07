@@ -30,6 +30,8 @@ class ExperimentConfig:
     feature_version: str
     label_dataset: str
     label_version: str = "latest"
+    feature_asof_time: str | None = None
+    label_asof_time: str | None = None
     train_period: str = "12M"
     test_period: str = "3M"
     embargo: str = "5d"
@@ -43,6 +45,8 @@ class ExperimentConfig:
             "feature_version": self.feature_version,
             "label_dataset": self.label_dataset,
             "label_version": self.label_version,
+            "feature_asof_time": self.feature_asof_time,
+            "label_asof_time": self.label_asof_time,
             "train_period": self.train_period,
             "test_period": self.test_period,
             "embargo": self.embargo,
@@ -71,6 +75,7 @@ class BacktestResult:
     started_at: datetime
     completed_at: datetime
     fold_results: list[dict[str, Any]] = field(default_factory=list)
+    dataset_asof_times: dict[str, str | None] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +85,7 @@ class BacktestResult:
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat(),
             "fold_results": self.fold_results,
+            "dataset_asof_times": self.dataset_asof_times,
         }
 
     def save(self, path: Path) -> None:
@@ -100,6 +106,7 @@ class BacktestResult:
             started_at=datetime.fromisoformat(data["started_at"]),
             completed_at=datetime.fromisoformat(data["completed_at"]),
             fold_results=data.get("fold_results", []),
+            dataset_asof_times=data.get("dataset_asof_times", {}),
         )
 
 
@@ -278,18 +285,31 @@ class ExperimentTracker:
 
         return self._current_experiment
 
-    def log_fold(self, fold_idx: int, metrics: dict[str, float]) -> None:
+    def log_fold(
+        self,
+        fold_idx: int,
+        metrics: dict[str, float],
+        asof_time: datetime | str | None = None,
+    ) -> None:
         """Log metrics for a single fold.
 
         Args:
             fold_idx: Fold index
             metrics: Fold metrics
+            asof_time: Optional split as-of timestamp for reproducibility
         """
+        asof_value: str | None = None
+        if isinstance(asof_time, datetime):
+            asof_value = asof_time.isoformat()
+        elif isinstance(asof_time, str):
+            asof_value = asof_time
+
         self._fold_results.append(
             {
                 "fold": fold_idx,
                 "metrics": metrics,
                 "timestamp": datetime.now(UTC).isoformat(),
+                "asof_time": asof_value,
             }
         )
 
@@ -318,6 +338,10 @@ class ExperimentTracker:
             started_at=self._start_time,
             completed_at=datetime.now(UTC),
             fold_results=self._fold_results,
+            dataset_asof_times={
+                "feature_asof_time": self._config.feature_asof_time,
+                "label_asof_time": self._config.label_asof_time,
+            },
         )
 
         # Save to disk
@@ -359,8 +383,10 @@ def generate_reproducibility_checklist(config: ExperimentConfig) -> dict[str, An
     return {
         "feature_dataset": config.feature_dataset,
         "feature_version": config.feature_version,
+        "feature_asof_time": config.feature_asof_time,
         "label_dataset": config.label_dataset,
         "label_version": config.label_version,
+        "label_asof_time": config.label_asof_time,
         "train_period": config.train_period,
         "test_period": config.test_period,
         "embargo": config.embargo,

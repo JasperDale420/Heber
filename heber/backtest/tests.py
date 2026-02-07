@@ -25,6 +25,8 @@ class TestExperimentConfig:
             feature_dataset="momentum_features",
             feature_version="v3.2.1",
             label_dataset="returns_5d",
+            feature_asof_time="2024-06-01T00:00:00+00:00",
+            label_asof_time="2024-06-01T00:00:00+00:00",
             train_period="12M",
             test_period="3M",
         )
@@ -34,6 +36,8 @@ class TestExperimentConfig:
 
         assert restored.feature_dataset == "momentum_features"
         assert restored.feature_version == "v3.2.1"
+        assert restored.feature_asof_time == "2024-06-01T00:00:00+00:00"
+        assert restored.label_asof_time == "2024-06-01T00:00:00+00:00"
 
     def test_config_hash_deterministic(self):
         config1 = ExperimentConfig(
@@ -82,6 +86,7 @@ class TestBacktestResult:
                 started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC) + timedelta(hours=1),
                 fold_results=[{"fold": 0, "metrics": {"sharpe": 1.4}}],
+                dataset_asof_times={"feature_asof_time": "2024-06-01T00:00:00+00:00"},
             )
 
             path = Path(tmpdir) / "result.json"
@@ -92,6 +97,7 @@ class TestBacktestResult:
             assert loaded.experiment_id == "test_123"
             assert loaded.metrics["sharpe"] == pytest.approx(1.5)
             assert len(loaded.fold_results) == 1
+            assert loaded.dataset_asof_times["feature_asof_time"] == "2024-06-01T00:00:00+00:00"
 
 
 class TestBacktestDataLoader:
@@ -180,21 +186,25 @@ class TestExperimentTracker:
                 feature_dataset="momentum",
                 feature_version="v1",
                 label_dataset="returns",
+                feature_asof_time="2024-01-01T00:00:00+00:00",
+                label_asof_time="2024-01-01T00:00:00+00:00",
             )
 
             exp_id = tracker.start_experiment(config)
             assert exp_id is not None
 
             # Log some folds
-            tracker.log_fold(0, {"sharpe": 1.2})
-            tracker.log_fold(1, {"sharpe": 1.4})
-            tracker.log_fold(2, {"sharpe": 1.3})
+            tracker.log_fold(0, {"sharpe": 1.2}, asof_time="2024-01-01T00:00:00+00:00")
+            tracker.log_fold(1, {"sharpe": 1.4}, asof_time="2024-02-01T00:00:00+00:00")
+            tracker.log_fold(2, {"sharpe": 1.3}, asof_time="2024-03-01T00:00:00+00:00")
 
             result = tracker.end_experiment({"sharpe": 1.3, "accuracy": 0.6})
 
             assert result.experiment_id == exp_id
             assert len(result.fold_results) == 3
             assert result.metrics["sharpe"] == pytest.approx(1.3)
+            assert result.fold_results[0]["asof_time"] == "2024-01-01T00:00:00+00:00"
+            assert result.dataset_asof_times["feature_asof_time"] == "2024-01-01T00:00:00+00:00"
 
     def test_list_and_load_experiments(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -224,6 +234,8 @@ class TestReproducibilityChecklist:
             feature_dataset="momentum",
             feature_version="v3.2.1",
             label_dataset="returns_5d",
+            feature_asof_time="2024-05-31T00:00:00+00:00",
+            label_asof_time="2024-05-31T00:00:00+00:00",
             train_period="12M",
             test_period="3M",
             embargo="5d",
@@ -236,6 +248,8 @@ class TestReproducibilityChecklist:
 
         assert checklist["feature_dataset"] == "momentum"
         assert checklist["feature_version"] == "v3.2.1"
+        assert checklist["feature_asof_time"] == "2024-05-31T00:00:00+00:00"
+        assert checklist["label_asof_time"] == "2024-05-31T00:00:00+00:00"
         assert checklist["random_seed"] == 42
         assert checklist["code_commit"] == "abc123"
         assert "config_hash" in checklist

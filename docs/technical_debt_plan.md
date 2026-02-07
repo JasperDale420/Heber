@@ -58,6 +58,7 @@ Updated: 2026-02-06
 - `T-48` complete (`TD-081`): backfill jobs now persist to disk with progress checkpoints and are reloaded on coordinator startup for restart-safe resume behavior.
 - `T-49` complete (`TD-083`): gap detection now scans both legacy and canonical Silver partition layouts for `dt=*` coverage, preventing false full-gap reports when storage layout differs.
 - `T-50` complete (`TD-084`): backtest data-loader label reads now pass explicit `label_version` pinning to `read_gold()`, with regression tests for explicit and default (`latest`) version behavior.
+- `T-51` complete (`TD-085`): backtest experiment config/results now record feature/label as-of timestamps plus per-fold as-of metadata in tracker logs for reproducible reruns.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -90,6 +91,7 @@ Updated: 2026-02-06
 - Audit Pass 43 revalidated `TD-081` as resolved via `T-48`.
 - Audit Pass 44 revalidated `TD-083` as resolved via `T-49`.
 - Audit Pass 45 revalidated `TD-084` as resolved via `T-50`.
+- Audit Pass 46 revalidated `TD-085` as resolved via `T-51`.
 
 ## Prioritization Approach
 
@@ -879,6 +881,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-51: Persist Backtest As-Of Metadata for Reproducibility (TD-085)
+
+Priority: P1
+
+Description: Backtest artifacts captured dataset/version but not the as-of cutoffs used to read historical features/labels, weakening experiment reproducibility.
+
+Scope:
+- `heber/backtest/integration.py`
+- `heber/backtest/tests.py`
+
+Acceptance Criteria:
+- `ExperimentConfig` supports feature/label as-of timestamps and includes them in serialized config + reproducibility checklist output.
+- `BacktestResult` stores dataset as-of metadata in persisted results.
+- `ExperimentTracker.log_fold()` supports per-fold as-of timestamps in fold metadata.
+- Regression tests verify round-trip persistence and checklist/result inclusion of as-of fields.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1007,3 +1027,4 @@ Estimate: 1 day
 48. T-48 (Backfill job persistence and resume)
 49. T-49 (Backfill gap-detection layout conformance)
 50. T-50 (Backtest label-version pinning)
+51. T-51 (Backtest as-of reproducibility metadata)

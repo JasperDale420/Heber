@@ -403,8 +403,12 @@ Audit Pass 45 (2026-02-07, files reviewed directly):
 - heber/backtest/integration.py
 - heber/backtest/tests.py
 
+Audit Pass 46 (2026-02-07, files reviewed directly):
+- heber/backtest/integration.py
+- heber/backtest/tests.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/backtest/integration.py (`TD-085`) as-of reproducibility metadata re-audit.
+- heber/retention/__init__.py (`TD-051`) Gold-layout retention scanning re-audit.
 
 ## Remediation Updates
 
@@ -453,6 +457,7 @@ Updated: 2026-02-06
 - `TD-081` addressed via `T-48`: backfill jobs and chunk progress now persist to disk and reload on startup, including resume-friendly recovery of stale `running` state after process restarts.
 - `TD-083` addressed via `T-49`: gap detection now scans both legacy (`silver/{provider}_{feed}/dt=*`) and canonical (`silver/feed={feed}/instrument_type=*/dt=*`) Silver layouts so missing-date detection reflects actual partition paths.
 - `TD-084` addressed via `T-50`: backtest data-loader label reads now pass explicit `label_version` values to `read_gold()` (defaulting to `"latest"`), removing unpinned label-version loads.
+- `TD-085` addressed via `T-51`: backtest experiment config/results now carry dataset as-of timestamps (overall and per-fold metadata) to strengthen reproducibility of historical runs.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -489,6 +494,7 @@ Updated: 2026-02-06
 - Audit Pass 43 revalidated `TD-081` as resolved via `T-48`; backfill job state now survives restarts and resumes from persisted progress.
 - Audit Pass 44 revalidated `TD-083` as resolved via `T-49`; gap detection now unions dates across legacy and canonical Silver storage layouts.
 - Audit Pass 45 revalidated `TD-084` as resolved via `T-50`; backtest label reads now honor explicit label-version pinning.
+- Audit Pass 46 revalidated `TD-085` as resolved via `T-51`; backtest experiment metadata now records as-of cutoffs for reproducibility.
 
 ## Executive Summary
 
@@ -1006,6 +1012,8 @@ Revalidated 2026-02-07 (Pass 45): Resolved. Backtest label reads now pass explic
 **TD-085: Backtest reproducibility omits data as-of cutoffs.**
 Evidence: `ExperimentConfig` and results capture dataset names and versions but do not persist the as-of timestamp used for feature/label reads, which is critical for reproducibility.
 Recommendation: Record `asof_time` per split or overall experiment in the config/results metadata.
+Update 2026-02-07: Remediated in `T-51` by adding feature/label as-of metadata to experiment config/checklists/results and per-fold as-of timestamp support in experiment tracking logs.
+Revalidated 2026-02-07 (Pass 46): Resolved. Backtest artifacts now include reproducibility-critical as-of timestamps.
 
 **TD-086: Backfill deployment entrypoint is not executable.**
 Evidence: `k8s/base/deployments/backfill.yaml` runs `python -m heber.backfill`, but `heber/backfill/` has no `__main__.py`. Running the command locally returns: `No module named heber.backfill.__main__; 'heber.backfill' is a package and cannot be directly executed`.
@@ -1038,7 +1046,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 43: backfill job persistence and resume remediation re-audit)
 - Expanded technical debt audit (pass 44: backfill gap-detection layout conformance remediation re-audit)
 - Expanded technical debt audit (pass 45: backtest label-version pinning remediation re-audit)
+- Expanded technical debt audit (pass 46: backtest as-of reproducibility metadata remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -324,6 +325,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `BacktestDataLoader` now accepts `label_version` and passes it to label `read_gold()` calls for train/test data loads
   - Default label version behavior is now explicit (`latest`) instead of implicitly unpinned
   - Added regression coverage for explicit and default label-version read behavior (`heber/backtest/tests.py`)
+- **Backtest As-Of Reproducibility Metadata** (`heber/backtest/integration.py`)
+  - `ExperimentConfig` now includes feature/label as-of timestamps and propagates them through config serialization/checklist output
+  - `BacktestResult` now persists dataset as-of metadata, and `ExperimentTracker.log_fold()` now supports per-fold as-of timestamps
+  - Added regression coverage for as-of metadata round-trip persistence and fold/result/checklist inclusion (`heber/backtest/tests.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
