@@ -215,6 +215,7 @@ class EventConsumer:
             )
 
             self._validate_payload_schema(envelope)
+            self._validate_instrument_key(envelope)
 
             # Write to Bronze (always)
             await self.bronze_writer.write(envelope)
@@ -372,6 +373,15 @@ class EventConsumer:
                 feed=feed,
                 unexpected=sorted(unexpected),
             )
+
+    @staticmethod
+    def _validate_instrument_key(envelope: EventEnvelope) -> None:
+        """Enforce canonical instrument-key format before writes."""
+        if envelope.is_valid_instrument_key():
+            return
+        raise ValueError(
+            f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}"
+        )
 
     async def run(self):
         """Main consumer loop."""

@@ -68,6 +68,7 @@ Updated: 2026-02-07
 - `T-58` complete (`TD-056`, `TD-057`, `TD-058`): Feast helpers now resolve repo path from config/env, return non-placeholder materialization counts, and support tag value / key:value search filters.
 - `T-59` complete (`TD-014`): core consumer/silver/compactor runtime paths now emit concrete metrics via shared Prometheus helpers, with instrumentation regression tests.
 - `T-60` complete (`TD-031`, `TD-032`): watch model timestamps now default to aware UTC values and watch poller quote fetches now gate by per-horizon due intervals.
+- `T-61` complete (`TD-013`): consumer processing now enforces canonical instrument-key validation before Bronze/Silver writes and rejects invalid keys with regression coverage.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -110,6 +111,7 @@ Updated: 2026-02-07
 - Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`.
 - Audit Pass 54 revalidated `TD-014` as resolved via `T-59`.
 - Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`.
+- Audit Pass 56 revalidated `TD-013` as resolved via `T-61`.
 
 ## Prioritization Approach
 
@@ -1089,6 +1091,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-61: Enforce Instrument-Key Validation In Consumer (TD-013)
+
+Priority: P1
+
+Description: Instrument-key validation existed in envelope helpers but was not enforced in ingestion, allowing malformed keys to flow into Bronze/Silver storage.
+
+Scope:
+- `heber/models/envelope.py`
+- `heber/writer/consumer.py`
+- `tests/test_writer_consumer_reliability.py`
+
+Acceptance Criteria:
+- Consumer processing validates `instrument_key` format against `instrument_type` before persistence.
+- Invalid keys fail processing before Bronze/Silver writes.
+- Existing retry/DLQ behavior handles invalid-key failures consistently as processing errors.
+- Regression tests verify invalid-key rejection and confirm no writes occur for rejected records.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1227,3 +1248,4 @@ Estimate: 1 day
 58. T-58 (Feast materialization/search behavior alignment)
 59. T-59 (Runtime metrics helper wiring)
 60. T-60 (Watch timestamp + polling cadence hardening)
+61. T-61 (Consumer instrument-key validation enforcement)

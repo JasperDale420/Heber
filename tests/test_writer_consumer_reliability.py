@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -99,3 +101,32 @@ async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
 
     assert ack_ids == []
     assert failed_ids == ["2-0"]
+
+
+@pytest.mark.asyncio
+async def test_process_event_rejects_invalid_instrument_key() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = AsyncMock()
+    consumer.silver_writer.write = AsyncMock()
+
+    now = datetime(2026, 2, 7, 16, 0, tzinfo=UTC)
+    envelope = {
+        "event_id": "evt-invalid-key",
+        "provider": "alpaca",
+        "feed": "bars",
+        "source": "websocket",
+        "instrument_type": "equity",
+        "instrument_key": "AAPL",
+        "symbol": "AAPL",
+        "ts_event": now.isoformat(),
+        "ts_ingest": now.isoformat(),
+        "payload": {},
+    }
+
+    success, error = await consumer._process_event_once({"data": json.dumps(envelope)})
+
+    assert success is False
+    assert error is not None
+    assert "Invalid instrument_key format" in error
+    consumer.bronze_writer.write.assert_not_awaited()
+    consumer.silver_writer.write.assert_not_awaited()
