@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -113,8 +114,9 @@ class LabelWriter:
             )
             partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-            file_path = partition_path / f"part-{ts}.parquet"
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+            # Include a unique suffix so multiple flushes within the same timestamp cannot overwrite files.
+            file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
 
             group.drop(columns=["_date"]).to_parquet(file_path, compression="snappy")
             logger.debug("Wrote partition", path=str(file_path), rows=len(group))

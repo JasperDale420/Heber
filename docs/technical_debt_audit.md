@@ -569,8 +569,16 @@ Audit Pass 73 (2026-02-07, files reviewed directly):
 - tests/test_watch_consumer_reliability.py
 - tests/test_watch_manager_redis_bytes.py
 
+Audit Pass 74 (2026-02-07, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_manager_redis_bytes.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/writer.py line-by-line re-audit for service lifecycle and flush semantics.
+- heber/watch/__main__.py line-by-line re-audit for runtime lifecycle/shutdown edge cases.
 
 ## Remediation Updates
 
@@ -706,6 +714,7 @@ Updated: 2026-02-07
 - Audit Pass 71 revalidated and remediated `TD-089`; PostgreSQL readiness checks now execute SQLAlchemy 2.x-compatible statements with regression coverage.
 - Audit Pass 72 revalidated and remediated `TD-090`; watch lookups now normalize Redis byte IDs so active/symbol watch queries remain correct with default Redis client decoding behavior.
 - Audit Pass 73 revalidated and remediated `TD-091`; zero-price option snapshots now remain valid inputs for return/barrier evaluation instead of being dropped by truthiness checks.
+- Audit Pass 74 revalidated and remediated `TD-092`; label writer partition files now use collision-safe names so repeated flushes in the same second do not overwrite prior output.
 
 ## Executive Summary
 
@@ -808,6 +817,7 @@ Severity key: High, Medium, Low
 | TD-089 | Medium | Ops Health | PostgreSQL readiness check executed raw SQL string (`conn.execute(\"SELECT 1\")`), which fails under SQLAlchemy 2.x and can report false `not_ready` status. |
 | TD-090 | Medium | Watch Service | Watch manager assumed Redis set members were `str`; default `redis.from_url` responses are often `bytes`, which can silently break active/symbol watch retrieval. |
 | TD-091 | Medium | Watch Service | Zero-valued quote fields (`0.0`) were treated as falsy in poller/checker return-path logic, which could suppress `-100%` outcomes and miss SL barrier classification. |
+| TD-092 | Medium | Watch Service | Label writer used second-granularity parquet filenames, so multiple flushes in the same second could overwrite prior partition files and lose labels. |
 
 ## Detailed Findings
 
@@ -1337,6 +1347,12 @@ Recommendation: Use explicit `is not None` checks for price presence and add reg
 Update 2026-02-07: Remediated in `T-77` by switching to explicit `None` checks in poller/checker return logic and adding focused regression coverage for zero-price SL classification and snapshot return computation.
 Revalidated 2026-02-07 (Pass 73): Resolved. Zero-valued prices now propagate through return computations and barrier detection as expected.
 
+**TD-092: Label writer parquet filenames can collide within the same second.**
+Evidence: `LabelWriter._write_to_parquet()` used `part-%Y%m%d%H%M%S.parquet`. Multiple flushes targeting the same partition in one second produced the same filename and overwrote earlier output.
+Recommendation: Make output file names collision-safe (for example, microseconds plus unique suffix) and add a regression test that forces same-second writes.
+Update 2026-02-07: Remediated in `T-78` by adding a unique suffix to parquet part filenames and adding a same-second collision regression test.
+Revalidated 2026-02-07 (Pass 74): Resolved. Repeated flushes within a single second no longer overwrite prior partition files.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1344,7 +1360,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

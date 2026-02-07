@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py` and `watch/checker.py`: zero-valued option prices (`0.0`) are now treated as valid quote data (explicit `None` checks), so return paths and SL outcomes are not dropped by truthiness checks
 - Added zero-price watch regression tests (`tests/test_watch_zero_price_handling.py`) for snapshot return computation and barrier SL classification
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-091` remediation in audit pass 73 and `T-77`
+- Fixed `watch/writer.py`: parquet part filenames now include a collision-safe unique suffix so multiple flushes in the same second do not overwrite prior label files
+- Added same-second writer collision regression test (`tests/test_watch_writer_file_collisions.py`) following TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-092` remediation in audit pass 74 and `T-78`
 
 ### Removed
 
@@ -125,6 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 71: ops health SQLAlchemy 2.x readiness conformance revalidation)
 - Expanded technical debt audit (pass 72: watch manager Redis byte-ID retrieval conformance revalidation)
 - Expanded technical debt audit (pass 73: watch zero-price return-path/barrier conformance revalidation)
+- Expanded technical debt audit (pass 74: watch writer same-second file-collision conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
