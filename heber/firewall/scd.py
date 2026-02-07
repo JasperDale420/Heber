@@ -118,17 +118,34 @@ def join_with_reference_asof(
     left_keys = [left_key] if isinstance(left_key, str) else list(left_key)
     ref_keys = [ref_key] if isinstance(ref_key, str) else list(ref_key)
 
-    # Join and filter by validity
-    result = left.join(
+    # Join and filter by validity. Reference validity columns may be suffixed
+    # only when the left frame already has those names.
+    joined = left.join(
         reference,
         left_on=left_keys,
         right_on=ref_keys,
         how="left",
         suffix=suffix,
-    ).filter(
-        # Keep only rows where reference was valid at left's time
-        (pl.col(ref_valid_from + suffix) <= pl.col(left_time_col))
-        & (pl.col(ref_valid_to + suffix).is_null() | (pl.col(ref_valid_to + suffix) > pl.col(left_time_col)))
+    )
+
+    schema_names = set(joined.collect_schema().names())
+
+    valid_from_candidates = [ref_valid_from + suffix, ref_valid_from]
+    valid_to_candidates = [ref_valid_to + suffix, ref_valid_to]
+
+    valid_from_col = next((name for name in valid_from_candidates if name in schema_names), None)
+    valid_to_col = next((name for name in valid_to_candidates if name in schema_names), None)
+
+    if valid_from_col is None or valid_to_col is None:
+        raise ValueError(
+            "Reference validity columns not found after join. "
+            f"Expected one of {valid_from_candidates} / {valid_to_candidates}."
+        )
+
+    result = joined.filter(
+        # Keep only rows where reference was valid at left's time.
+        (pl.col(valid_from_col) <= pl.col(left_time_col))
+        & (pl.col(valid_to_col).is_null() | (pl.col(valid_to_col) > pl.col(left_time_col)))
     )
 
     logger.debug(

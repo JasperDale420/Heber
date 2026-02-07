@@ -100,7 +100,8 @@ def validate_gold_build(
     Raises:
         LeakageError: If strict=True and any gate fails
     """
-    violations = []
+    messages: list[str] = []
+    hard_violations: list[str] = []
 
     # Gate 1: max_ts_available_used must not exceed feature_time
     if metadata.max_ts_available_used > metadata.feature_time:
@@ -109,7 +110,8 @@ def validate_gold_build(
             f"> feature_time ({metadata.feature_time}). "
             "This means future data is being used."
         )
-        violations.append(msg)
+        messages.append(msg)
+        hard_violations.append(msg)
         logger.error("gold_build_leakage", violation="future_data", **metadata.to_dict())
 
     # Gate 2: max_ts_event_used should typically not exceed max_ts_available
@@ -120,18 +122,18 @@ def validate_gold_build(
             f"> max_ts_available_used ({metadata.max_ts_available_used}). "
             "Check timestamp semantics."
         )
-        violations.append(msg)
+        messages.append(msg)
         logger.warning("gold_build_warning", **metadata.to_dict())
 
     # Log successful validation
-    if not violations:
+    if not messages:
         logger.info("gold_build_validated", **metadata.to_dict())
 
-    # Raise on violations in strict mode
-    if strict and violations:
-        raise LeakageError("\n".join(violations))
+    # Strict mode should fail only on hard leakage gates.
+    if strict and hard_violations:
+        raise LeakageError("\n".join(hard_violations))
 
-    return violations
+    return messages
 
 
 def validate_train_test_split(

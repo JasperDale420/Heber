@@ -63,6 +63,7 @@ Updated: 2026-02-07
 - `T-53` complete (`TD-052`, `TD-053`): reaper now enforces retention for `HOT_STORE` and `DLQ` layers, and default retention paths now resolve from configured data-root settings/env.
 - `T-54` complete (`TD-050`, `TD-054`): label reads now use semantic-version-aware latest resolution and fail closed when `ts_available` is missing.
 - `T-55` complete (`TD-044`): dead-letter queue now persists queued failure events and reloads them on startup.
+- `T-56` complete (`TD-045`, `TD-046`): firewall SCD joins now resolve validity columns without suffix assumptions, and strict Gold validation now raises only on hard leakage violations.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -100,6 +101,7 @@ Updated: 2026-02-07
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`.
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`.
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`.
+- Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`.
 
 ## Prioritization Approach
 
@@ -979,6 +981,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-56: Harden Firewall SCD Validity Join + Strict Validation Gates (TD-045, TD-046)
+
+Priority: P1
+
+Description: Firewall SCD joins assumed suffixed validity column names that are not always present after Polars joins, and strict Gold validation treated warning-level checks as hard failures.
+
+Scope:
+- `heber/firewall/scd.py`
+- `heber/firewall/validation.py`
+- `tests/test_firewall_scd_and_validation.py`
+
+Acceptance Criteria:
+- `join_with_reference_asof()` correctly resolves reference validity columns when they are suffixed and when they remain unsuffixed after join.
+- Join paths fail explicitly with actionable errors when validity columns are missing entirely.
+- `validate_gold_build(strict=True)` raises only for hard leakage gates and does not raise for warning-only metadata inconsistencies.
+- Regression tests cover both SCD column-resolution modes and strict warning-only validation behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1112,3 +1133,4 @@ Estimate: 1 day
 53. T-53 (Hot Store/DLQ retention + config-root defaults)
 54. T-54 (Label semver + PIT guard hardening)
 55. T-55 (Persistent DLQ queue state)
+56. T-56 (Firewall join + strict gate hardening)

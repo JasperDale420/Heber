@@ -423,8 +423,13 @@ Audit Pass 50 (2026-02-07, files reviewed directly):
 - heber/ops/reliability.py
 - tests/test_dead_letter_queue_persistence.py
 
+Audit Pass 51 (2026-02-07, files reviewed directly):
+- heber/firewall/scd.py
+- heber/firewall/validation.py
+- tests/test_firewall_scd_and_validation.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/hotstore/client.py (`TD-004`) duplicate Hot Store implementation drift re-audit.
+- heber/models/silver.py (`TD-047`, `TD-048`, `TD-049`) schema/type drift re-audit.
 
 ## Remediation Updates
 
@@ -478,6 +483,7 @@ Updated: 2026-02-07
 - `TD-052` and `TD-053` addressed via `T-53`: retention scheduler now enforces policies for `HOT_STORE` and `DLQ` layers, and reaper defaults now resolve storage roots from configured `HEBER_DATA_ROOT`/shared settings instead of hardcoded `/data/heber`.
 - `TD-050` and `TD-054` addressed via `T-54`: label reads now resolve latest versions with semantic-version-aware ordering and fail closed when `ts_available` is missing.
 - `TD-044` addressed via `T-55`: `DeadLetterQueue` now supports persistent storage and reload semantics so failed events survive process restarts.
+- `TD-045` and `TD-046` addressed via `T-56`: SCD reference joins now handle both suffixed and unsuffixed validity columns, and strict Gold validation now fails only on hard leakage violations (not warning-only timestamp checks).
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -519,6 +525,7 @@ Updated: 2026-02-07
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`; retention policy execution now includes `HOT_STORE`/`DLQ` and uses configuration-aligned storage roots by default.
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`; label latest-version selection and point-in-time fail-closed guards now align with intended behavior.
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`; DLQ entries now persist across restarts with replay-safe queue semantics.
+- Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`; firewall SCD join and strict Gold validation now match expected runtime semantics.
 
 ## Executive Summary
 
@@ -574,8 +581,8 @@ Severity key: High, Medium, Low
 | TD-042 | Low | Logging | `configure_logging()` accepts a log level but does not apply it. |
 | TD-043 | Medium | Reliability | Bloom filter dedupe has no TTL/rotation, causing rising false positives and potential drops without a backing store. |
 | TD-044 | Low | Reliability | Dead-letter queue now supports persistence and startup reload, preventing restart-time loss of failed events. |
-| TD-045 | Medium | Firewall | SCD join expects suffixed validity columns that may not exist, causing runtime failures. |
-| TD-046 | Low | Firewall | Gold build validation treats warning-level violations as hard failures in strict mode. |
+| TD-045 | Medium | Firewall | SCD joins now resolve validity columns from suffixed or unsuffixed names, avoiding runtime failures from suffix assumptions. |
+| TD-046 | Low | Firewall | Strict Gold validation now raises only on hard leakage gates, while warning-only checks remain non-fatal. |
 | TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
 | TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
 | TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
@@ -820,10 +827,14 @@ Revalidated 2026-02-07 (Pass 50): Resolved. Failed events now survive process re
 **TD-045: SCD join expects suffixed validity columns that may not exist.**
 Evidence: `join_with_reference_asof()` always filters on `valid_from{suffix}`/`valid_to{suffix}`. Polars only applies suffixes on name collisions; if the left table does not have `valid_from` or `valid_to`, the reference columns are unsuffixed and the filter will fail with missing columns.
 Recommendation: Normalize reference validity columns before the join (e.g., rename to fixed names) or detect whether suffixing occurred and use the correct column names.
+Update 2026-02-07: Remediated in `T-56` by resolving validity columns from available joined schema names (`valid_from_ref`/`valid_to_ref` or unsuffixed fallback) before applying as-of filters.
+Revalidated 2026-02-07 (Pass 51): Resolved. SCD joins now work whether Polars suffixes reference validity columns or not.
 
 **TD-046: Gold build validation treats warning-level violations as hard failures.**
 Evidence: `validate_gold_build()` labels the `max_ts_event_used > max_ts_available_used` check as a warning, but appends it to `violations` and raises when `strict=True`.
 Recommendation: Separate warnings from hard violations or only raise for the strict gates.
+Update 2026-02-07: Remediated in `T-56` by separating hard leakage violations from warning messages and raising in strict mode only when hard gates fail.
+Revalidated 2026-02-07 (Pass 51): Resolved. Warning-only metadata inconsistencies no longer fail strict validation.
 
 **TD-047: `lineage` type mismatch between models and Arrow schema.**
 Evidence: `SilverBase.lineage` is `dict[str, Any] | None` but `SILVER_BASE_SCHEMA` defines `lineage` as `pa.string()` with “JSON serialized” comment. This mismatch creates inconsistent serialization expectations across ingestion and writing.
@@ -1076,11 +1087,11 @@ Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-074.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-074.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-047..TD-049, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
