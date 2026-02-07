@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+import polars as pl
 import structlog
 
+from heber.config import settings
+from heber.ml.datasets import persist_features_to_gold as persist_features_frame_to_gold
 from heber.watch.gateway import gateway_url_candidates
 
 if TYPE_CHECKING:
@@ -573,6 +577,7 @@ class AlertFeatureExtractor:
 
 # Redis key pattern for feature storage
 FEATURES_KEY = "heber:watch:features:{alert_id}"
+DEFAULT_FEATURES_OUTPUT_PATH = settings.gold_path / "dataset=meta_label_features" / "project=watch" / "version=v1"
 
 
 async def store_features(redis: Redis, features: AlertFeatures) -> None:
@@ -605,3 +610,14 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
     if data is None:
         return None
     return AlertFeatures.from_dict(json.loads(data))
+
+
+def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
+    """Persist one feature row into Gold meta-label feature partitions."""
+    row = {k: v for k, v in features.__dict__.items()}
+    features_df = pl.DataFrame([row])
+    persist_features_frame_to_gold(
+        features_df=features_df,
+        output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,
+        partition_col="alert_time",
+    )

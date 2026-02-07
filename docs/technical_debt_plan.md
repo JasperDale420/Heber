@@ -71,6 +71,7 @@ Updated: 2026-02-07
 - `T-61` complete (`TD-013`): consumer processing now enforces canonical instrument-key validation before Bronze/Silver writes and rejects invalid keys with regression coverage.
 - `T-62` complete (`TD-019`): watch feature extraction now normalizes alert timestamps to market timezone before computing time-of-day/session features, with naive timestamps treated as UTC.
 - `T-63` complete (`TD-020`): watch Data Gateway HTTP callers now share API-prefix-first endpoint construction with legacy fallback, removing path drift between poller/consumer/features.
+- `T-64` complete (`TD-021`, `TD-022`): meta-label dataset defaults now use configured Gold-root paths with legacy fallback, and watch feature extraction now persists feature rows to Gold partitions during ingestion.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -116,6 +117,7 @@ Updated: 2026-02-07
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`.
 - Audit Pass 57 revalidated `TD-019` as resolved via `T-62`.
 - Audit Pass 58 revalidated `TD-020` as resolved via `T-63`.
+- Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`.
 
 ## Prioritization Approach
 
@@ -1153,6 +1155,28 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-64: Align Meta-Label Paths + Persist Features To Gold (TD-021, TD-022)
+
+Priority: P1
+
+Description: Meta-label dataset defaults were hardcoded to `/tmp/heber/gold` and feature extraction wrote only to Redis, leaving builder parquet reads disconnected from live watch ingestion outputs.
+
+Scope:
+- `heber/ml/datasets.py`
+- `heber/watch/features.py`
+- `heber/watch/consumer.py`
+- `tests/test_meta_label_dataset_paths.py`
+- `tests/test_watch_feature_persistence.py`
+
+Acceptance Criteria:
+- `DatasetConfig` defaults resolve outcomes/features roots from configured `settings.gold_path` canonical dataset layout.
+- Dataset loaders support legacy-path fallback for historical watch-output layouts.
+- Watch feature extraction persists rows to Gold partitions during alert processing (while preserving Redis cache behavior when configured).
+- Feature partition writes are append-safe and avoid clobbering existing partition data.
+- Regression tests cover default path wiring, fallback loading, append-safe persistence, and consumer persistence invocation.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1294,3 +1318,4 @@ Estimate: 1 day
 61. T-61 (Consumer instrument-key validation enforcement)
 62. T-62 (Watch timing market-timezone normalization)
 63. T-63 (Watch Data Gateway path unification)
+64. T-64 (Meta-label path + feature persistence alignment)

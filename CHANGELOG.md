@@ -76,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 56: consumer instrument-key validation remediation re-audit)
 - Expanded technical debt audit (pass 57: watch feature market-timezone normalization remediation re-audit)
 - Expanded technical debt audit (pass 58: watch gateway endpoint-path unification remediation re-audit)
+- Expanded technical debt audit (pass 59: meta-label path/persistence alignment remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -279,6 +280,12 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added shared watch-service Data Gateway URL candidate construction to standardize route handling
   - Poller, watch consumer, and feature-enrichment gateway calls now use `/api/v1`-prefixed routes first with legacy unprefixed fallback
   - Added regression tests for candidate ordering and fallback behavior in poller and consumer fetch paths (`tests/test_watch_gateway_paths.py`)
+- **Meta-Label Path + Feature Persistence Alignment** (`heber/ml/datasets.py`, `heber/watch/features.py`, `heber/watch/consumer.py`)
+  - Meta-label builder defaults now resolve outcomes/features roots from configured `settings.gold_path` canonical dataset paths
+  - Dataset loaders now support legacy path fallback for historical watch-output layouts
+  - Watch feature extraction now persists feature rows into Gold date partitions during ingestion, while keeping Redis cache writes
+  - Feature partition persistence now appends safely to existing partition files instead of overwriting each call
+  - Added regression coverage for path defaults/fallbacks, append-safe persistence, and consumer persistence invocation (`tests/test_meta_label_dataset_paths.py`, `tests/test_watch_feature_persistence.py`)
 - **Hot Store Event Batching** (`heber/hotstore/sync.py`)
   - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
   - Replaced one-insert-per-event sync path with threshold-based batched inserts

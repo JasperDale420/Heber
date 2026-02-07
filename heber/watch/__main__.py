@@ -23,7 +23,7 @@ DEFAULT_REDIS_URL = os.environ.get("HEBER_REDIS_URL", "redis://localhost:6379")
 DEFAULT_GATEWAY_URL = os.environ.get("DATA_GATEWAY_URL", "http://localhost:8000")
 DEFAULT_OUTPUT_PATH = os.environ.get(
     "HEBER_GOLD_PATH",
-    "/Volumes/heber/data/gold/labels_alert_barriers",
+    "/Volumes/heber/data/gold",
 )
 
 

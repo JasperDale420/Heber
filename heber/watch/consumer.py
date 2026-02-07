@@ -21,7 +21,7 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
-from heber.watch.features import AlertFeatureExtractor, store_features
+from heber.watch.features import AlertFeatureExtractor, persist_features_to_gold, store_features
 from heber.watch.gateway import gateway_url_candidates
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
@@ -463,9 +463,12 @@ class AlertWatchConsumer:
                 ts_event=alert.get("ts_event", datetime.now(UTC)),
                 ts_ingest=datetime.now(UTC),
                 ts_available=datetime.now(UTC),
+                instrument_type="option",
                 instrument_key=f"option:{alert.get('occ_symbol', '')}",
+                symbol=alert.get("occ_symbol") or alert["underlying"],
                 provider="unusual_whales",
                 feed="flow_alerts",
+                source="watch_consumer",
                 underlying=alert["underlying"],
                 occ_symbol=alert.get("occ_symbol"),
                 expiry=alert.get("expiry")
@@ -501,6 +504,9 @@ class AlertWatchConsumer:
                     "Skipping feature storage (no async redis)",
                     alert_id=alert["id"],
                 )
+
+            # Persist feature row to Gold dataset for training-set assembly.
+            await asyncio.to_thread(persist_features_to_gold, features)
 
         except Exception as e:
             # Don't fail watch creation if feature extraction fails

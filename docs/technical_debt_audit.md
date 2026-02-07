@@ -467,8 +467,15 @@ Audit Pass 58 (2026-02-07, files reviewed directly):
 - heber/watch/features.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 59 (2026-02-07, files reviewed directly):
+- heber/ml/datasets.py
+- heber/watch/features.py
+- heber/watch/consumer.py
+- tests/test_meta_label_dataset_paths.py
+- tests/test_watch_feature_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/ml/datasets.py (`TD-021`, `TD-022`) Gold/feature dataset path and persistence re-audit.
+- heber/ml/datasets.py + heber/ml/trainer.py (`TD-023`) feature-order consistency re-audit.
 
 ## Remediation Updates
 
@@ -530,6 +537,7 @@ Updated: 2026-02-07
 - `TD-013` addressed via `T-61`: consumer processing now enforces canonical instrument-key format checks before Bronze/Silver writes, with regression coverage for invalid-key rejection.
 - `TD-019` addressed via `T-62`: watch feature extraction now normalizes alert timestamps to US/Eastern (with naive-as-UTC behavior) before computing time-of-day and market-session timing features.
 - `TD-020` addressed via `T-63`: watch-service Data Gateway calls now use shared endpoint construction with `/api/v1`-first routing and legacy fallback for consistent cross-module behavior.
+- `TD-021` and `TD-022` addressed via `T-64`: meta-label dataset defaults now resolve from configured Gold root with legacy-path fallback, and watch feature extraction now persists feature rows into Gold partitions during ingestion.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -579,6 +587,7 @@ Updated: 2026-02-07
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`; invalid instrument keys are now rejected before persistence and covered by consumer reliability tests.
 - Audit Pass 57 revalidated `TD-019` as resolved via `T-62`; watch timing features now derive from market-timezone-normalized alert timestamps.
 - Audit Pass 58 revalidated `TD-020` as resolved via `T-63`; watch modules now share Data Gateway route construction with API-prefix-first fallback behavior.
+- Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`; meta-label paths now follow configured Gold roots and feature rows persist to Gold at watch-ingest time.
 
 ## Executive Summary
 
@@ -610,8 +619,8 @@ Severity key: High, Medium, Low
 | TD-018 | Medium | Watch Service | Acks watch-stream messages even when processing fails; no DLQ. |
 | TD-019 | Medium | Features | Watch timing features now normalize alert timestamps to US/Eastern before time-of-day extraction. |
 | TD-020 | Medium | Integration | Watch modules now share consistent Data Gateway endpoint construction with API-prefix-first fallback. |
-| TD-021 | Medium | ML | Default gold/features paths do not align with configured volume root. |
-| TD-022 | Medium | ML | Feature persistence to Gold is not wired; builder expects Parquet that is never written. |
+| TD-021 | Medium | ML | Meta-label dataset defaults now resolve from configured Gold root, with legacy path fallback support. |
+| TD-022 | Medium | ML | Watch feature extraction now persists feature rows to Gold partitions consumed by dataset builder. |
 | TD-023 | Medium | ML | Feature ordering for inference is not tied to training feature order. |
 | TD-024 | Medium | Data Quality | Soda scanner default Silver path misses `/data` segment. |
 | TD-025 | Low | Data Quality | Non-null rate uses hard-coded 0.99 for per-column threshold. |
@@ -772,10 +781,14 @@ Revalidated 2026-02-07 (Pass 58): Resolved. Watch modules now use a single endpo
 **TD-021: Meta-label builder defaults to `/tmp/heber/gold` instead of configured data root.**
 Evidence: `heber/ml/datasets.py` default paths point to `/tmp/heber/gold`, while the system’s data root is `/Volumes/heber/data` via `Settings`.
 Recommendation: Use `HEBER_DATA_ROOT` or `settings.gold_path` and ensure the builder follows environment configuration.
+Update 2026-02-07: Remediated in `T-64` by switching default outcomes/features paths to `settings.gold_path`-based canonical dataset paths and adding legacy-path fallback support for historical layouts.
+Revalidated 2026-02-07 (Pass 59): Resolved. Meta-label dataset reads now default to configured Gold root semantics.
 
 **TD-022: Feature persistence to Gold is not wired; builder expects Parquet that is never written.**
 Evidence: Features are stored in Redis (`heber/watch/features.py`) but no job writes features to Gold; `MetaLabelDatasetBuilder` expects Parquet under `meta_labels/features`.
 Recommendation: Add a persistence step that writes features to Gold (or update the builder to read from Redis + outcomes).
+Update 2026-02-07: Remediated in `T-64` by persisting extracted watch features into Gold date partitions during alert processing and adding append-safe partition writes in dataset persistence helpers.
+Revalidated 2026-02-07 (Pass 59): Resolved. Feature rows now land in Gold partitions consumed by `MetaLabelDatasetBuilder`.
 
 **TD-023: Inference feature ordering is not tied to training feature order.**
 Evidence: Training uses `MetaLabelDatasetBuilder.get_feature_columns()` (dataframe column order), while inference uses `AlertFeatures.numeric_feature_names()` (fixed order). These can diverge.
@@ -1172,7 +1185,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-021..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-023..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
