@@ -522,8 +522,20 @@ Audit Pass 67 (2026-02-07, files reviewed directly):
 - tests/test_k8s_hpa_probe_conformance.py
 - tests/test_k8s_kustomize_image_tags.py
 
+Audit Pass 68 (2026-02-07, files reviewed directly):
+- k8s/base/kustomization.yaml
+- k8s/base/namespace.yaml
+- k8s/base/serviceaccount.yaml
+- k8s/base/secrets/cluster-secret-store.yaml
+- k8s/base/secrets/external-secret.yaml
+- k8s/base/deployments/*.yaml
+- k8s/overlays/dev/kustomization.yaml
+- k8s/overlays/staging/kustomization.yaml
+- k8s/overlays/prod/kustomization.yaml
+- tests/test_k8s_namespace_prerequisites.py
+
 Not yet audited in this run (recommend a future pass):
-- k8s/base/namespace.yaml (`TD-078`) Namespace and secret/configmap reference drift re-audit.
+- k8s/base/deployments/consumer.yaml (`TD-074`) Runtime entrypoint alignment re-audit.
 
 ## Remediation Updates
 
@@ -593,6 +605,7 @@ Updated: 2026-02-07
 - `TD-029` addressed via `T-69`: quarantine partition extraction now prefers canonical top-level envelope `provider`/`feed` fields with legacy `meta` fallback, with regression tests for both payload shapes.
 - `TD-073` addressed via `T-70`: Terraform root-module output references are now regression-tested against local module outputs in addition to module-source existence checks.
 - `TD-077` addressed via `T-71`: overlay image transformers now target the base-rewritten image name (`ghcr.io/jacobmcmillan/heber`) so env-specific tags override correctly, with regression checks for both kustomization contracts and rendered output tags.
+- `TD-078` addressed via `T-72`: base kustomize resources now include `serviceaccount.yaml`, `secrets/cluster-secret-store.yaml`, and `secrets/external-secret.yaml`, with rendered-overlay tests asserting namespace-scoped runtime prerequisites (`heber` service account and `heber-secrets` external secret wiring).
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -651,6 +664,7 @@ Updated: 2026-02-07
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`; Hot Store facade/runtime paths remain unified on `clickhouse-connect` with regression coverage to prevent reintroduction of divergent client stacks.
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07`/`T-70`; Terraform module sources and root output wiring contracts now have regression coverage.
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`; kustomize overlay image tag overrides now apply correctly across `dev`, `staging`, and `prod`.
+- Audit Pass 68 revalidated `TD-078` as resolved via `T-72`; overlay renders now include the required namespace-scoped runtime prerequisites for service accounts and secrets.
 
 ## Executive Summary
 
@@ -739,7 +753,7 @@ Severity key: High, Medium, Low
 | TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
 | TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
 | TD-077 | Low | K8s | Overlay image rewrite rules and rendered manifests are regression-tested to ensure env-specific tags apply after base image-name rewrites. |
-| TD-078 | Low | K8s | Namespace base is `heber` while overlays change namespace; secrets/configmap names may not be present in each namespace. |
+| TD-078 | Low | K8s | Base resources and rendered overlays now include/validate namespace-scoped service account + external-secret prerequisites for deployment secret/config wiring. |
 | TD-079 | Low | Infra | Terraform backends and module configs are hardcoded to `us-east-1` without variable override. |
 | TD-080 | Medium | Backfill | Backfill writes only Silver temp partitions and never updates Bronze, coverage, or catalog metadata. |
 | TD-081 | Medium | Backfill | Backfill jobs are in-memory only; jobs and progress are lost on restart. |
@@ -1190,9 +1204,11 @@ Recommendation: Ensure overlay image transformers target the already rewritten b
 Update 2026-02-07: Remediated in `T-71` by updating overlay image rules to `name: ghcr.io/jacobmcmillan/heber` (`dev`, `staging`, `prod`) and adding static/rendered conformance checks in `tests/test_k8s_kustomize_image_tags.py`.
 Revalidated 2026-02-07 (Pass 67): Resolved. Rendered overlays now preserve env-specific tags (`latest`, `staging`, `v1.0.0`) and no longer collapse to base `latest`.
 
-**TD-078: Namespace/secret references may drift across overlays.**
-Evidence: Base namespace is `heber` and secrets are referenced by name `heber-secrets`. Overlays change namespace but do not include secrets or ServiceAccount manifests, so deployments may reference missing secrets unless applied separately.
-Recommendation: Add namespace-scoped secrets/serviceaccounts per overlay or document required prerequisites in deployment steps.
+**TD-078: Namespace-scoped runtime prerequisites can drift across overlays.**
+Evidence: Deployments reference `serviceAccountName: heber` and `secretRef: heber-secrets`, but base resources previously omitted `ServiceAccount` and External Secrets manifests from kustomize resources, so overlay renders did not include those prerequisites.
+Recommendation: Keep prerequisite resources in base kustomization and guard with rendered-overlay regression tests.
+Update 2026-02-07: Remediated in `T-72` by adding `serviceaccount.yaml`, `secrets/cluster-secret-store.yaml`, and `secrets/external-secret.yaml` to base kustomize resources, plus rendered-overlay prerequisite checks in `tests/test_k8s_namespace_prerequisites.py`.
+Revalidated 2026-02-07 (Pass 68): Resolved. `kubectl kustomize` overlay renders now include `ServiceAccount/ExternalSecret/ClusterSecretStore` resources aligned with deployment `serviceAccountName` + `secretRef` usage.
 
 **TD-079: Terraform environment settings are hardcoded.**
 Evidence: Each env `main.tf` pins `region = "us-east-1"` and backend config is fixed. This makes multi-region deployment or account reuse harder.
@@ -1267,8 +1283,8 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-078.
-- Harden namespace/secret/configmap overlay prerequisite checks with regression coverage.
+- Address remaining low-severity k8s deployment conformance drift (`TD-074`) via targeted re-audit.
+- Keep rendered-overlay conformance checks for image/tag and prerequisite resource wiring in CI.
 
 ## Open Questions for Future Audits
 

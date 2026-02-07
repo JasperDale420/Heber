@@ -79,6 +79,7 @@ Updated: 2026-02-07
 - `T-69` complete (`TD-029`): quarantine partition routing now reads canonical envelope top-level `provider`/`feed` first, with legacy `meta` fallback retained for compatibility.
 - `T-70` complete (`TD-073`): Terraform root-module output references are now regression-tested against local module output declarations to prevent wiring drift.
 - `T-71` complete (`TD-077`): overlay image-transformer rules now target the base-rewritten image name so env tags override correctly, with regression checks for both kustomization config and rendered manifests.
+- `T-72` complete (`TD-078`): base kustomize resources now include service-account and external-secret prerequisites, with rendered-overlay conformance tests guarding deployment `serviceAccountName` and `secretRef` contracts.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -133,6 +134,7 @@ Updated: 2026-02-07
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`.
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07` and `T-70`.
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`.
+- Audit Pass 68 revalidated `TD-078` as resolved via `T-72`.
 
 ## Prioritization Approach
 
@@ -1323,6 +1325,27 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-72: Add Namespace-Scoped Runtime Prerequisites To Base Kustomize (TD-078)
+
+Priority: P1
+
+Description: Deployments require `serviceAccountName: heber` and `secretRef: heber-secrets`, but these prerequisite resources were not consistently present in rendered overlays because base kustomization did not include service-account and external-secret resource manifests.
+
+Scope:
+- `k8s/base/kustomization.yaml`
+- `k8s/base/serviceaccount.yaml`
+- `k8s/base/secrets/cluster-secret-store.yaml`
+- `k8s/base/secrets/external-secret.yaml`
+- `tests/test_k8s_namespace_prerequisites.py`
+
+Acceptance Criteria:
+- Base kustomization resources include service-account and external-secret manifests required by deployments.
+- Rendered overlays include `ServiceAccount heber`, `ExternalSecret heber-secrets`, and `ClusterSecretStore aws-secrets-manager`.
+- Regression tests validate rendered overlay prerequisites and deployment env/serviceaccount references.
+- Audit docs/changelog capture `TD-078` closure and pass-level revalidation.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1472,3 +1495,4 @@ Estimate: 1 day
 69. T-69 (Quarantine partition-key envelope alignment)
 70. T-70 (Terraform root-module output contract guard)
 71. T-71 (Overlay image-transformer name alignment)
+72. T-72 (Namespace-scoped runtime prerequisite conformance)

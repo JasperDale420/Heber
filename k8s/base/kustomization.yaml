@@ -14,7 +14,10 @@ metadata:
 
 resources:
   - namespace.yaml
+  - serviceaccount.yaml
   - configmap.yaml
+  - secrets/cluster-secret-store.yaml
+  - secrets/external-secret.yaml
   - deployments/consumer.yaml
   - deployments/writer.yaml
   - deployments/compactor.yaml
