@@ -214,13 +214,13 @@ class SnapshotPoller:
         bid = quote.get("bp") or quote.get("bid_price")
         ask = quote.get("ap") or quote.get("ask_price")
 
-        if bid and ask:
+        if bid is not None and ask is not None:
             mid = (bid + ask) / 2
         else:
             mid = quote.get("last_price")
 
         return_pct = None
-        if mid and watch.entry_price > 0:
+        if mid is not None and watch.entry_price > 0:
             return_pct = (mid - watch.entry_price) / watch.entry_price
 
         return WatchSnapshot(

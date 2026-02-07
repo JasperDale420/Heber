@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/manager.py`: active/symbol watch queries now normalize Redis byte IDs before key lookup, preventing silent misses when using default `redis.from_url` byte responses
 - Added watch-manager Redis byte-response regression tests (`tests/test_watch_manager_redis_bytes.py`) for active and symbol-index retrieval
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-090` remediation in audit pass 72 and `T-76`
+- Fixed `watch/poller.py` and `watch/checker.py`: zero-valued option prices (`0.0`) are now treated as valid quote data (explicit `None` checks), so return paths and SL outcomes are not dropped by truthiness checks
+- Added zero-price watch regression tests (`tests/test_watch_zero_price_handling.py`) for snapshot return computation and barrier SL classification
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-091` remediation in audit pass 73 and `T-77`
 
 ### Removed
 
@@ -121,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 70: Hot Store sync/async table-helper contract revalidation)
 - Expanded technical debt audit (pass 71: ops health SQLAlchemy 2.x readiness conformance revalidation)
 - Expanded technical debt audit (pass 72: watch manager Redis byte-ID retrieval conformance revalidation)
+- Expanded technical debt audit (pass 73: watch zero-price return-path/barrier conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

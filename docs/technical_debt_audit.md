@@ -561,8 +561,16 @@ Audit Pass 72 (2026-02-07, files reviewed directly):
 - tests/test_watch_async_redis.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 73 (2026-02-07, files reviewed directly):
+- heber/watch/checker.py
+- heber/watch/poller.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_manager_redis_bytes.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/checker.py line-by-line re-audit for barrier/outcome edge cases.
+- heber/watch/writer.py line-by-line re-audit for service lifecycle and flush semantics.
 
 ## Remediation Updates
 
@@ -697,6 +705,7 @@ Updated: 2026-02-07
 - Audit Pass 70 revalidated `TD-071` as resolved via `T-09`/`T-74`; sync and async Hot Store table-creation helpers now enforce execution-mode boundaries with regression coverage.
 - Audit Pass 71 revalidated and remediated `TD-089`; PostgreSQL readiness checks now execute SQLAlchemy 2.x-compatible statements with regression coverage.
 - Audit Pass 72 revalidated and remediated `TD-090`; watch lookups now normalize Redis byte IDs so active/symbol watch queries remain correct with default Redis client decoding behavior.
+- Audit Pass 73 revalidated and remediated `TD-091`; zero-price option snapshots now remain valid inputs for return/barrier evaluation instead of being dropped by truthiness checks.
 
 ## Executive Summary
 
@@ -798,6 +807,7 @@ Severity key: High, Medium, Low
 | TD-088 | Medium | Observability | Deployments advertise Prometheus scraping on port 9090, but service entrypoints do not start a metrics HTTP server, so scrape targets are non-functional. |
 | TD-089 | Medium | Ops Health | PostgreSQL readiness check executed raw SQL string (`conn.execute(\"SELECT 1\")`), which fails under SQLAlchemy 2.x and can report false `not_ready` status. |
 | TD-090 | Medium | Watch Service | Watch manager assumed Redis set members were `str`; default `redis.from_url` responses are often `bytes`, which can silently break active/symbol watch retrieval. |
+| TD-091 | Medium | Watch Service | Zero-valued quote fields (`0.0`) were treated as falsy in poller/checker return-path logic, which could suppress `-100%` outcomes and miss SL barrier classification. |
 
 ## Detailed Findings
 
@@ -1321,6 +1331,12 @@ Recommendation: Normalize watch IDs from Redis set membership (`bytes` -> UTF-8 
 Update 2026-02-07: Remediated in `T-76` by normalizing Redis IDs in `WatchManager` and adding regression tests covering active/symbol lookups with byte-set responses.
 Revalidated 2026-02-07 (Pass 72): Resolved. Active watch and symbol index queries now remain correct under byte-decoding Redis clients.
 
+**TD-091: Zero-valued quote handling is filtered out by truthiness checks.**
+Evidence: `SnapshotPoller._create_snapshot()` and `BarrierChecker.check_watch()` previously used truthy checks for prices (`if bid and ask`, `if mid`, `if snap.mid_px`). Valid market values of `0.0` were treated as missing, so return paths could drop `-100%` values and fail to classify stop-loss outcomes correctly.
+Recommendation: Use explicit `is not None` checks for price presence and add regression tests for zero-price quote/snapshot paths.
+Update 2026-02-07: Remediated in `T-77` by switching to explicit `None` checks in poller/checker return logic and adding focused regression coverage for zero-price SL classification and snapshot return computation.
+Revalidated 2026-02-07 (Pass 73): Resolved. Zero-valued prices now propagate through return computations and barrier detection as expected.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1328,7 +1344,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

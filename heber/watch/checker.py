@@ -77,7 +77,7 @@ class BarrierChecker:
         # Build return path
         returns = []
         for snap in snapshots:
-            if snap.mid_px and watch.entry_price > 0:
+            if snap.mid_px is not None and watch.entry_price > 0:
                 ret = (snap.mid_px - watch.entry_price) / watch.entry_price
                 returns.append(ret)
             elif snap.return_pct is not None:
