@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 62: framework schedule + test-environment port alignment re-audit)
 - Expanded technical debt audit (pass 63: Iceberg partition-spec API alignment re-audit)
 - Expanded technical debt audit (pass 64: quarantine partition-key envelope alignment re-audit)
+- Expanded technical debt audit (pass 65: hotstore facade/client-stack revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -206,6 +207,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Quarantine path partitioning now prefers top-level envelope `provider`/`feed` fields
   - Legacy `meta.provider` / `meta.feed` fallback is preserved for compatibility with older payloads
   - Added regression coverage for both canonical and legacy envelope partition extraction
+- **Hot Store Facade/Client Stack Regression Guard** (`tests/test_hotstore_facade_alignment.py`)
+  - Added static checks that `heber.writer.hotstore` remains a compatibility facade over `heber.hotstore.sync`
+  - Added guard to prevent reintroduction of `clickhouse_driver` references across Hot Store runtime modules
 - **Silver Writer Type Coercion** (`heber/writer/silver.py`)
   - Added `_coerce_value()` method for automatic type conversion to Arrow types
   - Added field name mapping for UW flow_alerts: `price`→`contract_px`, `underlying_price`→`spot_px`, `option_chain`→`occ_symbol`, `alert_rule`→`alert_type`

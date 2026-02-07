@@ -500,8 +500,15 @@ Audit Pass 64 (2026-02-07, files reviewed directly):
 - heber/bus/backpressure.py
 - tests/test_backpressure_quarantine_paths.py
 
+Audit Pass 65 (2026-02-07, files reviewed directly):
+- heber/writer/hotstore.py
+- heber/hotstore/sync.py
+- heber/hotstore/client.py
+- tests/test_hotstore_facade_alignment.py
+- tests/test_hotstore_unification.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/writer/hotstore.py (`TD-004`) Hot Store implementation divergence re-audit.
+- infrastructure/terraform/main.tf (`TD-073`) Terraform module source availability re-audit.
 
 ## Remediation Updates
 
@@ -624,6 +631,7 @@ Updated: 2026-02-07
 - Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`; framework schedule API coverage is now explicit and testing environment defaults now match compose host-port expectations.
 - Audit Pass 63 revalidated `TD-028` as resolved via `T-68`; Iceberg Silver table creation now builds partition specs with PyIceberg `PartitionSpec` objects.
 - Audit Pass 64 revalidated `TD-029` as resolved via `T-69`; quarantine partition paths now align with canonical envelope fields and preserve legacy fallback compatibility.
+- Audit Pass 65 revalidated `TD-004` as resolved via `T-09`; Hot Store facade/runtime paths remain unified on `clickhouse-connect` with regression coverage to prevent reintroduction of divergent client stacks.
 
 ## Executive Summary
 
@@ -638,7 +646,7 @@ Severity key: High, Medium, Low
 | TD-001 | High | Testing | Pytest only discovers `tests/`, so in-package tests under `heber/` are not executed. |
 | TD-002 | High | SDK/Config | SDK default catalog URL uses port 8080 but docker-compose exposes 8085. |
 | TD-003 | High | Docker | Dockerfile stages reference non-existent modules. |
-| TD-004 | High | Hot Store | Two divergent Hot Store implementations with inconsistent clients and async behavior. |
+| TD-004 | Low | Hot Store | Hot Store remains unified under `heber.hotstore.sync` with facade compatibility and no `clickhouse_driver` drift. |
 | TD-005 | Medium | Silver Writer | Flush interval uses Bronze setting instead of Silver setting. |
 | TD-006 | Medium | Time Handling | Widespread use of naive `datetime.utcnow()` despite UTC expectations. |
 | TD-007 | Medium | Compaction | Compactor loads all files into memory and deletes originals without atomic swap. |
@@ -741,6 +749,8 @@ Recommendation: Fix stage commands to point to existing modules (`heber.writer.c
 **TD-004: Hot Store has two divergent implementations with inconsistent clients and async behavior.**
 Evidence: `heber/hotstore/client.py` uses `clickhouse-connect` synchronously. `heber/writer/hotstore.py` uses `clickhouse_driver` and defines async methods that `await` a non-async client. `heber/hotstore/sync.py` uses a third approach with direct inserts. This creates runtime inconsistency and unclear ownership of the Hot Store pipeline.
 Recommendation: Pick one Hot Store implementation, unify on a single ClickHouse client, and enforce a consistent async model. Deprecate or delete the unused path.
+Update 2026-02-07: Revalidated in `T-09`/Pass 65. `heber/writer/hotstore.py` now remains a compatibility facade over `heber.hotstore.sync`, and Hot Store runtime/client paths use `clickhouse_connect` only.
+Revalidated 2026-02-07 (Pass 65): Resolved. Regression tests now enforce facade alignment and prevent reintroduction of `clickhouse_driver` references.
 
 **TD-005: Silver writer flush interval uses Bronze setting.**
 Evidence: `heber/writer/silver.py` uses `settings.bronze_flush_interval_seconds` inside `flush_if_needed`. This is likely a bug and creates unexpected flush timing for Silver files.
@@ -1235,7 +1245,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-061, TD-073, TD-077..TD-078.
+- Address TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
