@@ -197,6 +197,63 @@ class TestWriteAndReadLabel:
             assert len(result) == 2
             assert set(result["instrument_key"]) == {"AAPL", "MSFT"}
 
+    def test_read_label_uses_semver_latest(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gold_root = Path(tmpdir)
+            asof_time = datetime(2025, 1, 30, 16, 10, tzinfo=UTC)
+
+            older = pd.DataFrame(
+                {
+                    "instrument_key": ["AAPL"],
+                    "ts_label": [datetime(2025, 1, 5, 9, 30, tzinfo=UTC)],
+                    "label": [0.02],
+                }
+            )
+            newer = pd.DataFrame(
+                {
+                    "instrument_key": ["AAPL"],
+                    "ts_label": [datetime(2025, 1, 6, 9, 30, tzinfo=UTC)],
+                    "label": [0.05],
+                }
+            )
+
+            write_label(
+                gold_root=gold_root,
+                dataset="returns_5d",
+                df=older,
+                forward_window="5d",
+                version="v1.2.0",
+            )
+            write_label(
+                gold_root=gold_root,
+                dataset="returns_5d",
+                df=newer,
+                forward_window="5d",
+                version="v1.10.0",
+            )
+
+            result = read_label(gold_root, "returns_5d", asof_time)
+            assert len(result) == 1
+            assert result.iloc[0]["label"] == pytest.approx(0.05)
+
+    def test_read_label_fails_closed_without_ts_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gold_root = Path(tmpdir)
+            dataset_path = gold_root / "dataset=returns_5d" / "type=label" / "version=v1.0.0"
+            dataset_path.mkdir(parents=True, exist_ok=True)
+
+            df = pd.DataFrame(
+                {
+                    "instrument_key": ["AAPL"],
+                    "ts_label": [datetime(2025, 1, 5, 9, 30, tzinfo=UTC)],
+                    "label": [0.02],
+                }
+            )
+            df.to_parquet(dataset_path / "data.parquet", compression="snappy")
+
+            with pytest.raises(ValueError, match="missing required ts_available"):
+                read_label(gold_root, "returns_5d", datetime(2025, 1, 15, 16, 10, tzinfo=UTC))
+
 
 def run_all_label_tests() -> dict[str, bool]:
     """Run all label management tests.

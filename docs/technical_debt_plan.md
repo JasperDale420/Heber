@@ -61,6 +61,7 @@ Updated: 2026-02-07
 - `T-51` complete (`TD-085`): backtest experiment config/results now record feature/label as-of timestamps plus per-fold as-of metadata in tracker logs for reproducible reruns.
 - `T-52` complete (`TD-051`, `TD-055`): retention now scans canonical Gold key-value layouts for dataset/version partitions and prunes versions using semantic-version-aware ordering.
 - `T-53` complete (`TD-052`, `TD-053`): reaper now enforces retention for `HOT_STORE` and `DLQ` layers, and default retention paths now resolve from configured data-root settings/env.
+- `T-54` complete (`TD-050`, `TD-054`): label reads now use semantic-version-aware latest resolution and fail closed when `ts_available` is missing.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -96,6 +97,7 @@ Updated: 2026-02-07
 - Audit Pass 46 revalidated `TD-085` as resolved via `T-51`.
 - Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`.
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`.
+- Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`.
 
 ## Prioritization Approach
 
@@ -940,6 +942,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-54: Harden Label Read Version Selection and PIT Guarding (TD-050, TD-054)
+
+Priority: P1
+
+Description: Label reads previously selected latest `version=*` folders lexicographically and returned unfiltered rows when `ts_available` was missing, creating correctness and leakage risks.
+
+Scope:
+- `heber/gold/labels.py`
+- `heber/gold/label_tests.py`
+
+Acceptance Criteria:
+- `read_label()` resolves latest versions using semantic-version-aware ordering with stable fallback behavior for non-semver version names.
+- `read_label()` fails closed when `ts_available` is missing (raise by default), with an explicit compatibility override path.
+- Regression tests verify latest-version semantics (`v1.10.0` over `v1.2.0`) and fail-closed behavior for malformed label datasets.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1071,3 +1090,4 @@ Estimate: 1 day
 51. T-51 (Backtest as-of reproducibility metadata)
 52. T-52 (Gold retention layout + semver pruning)
 53. T-53 (Hot Store/DLQ retention + config-root defaults)
+54. T-54 (Label semver + PIT guard hardening)

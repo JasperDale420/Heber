@@ -57,6 +57,16 @@ def parse_duration(duration_str: str) -> timedelta:
         return timedelta(seconds=value)
 
 
+def _version_sort_key(version: str) -> tuple[int, int, int, int, str]:
+    """Sort key for version strings, preferring semantic versions."""
+    clean = version.strip()
+    semver_match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", clean)
+    if semver_match:
+        major, minor, patch = semver_match.groups()
+        return (1, int(major), int(minor), int(patch), clean)
+    return (0, 0, 0, 0, clean)
+
+
 @dataclass
 class LabelMetadata:
     """Metadata for a label dataset (PRD §29.2).
@@ -264,6 +274,7 @@ def read_label(
     asof_time: datetime,
     instrument_keys: list[str] | None = None,
     version: str | None = None,
+    fail_on_missing_ts_available: bool = True,
 ) -> pd.DataFrame:
     """Read labels with point-in-time correctness (PRD §29.4).
 
@@ -276,6 +287,7 @@ def read_label(
         asof_time: Point-in-time cutoff
         instrument_keys: Filter to specific instruments
         version: Specific version (None for latest)
+        fail_on_missing_ts_available: Raise when required ts_available column is absent
 
     Returns:
         DataFrame with labels available at asof_time
@@ -293,7 +305,11 @@ def read_label(
         if not versions:
             logger.warning("No versions found for label dataset", dataset=dataset)
             return pd.DataFrame()
-        latest = sorted(versions, key=lambda d: d.name, reverse=True)[0]
+        latest = sorted(
+            versions,
+            key=lambda d: _version_sort_key(d.name.replace("version=", "", 1)),
+            reverse=True,
+        )[0]
         data_path = latest / DATA_PARQUET
 
     if not data_path.exists():
@@ -302,8 +318,17 @@ def read_label(
 
     df = pd.read_parquet(data_path)
 
-    if "ts_available" in df.columns:
-        df = df[df["ts_available"] <= asof_time]
+    if "ts_available" not in df.columns:
+        message = (
+            f"Label dataset {dataset} is missing required ts_available column. "
+            "Cannot enforce point-in-time correctness."
+        )
+        if fail_on_missing_ts_available:
+            raise ValueError(message)
+        logger.warning("label_missing_ts_available", dataset=dataset, path=str(data_path))
+        return pd.DataFrame()
+
+    df = df[df["ts_available"] <= asof_time]
 
     if instrument_keys and "instrument_key" in df.columns:
         df = df[df["instrument_key"].isin(instrument_keys)]

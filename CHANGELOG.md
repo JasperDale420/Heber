@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 46: backtest as-of reproducibility metadata remediation re-audit)
 - Expanded technical debt audit (pass 47: Gold retention layout + semver pruning remediation re-audit)
 - Expanded technical debt audit (pass 48: retention layer coverage + config-root defaults remediation re-audit)
+- Expanded technical debt audit (pass 49: label latest-version + PIT guard remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -340,6 +341,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `DatasetRetentionConfig` now includes explicit `hot_store` and `dlq` policy fields in serialized retention configs
   - Reaper default storage/archive paths now resolve from configured `HEBER_DATA_ROOT`/shared settings instead of hardcoded `/data/heber`
   - Added regression coverage for all-layer scheduler processing and default-root resolution (`tests/test_retention_gold_layout.py`)
+- **Label Read Latest-Version + Point-In-Time Guard Hardening** (`heber/gold/labels.py`)
+  - `read_label()` latest-version resolution now uses semantic-version-aware ordering instead of lexicographic `version=*` folder sort
+  - `read_label()` now fails closed by default when `ts_available` is missing, preventing unfiltered future-label reads
+  - Added regression coverage for semver latest selection and missing-`ts_available` fail-closed behavior (`heber/gold/label_tests.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

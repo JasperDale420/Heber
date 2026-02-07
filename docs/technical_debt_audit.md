@@ -415,8 +415,12 @@ Audit Pass 48 (2026-02-07, files reviewed directly):
 - heber/retention/__init__.py
 - tests/test_retention_gold_layout.py
 
+Audit Pass 49 (2026-02-07, files reviewed directly):
+- heber/gold/labels.py
+- heber/gold/label_tests.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/gold/labels.py (`TD-050`, `TD-054`) label version-selection and fail-closed `ts_available` enforcement re-audit.
+- heber/ops/reliability.py (`TD-044`) persistent DLQ strategy re-audit.
 
 ## Remediation Updates
 
@@ -468,6 +472,7 @@ Updated: 2026-02-07
 - `TD-085` addressed via `T-51`: backtest experiment config/results now carry dataset as-of timestamps (overall and per-fold metadata) to strengthen reproducibility of historical runs.
 - `TD-051` and `TD-055` addressed via `T-52`: retention now scans Gold key-value layouts (`dataset=.../(project|type)=.../version=...[/dt=...]`) and version-pruning order now uses semantic-version-aware sorting instead of lexicographic ordering.
 - `TD-052` and `TD-053` addressed via `T-53`: retention scheduler now enforces policies for `HOT_STORE` and `DLQ` layers, and reaper defaults now resolve storage roots from configured `HEBER_DATA_ROOT`/shared settings instead of hardcoded `/data/heber`.
+- `TD-050` and `TD-054` addressed via `T-54`: label reads now resolve latest versions with semantic-version-aware ordering and fail closed when `ts_available` is missing.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -507,10 +512,11 @@ Updated: 2026-02-07
 - Audit Pass 46 revalidated `TD-085` as resolved via `T-51`; backtest experiment metadata now records as-of cutoffs for reproducibility.
 - Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`; Gold retention scan paths and version-pruning order now match actual Gold layout/version semantics.
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`; retention policy execution now includes `HOT_STORE`/`DLQ` and uses configuration-aligned storage roots by default.
+- Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`; label latest-version selection and point-in-time fail-closed guards now align with intended behavior.
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, `read_label()` still needs fail-closed behavior when `ts_available` is missing and semantic-version latest selection in label reads still needs hardening. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, persistent DLQ storage strategy remains open in reliability handling. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -567,11 +573,11 @@ Severity key: High, Medium, Low
 | TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
 | TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
 | TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
-| TD-050 | Low | Gold Labels | `read_label()` chooses the “latest” version lexicographically, which can pick the wrong semantic version. |
+| TD-050 | Low | Gold Labels | `read_label()` now resolves latest version using semantic-version-aware ordering instead of lexicographic directory sort. |
 | TD-051 | Medium | Retention | Gold retention scanning now discovers canonical key-value layouts (`dataset=.../(project|type)=.../version=...[/dt=...]`) and records version metadata for pruning. |
 | TD-052 | Low | Retention | Reaper now executes retention policies for `HOT_STORE` and `DLQ` layers alongside Bronze/Silver/Gold. |
 | TD-053 | Low | Retention | Reaper defaults now resolve storage roots from configured `HEBER_DATA_ROOT` / shared settings instead of hardcoded `/data/heber`. |
-| TD-054 | Medium | Gold Labels | `read_label()` allows datasets without `ts_available` and returns all rows, bypassing point-in-time guards. |
+| TD-054 | Medium | Gold Labels | `read_label()` now fails closed when `ts_available` is missing, preventing point-in-time guard bypass. |
 | TD-055 | Low | Retention | Version pruning now uses semantic-version-aware ordering (with fallback) instead of pure lexicographic sorting. |
 | TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
 | TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
@@ -826,6 +832,8 @@ Recommendation: Standardize date representation (prefer `date`/`datetime`) and e
 **TD-050: `read_label()` picks latest version by lexicographic sort.**
 Evidence: `read_label()` sorts `version=` directories by name and picks the highest string. Versions like `v1.10.0` will sort before `v1.2.0`, yielding an older dataset as “latest.”
 Recommendation: Parse semantic versions or use metadata (created_at) to choose the newest version.
+Update 2026-02-07: Remediated in `T-54` by introducing semantic-version-aware latest-version selection in `read_label()` with deterministic fallback behavior.
+Revalidated 2026-02-07 (Pass 49): Resolved. Label reads now choose the newest semver release when no explicit version is provided.
 
 **TD-051: Retention scanning does not match Gold layout.**
 Evidence: `ReaperWorker.scan_partitions()` expects partitions under `<storage_root>/<layer>/<dataset>/dt=*` and never populates `PartitionInfo.version`. Gold datasets are written as `dataset=.../type=.../version=...` (and labels have no `dt=`), so Gold partitions are never discovered and version pruning cannot work.
@@ -848,6 +856,8 @@ Revalidated 2026-02-07 (Pass 48): Resolved. `create_reaper()` / `ReaperWorker` n
 **TD-054: `read_label()` bypasses ts_available guard if column is missing.**
 Evidence: `read_label()` only filters by `ts_available` when the column exists. A malformed or externally-written label dataset without `ts_available` will return all rows, including future data.
 Recommendation: Require `ts_available` for label datasets (raise or warn) and fail closed in training contexts.
+Update 2026-02-07: Remediated in `T-54` by failing closed (`ValueError` by default) when `ts_available` is absent, with an explicit compatibility flag for non-strict callers.
+Revalidated 2026-02-07 (Pass 49): Resolved. Point-in-time label reads no longer return unfiltered rows when `ts_available` is missing.
 
 **TD-055: Retention version pruning uses lexicographic ordering.**
 Evidence: `find_expired_versions()` sorts version keys as strings. This can delete or keep the wrong versions for semver patterns.
@@ -1058,7 +1068,7 @@ Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-054, TD-074.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-045, TD-074.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
@@ -1066,7 +1076,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
