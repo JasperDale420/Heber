@@ -399,8 +399,12 @@ Audit Pass 44 (2026-02-06, files reviewed directly):
 - heber/backfill/__init__.py
 - tests/test_backfill_gap_detector_layout.py
 
+Audit Pass 45 (2026-02-07, files reviewed directly):
+- heber/backtest/integration.py
+- heber/backtest/tests.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/backtest/integration.py (`TD-084`) label-version pinning re-audit.
+- heber/backtest/integration.py (`TD-085`) as-of reproducibility metadata re-audit.
 
 ## Remediation Updates
 
@@ -448,6 +452,7 @@ Updated: 2026-02-06
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
 - `TD-081` addressed via `T-48`: backfill jobs and chunk progress now persist to disk and reload on startup, including resume-friendly recovery of stale `running` state after process restarts.
 - `TD-083` addressed via `T-49`: gap detection now scans both legacy (`silver/{provider}_{feed}/dt=*`) and canonical (`silver/feed={feed}/instrument_type=*/dt=*`) Silver layouts so missing-date detection reflects actual partition paths.
+- `TD-084` addressed via `T-50`: backtest data-loader label reads now pass explicit `label_version` values to `read_gold()` (defaulting to `"latest"`), removing unpinned label-version loads.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -483,6 +488,7 @@ Updated: 2026-02-06
 - Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`; backfill now writes Bronze + catalog coverage metadata and no longer silently succeeds without `pyarrow`.
 - Audit Pass 43 revalidated `TD-081` as resolved via `T-48`; backfill job state now survives restarts and resumes from persisted progress.
 - Audit Pass 44 revalidated `TD-083` as resolved via `T-49`; gap detection now unions dates across legacy and canonical Silver storage layouts.
+- Audit Pass 45 revalidated `TD-084` as resolved via `T-50`; backtest label reads now honor explicit label-version pinning.
 
 ## Executive Summary
 
@@ -994,6 +1000,8 @@ Revalidated 2026-02-06 (Pass 44): Resolved. Gap detection now correctly recogniz
 **TD-084: Backtest labels use `read_gold()` without a version.**
 Evidence: `BacktestDataLoader` passes `label_dataset` into `read_gold()` without specifying `version`. If the label dataset is versioned, this may read an unintended or incompatible version.
 Recommendation: Add a label version parameter (or reuse `label_version`) and pass it to `read_gold()`.
+Update 2026-02-07: Remediated in `T-50` by adding `label_version` support to `BacktestDataLoader` and wiring it into label `read_gold()` calls.
+Revalidated 2026-02-07 (Pass 45): Resolved. Backtest label reads now pass explicit version pinning (default `"latest"`).
 
 **TD-085: Backtest reproducibility omits data as-of cutoffs.**
 Evidence: `ExperimentConfig` and results capture dataset names and versions but do not persist the as-of timestamp used for feature/label reads, which is critical for reproducibility.
@@ -1030,7 +1038,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-084..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

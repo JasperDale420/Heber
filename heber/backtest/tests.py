@@ -111,6 +111,7 @@ class TestBacktestDataLoader:
             feature_dataset="momentum_features",
             feature_version="v3",
             label_dataset="returns_5d",
+            label_version="v5",
         )
 
         features, _ = loader.load_train_data(
@@ -120,6 +121,9 @@ class TestBacktestDataLoader:
 
         assert mock_client.read_gold.call_count == 2
         assert len(features) == 1
+        label_call = mock_client.read_gold.call_args_list[1]
+        assert label_call.kwargs["dataset"] == "returns_5d"
+        assert label_call.kwargs["version"] == "v5"
 
     def test_load_without_labels(self):
         mock_client = MagicMock()
@@ -144,6 +148,25 @@ class TestBacktestDataLoader:
 
         assert mock_client.read_gold.call_count == 1
         assert labels is None
+
+    def test_label_version_defaults_to_latest(self):
+        mock_client = MagicMock()
+        mock_client.read_gold.return_value = pd.DataFrame({"instrument_key": ["AAPL"], "target": [1]})
+
+        loader = BacktestDataLoader(
+            client=mock_client,
+            feature_dataset="momentum_features",
+            feature_version="v3",
+            label_dataset="returns_5d",
+        )
+
+        loader.load_test_data(
+            test_start="2024-01-01",
+            test_end="2024-02-01",
+        )
+
+        label_call = mock_client.read_gold.call_args_list[1]
+        assert label_call.kwargs["version"] == "latest"
 
 
 class TestExperimentTracker:

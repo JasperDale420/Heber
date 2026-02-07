@@ -116,6 +116,7 @@ class BacktestDataLoader:
         feature_dataset: str,
         feature_version: str = "latest",
         label_dataset: str | None = None,
+        label_version: str = "latest",
     ):
         """Initialize data loader.
 
@@ -124,11 +125,13 @@ class BacktestDataLoader:
             feature_dataset: Name of feature dataset
             feature_version: Feature version (default: latest)
             label_dataset: Optional label dataset name
+            label_version: Label version (default: latest)
         """
         self.client = client
         self.feature_dataset = feature_dataset
         self.feature_version = feature_version
         self.label_dataset = label_dataset
+        self.label_version = label_version
 
     def load_train_data(
         self,
@@ -172,6 +175,7 @@ class BacktestDataLoader:
         if self.label_dataset:
             labels = self.client.read_gold(
                 dataset=self.label_dataset,
+                version=self.label_version,
                 time_range=(train_start, train_end),
                 asof_time=asof_time,
                 instrument_keys=instrument_keys,
@@ -221,6 +225,7 @@ class BacktestDataLoader:
         if self.label_dataset:
             labels = self.client.read_gold(
                 dataset=self.label_dataset,
+                version=self.label_version,
                 time_range=(test_start, test_end),
                 asof_time=asof_time,
                 instrument_keys=instrument_keys,

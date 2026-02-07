@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 42: backfill Bronze/catalog write reliability remediation re-audit)
 - Expanded technical debt audit (pass 43: backfill job persistence and resume remediation re-audit)
 - Expanded technical debt audit (pass 44: backfill gap-detection layout conformance remediation re-audit)
+- Expanded technical debt audit (pass 45: backtest label-version pinning remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -319,6 +320,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Gap detection now scans both legacy backfill Silver roots and canonical Silver feed/instrument_type partition trees for `dt=*` coverage
   - Existing-date discovery now unions coverage across both layouts to avoid false full-gap reports
   - Added regression coverage for legacy-only, canonical-only, and mixed-layout date discovery (`tests/test_backfill_gap_detector_layout.py`)
+- **Backtest Label-Version Pinning** (`heber/backtest/integration.py`)
+  - `BacktestDataLoader` now accepts `label_version` and passes it to label `read_gold()` calls for train/test data loads
+  - Default label version behavior is now explicit (`latest`) instead of implicitly unpinned
+  - Added regression coverage for explicit and default label-version read behavior (`heber/backtest/tests.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
