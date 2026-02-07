@@ -66,6 +66,7 @@ Updated: 2026-02-07
 - `T-56` complete (`TD-045`, `TD-046`): firewall SCD joins now resolve validity columns without suffix assumptions, and strict Gold validation now raises only on hard leakage violations.
 - `T-57` complete (`TD-047`, `TD-048`, `TD-049`): Silver models now normalize lineage JSON serialization, apply release-aware schema-version defaults, and align expiry/date typing with canonical Arrow schemas.
 - `T-58` complete (`TD-056`, `TD-057`, `TD-058`): Feast helpers now resolve repo path from config/env, return non-placeholder materialization counts, and support tag value / key:value search filters.
+- `T-59` complete (`TD-014`): core consumer/silver/compactor runtime paths now emit concrete metrics via shared Prometheus helpers, with instrumentation regression tests.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -106,6 +107,7 @@ Updated: 2026-02-07
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`.
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`.
 - Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`.
+- Audit Pass 54 revalidated `TD-014` as resolved via `T-59`.
 
 ## Prioritization Approach
 
@@ -1045,6 +1047,27 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-59: Wire Runtime Metrics Helpers Into Core Services (TD-014)
+
+Priority: P1
+
+Description: Shared Prometheus metrics helpers were defined but only weakly connected to live code paths, leaving core ingestion/storage telemetry sparse.
+
+Scope:
+- `heber/writer/consumer.py`
+- `heber/writer/silver.py`
+- `heber/writer/compactor.py`
+- `tests/test_metrics_runtime_wiring.py`
+
+Acceptance Criteria:
+- Consumer event processing records received/processed status metrics and anti-leakage ingest/availability lag metrics.
+- Consumer loop records batch-size metrics for processed stream batches.
+- Silver flush writes record rows/bytes/duration metrics and emit write-error metrics for failed flush paths.
+- Compactor records success/error run metrics with merged-file and reclaimed-byte values for actual compaction attempts.
+- Regression tests validate instrumentation calls for consumer, Silver writer, and compactor runtime paths.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1181,3 +1204,4 @@ Estimate: 1 day
 56. T-56 (Firewall join + strict gate hardening)
 57. T-57 (Silver model defaults + schema type alignment)
 58. T-58 (Feast materialization/search behavior alignment)
+59. T-59 (Runtime metrics helper wiring)

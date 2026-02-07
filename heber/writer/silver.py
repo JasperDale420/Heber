@@ -20,6 +20,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.metrics import record_write, record_write_error
 from heber.schemas.silver import DEFAULT_SCHEMA, SILVER_SCHEMAS
 
 logger = structlog.get_logger(__name__)
@@ -213,6 +214,7 @@ class SilverWriter:
         if not rows:
             return
 
+        started_at = datetime.now(UTC)
         # Determine feed from partition key
         feed = partition_key.split("/")[0].split("=")[1]
         schema = self._get_schema(feed)
@@ -228,6 +230,15 @@ class SilverWriter:
                 file_path,
                 compression="snappy",
                 row_group_size=100_000,
+            )
+            elapsed = (datetime.now(UTC) - started_at).total_seconds()
+            bytes_written = file_path.stat().st_size if file_path.exists() else 0
+            record_write(
+                layer="silver",
+                dataset=feed,
+                rows=len(rows),
+                bytes_written=bytes_written,
+                duration_seconds=elapsed,
             )
 
             logger.info(
@@ -255,6 +266,15 @@ class SilverWriter:
             if valid_rows:
                 table = pa.Table.from_pylist(valid_rows, schema=schema)
                 pq.write_table(table, file_path, compression="snappy", row_group_size=100_000)
+                elapsed = (datetime.now(UTC) - started_at).total_seconds()
+                bytes_written = file_path.stat().st_size if file_path.exists() else 0
+                record_write(
+                    layer="silver",
+                    dataset=feed,
+                    rows=len(valid_rows),
+                    bytes_written=bytes_written,
+                    duration_seconds=elapsed,
+                )
                 logger.info(
                     "Flushed Silver partition (salvaged)",
                     partition=partition_key,
@@ -263,8 +283,10 @@ class SilverWriter:
                     file=str(file_path),
                 )
             else:
+                record_write_error(layer="silver", error_type=type(e).__name__)
                 logger.error("All Silver rows invalid, partition skipped", partition=partition_key)
         except Exception as e:
+            record_write_error(layer="silver", error_type=type(e).__name__)
             logger.error(
                 "Failed to flush Silver partition",
                 partition=partition_key,

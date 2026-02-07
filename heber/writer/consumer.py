@@ -14,7 +14,13 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
-from heber.ops.metrics import start_metrics_server_from_env
+from heber.ops.metrics import (
+    record_batch_processed,
+    record_event_processed,
+    record_event_received,
+    record_ingest_latency,
+    start_metrics_server_from_env,
+)
 from heber.writer.bronze import BronzeWriter
 from heber.writer.silver import SilverWriter
 
@@ -173,6 +179,8 @@ class EventConsumer:
 
     async def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
         """Process an event one time and return `(success, error)`."""
+        feed = "unknown"
+        provider = "unknown"
         try:
             # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
             payload_str = (
@@ -189,10 +197,22 @@ class EventConsumer:
 
             event_dict = json.loads(payload_str)
             envelope = EventEnvelope.model_validate(event_dict)
+            feed = envelope.feed
+            provider = envelope.provider
+            record_event_received(feed=feed, provider=provider)
 
             # Set ts_available if not present
             if envelope.ts_available is None:
                 envelope = envelope.with_ts_available(datetime.now(UTC))
+
+            ingest_lag = max((envelope.ts_ingest - envelope.ts_event).total_seconds(), 0.0)
+            availability_lag = max((envelope.ts_available - envelope.ts_event).total_seconds(), 0.0)
+            record_ingest_latency(
+                feed=feed,
+                provider=provider,
+                ingest_lag=ingest_lag,
+                availability_lag=availability_lag,
+            )
 
             self._validate_payload_schema(envelope)
 
@@ -208,9 +228,11 @@ class EventConsumer:
                 feed=envelope.feed,
                 instrument_key=envelope.instrument_key,
             )
+            record_event_processed(feed=feed, provider=provider, status="success")
             return True, None
 
         except Exception as e:
+            record_event_processed(feed=feed, provider=provider, status="error")
             logger.error(
                 "Failed to process event",
                 error=str(e),
@@ -412,6 +434,7 @@ class EventConsumer:
         failed_ids: list[str] = []
 
         for _stream_name, stream_messages in messages:
+            record_batch_processed(feed="mixed", batch_size=len(stream_messages))
             ack_ids, stream_failed_ids = await self._process_stream_messages(stream_messages)
             processed_ids.extend(ack_ids)
             failed_ids.extend(stream_failed_ids)

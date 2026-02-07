@@ -439,8 +439,15 @@ Audit Pass 53 (2026-02-07, files reviewed directly):
 - tests/test_feast_materialization_behavior.py
 - tests/test_sdk_catalog_defaults.py
 
+Audit Pass 54 (2026-02-07, files reviewed directly):
+- heber/ops/metrics.py
+- heber/writer/consumer.py
+- heber/writer/silver.py
+- heber/writer/compactor.py
+- tests/test_metrics_runtime_wiring.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/metrics.py (`TD-014`) metrics implementation depth re-audit.
+- heber/watch/models.py (`TD-031`, `TD-032`) watch timestamp/polling behavior re-audit.
 
 ## Remediation Updates
 
@@ -497,6 +504,7 @@ Updated: 2026-02-07
 - `TD-045` and `TD-046` addressed via `T-56`: SCD reference joins now handle both suffixed and unsuffixed validity columns, and strict Gold validation now fails only on hard leakage violations (not warning-only timestamp checks).
 - `TD-047`, `TD-048`, and `TD-049` addressed via `T-57`: Silver models now normalize `lineage` serialization, apply release-aware `schema_version` defaults, and align date typing between Pydantic and Arrow schemas.
 - `TD-056`, `TD-057`, and `TD-058` addressed via `T-58`: Feast helpers now default repo path from configuration, report best-effort materialization row counts instead of `-1` placeholders, and support tag value/key:value matching in feature search.
+- `TD-014` addressed via `T-59`: metrics recording is now wired into core consumer/silver/compactor runtime paths with explicit exporter startup and regression coverage for metric emission.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -541,6 +549,7 @@ Updated: 2026-02-07
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`; firewall SCD join and strict Gold validation now match expected runtime semantics.
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`; Silver model defaults and field types now match schema contracts with regression coverage.
 - Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`; Feast helpers now use configuration-driven defaults, value-aware tag filtering, and non-placeholder materialization counts.
+- Audit Pass 54 revalidated `TD-014` as resolved via `T-59`; core ingestion/storage runtime paths now emit concrete metrics rather than placeholder-only counters.
 
 ## Executive Summary
 
@@ -565,7 +574,7 @@ Severity key: High, Medium, Low
 | TD-011 | Medium | Hot Store | HotStoreSync inserts one row per event with no batching. |
 | TD-012 | Medium | Catalog DB | No Alembic migrations; tables are created at runtime. |
 | TD-013 | Low | Validation | Instrument key validation is defined but not enforced in ingestion. |
-| TD-014 | Low | Observability | Metrics are mostly placeholders and not wired to a running exporter. |
+| TD-014 | Low | Observability | Core ingestion/storage runtimes now emit concrete Prometheus metrics and exporter entrypoints are wired across services. |
 | TD-015 | High | Event Bus | Claimed pending messages are not yielded to consumers, risking silent drops. |
 | TD-016 | High | ML | Meta-label dataset builder expects columns not produced by the label writer. |
 | TD-017 | Medium | Watch Service | Uses synchronous Redis calls inside async loops; can block the event loop. |
@@ -698,6 +707,8 @@ Recommendation: Validate in the consumer and attach a quality flag or reject inv
 **TD-014: Observability is partially stubbed.**
 Evidence: Several modules reference metrics counters but there is no wiring to a metrics server or standard export path. Some modules have metrics placeholders and log-only paths.
 Recommendation: Add a consistent metrics export strategy, likely via Prometheus, and register metrics in service entrypoints.
+Update 2026-02-07: Remediated in `T-59` by wiring shared metrics recording helpers into consumer event processing (`received/processed/batch/latency`), Silver flush writes (`rows/bytes/duration/error`), and compactor runs (`success/error/files/bytes/duration`) while retaining exporter startup via service entrypoints.
+Revalidated 2026-02-07 (Pass 54): Resolved. Primary ingestion and storage services now emit concrete runtime metrics with regression tests for instrumentation paths.
 
 **TD-015: Claimed pending messages are not yielded to consumers (possible silent drops).**
 Evidence: `heber/bus/__init__.py` calls `_claim_idle_messages()` inside `RedisEventBus.consume()` but discards the returned messages. Claimed messages are never processed, yet are removed from other consumers.
@@ -1122,7 +1133,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-019..TD-029, TD-031..TD-032, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

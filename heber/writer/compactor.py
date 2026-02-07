@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
-from heber.ops.metrics import start_metrics_server_from_env
+from heber.ops.metrics import record_compaction, start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +49,19 @@ class Compactor:
         except Exception as e:
             logger.warning("Failed to release compaction lock", lock_path=str(lock_path), error=str(e))
 
+    def _dataset_label(self, partition_path: Path) -> str:
+        """Extract a low-cardinality dataset label from a partition path."""
+        try:
+            rel = partition_path.relative_to(settings.silver_path)
+            for part in rel.parts:
+                if part.startswith("feed="):
+                    return part.split("=", 1)[1]
+            if rel.parts:
+                return rel.parts[0]
+        except Exception:
+            pass
+        return "unknown"
+
     async def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -80,6 +93,9 @@ class Compactor:
             files=len(small_files),
             total_bytes=total_size,
         )
+        started_at = datetime.now(UTC)
+        dataset = self._dataset_label(partition_path)
+        source_bytes = sum(f.stat().st_size for f in small_files)
 
         try:
             # Stream files into a single temp parquet, then atomically promote.
@@ -105,10 +121,20 @@ class Compactor:
 
             # Atomic file promotion once the merge succeeds.
             temp_path.replace(merged_path)
+            merged_size = merged_path.stat().st_size if merged_path.exists() else 0
+            reclaimed = max(source_bytes - merged_size, 0)
 
             # Delete source files only after merged output is durable.
             for f in small_files:
                 f.unlink()
+
+            record_compaction(
+                dataset=dataset,
+                status="success",
+                files_merged=len(small_files),
+                bytes_reclaimed=reclaimed,
+                duration=(datetime.now(UTC) - started_at).total_seconds(),
+            )
 
             logger.info(
                 "Compaction complete",
@@ -121,6 +147,13 @@ class Compactor:
             return len(small_files)
 
         except Exception as e:
+            record_compaction(
+                dataset=dataset,
+                status="error",
+                files_merged=0,
+                bytes_reclaimed=0,
+                duration=(datetime.now(UTC) - started_at).total_seconds(),
+            )
             # Best-effort cleanup: never delete source files on failed compaction.
             for stale_temp in partition_path.glob(".compacted-*.tmp"):
                 stale_temp.unlink(missing_ok=True)

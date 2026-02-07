@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 51: firewall SCD + strict-gate remediation re-audit)
 - Expanded technical debt audit (pass 52: Silver model/schema alignment remediation re-audit)
 - Expanded technical debt audit (pass 53: Feast materialization/search behavior remediation re-audit)
+- Expanded technical debt audit (pass 54: runtime metrics helper wiring remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -252,6 +253,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `materialize_features()` now extracts row counts from Feast materialization responses and falls back to offline-source row estimation instead of `-1` placeholders
   - `search_features()` now supports case-insensitive key, value, and `key:value` tag filters
   - Added regression coverage for repo-path defaults, materialization count behavior, and tag-filter semantics (`tests/test_feast_materialization_behavior.py`)
+- **Runtime Metrics Wiring** (`heber/writer/consumer.py`, `heber/writer/silver.py`, `heber/writer/compactor.py`)
+  - Consumer processing now emits received/processed/batch metrics and anti-leakage latency observations via shared metrics helpers
+  - Silver flush paths now emit write throughput/duration metrics and explicit write-error metrics on failure
+  - Compactor runs now emit success/error metrics with merged-file and reclaimed-byte values
+  - Added regression coverage for runtime metrics instrumentation paths (`tests/test_metrics_runtime_wiring.py`)
 - **Hot Store Event Batching** (`heber/hotstore/sync.py`)
   - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
   - Replaced one-insert-per-event sync path with threshold-based batched inserts
