@@ -64,6 +64,7 @@ Updated: 2026-02-07
 - `T-54` complete (`TD-050`, `TD-054`): label reads now use semantic-version-aware latest resolution and fail closed when `ts_available` is missing.
 - `T-55` complete (`TD-044`): dead-letter queue now persists queued failure events and reloads them on startup.
 - `T-56` complete (`TD-045`, `TD-046`): firewall SCD joins now resolve validity columns without suffix assumptions, and strict Gold validation now raises only on hard leakage violations.
+- `T-57` complete (`TD-047`, `TD-048`, `TD-049`): Silver models now normalize lineage JSON serialization, apply release-aware schema-version defaults, and align expiry/date typing with canonical Arrow schemas.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -102,6 +103,7 @@ Updated: 2026-02-07
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`.
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`.
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`.
+- Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`.
 
 ## Prioritization Approach
 
@@ -1000,6 +1002,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-57: Align Silver Model Defaults and Schema Types (TD-047, TD-048, TD-049)
+
+Priority: P1
+
+Description: Silver model contracts had drift between Pydantic and Arrow representations (`lineage` dict vs string, global `v1` schema-version defaults, and mixed string/date expiry typing).
+
+Scope:
+- `heber/models/silver.py`
+- `heber/schemas/silver.py`
+- `tests/test_silver_model_schema_alignment.py`
+
+Acceptance Criteria:
+- `SilverBase` normalizes dict lineage input to deterministic JSON strings so model values match string-backed schema expectations.
+- `SilverBase` applies release-aware default `schema_version` values for v2-v6 dataset families while preserving explicit overrides.
+- `MaxPainRecord`, `HottestChainRecord`, and `IVTermStructureRecord` use `date`-typed expiry fields, and canonical Arrow schemas use `pa.date32()` for those feeds.
+- Regression tests cover lineage normalization, schema-version defaults, and model/schema date-type alignment.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1134,3 +1155,4 @@ Estimate: 1 day
 54. T-54 (Label semver + PIT guard hardening)
 55. T-55 (Persistent DLQ queue state)
 56. T-56 (Firewall join + strict gate hardening)
+57. T-57 (Silver model defaults + schema type alignment)

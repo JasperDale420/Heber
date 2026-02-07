@@ -4,11 +4,12 @@ All Silver datasets include the shared base columns plus dataset-specific fields
 These Pydantic models are used for validation and documentation.
 """
 
+import json
 from datetime import date, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 import pyarrow as pa
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ==============================================================================
 # Shared Base Columns (PRD §8.7.1)
@@ -30,7 +31,53 @@ class SilverBase(BaseModel):
     source: str = Field(..., description="websocket|rest")
     schema_version: str = Field(default="v1", description="Dataset schema version")
     quality_flags: list[str] = Field(default_factory=list, description="validated, deduped, late")
-    lineage: dict[str, Any] | None = Field(default=None, description="Correlation metadata")
+    lineage: str | None = Field(default=None, description="Correlation metadata JSON")
+
+    # Model-level schema defaults by release cohort.
+    # Datasets not listed here remain on v1.
+    _SCHEMA_VERSION_DEFAULTS: ClassVar[dict[str, str]] = {
+        # V2
+        "NewsArticleRecord": "v2",
+        "NewsEntityRecord": "v2",
+        "NewsEventRecord": "v2",
+        "FilingEventRecord": "v2",
+        # V3
+        "CongressTradeRecord": "v3",
+        "InsiderTradeRecord": "v3",
+        "InsiderFlowRecord": "v3",
+        "InstitutionHoldingRecord": "v3",
+        "InstitutionActivityRecord": "v3",
+        "PoliticianTradeRecord": "v3",
+        # V4
+        "AnalystRatingRecord": "v4",
+        "StockFundamentalsRecord": "v4",
+        "EconomicEventRecord": "v4",
+        "MarketIndicatorRecord": "v4",
+        # V5
+        "OptionHistoryRecord": "v5",
+        "OptionChainSnapshotRecord": "v5",
+        "VolumeProfileRecord": "v5",
+        "GroupFlowRecord": "v5",
+        # V6
+        "ETFMetadataRecord": "v6",
+        "ETFSectorWeightsRecord": "v6",
+    }
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_common_defaults(cls, data: Any) -> Any:
+        """Normalize cross-model defaults to avoid schema drift."""
+        if not isinstance(data, dict):
+            return data
+
+        if not data.get("schema_version"):
+            data["schema_version"] = cls._SCHEMA_VERSION_DEFAULTS.get(cls.__name__, "v1")
+
+        lineage = data.get("lineage")
+        if isinstance(lineage, dict):
+            data["lineage"] = json.dumps(lineage, sort_keys=True, default=str)
+
+        return data
 
 
 # ==============================================================================
@@ -314,7 +361,7 @@ class GreekExposureRecord(SilverBase):
 class MaxPainRecord(SilverBase):
     """Max pain strike data."""
 
-    expiry: str  # YYYY-MM-DD
+    expiry: date
     max_pain_strike: float
     call_oi: int | None = None
     put_oi: int | None = None
@@ -335,7 +382,7 @@ class HottestChainRecord(SilverBase):
     contract_symbol: str
     underlying: str
     strike: float
-    expiry: str  # YYYY-MM-DD
+    expiry: date
     option_type: str = Field(..., description="call or put")
     volume: int
     open_interest: int
@@ -421,7 +468,7 @@ class IVRankRecord(SilverBase):
 class IVTermStructureRecord(SilverBase):
     """IV term structure data point."""
 
-    expiry: str  # YYYY-MM-DD
+    expiry: date
     iv: float
     days_to_expiry: int
     call_iv: float | None = None

@@ -428,8 +428,13 @@ Audit Pass 51 (2026-02-07, files reviewed directly):
 - heber/firewall/validation.py
 - tests/test_firewall_scd_and_validation.py
 
+Audit Pass 52 (2026-02-07, files reviewed directly):
+- heber/models/silver.py
+- heber/schemas/silver.py
+- tests/test_silver_model_schema_alignment.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/models/silver.py (`TD-047`, `TD-048`, `TD-049`) schema/type drift re-audit.
+- heber/feast/materialization.py (`TD-056`, `TD-057`, `TD-058`) feature-store behavior re-audit.
 
 ## Remediation Updates
 
@@ -484,6 +489,7 @@ Updated: 2026-02-07
 - `TD-050` and `TD-054` addressed via `T-54`: label reads now resolve latest versions with semantic-version-aware ordering and fail closed when `ts_available` is missing.
 - `TD-044` addressed via `T-55`: `DeadLetterQueue` now supports persistent storage and reload semantics so failed events survive process restarts.
 - `TD-045` and `TD-046` addressed via `T-56`: SCD reference joins now handle both suffixed and unsuffixed validity columns, and strict Gold validation now fails only on hard leakage violations (not warning-only timestamp checks).
+- `TD-047`, `TD-048`, and `TD-049` addressed via `T-57`: Silver models now normalize `lineage` serialization, apply release-aware `schema_version` defaults, and align date typing between Pydantic and Arrow schemas.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -526,6 +532,7 @@ Updated: 2026-02-07
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`; label latest-version selection and point-in-time fail-closed guards now align with intended behavior.
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`; DLQ entries now persist across restarts with replay-safe queue semantics.
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`; firewall SCD join and strict Gold validation now match expected runtime semantics.
+- Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`; Silver model defaults and field types now match schema contracts with regression coverage.
 
 ## Executive Summary
 
@@ -583,9 +590,9 @@ Severity key: High, Medium, Low
 | TD-044 | Low | Reliability | Dead-letter queue now supports persistence and startup reload, preventing restart-time loss of failed events. |
 | TD-045 | Medium | Firewall | SCD joins now resolve validity columns from suffixed or unsuffixed names, avoiding runtime failures from suffix assumptions. |
 | TD-046 | Low | Firewall | Strict Gold validation now raises only on hard leakage gates, while warning-only checks remain non-fatal. |
-| TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
-| TD-048 | Low | Models | `schema_version` defaults to `v1` for all models, including v2/v3/v4 datasets. |
-| TD-049 | Low | Models | Date fields are inconsistently typed (`date` vs `str`) across Silver schemas. |
+| TD-047 | Medium | Models | Silver models now normalize dict lineage to canonical JSON strings, matching string-backed schema storage. |
+| TD-048 | Low | Models | Silver models now apply release-aware default schema versions (`v2`..`v6`) instead of defaulting all datasets to `v1`. |
+| TD-049 | Low | Models | Expiry/date fields are now consistently typed as dates across Silver models and canonical Arrow schemas. |
 | TD-050 | Low | Gold Labels | `read_label()` now resolves latest version using semantic-version-aware ordering instead of lexicographic directory sort. |
 | TD-051 | Medium | Retention | Gold retention scanning now discovers canonical key-value layouts (`dataset=.../(project|type)=.../version=...[/dt=...]`) and records version metadata for pruning. |
 | TD-052 | Low | Retention | Reaper now executes retention policies for `HOT_STORE` and `DLQ` layers alongside Bronze/Silver/Gold. |
@@ -839,14 +846,20 @@ Revalidated 2026-02-07 (Pass 51): Resolved. Warning-only metadata inconsistencie
 **TD-047: `lineage` type mismatch between models and Arrow schema.**
 Evidence: `SilverBase.lineage` is `dict[str, Any] | None` but `SILVER_BASE_SCHEMA` defines `lineage` as `pa.string()` with “JSON serialized” comment. This mismatch creates inconsistent serialization expectations across ingestion and writing.
 Recommendation: Standardize lineage as a structured type (e.g., JSON/struct) and enforce serialization in one place, or update the Pydantic model to store serialized JSON consistently.
+Update 2026-02-07: Remediated in `T-57` by normalizing dict lineage values to deterministic JSON strings (`sort_keys=True`) during `SilverBase` model validation.
+Revalidated 2026-02-07 (Pass 52): Resolved. Model lineage now matches string-backed schema expectations and is covered by regression tests.
 
 **TD-048: `schema_version` defaults to `v1` across all models.**
 Evidence: `SilverBase.schema_version` defaults to `v1` even for v2/v3/v4 datasets (news, filings, alternative data). Unless overridden at write time, stored rows will be mislabeled.
 Recommendation: Set per-dataset defaults in each model or enforce schema_version injection in the writer based on dataset.
+Update 2026-02-07: Remediated in `T-57` by adding release-cohort schema-version defaults in `SilverBase` for v2-v6 dataset families while preserving explicit overrides.
+Revalidated 2026-02-07 (Pass 52): Resolved. Default schema versions now match intended dataset release cohorts.
 
 **TD-049: Date fields are inconsistently typed across Silver schemas.**
 Evidence: Some models use `date` (e.g., `expiry` in options), while others use `str` for dates (e.g., `expiry` in `MaxPainRecord`, `HottestChainRecord`, `IVTermStructureRecord`). This leads to inconsistent parsing and schema drift across datasets.
 Recommendation: Standardize date representation (prefer `date`/`datetime`) and enforce normalization in ingestion.
+Update 2026-02-07: Remediated in `T-57` by converting remaining string expiry fields to `date` in Pydantic models and aligning canonical Arrow schemas (`max_pain`, `hottest_chain`, `iv_term_structure`) to `pa.date32()`.
+Revalidated 2026-02-07 (Pass 52): Resolved. Date typing is now consistent between model contracts and canonical Arrow schemas.
 
 **TD-050: `read_label()` picks latest version by lexicographic sort.**
 Evidence: `read_label()` sorts `version=` directories by name and picks the highest string. Versions like `v1.10.0` will sort before `v1.2.0`, yielding an older dataset as “latest.”
@@ -1091,7 +1104,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-047..TD-049, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

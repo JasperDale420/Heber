@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 49: label latest-version + PIT guard remediation re-audit)
 - Expanded technical debt audit (pass 50: persistent DLQ queue remediation re-audit)
 - Expanded technical debt audit (pass 51: firewall SCD + strict-gate remediation re-audit)
+- Expanded technical debt audit (pass 52: Silver model/schema alignment remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -240,6 +241,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Moved canonical Silver Arrow schema definitions out of `heber.writer.silver` into shared `heber.schemas.silver`
   - Updated writer and Bronze-to-Silver transformer to consume the shared schema module
   - Added regression tests to enforce single-source schema ownership and block inline schema constant reintroduction (`tests/test_silver_schema_source.py`)
+- **Silver Model Contract Alignment** (`heber/models/silver.py`, `heber/schemas/silver.py`)
+  - Normalized `SilverBase.lineage` dict inputs into deterministic JSON strings to match string-backed schema storage
+  - Added release-aware default `schema_version` mapping for v2-v6 dataset families while preserving explicit overrides
+  - Standardized `expiry` typing to `date` in `MaxPainRecord`, `HottestChainRecord`, and `IVTermStructureRecord`, and aligned canonical Arrow schemas to `pa.date32()`
+  - Added regression coverage for lineage normalization, schema-version defaults, and date-type alignment (`tests/test_silver_model_schema_alignment.py`)
 - **Hot Store Event Batching** (`heber/hotstore/sync.py`)
   - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
   - Replaced one-insert-per-event sync path with threshold-based batched inserts
