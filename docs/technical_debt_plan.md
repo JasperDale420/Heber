@@ -77,6 +77,7 @@ Updated: 2026-02-07
 - `T-67` complete (`TD-026`, `TD-027`): framework schedule API presence is now explicitly regression-tested and testing environment local-service defaults now align with docker-compose host port mappings.
 - `T-68` complete (`TD-028`): Iceberg Silver table creation now builds a concrete PyIceberg `PartitionSpec` for day-partitioning on `ts_event`, with regression coverage preventing list-based partition drift.
 - `T-69` complete (`TD-029`): quarantine partition routing now reads canonical envelope top-level `provider`/`feed` first, with legacy `meta` fallback retained for compatibility.
+- `T-70` complete (`TD-073`): Terraform root-module output references are now regression-tested against local module output declarations to prevent wiring drift.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -129,6 +130,7 @@ Updated: 2026-02-07
 - Audit Pass 63 revalidated `TD-028` as resolved via `T-68`.
 - Audit Pass 64 revalidated `TD-029` as resolved via `T-69`.
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`.
+- Audit Pass 66 revalidated `TD-073` as resolved via `T-07` and `T-70`.
 
 ## Prioritization Approach
 
@@ -1280,6 +1282,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-70: Guard Terraform Root-Module Output Contracts (TD-073)
+
+Priority: P1
+
+Description: Root Terraform configuration can reference module outputs that are renamed/removed in local modules. Add static regression coverage so root output references stay aligned with module output declarations.
+
+Scope:
+- `tests/test_terraform_module_sources.py`
+- `tests/test_terraform_root_module_contract.py`
+- `infrastructure/terraform/main.tf`
+- `infrastructure/terraform/modules/*/main.tf`
+
+Acceptance Criteria:
+- Tests fail when `infrastructure/terraform/main.tf` references a local module output not declared by that module.
+- Existing module source-path checks remain in place.
+- Audit docs/changelog capture pass-level revalidation of `TD-073`.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1427,3 +1448,4 @@ Estimate: 1 day
 67. T-67 (Framework schedule API + test-environment port alignment)
 68. T-68 (Iceberg partition-spec object alignment)
 69. T-69 (Quarantine partition-key envelope alignment)
+70. T-70 (Terraform root-module output contract guard)

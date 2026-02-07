@@ -507,8 +507,14 @@ Audit Pass 65 (2026-02-07, files reviewed directly):
 - tests/test_hotstore_facade_alignment.py
 - tests/test_hotstore_unification.py
 
+Audit Pass 66 (2026-02-07, files reviewed directly):
+- infrastructure/terraform/main.tf
+- infrastructure/terraform/modules/*/main.tf
+- tests/test_terraform_module_sources.py
+- tests/test_terraform_root_module_contract.py
+
 Not yet audited in this run (recommend a future pass):
-- infrastructure/terraform/main.tf (`TD-073`) Terraform module source availability re-audit.
+- k8s/base/overlays/production/kustomization.yaml (`TD-077`) Image rewrite alignment re-audit.
 
 ## Remediation Updates
 
@@ -576,6 +582,7 @@ Updated: 2026-02-07
 - `TD-026` and `TD-027` addressed via `T-67`: E2E framework schedule API is now verified present by regression tests, and testing-environment local service defaults now align with docker-compose host port mappings.
 - `TD-028` addressed via `T-68`: Iceberg Silver table creation now passes a concrete `PartitionSpec`/`DayTransform` object instead of list-form partition definitions, with regression coverage to prevent API drift.
 - `TD-029` addressed via `T-69`: quarantine partition extraction now prefers canonical top-level envelope `provider`/`feed` fields with legacy `meta` fallback, with regression tests for both payload shapes.
+- `TD-073` addressed via `T-70`: Terraform root-module output references are now regression-tested against local module outputs in addition to module-source existence checks.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -632,6 +639,7 @@ Updated: 2026-02-07
 - Audit Pass 63 revalidated `TD-028` as resolved via `T-68`; Iceberg Silver table creation now builds partition specs with PyIceberg `PartitionSpec` objects.
 - Audit Pass 64 revalidated `TD-029` as resolved via `T-69`; quarantine partition paths now align with canonical envelope fields and preserve legacy fallback compatibility.
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`; Hot Store facade/runtime paths remain unified on `clickhouse-connect` with regression coverage to prevent reintroduction of divergent client stacks.
+- Audit Pass 66 revalidated `TD-073` as resolved via `T-07`/`T-70`; Terraform module sources and root output wiring contracts now have regression coverage.
 
 ## Executive Summary
 
@@ -715,7 +723,7 @@ Severity key: High, Medium, Low
 | TD-070 | Low | Hot Store | Hot Store DDL and sync mappings now preserve base provenance/quality fields (`quality_flags`, `lineage`). |
 | TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
 | TD-072 | Low | Testing | Additional schema registry tests are now growth-tolerant and verify required schema contracts. |
-| TD-073 | High | Infra | Terraform root module references local modules (`./modules/*`) that are not present. |
+| TD-073 | Low | Infra | Terraform root module local sources and referenced module outputs are covered by regression checks. |
 | TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
 | TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
 | TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
@@ -1138,9 +1146,10 @@ Recommendation: Assert on minimum required schemas or specific known names rathe
 Revalidated 2026-02-06 (Pass 22): Still open. Test continues to assert an exact schema count.
 Revalidated 2026-02-06 (Pass 24): Resolved. Tests now assert required schema contracts and registry lookup behavior.
 
-**TD-073: Terraform references modules that are missing from the repo.**
-Evidence: `infrastructure/terraform/main.tf` references `./modules/vpc`, `./modules/s3`, `./modules/rds`, etc., but there is no `modules/` directory under `infrastructure/terraform/`. Terraform will fail at init/plan.
-Recommendation: Add the modules or replace with a remote module source. If infrastructure is managed elsewhere, remove or clearly mark these files as placeholders.
+**TD-073: Terraform root-module wiring can drift from local module output contracts.**
+Evidence: `infrastructure/terraform/main.tf` now references local modules that exist under `infrastructure/terraform/modules/*`. The remaining debt risk is root-module references drifting from the outputs each local module actually exports.
+Recommendation: Keep static contract tests that validate both module source-path existence and root `module.<name>.<output>` references. Add `terraform validate` in CI when Terraform CLI is available.
+Revalidated 2026-02-07 (Pass 66): Resolved. Local module paths are present and regression tests now cover root-to-module output wiring contracts (`tests/test_terraform_module_sources.py`, `tests/test_terraform_root_module_contract.py`).
 
 **TD-074: Kubernetes deployments reference non-existent module entrypoints.**
 Evidence: `k8s/base/deployments/consumer.yaml` runs `python -m heber.bus.consumer`, and writer/compactor run `heber.writer.service` and `heber.writer.compaction`. These module paths do not exist in the repo (writer is `consumer.py`/`compactor.py`).
@@ -1245,8 +1254,8 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-061, TD-073, TD-077..TD-078.
-- Unify Hot Store implementation and schema definitions.
+- Address TD-077..TD-078.
+- Harden Kubernetes overlay image/namespace conformance checks with regression coverage.
 
 ## Open Questions for Future Audits
 

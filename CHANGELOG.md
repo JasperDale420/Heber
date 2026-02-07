@@ -83,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 63: Iceberg partition-spec API alignment re-audit)
 - Expanded technical debt audit (pass 64: quarantine partition-key envelope alignment re-audit)
 - Expanded technical debt audit (pass 65: hotstore facade/client-stack revalidation)
+- Expanded technical debt audit (pass 66: Terraform module wiring/output-contract revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -241,6 +242,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added local Terraform module scaffolds for `vpc`, `s3`, `rds`, `elasticache`, `ecr`, and `eks` so root module sources resolve
   - Preserved existing root module inputs/outputs wiring while unblocking initialization from missing-module failures
   - Added regression checks for module-source path resolution (`tests/test_terraform_module_sources.py`)
+- **Terraform Root-Module Output Contract Guard** (`tests/test_terraform_root_module_contract.py`)
+  - Added static regression checks that every `module.<name>.<output>` reference in `infrastructure/terraform/main.tf` is backed by a declared output in the target local module
+  - Prevents root-to-module wiring drift when module outputs are renamed or removed
 - **SDK Catalog URL Alignment** (`heber/config.py`, `heber/sdk/client.py`)
   - Added `HEBER_CATALOG_URL` defaulting to `http://localhost:8085/api/v1` for SDK clients
   - `HeberClient` now defaults to `settings.catalog_url` instead of deriving URL from API service bind port
