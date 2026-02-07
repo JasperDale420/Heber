@@ -60,6 +60,7 @@ Updated: 2026-02-07
 - `T-50` complete (`TD-084`): backtest data-loader label reads now pass explicit `label_version` pinning to `read_gold()`, with regression tests for explicit and default (`latest`) version behavior.
 - `T-51` complete (`TD-085`): backtest experiment config/results now record feature/label as-of timestamps plus per-fold as-of metadata in tracker logs for reproducible reruns.
 - `T-52` complete (`TD-051`, `TD-055`): retention now scans canonical Gold key-value layouts for dataset/version partitions and prunes versions using semantic-version-aware ordering.
+- `T-53` complete (`TD-052`, `TD-053`): reaper now enforces retention for `HOT_STORE` and `DLQ` layers, and default retention paths now resolve from configured data-root settings/env.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -94,6 +95,7 @@ Updated: 2026-02-07
 - Audit Pass 45 revalidated `TD-084` as resolved via `T-50`.
 - Audit Pass 46 revalidated `TD-085` as resolved via `T-51`.
 - Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`.
+- Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`.
 
 ## Prioritization Approach
 
@@ -919,6 +921,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-53: Enforce Hot Store/DLQ Retention and Config-Aligned Defaults (TD-052, TD-053)
+
+Priority: P1
+
+Description: Retention configs defined `HOT_STORE`/`DLQ` policies but scheduler execution only processed Bronze/Silver/Gold. Defaults also used hardcoded `/data/heber` roots, diverging from configured data-root behavior.
+
+Scope:
+- `heber/retention/__init__.py`
+- `tests/test_retention_gold_layout.py`
+
+Acceptance Criteria:
+- `ReaperScheduler._process_dataset()` evaluates `HOT_STORE` and `DLQ` layers with their configured retention policies.
+- `DatasetRetentionConfig` includes explicit `hot_store` and `dlq` policy fields in serialized config output.
+- `create_reaper()` and `ReaperWorker` resolve default storage roots from explicit args, `HEBER_DATA_ROOT`, then shared settings (with a legacy fallback).
+- Archive-root defaults are derived from the resolved storage root when not explicitly provided.
+- Regression tests verify scheduler coverage for all layers and configuration-aligned default root resolution.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1049,3 +1070,4 @@ Estimate: 1 day
 50. T-50 (Backtest label-version pinning)
 51. T-51 (Backtest as-of reproducibility metadata)
 52. T-52 (Gold retention layout + semver pruning)
+53. T-53 (Hot Store/DLQ retention + config-root defaults)

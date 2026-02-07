@@ -9,6 +9,7 @@ Provides:
 
 import asyncio
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -140,6 +141,8 @@ class DatasetRetentionConfig:
     bronze: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(90, action=LifecycleAction.DELETE))
     silver: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(None, action=LifecycleAction.ARCHIVE))
     gold: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(365, 5, LifecycleAction.DELETE))
+    hot_store: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(7, action=LifecycleAction.DELETE))
+    dlq: RetentionPolicy = field(default_factory=lambda: RetentionPolicy(30, action=LifecycleAction.DELETE))
     pinned_versions: list[str] = field(default_factory=list)  # Per PRD §15.6
 
     def to_json(self) -> str:
@@ -148,6 +151,8 @@ class DatasetRetentionConfig:
                 "bronze": self.bronze.to_dict(),
                 "silver": self.silver.to_dict(),
                 "gold": self.gold.to_dict(),
+                "hot_store": self.hot_store.to_dict(),
+                "dlq": self.dlq.to_dict(),
                 "pinned_versions": self.pinned_versions,
             },
             indent=2,
@@ -291,15 +296,32 @@ class ReaperWorker:
 
     def __init__(
         self,
-        storage_root: str = DEFAULT_STORAGE_ROOT,
+        storage_root: str | Path | None = None,
         safety_checker: DeletionSafetyChecker | None = None,
         archiver: Archiver | None = None,
         dry_run: bool = False,
     ):
-        self.storage_root = Path(storage_root)
+        self.storage_root = self._resolve_storage_root(storage_root)
         self.safety_checker = safety_checker or DeletionSafetyChecker()
-        self.archiver = archiver or Archiver()
+        self.archiver = archiver or Archiver(archive_root=str(self.storage_root / "archive"))
         self.dry_run = dry_run
+
+    @staticmethod
+    def _resolve_storage_root(storage_root: str | Path | None) -> Path:
+        """Resolve storage root from explicit arg, env, shared settings, then legacy fallback."""
+        if storage_root is not None:
+            return Path(storage_root)
+
+        env_root = os.getenv("HEBER_DATA_ROOT")
+        if env_root:
+            return Path(env_root)
+
+        try:
+            from heber.config import settings as heber_settings
+
+            return Path(heber_settings.data_root)
+        except Exception:
+            return Path(DEFAULT_STORAGE_ROOT)
 
     def scan_partitions(
         self,
@@ -641,6 +663,8 @@ class ReaperScheduler:
             (DataLayer.BRONZE, config.bronze),
             (DataLayer.SILVER, config.silver),
             (DataLayer.GOLD, config.gold),
+            (DataLayer.HOT_STORE, config.hot_store),
+            (DataLayer.DLQ, config.dlq),
         ]
         for layer, policy in layer_policies:
             if policy.retention_days is None and policy.retention_versions is None:
@@ -715,14 +739,16 @@ class ReaperScheduler:
 
 
 def create_reaper(
-    storage_root: str = DEFAULT_STORAGE_ROOT,
-    archive_root: str = "/data/heber/archive",
+    storage_root: str | Path | None = None,
+    archive_root: str | Path | None = None,
     dry_run: bool = False,
 ) -> ReaperScheduler:
     """Create a configured reaper scheduler."""
+    resolved_storage_root = ReaperWorker._resolve_storage_root(storage_root)
+    resolved_archive_root = Path(archive_root) if archive_root is not None else resolved_storage_root / "archive"
     worker = ReaperWorker(
-        storage_root=storage_root,
-        archiver=Archiver(archive_root),
+        storage_root=resolved_storage_root,
+        archiver=Archiver(str(resolved_archive_root)),
         dry_run=dry_run,
     )
     return ReaperScheduler(worker)

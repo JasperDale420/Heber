@@ -2,7 +2,16 @@ import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from heber.retention import DataLayer, PartitionInfo, ReaperWorker, RetentionPolicy
+from heber.retention import (
+    DataLayer,
+    DatasetRetentionConfig,
+    LifecycleAction,
+    PartitionInfo,
+    ReaperScheduler,
+    ReaperWorker,
+    RetentionPolicy,
+    create_reaper,
+)
 
 
 def test_scan_gold_partitions_reads_project_version_layout(tmp_path: Path) -> None:
@@ -73,3 +82,39 @@ def test_find_expired_versions_sorts_semver_not_lexicographic(tmp_path: Path) ->
 
     expired_with_pin = worker.find_expired_versions(partitions, policy, pinned_versions=["v1.2.0"])
     assert expired_with_pin == []
+
+
+def test_scheduler_processes_hot_store_and_dlq_layers(tmp_path: Path) -> None:
+    dataset = "flow_alerts"
+    for layer in [DataLayer.BRONZE, DataLayer.SILVER, DataLayer.HOT_STORE, DataLayer.DLQ]:
+        dt_dir = tmp_path / layer.value / f"dataset={dataset}" / "dt=2020-01-01"
+        dt_dir.mkdir(parents=True, exist_ok=True)
+        (dt_dir / "part-0001.parquet").write_bytes(b"x")
+
+    gold_dt_dir = tmp_path / "gold" / f"dataset={dataset}" / "project=core" / "version=v1.0.0" / "dt=2020-01-01"
+    gold_dt_dir.mkdir(parents=True, exist_ok=True)
+    (gold_dt_dir / "part-0001.parquet").write_bytes(b"y")
+
+    config = DatasetRetentionConfig(
+        dataset=dataset,
+        bronze=RetentionPolicy(retention_days=1, action=LifecycleAction.DELETE),
+        silver=RetentionPolicy(retention_days=1, action=LifecycleAction.DELETE),
+        gold=RetentionPolicy(retention_days=1, action=LifecycleAction.DELETE),
+        hot_store=RetentionPolicy(retention_days=1, action=LifecycleAction.DELETE),
+        dlq=RetentionPolicy(retention_days=1, action=LifecycleAction.DELETE),
+    )
+    worker = ReaperWorker(storage_root=tmp_path, dry_run=True)
+    scheduler = ReaperScheduler(worker=worker, retention_configs={dataset: config})
+
+    result = scheduler.run_once()
+    assert result.partitions_scanned == 5
+    assert result.partitions_deleted == 5
+
+
+def test_create_reaper_uses_configured_data_root(monkeypatch, tmp_path: Path) -> None:
+    configured_root = tmp_path / "configured-root"
+    monkeypatch.setenv("HEBER_DATA_ROOT", str(configured_root))
+
+    scheduler = create_reaper(dry_run=True)
+    assert scheduler.worker.storage_root == configured_root
+    assert scheduler.worker.archiver.archive_root == configured_root / "archive"

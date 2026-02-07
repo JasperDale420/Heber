@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 45: backtest label-version pinning remediation re-audit)
 - Expanded technical debt audit (pass 46: backtest as-of reproducibility metadata remediation re-audit)
 - Expanded technical debt audit (pass 47: Gold retention layout + semver pruning remediation re-audit)
+- Expanded technical debt audit (pass 48: retention layer coverage + config-root defaults remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -334,6 +335,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Reaper Gold scans now discover canonical `dataset=.../(project|type)=.../version=...[/dt=...]` paths and capture version metadata for pruning
   - Gold version pruning now uses semantic-version-aware ordering with deterministic fallback instead of lexicographic-only sort
   - Added regression coverage for project-layout scans, label-layout scans without `dt=*`, and semver retention ordering (`tests/test_retention_gold_layout.py`)
+- **Retention Layer Coverage + Config-Root Defaults** (`heber/retention/__init__.py`)
+  - Reaper scheduler now evaluates retention policies for `HOT_STORE` and `DLQ` layers in addition to Bronze/Silver/Gold
+  - `DatasetRetentionConfig` now includes explicit `hot_store` and `dlq` policy fields in serialized retention configs
+  - Reaper default storage/archive paths now resolve from configured `HEBER_DATA_ROOT`/shared settings instead of hardcoded `/data/heber`
+  - Added regression coverage for all-layer scheduler processing and default-root resolution (`tests/test_retention_gold_layout.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
