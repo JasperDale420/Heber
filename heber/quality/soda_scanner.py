@@ -9,13 +9,15 @@ Phase 3 of OSS Migration Roadmap.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
+
+from heber.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -56,14 +58,14 @@ class SodaConfig:
     """
 
     checks_dir: Path = Path("soda/checks")
-    silver_path: Path = Path("/Volumes/heber/silver")
+    silver_path: Path = field(default_factory=lambda: settings.silver_path)
 
     @classmethod
     def from_env(cls) -> SodaConfig:
         """Load configuration from environment."""
         return cls(
             checks_dir=Path(os.getenv("SODA_CHECKS_DIR", "soda/checks")),
-            silver_path=Path(os.getenv("HEBER_SILVER_PATH", "/Volumes/heber/silver")),
+            silver_path=Path(os.getenv("HEBER_SILVER_PATH", str(settings.silver_path))),
         )
 
 

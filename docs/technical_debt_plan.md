@@ -73,6 +73,7 @@ Updated: 2026-02-07
 - `T-63` complete (`TD-020`): watch Data Gateway HTTP callers now share API-prefix-first endpoint construction with legacy fallback, removing path drift between poller/consumer/features.
 - `T-64` complete (`TD-021`, `TD-022`): meta-label dataset defaults now use configured Gold-root paths with legacy fallback, and watch feature extraction now persists feature rows to Gold partitions during ingestion.
 - `T-65` complete (`TD-023`): training feature order is now persisted in model metadata and inference uses that saved ordering when constructing feature vectors.
+- `T-66` complete (`TD-024`, `TD-025`): Soda scanner defaults now resolve from shared Silver-root settings and contract non-null reporting now uses each contract threshold.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -120,6 +121,7 @@ Updated: 2026-02-07
 - Audit Pass 58 revalidated `TD-020` as resolved via `T-63`.
 - Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`.
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`.
+- Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`.
 
 ## Prioritization Approach
 
@@ -1198,6 +1200,26 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-66: Align Soda Silver Path + Non-Null Threshold Reporting (TD-024, TD-025)
+
+Priority: P1
+
+Description: Data quality defaults diverged from shared storage settings (`/Volumes/heber/silver` vs `/Volumes/heber/data/silver`), and non-null column reporting used a hard-coded 0.99 threshold instead of each contract threshold.
+
+Scope:
+- `heber/quality/soda_scanner.py`
+- `heber/quality/contracts.py`
+- `heber/quality/tests.py`
+- `tests/test_quality_soda_contracts.py`
+
+Acceptance Criteria:
+- `SodaConfig` defaults and `from_env()` fallback resolve `silver_path` from `settings.silver_path`.
+- `HEBER_SILVER_PATH` override remains supported.
+- Non-null column threshold classification uses the active contract threshold, not a hard-coded cutoff.
+- Regression tests cover both Soda default-path wiring and threshold-specific column reporting.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1341,3 +1363,4 @@ Estimate: 1 day
 63. T-63 (Watch Data Gateway path unification)
 64. T-64 (Meta-label path + feature persistence alignment)
 65. T-65 (Training feature-order persistence for inference)
+66. T-66 (Soda path + contract-threshold quality alignment)

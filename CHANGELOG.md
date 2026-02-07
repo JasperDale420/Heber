@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 58: watch gateway endpoint-path unification remediation re-audit)
 - Expanded technical debt audit (pass 59: meta-label path/persistence alignment remediation re-audit)
 - Expanded technical debt audit (pass 60: training/inference feature-order contract remediation re-audit)
+- Expanded technical debt audit (pass 61: Soda path + contract-threshold quality remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -188,6 +189,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
 
 ### Fixed
 
+- **Data Quality Defaults + Threshold Contracts** (`heber/quality/soda_scanner.py`, `heber/quality/contracts.py`)
+  - Soda scanner `silver_path` defaults now resolve from shared settings (`settings.silver_path`) and `from_env()` fallback matches that root
+  - Non-null per-column threshold reporting now uses the active contract threshold instead of a hard-coded `0.99`
+  - Added regression coverage for Soda defaults and threshold-aware column reporting (`tests/test_quality_soda_contracts.py`)
 - **Silver Writer Type Coercion** (`heber/writer/silver.py`)
   - Added `_coerce_value()` method for automatic type conversion to Arrow types
   - Added field name mapping for UW flow_alerts: `price`→`contract_px`, `underlying_price`→`spot_px`, `option_chain`→`occ_symbol`, `alert_rule`→`alert_type`

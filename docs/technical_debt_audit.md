@@ -480,8 +480,15 @@ Audit Pass 60 (2026-02-07, files reviewed directly):
 - heber/watch/features.py
 - tests/test_meta_feature_order_contract.py
 
+Audit Pass 61 (2026-02-07, files reviewed directly):
+- heber/quality/soda_scanner.py
+- heber/quality/contracts.py
+- heber/quality/tests.py
+- tests/test_quality_soda_contracts.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/quality/validator.py (`TD-024`, `TD-025`) Soda path/threshold behavior re-audit.
+- heber/testing/framework.py (`TD-026`) Missing `E2ETestSuite.get_schedule()` implementation re-audit.
+- heber/testing/environments.py (`TD-027`) Local testing defaults vs docker-compose alignment re-audit.
 
 ## Remediation Updates
 
@@ -545,6 +552,7 @@ Updated: 2026-02-07
 - `TD-020` addressed via `T-63`: watch-service Data Gateway calls now use shared endpoint construction with `/api/v1`-first routing and legacy fallback for consistent cross-module behavior.
 - `TD-021` and `TD-022` addressed via `T-64`: meta-label dataset defaults now resolve from configured Gold root with legacy-path fallback, and watch feature extraction now persists feature rows into Gold partitions during ingestion.
 - `TD-023` addressed via `T-65`: trained feature order is now persisted in model metadata and inference scoring uses that stored ordering for feature-vector construction.
+- `TD-024` and `TD-025` addressed via `T-66`: Soda scanner default Silver path now resolves from shared settings (`settings.silver_path`) and non-null per-column reporting now uses each contract threshold.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -596,6 +604,7 @@ Updated: 2026-02-07
 - Audit Pass 58 revalidated `TD-020` as resolved via `T-63`; watch modules now share Data Gateway route construction with API-prefix-first fallback behavior.
 - Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`; meta-label paths now follow configured Gold roots and feature rows persist to Gold at watch-ingest time.
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`; inference now consumes persisted training feature order rather than relying on hardcoded feature extraction order.
+- Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`; Soda scanner defaults now follow configured Silver root semantics and completeness reporting now uses contract-specific thresholds.
 
 ## Executive Summary
 
@@ -630,8 +639,8 @@ Severity key: High, Medium, Low
 | TD-021 | Medium | ML | Meta-label dataset defaults now resolve from configured Gold root, with legacy path fallback support. |
 | TD-022 | Medium | ML | Watch feature extraction now persists feature rows to Gold partitions consumed by dataset builder. |
 | TD-023 | Medium | ML | Feature order is now persisted with trained models and reused during inference scoring. |
-| TD-024 | Medium | Data Quality | Soda scanner default Silver path misses `/data` segment. |
-| TD-025 | Low | Data Quality | Non-null rate uses hard-coded 0.99 for per-column threshold. |
+| TD-024 | Low | Data Quality | Soda scanner defaults now resolve Silver root from shared settings (`settings.silver_path`) with env override support. |
+| TD-025 | Low | Data Quality | Non-null per-column threshold reporting now uses each contract threshold (no hard-coded 0.99). |
 | TD-026 | Medium | Testing | `tests_framework.py` calls missing `E2ETestSuite.get_schedule()`. |
 | TD-027 | Low | Environment | Testing environment defaults (ports/services) diverge from docker-compose. |
 | TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
@@ -807,10 +816,14 @@ Revalidated 2026-02-07 (Pass 60): Resolved. Inference now uses persisted trainin
 **TD-024: Soda scanner default Silver path is likely wrong.**
 Evidence: `SodaConfig.silver_path` defaults to `/Volumes/heber/silver` but the data root is `/Volumes/heber/data/silver`.
 Recommendation: Default to `settings.silver_path` or set `HEBER_SILVER_PATH` in `.env.example`.
+Update 2026-02-07: Remediated in `T-66` by defaulting `SodaConfig.silver_path` and `from_env()` fallback to `settings.silver_path` while preserving `HEBER_SILVER_PATH` override behavior.
+Revalidated 2026-02-07 (Pass 61): Resolved. Soda scanner defaults now align with configured Silver root semantics (`/Volumes/heber/data/silver` by default).
 
 **TD-025: Non-null rate uses a hard-coded 0.99 threshold for per-column reporting.**
 Evidence: `DataQualityValidator.check_non_null_rate()` flags columns below 0.99 regardless of the contract threshold. This can produce false violations when contract thresholds differ.
 Recommendation: Use the contract threshold when identifying columns below threshold.
+Update 2026-02-07: Remediated in `T-66` by adding threshold-aware non-null column classification and passing each contract threshold through validation paths.
+Revalidated 2026-02-07 (Pass 61): Resolved. Per-column completeness reporting now respects contract thresholds and no longer uses a hard-coded 0.99 cutoff.
 
 **TD-026: `tests_framework.py` references a missing method.**
 Evidence: `TestE2ETestSuite.test_get_schedule()` calls `E2ETestSuite.get_schedule()` but the method does not exist in `heber/testing/framework.py`.
@@ -1195,7 +1208,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-024..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-026..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

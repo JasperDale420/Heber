@@ -167,6 +167,7 @@ class DataQualityValidator:
         self,
         df: pd.DataFrame,
         columns: list[str],
+        threshold: float = 0.99,
     ) -> tuple[float, list[str]]:
         """Check non-null rate for specified columns.
 
@@ -185,7 +186,7 @@ class DataQualityValidator:
             rates[col] = df[col].notna().mean()
 
         mean_rate = np.mean(list(rates.values()))
-        below_threshold = [c for c, r in rates.items() if r < 0.99]
+        below_threshold = [c for c, r in rates.items() if r < threshold]
 
         return mean_rate, below_threshold
 
@@ -284,7 +285,7 @@ class DataQualityValidator:
         violations: list[QualityViolation],
     ) -> None:
         """Validate non-null rate contract."""
-        rate, cols = self.check_non_null_rate(df, contract.columns)
+        rate, cols = self.check_non_null_rate(df, contract.columns, threshold=contract.threshold)
         metrics["non_null_rate"] = rate
 
         if rate < contract.threshold:
