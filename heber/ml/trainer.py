@@ -37,6 +37,7 @@ class TrainingConfig:
 
     # Evaluation thresholds
     score_thresholds: list[float] = field(default_factory=lambda: [0.5, 0.55, 0.6, 0.65, 0.7])
+    feature_names: list[str] = field(default_factory=list)
 
     # Output
     model_name: str = "meta_model"
@@ -133,6 +134,10 @@ class MetaModelTrainer:
         if x_val is not None and y_val is not None:
             val_metrics = self._compute_metrics(val_features, val_labels, prefix="val")
             metrics.update(val_metrics)
+
+        # Persist training feature order for inference-time alignment.
+        if feature_names:
+            self.config.feature_names = list(feature_names)
 
         # Log to MLflow if enabled
         if self.use_mlflow:
@@ -284,6 +289,7 @@ class MetaModelTrainer:
             "learning_rate": self.config.learning_rate,
             "num_leaves": self.config.num_leaves,
             "score_thresholds": self.config.score_thresholds,
+            "feature_names": self.config.feature_names,
         }
         with open(path.with_suffix(".json"), "w") as f:
             json.dump(config_dict, f, indent=2)

@@ -72,6 +72,7 @@ Updated: 2026-02-07
 - `T-62` complete (`TD-019`): watch feature extraction now normalizes alert timestamps to market timezone before computing time-of-day/session features, with naive timestamps treated as UTC.
 - `T-63` complete (`TD-020`): watch Data Gateway HTTP callers now share API-prefix-first endpoint construction with legacy fallback, removing path drift between poller/consumer/features.
 - `T-64` complete (`TD-021`, `TD-022`): meta-label dataset defaults now use configured Gold-root paths with legacy fallback, and watch feature extraction now persists feature rows to Gold partitions during ingestion.
+- `T-65` complete (`TD-023`): training feature order is now persisted in model metadata and inference uses that saved ordering when constructing feature vectors.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -118,6 +119,7 @@ Updated: 2026-02-07
 - Audit Pass 57 revalidated `TD-019` as resolved via `T-62`.
 - Audit Pass 58 revalidated `TD-020` as resolved via `T-63`.
 - Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`.
+- Audit Pass 60 revalidated `TD-023` as resolved via `T-65`.
 
 ## Prioritization Approach
 
@@ -1177,6 +1179,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-65: Persist Training Feature Order For Inference (TD-023)
+
+Priority: P1
+
+Description: Meta-model inference previously relied on `AlertFeatures.numeric_feature_names()` while training used dataset-derived feature ordering, creating a mismatch risk when dataset feature columns changed order/content.
+
+Scope:
+- `heber/ml/trainer.py`
+- `heber/ml/inference.py`
+- `tests/test_meta_feature_order_contract.py`
+
+Acceptance Criteria:
+- Trainer stores training feature names in model config artifacts during train/save.
+- Loaded models retain stored feature-name ordering.
+- Inference scorer uses stored training feature names for feature-vector construction when available.
+- Regression tests validate save/load feature-name persistence and inference feature-order usage.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1319,3 +1340,4 @@ Estimate: 1 day
 62. T-62 (Watch timing market-timezone normalization)
 63. T-63 (Watch Data Gateway path unification)
 64. T-64 (Meta-label path + feature persistence alignment)
+65. T-65 (Training feature-order persistence for inference)

@@ -106,7 +106,11 @@ class MetaLabelScorer:
             features = await self._feature_extractor.extract(alert)
 
             # Get feature vector
-            feature_array = features.to_feature_array()
+            feature_names = getattr(getattr(self._model, "config", None), "feature_names", None)
+            if feature_names:
+                feature_array = features.to_feature_array(feature_names=list(feature_names))
+            else:
+                feature_array = features.to_feature_array()
 
             # Predict
             import numpy as np

@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 57: watch feature market-timezone normalization remediation re-audit)
 - Expanded technical debt audit (pass 58: watch gateway endpoint-path unification remediation re-audit)
 - Expanded technical debt audit (pass 59: meta-label path/persistence alignment remediation re-audit)
+- Expanded technical debt audit (pass 60: training/inference feature-order contract remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -286,6 +287,11 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Watch feature extraction now persists feature rows into Gold date partitions during ingestion, while keeping Redis cache writes
   - Feature partition persistence now appends safely to existing partition files instead of overwriting each call
   - Added regression coverage for path defaults/fallbacks, append-safe persistence, and consumer persistence invocation (`tests/test_meta_label_dataset_paths.py`, `tests/test_watch_feature_persistence.py`)
+- **Training/Inference Feature-Order Contract** (`heber/ml/trainer.py`, `heber/ml/inference.py`)
+  - Trainer now persists ordered training feature names into model config artifacts
+  - Loaded models retain stored feature-name order for downstream scoring
+  - Inference scorer now uses saved training feature order when constructing feature vectors
+  - Added regression tests for save/load feature-name persistence and inference-order usage (`tests/test_meta_feature_order_contract.py`)
 - **Hot Store Event Batching** (`heber/hotstore/sync.py`)
   - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
   - Replaced one-insert-per-event sync path with threshold-based batched inserts
