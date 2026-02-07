@@ -1,6 +1,10 @@
-"""Silver layer writer - normalized Parquet datasets.
+"""Silver layer writer — typed-flat Parquet datasets.
 
-Silver is the canonical, normalized event layer optimized for querying.
+Architecture decision (A+C model):
+  - Silver = rename + type coerce ONLY (no computed/derived fields)
+  - Computed fields (moneyness, DTE, volume_oi_ratio) live in Gold/Feature views
+  - BronzeToSilverTransformer handles replay/backfill from raw Bronze
+
 Format: Parquet
 Path: silver/feed={}/instrument_type={}/dt={}/[hour={}]/
 """
@@ -22,7 +26,18 @@ logger = structlog.get_logger(__name__)
 
 
 class SilverWriter:
-    """Writes normalized events to Silver layer as Parquet."""
+    """Writes typed-flat events to Silver layer as Parquet.
+
+    Responsibilities:
+      1. Field renames — map provider payload names to Silver canonical names
+      2. Type coercion — cast strings to float/int/date/timestamp per Arrow schema
+      3. Schema enforcement — write typed Parquet with strict Arrow schemas
+
+    NOT responsible for:
+      - Computed/derived fields (Gold/Feature layer)
+      - Cross-event joins or lookups
+      - Deduplication (handled at consumer level via event_id)
+    """
 
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
@@ -64,26 +79,31 @@ class SilverWriter:
         # Add payload fields
         payload = envelope.payload
         if envelope.feed in SILVER_SCHEMAS:
-            # Field name mappings for UW feeds (payload field -> Silver schema field)
+            # Field renames: payload field name -> Silver canonical column name.
+            # Only feeds where provider names differ from Silver schema need entries.
+            # Feeds not listed here use direct name matching (payload name == schema column).
             field_mappings = {
                 "flow_alerts": {
                     "price": "contract_px",
                     "underlying_price": "spot_px",
                     "option_chain": "occ_symbol",
-                    "symbol": "underlying",  # symbol in payload is the underlying
+                    "symbol": "underlying",
                     "alert_rule": "alert_type",
                 },
                 "darkpool": {
-                    "symbol": "underlying",  # symbol in payload is the underlying
+                    "symbol": "underlying",
                     "exchange": "venue",
                     "tracking_id": "print_id",
+                },
+                "quotes": {
+                    "bid_price": "bid_px",
+                    "ask_price": "ask_px",
+                    "bid_size": "bid_sz",
+                    "ask_size": "ask_sz",
                 },
                 "market_tide": {
                     "net_call_premium": "total_call_premium",
                     "net_put_premium": "total_put_premium",
-                },
-                "sector_tide": {
-                    # sector_tide uses same field names, but we include for consistency
                 },
             }
             mappings = field_mappings.get(envelope.feed, {})
