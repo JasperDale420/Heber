@@ -1,14 +1,14 @@
 # =============================================================================
 # Heber Multi-Stage Dockerfile per PRD §19
 # =============================================================================
-# Base image: python:3.11-slim-bookworm (Debian for compatibility)
+# Base image: python:3.11-slim-bookworm (pinned for dependency compatibility)
 # Security: Non-root user, minimal dependencies, no cache layers
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,7 +30,7 @@ RUN uv pip install --target=/build/deps -e .
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal production image
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 # Labels per OCI spec
 LABEL org.opencontainers.image.source="https://github.com/jacobmcmillan/heber"
