@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added context note to `backup-dr-runbook.md` clarifying AWS procedures are aspirational for future production
 - Fixed `hotstore/tables.py`: sync table bootstrap now closes unexpected awaitable execute results before raising `TypeError`, preventing un-awaited coroutine warnings on sync misuse
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-071` revalidation in audit pass 70 and `T-74`
+- Fixed `ops/health.py`: PostgreSQL readiness check now executes SQLAlchemy 2.x-compatible SQL (`text(\"SELECT 1\")`) instead of raw string execution that triggered false dependency failures
+- Added regression tests for PostgreSQL health checks (`tests/test_ops_health_checks.py`) covering healthy and failing connection paths
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-089` remediation in audit pass 71 and `T-75`
 
 ### Removed
 
@@ -113,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 68: k8s namespace/secret prerequisite conformance revalidation)
 - Expanded technical debt audit (pass 69: deployment runtime-entrypoint conformance revalidation)
 - Expanded technical debt audit (pass 70: Hot Store sync/async table-helper contract revalidation)
+- Expanded technical debt audit (pass 71: ops health SQLAlchemy 2.x readiness conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

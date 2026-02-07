@@ -82,6 +82,7 @@ Updated: 2026-02-07
 - `T-72` complete (`TD-078`): base kustomize resources now include service-account and external-secret prerequisites, with rendered-overlay conformance tests guarding deployment `serviceAccountName` and `secretRef` contracts.
 - `T-73` complete (`TD-074`): runtime-entrypoint conformance checks now validate command-module wiring across all base deployments (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`).
 - `T-74` complete (`TD-071`): Hot Store table-creation helpers now harden sync/async contract boundaries by rejecting awaitable results on the sync path (with coroutine cleanup), plus regression tests for sync misuse and async-helper execution.
+- `T-75` complete (`TD-089`): PostgreSQL readiness checks now execute SQLAlchemy 2.x-compatible statements (`text(\"SELECT 1\")`) with regression coverage for healthy and failing engine paths.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -139,6 +140,7 @@ Updated: 2026-02-07
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`.
 - Audit Pass 69 revalidated `TD-074` as resolved via `T-06` and `T-73`.
 - Audit Pass 70 revalidated `TD-071` as resolved via `T-09` and `T-74`.
+- Audit Pass 71 revalidated `TD-089` as resolved via `T-75`.
 
 ## Prioritization Approach
 

@@ -227,11 +227,13 @@ def create_redis_check(redis_client: Any) -> Callable[[], HealthCheck]:
 
 def create_postgres_check(engine: Any) -> Callable[[], HealthCheck]:
     """Create a PostgreSQL dependency check."""
+    from sqlalchemy import text
 
     def check() -> HealthCheck:
         try:
             with engine.connect() as conn:
-                conn.execute("SELECT 1")
+                # SQLAlchemy 2.x requires executable SQL constructs, not raw SQL strings.
+                conn.execute(text("SELECT 1"))
             return HealthCheck(name="postgres", status=HealthStatus.OK)
         except Exception as e:
             return HealthCheck(name="postgres", status=HealthStatus.ERROR, message=str(e))

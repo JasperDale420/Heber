@@ -546,8 +546,14 @@ Audit Pass 70 (2026-02-07, files reviewed directly):
 - tests/test_hotstore_unification.py
 - tests/test_hotstore_facade_alignment.py
 
+Audit Pass 71 (2026-02-07, files reviewed directly):
+- heber/ops/health.py
+- heber/ops/reliability.py
+- heber/ops/tests_remaining.py
+- tests/test_ops_health_checks.py
+
 Not yet audited in this run (recommend a future pass):
-- None in the current closure queue. Continue periodic re-audits for touched runtime paths.
+- heber/watch/manager.py line-by-line re-audit for lifecycle/state edge cases.
 
 ## Remediation Updates
 
@@ -680,6 +686,7 @@ Updated: 2026-02-07
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`; overlay renders now include the required namespace-scoped runtime prerequisites for service accounts and secrets.
 - Audit Pass 69 revalidated `TD-074` as resolved via `T-06`/`T-73`; deployment runtime-entrypoint commands remain aligned with importable modules across all base worker/service deployments.
 - Audit Pass 70 revalidated `TD-071` as resolved via `T-09`/`T-74`; sync and async Hot Store table-creation helpers now enforce execution-mode boundaries with regression coverage.
+- Audit Pass 71 revalidated and remediated `TD-089`; PostgreSQL readiness checks now execute SQLAlchemy 2.x-compatible statements with regression coverage.
 
 ## Executive Summary
 
@@ -779,6 +786,7 @@ Severity key: High, Medium, Low
 | TD-086 | Medium | K8s | Backfill deployment runs `python -m heber.backfill`, but the package has no `__main__`, so the container exits immediately with module-execution errors. |
 | TD-087 | Medium | K8s | Hotloader deployment runs `python -m heber.writer.hotstore`, but that module is a compatibility facade with no long-running entrypoint, so the container exits immediately. |
 | TD-088 | Medium | Observability | Deployments advertise Prometheus scraping on port 9090, but service entrypoints do not start a metrics HTTP server, so scrape targets are non-functional. |
+| TD-089 | Medium | Ops Health | PostgreSQL readiness check executed raw SQL string (`conn.execute(\"SELECT 1\")`), which fails under SQLAlchemy 2.x and can report false `not_ready` status. |
 
 ## Detailed Findings
 
@@ -1290,6 +1298,12 @@ Recommendation: Start a metrics server on the advertised port in each service en
 Update 2026-02-06: Remediated in `T-40` by wiring `start_metrics_server_from_env` into catalog lifecycle and worker entrypoints (`consumer`, `compactor`, `hotloader`, `backfill`) that are annotated for scrape.
 Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map to metrics-enabled runtime entrypoints, with regression tests guarding deployment-to-entrypoint alignment.
 
+**TD-089: PostgreSQL readiness probe uses SQLAlchemy 1.x execution pattern.**
+Evidence: `create_postgres_check()` called `conn.execute("SELECT 1")`. With SQLAlchemy 2.x (the repo baseline), executing a raw SQL string raises `ObjectNotExecutableError`, causing the dependency check to report `ERROR` even with a healthy database.
+Recommendation: Execute a SQLAlchemy `text()` statement (`conn.execute(text("SELECT 1"))`) and keep regression coverage for healthy and failing connection paths.
+Update 2026-02-07: Remediated in `T-75` by switching readiness SQL execution to `text("SELECT 1")` and adding targeted regression tests for success/failure paths.
+Revalidated 2026-02-07 (Pass 71): Resolved. PostgreSQL checks now succeed with SQLAlchemy 2.x-compatible execution semantics.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1297,7 +1311,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
