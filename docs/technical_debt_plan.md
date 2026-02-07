@@ -6,7 +6,7 @@ This plan converts high-severity audit items into ticket-ready tasks with clear 
 
 ## Implementation Status
 
-Updated: 2026-02-06
+Updated: 2026-02-07
 
 - `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
 - `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
@@ -59,6 +59,7 @@ Updated: 2026-02-06
 - `T-49` complete (`TD-083`): gap detection now scans both legacy and canonical Silver partition layouts for `dt=*` coverage, preventing false full-gap reports when storage layout differs.
 - `T-50` complete (`TD-084`): backtest data-loader label reads now pass explicit `label_version` pinning to `read_gold()`, with regression tests for explicit and default (`latest`) version behavior.
 - `T-51` complete (`TD-085`): backtest experiment config/results now record feature/label as-of timestamps plus per-fold as-of metadata in tracker logs for reproducible reruns.
+- `T-52` complete (`TD-051`, `TD-055`): retention now scans canonical Gold key-value layouts for dataset/version partitions and prunes versions using semantic-version-aware ordering.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -92,6 +93,7 @@ Updated: 2026-02-06
 - Audit Pass 44 revalidated `TD-083` as resolved via `T-49`.
 - Audit Pass 45 revalidated `TD-084` as resolved via `T-50`.
 - Audit Pass 46 revalidated `TD-085` as resolved via `T-51`.
+- Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`.
 
 ## Prioritization Approach
 
@@ -899,6 +901,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-52: Align Gold Retention Scanning and Version Ordering (TD-051, TD-055)
+
+Priority: P1
+
+Description: Retention scanning only looked for `<layer>/<dataset>/dt=*` and missed canonical Gold key-value layouts (`dataset=.../(project|type)=.../version=...[/dt=...]`). Version pruning also sorted versions lexicographically, which can retain older semver versions.
+
+Scope:
+- `heber/retention/__init__.py`
+- `tests/test_retention_gold_layout.py`
+
+Acceptance Criteria:
+- Gold partition scanning discovers canonical `dataset=.../project=.../version=.../dt=*` paths and `dataset=.../type=.../version=...` label paths without `dt=*`.
+- `PartitionInfo.version` is populated for scanned Gold partitions so version pruning has real version keys.
+- Gold version retention keeps newest semantic versions (for example, keeps `v1.10.0` over `v1.2.0`) with deterministic fallback ordering for non-semver strings.
+- Regression tests cover project-layout scan, label-layout scan without `dt=*`, and semantic-version pruning behavior.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1028,3 +1048,4 @@ Estimate: 1 day
 49. T-49 (Backfill gap-detection layout conformance)
 50. T-50 (Backtest label-version pinning)
 51. T-51 (Backtest as-of reproducibility metadata)
+52. T-52 (Gold retention layout + semver pruning)

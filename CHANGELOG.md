@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 44: backfill gap-detection layout conformance remediation re-audit)
 - Expanded technical debt audit (pass 45: backtest label-version pinning remediation re-audit)
 - Expanded technical debt audit (pass 46: backtest as-of reproducibility metadata remediation re-audit)
+- Expanded technical debt audit (pass 47: Gold retention layout + semver pruning remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -329,6 +330,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - `ExperimentConfig` now includes feature/label as-of timestamps and propagates them through config serialization/checklist output
   - `BacktestResult` now persists dataset as-of metadata, and `ExperimentTracker.log_fold()` now supports per-fold as-of timestamps
   - Added regression coverage for as-of metadata round-trip persistence and fold/result/checklist inclusion (`heber/backtest/tests.py`)
+- **Gold Retention Layout + Version Pruning Alignment** (`heber/retention/__init__.py`)
+  - Reaper Gold scans now discover canonical `dataset=.../(project|type)=.../version=...[/dt=...]` paths and capture version metadata for pruning
+  - Gold version pruning now uses semantic-version-aware ordering with deterministic fallback instead of lexicographic-only sort
+  - Added regression coverage for project-layout scans, label-layout scans without `dt=*`, and semver retention ordering (`tests/test_retention_gold_layout.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints

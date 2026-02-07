@@ -9,6 +9,7 @@ Provides:
 
 import asyncio
 import json
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -306,38 +307,157 @@ class ReaperWorker:
         layer: DataLayer,
     ) -> list[PartitionInfo]:
         """Scan partitions for a dataset/layer."""
-        layer_path = self.storage_root / layer.value / dataset
+        if layer == DataLayer.GOLD:
+            return self._scan_gold_partitions(dataset)
 
-        if not layer_path.exists():
+        layer_paths = self._candidate_layer_paths(layer, dataset)
+        if not layer_paths:
             return []
 
         partitions = []
-        for dt_dir in layer_path.glob("dt=*"):
-            try:
-                dt_str = dt_dir.name.replace("dt=", "")
-                partition_date = date.fromisoformat(dt_str)
+        for layer_path in layer_paths:
+            for dt_dir in layer_path.glob("dt=*"):
+                try:
+                    dt_str = dt_dir.name.replace("dt=", "")
+                    partition_date = date.fromisoformat(dt_str)
+                    file_count, total_bytes = self._summarize_parquet_tree(dt_dir)
 
-                # Count files and bytes
-                file_count = 0
-                total_bytes = 0
-                for f in dt_dir.glob("**/*.parquet"):
-                    file_count += 1
-                    total_bytes += f.stat().st_size
-
-                partitions.append(
-                    PartitionInfo(
-                        path=dt_dir,
-                        dataset=dataset,
-                        layer=layer,
-                        partition_date=partition_date,
-                        file_count=file_count,
-                        total_bytes=total_bytes,
+                    partitions.append(
+                        PartitionInfo(
+                            path=dt_dir,
+                            dataset=dataset,
+                            layer=layer,
+                            partition_date=partition_date,
+                            file_count=file_count,
+                            total_bytes=total_bytes,
+                        )
                     )
-                )
-            except ValueError:
-                continue
+                except ValueError:
+                    continue
 
         return partitions
+
+    def _candidate_layer_paths(
+        self,
+        layer: DataLayer,
+        dataset: str,
+    ) -> list[Path]:
+        """Return existing paths for a layer/dataset across legacy and key-value layouts."""
+        normalized = dataset.replace("dataset=", "", 1)
+        candidates = [
+            self.storage_root / layer.value / dataset,
+            self.storage_root / layer.value / normalized,
+            self.storage_root / layer.value / f"dataset={normalized}",
+        ]
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            path_str = str(path)
+            if path.exists() and path_str not in seen:
+                paths.append(path)
+                seen.add(path_str)
+        return paths
+
+    def _scan_gold_partitions(self, dataset: str) -> list[PartitionInfo]:
+        """Scan Gold datasets across project/type/version layouts."""
+        dataset_name = dataset.replace("dataset=", "", 1)
+        dataset_paths = self._candidate_layer_paths(DataLayer.GOLD, dataset_name)
+        if not dataset_paths:
+            return []
+
+        partitions: list[PartitionInfo] = []
+        seen: set[str] = set()
+
+        for dataset_path in dataset_paths:
+            version_dirs = [
+                *dataset_path.glob("project=*/version=*"),
+                *dataset_path.glob("type=*/version=*"),
+                *dataset_path.glob("version=*"),
+            ]
+            for version_dir in version_dirs:
+                if not version_dir.is_dir():
+                    continue
+                version = self._extract_version(version_dir.name)
+                dt_dirs = [dt_dir for dt_dir in version_dir.glob("dt=*") if dt_dir.is_dir()]
+
+                if dt_dirs:
+                    for dt_dir in dt_dirs:
+                        key = str(dt_dir)
+                        if key in seen:
+                            continue
+                        try:
+                            partition_date = date.fromisoformat(dt_dir.name.replace("dt=", ""))
+                        except ValueError:
+                            continue
+                        file_count, total_bytes = self._summarize_parquet_tree(dt_dir)
+                        partitions.append(
+                            PartitionInfo(
+                                path=dt_dir,
+                                dataset=dataset_name,
+                                layer=DataLayer.GOLD,
+                                partition_date=partition_date,
+                                version=version,
+                                file_count=file_count,
+                                total_bytes=total_bytes,
+                            )
+                        )
+                        seen.add(key)
+                else:
+                    key = str(version_dir)
+                    if key in seen:
+                        continue
+                    file_count, total_bytes = self._summarize_parquet_tree(version_dir)
+                    if file_count == 0:
+                        continue
+                    partition_date = self._infer_partition_date(version_dir)
+                    partitions.append(
+                        PartitionInfo(
+                            path=version_dir,
+                            dataset=dataset_name,
+                            layer=DataLayer.GOLD,
+                            partition_date=partition_date,
+                            version=version,
+                            file_count=file_count,
+                            total_bytes=total_bytes,
+                        )
+                    )
+                    seen.add(key)
+
+        return partitions
+
+    @staticmethod
+    def _extract_version(path_name: str) -> str | None:
+        if path_name.startswith("version="):
+            return path_name.replace("version=", "", 1)
+        return None
+
+    @staticmethod
+    def _summarize_parquet_tree(path: Path) -> tuple[int, int]:
+        file_count = 0
+        total_bytes = 0
+        for file_path in path.glob("**/*.parquet"):
+            if not file_path.is_file():
+                continue
+            file_count += 1
+            total_bytes += file_path.stat().st_size
+        return file_count, total_bytes
+
+    @staticmethod
+    def _infer_partition_date(path: Path) -> date:
+        parquet_files = [f for f in path.glob("**/*.parquet") if f.is_file()]
+        if parquet_files:
+            latest_mtime = max(f.stat().st_mtime for f in parquet_files)
+            return datetime.fromtimestamp(latest_mtime, tz=UTC).date()
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).date()
+
+    @staticmethod
+    def _version_sort_key(version: str) -> tuple[int, int, int, int, str]:
+        clean = version.strip()
+        semver_match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", clean)
+        if semver_match:
+            major, minor, patch = semver_match.groups()
+            return (1, int(major), int(minor), int(patch), clean)
+        return (0, 0, 0, 0, clean)
 
     def find_expired_partitions(
         self,
@@ -379,7 +499,7 @@ class ReaperWorker:
 
         # Find versions to delete
         expired = []
-        sorted_versions = sorted(by_version.keys(), reverse=True)
+        sorted_versions = sorted(by_version.keys(), key=self._version_sort_key, reverse=True)
 
         for v in sorted_versions[policy.retention_versions :]:
             if v not in pinned_versions:
