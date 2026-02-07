@@ -10,6 +10,7 @@ import httpx
 import structlog
 
 from heber.calendar import MarketCalendar
+from heber.watch.gateway import gateway_url_candidates
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -165,22 +166,33 @@ class SnapshotPoller:
             for i in range(0, len(symbols), self.batch_size):
                 batch = symbols[i : i + self.batch_size]
                 symbols_param = ",".join(batch)
+                routes = gateway_url_candidates(
+                    self.gateway_url,
+                    "/alpaca/options/quotes",
+                )
+                batch_data: dict | None = None
+                last_status: int | None = None
 
                 try:
-                    response = await client.get(
-                        f"{self.gateway_url}/api/v1/alpaca/options/quotes",
-                        params={"symbols": symbols_param},
-                    )
+                    for route in routes:
+                        response = await client.get(
+                            route,
+                            params={"symbols": symbols_param},
+                        )
+                        last_status = response.status_code
+                        if response.status_code == 200:
+                            batch_data = response.json()
+                            break
 
-                    if response.status_code == 200:
-                        data = response.json()
-                        for symbol, quote in data.get("data", {}).get("quotes", {}).items():
+                    if batch_data is not None:
+                        for symbol, quote in batch_data.get("data", {}).get("quotes", {}).items():
                             quotes[symbol] = quote
                     else:
                         logger.warning(
                             "Quote fetch failed",
-                            status=response.status_code,
+                            status=last_status,
                             batch_size=len(batch),
+                            routes=routes,
                         )
 
                 except Exception as e:
@@ -188,6 +200,7 @@ class SnapshotPoller:
                         "Quote fetch error",
                         error=str(e),
                         batch_size=len(batch),
+                        routes=routes,
                     )
 
         return quotes

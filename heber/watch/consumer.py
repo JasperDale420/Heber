@@ -22,6 +22,7 @@ from heber.features.templates.alert_labels import (
     classify_horizon,
 )
 from heber.watch.features import AlertFeatureExtractor, store_features
+from heber.watch.gateway import gateway_url_candidates
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
 
@@ -414,16 +415,23 @@ class AlertWatchConsumer:
         """
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{self.gateway_url}/api/v1/alpaca/options/quotes",
-                    params={"symbols": occ_symbol},
+                data: dict | None = None
+                routes = gateway_url_candidates(
+                    self.gateway_url,
+                    "/alpaca/options/quotes",
                 )
+                for route in routes:
+                    response = await client.get(
+                        route,
+                        params={"symbols": occ_symbol},
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        break
 
-                if response.status_code == 200:
-                    data = response.json()
+                if data is not None:
                     quotes = data.get("data", {}).get("quotes", {})
                     quote = quotes.get(occ_symbol)
-
                     if quote:
                         bid = quote.get("bp") or quote.get("bid_price", 0)
                         ask = quote.get("ap") or quote.get("ask_price", 0)

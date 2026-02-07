@@ -70,6 +70,7 @@ Updated: 2026-02-07
 - `T-60` complete (`TD-031`, `TD-032`): watch model timestamps now default to aware UTC values and watch poller quote fetches now gate by per-horizon due intervals.
 - `T-61` complete (`TD-013`): consumer processing now enforces canonical instrument-key validation before Bronze/Silver writes and rejects invalid keys with regression coverage.
 - `T-62` complete (`TD-019`): watch feature extraction now normalizes alert timestamps to market timezone before computing time-of-day/session features, with naive timestamps treated as UTC.
+- `T-63` complete (`TD-020`): watch Data Gateway HTTP callers now share API-prefix-first endpoint construction with legacy fallback, removing path drift between poller/consumer/features.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -114,6 +115,7 @@ Updated: 2026-02-07
 - Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`.
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`.
 - Audit Pass 57 revalidated `TD-019` as resolved via `T-62`.
+- Audit Pass 58 revalidated `TD-020` as resolved via `T-63`.
 
 ## Prioritization Approach
 
@@ -1130,6 +1132,27 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-63: Unify Watch Data Gateway Endpoint Paths (TD-020)
+
+Priority: P1
+
+Description: Watch-service gateway routes drifted between callers (`/api/v1/...` in poller/consumer vs unprefixed `/alpaca` and `/uw` paths in feature enrichment), creating brittle runtime behavior across deployments.
+
+Scope:
+- `heber/watch/gateway.py`
+- `heber/watch/poller.py`
+- `heber/watch/consumer.py`
+- `heber/watch/features.py`
+- `tests/test_watch_gateway_paths.py`
+
+Acceptance Criteria:
+- Watch modules use a shared Data Gateway endpoint-construction helper.
+- Gateway calls attempt `/api/v1`-prefixed routes first and can fall back to legacy unprefixed routes.
+- Poller quote fetch, consumer entry-price fetch, and feature-enrichment HTTP calls all use the shared strategy.
+- Regression tests validate candidate ordering and fallback behavior for poller and consumer paths.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1270,3 +1293,4 @@ Estimate: 1 day
 60. T-60 (Watch timestamp + polling cadence hardening)
 61. T-61 (Consumer instrument-key validation enforcement)
 62. T-62 (Watch timing market-timezone normalization)
+63. T-63 (Watch Data Gateway path unification)

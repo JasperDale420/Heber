@@ -460,8 +460,15 @@ Audit Pass 57 (2026-02-07, files reviewed directly):
 - heber/watch/features.py
 - tests/test_watch_feature_timezones.py
 
+Audit Pass 58 (2026-02-07, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- heber/watch/features.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py + heber/watch/features.py (`TD-020`) Data Gateway endpoint-path consistency re-audit.
+- heber/ml/datasets.py (`TD-021`, `TD-022`) Gold/feature dataset path and persistence re-audit.
 
 ## Remediation Updates
 
@@ -522,6 +529,7 @@ Updated: 2026-02-07
 - `TD-031` and `TD-032` addressed via `T-60`: watch model timestamp defaults are now timezone-aware UTC, and poller quote fetches now respect per-horizon cadence gates to avoid over-polling long-horizon watches.
 - `TD-013` addressed via `T-61`: consumer processing now enforces canonical instrument-key format checks before Bronze/Silver writes, with regression coverage for invalid-key rejection.
 - `TD-019` addressed via `T-62`: watch feature extraction now normalizes alert timestamps to US/Eastern (with naive-as-UTC behavior) before computing time-of-day and market-session timing features.
+- `TD-020` addressed via `T-63`: watch-service Data Gateway calls now use shared endpoint construction with `/api/v1`-first routing and legacy fallback for consistent cross-module behavior.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -570,6 +578,7 @@ Updated: 2026-02-07
 - Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`; watch timestamps now use aware UTC defaults and poller cadence now honors horizon intervals.
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`; invalid instrument keys are now rejected before persistence and covered by consumer reliability tests.
 - Audit Pass 57 revalidated `TD-019` as resolved via `T-62`; watch timing features now derive from market-timezone-normalized alert timestamps.
+- Audit Pass 58 revalidated `TD-020` as resolved via `T-63`; watch modules now share Data Gateway route construction with API-prefix-first fallback behavior.
 
 ## Executive Summary
 
@@ -600,7 +609,7 @@ Severity key: High, Medium, Low
 | TD-017 | Medium | Watch Service | Uses synchronous Redis calls inside async loops; can block the event loop. |
 | TD-018 | Medium | Watch Service | Acks watch-stream messages even when processing fails; no DLQ. |
 | TD-019 | Medium | Features | Watch timing features now normalize alert timestamps to US/Eastern before time-of-day extraction. |
-| TD-020 | Medium | Integration | Data Gateway endpoints are inconsistent across watch/feature codepaths. |
+| TD-020 | Medium | Integration | Watch modules now share consistent Data Gateway endpoint construction with API-prefix-first fallback. |
 | TD-021 | Medium | ML | Default gold/features paths do not align with configured volume root. |
 | TD-022 | Medium | ML | Feature persistence to Gold is not wired; builder expects Parquet that is never written. |
 | TD-023 | Medium | ML | Feature ordering for inference is not tied to training feature order. |
@@ -757,6 +766,8 @@ Revalidated 2026-02-07 (Pass 57): Resolved. Watch timing features now use market
 **TD-020: Data Gateway endpoint paths are inconsistent.**
 Evidence: `SnapshotPoller` uses `/api/v1/alpaca/options/quotes`, while feature enrichment uses `/alpaca/...` and `/uw/...` paths. These may not exist on the same gateway.
 Recommendation: Centralize Data Gateway base paths and versioning in config and align all callers.
+Update 2026-02-07: Remediated in `T-63` by adding shared watch-service Data Gateway URL candidate construction and migrating poller/consumer/features HTTP calls to API-prefix-first routing with legacy fallback.
+Revalidated 2026-02-07 (Pass 58): Resolved. Watch modules now use a single endpoint-construction strategy with regression coverage for fallback ordering.
 
 **TD-021: Meta-label builder defaults to `/tmp/heber/gold` instead of configured data root.**
 Evidence: `heber/ml/datasets.py` default paths point to `/tmp/heber/gold`, while the system’s data root is `/Volumes/heber/data` via `Settings`.
@@ -1161,7 +1172,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-020..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-021..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

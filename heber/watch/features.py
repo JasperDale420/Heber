@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from heber.watch.gateway import gateway_url_candidates
+
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
@@ -328,20 +330,28 @@ class AlertFeatureExtractor:
         try:
             import httpx
 
-            url = f"{self.gateway_url}/uw/options/{features.underlying}/iv-rank"
+            routes = gateway_url_candidates(
+                self.gateway_url,
+                f"/uw/options/{features.underlying}/iv-rank",
+            )
+            data: dict | None = None
 
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-
-                if response.status_code != 200:
+                last_status: int | None = None
+                for route in routes:
+                    response = await client.get(route)
+                    last_status = response.status_code
+                    if response.status_code == 200:
+                        data = response.json()
+                        break
+                if data is None:
                     logger.debug(
                         "Failed to fetch IV rank",
                         symbol=features.underlying,
-                        status=response.status_code,
+                        status=last_status,
+                        routes=routes,
                     )
                     return features
-
-                data = response.json()
 
             # Extract IV rank from response
             iv_data = data.get("data", {})
@@ -375,26 +385,34 @@ class AlertFeatureExtractor:
         try:
             import httpx
 
-            url = f"{self.gateway_url}/alpaca/options/chain/{features.underlying}"
+            routes = gateway_url_candidates(
+                self.gateway_url,
+                f"/alpaca/options/chain/{features.underlying}",
+            )
             params = {
                 "expiration_date": features.expiry.isoformat(),
                 "strike_price_gte": features.strike - 0.01,
                 "strike_price_lte": features.strike + 0.01,
                 "option_type": "call" if features.put_call == "C" else "put",
             }
+            data: dict | None = None
 
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, params=params)
-
-                if response.status_code != 200:
+                last_status: int | None = None
+                for route in routes:
+                    response = await client.get(route, params=params)
+                    last_status = response.status_code
+                    if response.status_code == 200:
+                        data = response.json()
+                        break
+                if data is None:
                     logger.debug(
                         "Failed to fetch option chain for Greeks",
                         symbol=features.underlying,
-                        status=response.status_code,
+                        status=last_status,
+                        routes=routes,
                     )
                     return features
-
-                data = response.json()
 
             # Extract contracts from response
             contracts = data.get("data", {}).get("contracts", [])
@@ -461,7 +479,10 @@ class AlertFeatureExtractor:
             # Fetch 35 days to ensure we have 30 trading days
             start_date = end_date - timedelta(days=50)
 
-            url = f"{self.gateway_url}/alpaca/stocks/bars"
+            routes = gateway_url_candidates(
+                self.gateway_url,
+                "/alpaca/stocks/bars",
+            )
             params = {
                 "symbol": symbol,
                 "start": start_date.isoformat(),
@@ -469,19 +490,24 @@ class AlertFeatureExtractor:
                 "timeframe": "1Day",
                 "limit": 50,
             }
+            data: dict | None = None
 
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, params=params)
-
-                if response.status_code != 200:
+                last_status: int | None = None
+                for route in routes:
+                    response = await client.get(route, params=params)
+                    last_status = response.status_code
+                    if response.status_code == 200:
+                        data = response.json()
+                        break
+                if data is None:
                     logger.warning(
                         "Failed to fetch bars for enrichment",
                         symbol=symbol,
-                        status=response.status_code,
+                        status=last_status,
+                        routes=routes,
                     )
                     return features
-
-                data = response.json()
 
             # Extract bars from response
             bars = data.get("data", {}).get("bars", [])
