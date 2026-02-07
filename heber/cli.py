@@ -90,7 +90,7 @@ def main() -> int:
 
         if args.feed:
             print(f"Backfilling feed: {args.feed}")
-            count = asyncio.run(transformer.transform(args.feed))
+            count = asyncio.run(transformer.transform(args.feed, since=since, until=until))
             print(f"Transformed {count} records")
         else:
             print("Backfilling all feeds from Bronze to Silver...")

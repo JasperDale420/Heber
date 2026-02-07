@@ -203,6 +203,8 @@ class BronzeToSilverTransformer:
         feed: str,
         dt: str | None = None,
         provider: str = "unusual_whales",
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> int:
         """Transform a specific feed (optionally for a specific date).
 
@@ -210,6 +212,8 @@ class BronzeToSilverTransformer:
             feed: Feed name (e.g., "flow_alerts")
             dt: Optional date string "YYYY-MM-DD"
             provider: Provider name
+            since: Only process files after this datetime
+            until: Only process files before this datetime
 
         Returns:
             Number of records transformed
@@ -224,8 +228,8 @@ class BronzeToSilverTransformer:
             # Transform specific date
             return await self._transform_date_partition(feed_dir, feed, dt)
         else:
-            # Transform entire feed
-            return await self._transform_feed(feed_dir, feed)
+            # Transform entire feed with optional date filtering
+            return await self._transform_feed(feed_dir, feed, since, until)
 
     async def _transform_feed(
         self,

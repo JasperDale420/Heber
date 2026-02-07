@@ -28,10 +28,6 @@ from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
-# Backward-compatible aliases
-HotStoreWriter = HotStoreSync
-HotStoreSyncer = HotStoreSync
-
 
 def _parse_datasets(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -131,8 +127,6 @@ __all__ = [
     "HotStoreSyncConfig",
     "SyncState",
     "HotStoreSync",
-    "HotStoreWriter",
-    "HotStoreSyncer",
     "HotStoreReader",
     "create_hot_store_syncer",
     "main",

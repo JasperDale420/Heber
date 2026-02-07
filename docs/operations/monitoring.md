@@ -125,15 +125,15 @@ curl -s http://localhost:8085/health | jq '.status'
 # Check for recent errors
 docker logs heber-catalog --since 24h 2>&1 | grep -c ERROR
 
-# Check DLQ size (if implemented in your stack)
-docker exec heber-redis redis-cli LLEN heber:dlq
+# Check DLQ size
+docker exec data-gateway-redis redis-cli XLEN heber:events:dlq
+```
 
 ## Logging Signals (Available Now)
 
 - `heber-consumer` logs show per-event processing failures and flush events.
 - `heber-compactor` logs show compaction cycles and failures.
 - `heber-catalog` logs show request failures and startup.
-```
 
 ---
 

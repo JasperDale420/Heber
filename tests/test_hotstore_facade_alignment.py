@@ -12,8 +12,9 @@ def test_legacy_hotstore_facade_points_to_unified_sync_module() -> None:
 
     assert "Compatibility facade for legacy writer.hotstore imports" in facade
     assert "from heber.hotstore.sync import" in facade
-    assert "HotStoreWriter = HotStoreSync" in facade
-    assert "HotStoreSyncer = HotStoreSync" in facade
+    # YAGNI aliases removed — verify they stay removed
+    assert "HotStoreWriter = HotStoreSync" not in facade
+    assert "HotStoreSyncer = HotStoreSync" not in facade
 
 
 def test_hotstore_paths_do_not_reference_clickhouse_driver() -> None:

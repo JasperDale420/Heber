@@ -1,5 +1,8 @@
 # Heber Backup & Disaster Recovery Runbook
 
+> [!NOTE]
+> The AWS-based procedures below (RDS snapshots, S3 cross-region replication, EKS failover) are aspirational targets for future production deployment. The current beta deployment runs entirely on local Docker Compose. For local backup procedures, see [runbook.md](runbook.md).
+
 ## RTO/RPO Targets (PRD §24.1)
 
 | Component | RPO | RTO | Priority |

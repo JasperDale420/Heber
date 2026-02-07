@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 
+- Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
+
+### Fixed
+
+#### Codebase Audit Fixes
+
+- Fixed `cli.py` backfill: `--since`/`--until` args are now passed to `transform()` when `--feed` is specified (previously silently ignored)
+- Fixed `catalog/urn.py`: `resolve_path()` referenced non-existent `settings.storage_base_path`, now uses `settings.data_root`
+- Fixed `monitoring.md`: markdown code block fence misplacement trapped "Logging Signals" section
+- Fixed `troubleshooting.md`: replaced stale `heber-redis` container references with `data-gateway-redis`
+- Fixed `troubleshooting.md` and `monitoring.md`: corrected DLQ commands from `LRANGE`/`LLEN` (list ops) to `XLEN` (stream op)
+- Added context note to `backup-dr-runbook.md` clarifying AWS procedures are aspirational for future production
+
+### Removed
+
+- Removed backward-compatibility aliases `HotStoreWriter`/`HotStoreSyncer` from `writer/hotstore.py` (YAGNI, zero callers)
+- Removed 4 stub functions from `catalog/urn.py`: `list_partitions()`, `discover_by_instrument()`, `discover_by_symbol()`, `trace_by_request()` (all returned empty, zero callers)
+
+### Changed
+
+- Updated `writer/transformer.py`: `transform()` now accepts `since`/`until` parameters for date-range filtering
+- Updated `test_hotstore_facade_alignment.py` to assert aliases stay removed
+
 - Added Catalog API reference (`docs/catalog_api.md`)
 - Added data contract (`docs/data_contract.md`)
 - Added schema registry usage (`docs/schema_registry.md`)

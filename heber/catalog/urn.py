@@ -116,7 +116,7 @@ def resolve_path(
         hour: Hour partition value (for bronze/high-vol silver)
         instrument_type: Instrument type for silver partitioning
         provider: Provider for bronze partitioning
-        base_path: Base storage path (defaults to settings.storage_base_path)
+        base_path: Base storage path (defaults to settings.data_root)
 
     Returns:
         Resolved Path object
@@ -125,7 +125,7 @@ def resolve_path(
         urn = DatasetURN.parse(urn)
 
     if base_path is None:
-        base_path = Path(settings.storage_base_path)
+        base_path = Path(settings.data_root)
     else:
         base_path = Path(base_path)
 
@@ -148,72 +148,3 @@ def resolve_path(
     )
 
     return base_path / path_str
-
-
-def list_partitions(
-    urn: str | DatasetURN,
-    base_path: str | Path | None = None,
-) -> list[dict[str, str]]:
-    """List available partitions for a dataset (PRD §11.5 Pattern A).
-
-    Args:
-        urn: Dataset URN
-        base_path: Base storage path
-
-    Returns:
-        List of partition dictionaries with keys like {dt, hour, instrument_type}
-    """
-    if isinstance(urn, str):
-        urn = DatasetURN.parse(urn)
-
-    path = resolve_path(urn, base_path=base_path)
-
-    # Find all matching partitions
-    # This is a simplified implementation - real version would glob the fs
-    partitions = []
-
-    # For now, return empty list as placeholder
-    # In production, this would scan the filesystem
-    logger.debug("list_partitions", urn=str(urn), path=str(path))
-
-    return partitions
-
-
-# Discovery pattern helpers (PRD §11.5)
-
-
-def discover_by_instrument(
-    instrument_key: str,
-    dt_start: date | None = None,
-    dt_end: date | None = None,
-) -> list[dict]:
-    """Pattern A: Query by instrument + time range.
-
-    Returns list of datasets/partitions containing data for this instrument.
-    """
-    # This would query data_coverage table
-    return []
-
-
-def discover_by_symbol(
-    symbol: str,
-    dt_start: date | None = None,
-    dt_end: date | None = None,
-) -> list[dict]:
-    """Pattern B: Query by symbol + date range.
-
-    First resolves symbol to instrument_key, then queries coverage.
-    """
-    # This would:
-    # 1. Query instrument_registry for canonical_symbol = symbol
-    # 2. Call discover_by_instrument with result
-    return []
-
-
-def trace_by_request(request_id: str) -> dict:
-    """Pattern C: Trace by request_id.
-
-    Returns the request metadata and any data it produced.
-    """
-    # This would query requests table
-    return {}
