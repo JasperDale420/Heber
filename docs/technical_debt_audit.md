@@ -456,8 +456,12 @@ Audit Pass 56 (2026-02-07, files reviewed directly):
 - heber/writer/consumer.py
 - tests/test_writer_consumer_reliability.py
 
+Audit Pass 57 (2026-02-07, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_timezones.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/features.py (`TD-019`) market-timezone feature extraction re-audit.
+- heber/watch/poller.py + heber/watch/features.py (`TD-020`) Data Gateway endpoint-path consistency re-audit.
 
 ## Remediation Updates
 
@@ -517,6 +521,7 @@ Updated: 2026-02-07
 - `TD-014` addressed via `T-59`: metrics recording is now wired into core consumer/silver/compactor runtime paths with explicit exporter startup and regression coverage for metric emission.
 - `TD-031` and `TD-032` addressed via `T-60`: watch model timestamp defaults are now timezone-aware UTC, and poller quote fetches now respect per-horizon cadence gates to avoid over-polling long-horizon watches.
 - `TD-013` addressed via `T-61`: consumer processing now enforces canonical instrument-key format checks before Bronze/Silver writes, with regression coverage for invalid-key rejection.
+- `TD-019` addressed via `T-62`: watch feature extraction now normalizes alert timestamps to US/Eastern (with naive-as-UTC behavior) before computing time-of-day and market-session timing features.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -564,6 +569,7 @@ Updated: 2026-02-07
 - Audit Pass 54 revalidated `TD-014` as resolved via `T-59`; core ingestion/storage runtime paths now emit concrete metrics rather than placeholder-only counters.
 - Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`; watch timestamps now use aware UTC defaults and poller cadence now honors horizon intervals.
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`; invalid instrument keys are now rejected before persistence and covered by consumer reliability tests.
+- Audit Pass 57 revalidated `TD-019` as resolved via `T-62`; watch timing features now derive from market-timezone-normalized alert timestamps.
 
 ## Executive Summary
 
@@ -593,7 +599,7 @@ Severity key: High, Medium, Low
 | TD-016 | High | ML | Meta-label dataset builder expects columns not produced by the label writer. |
 | TD-017 | Medium | Watch Service | Uses synchronous Redis calls inside async loops; can block the event loop. |
 | TD-018 | Medium | Watch Service | Acks watch-stream messages even when processing fails; no DLQ. |
-| TD-019 | Medium | Features | Time-of-day features are computed without timezone conversion (UTC vs ET). |
+| TD-019 | Medium | Features | Watch timing features now normalize alert timestamps to US/Eastern before time-of-day extraction. |
 | TD-020 | Medium | Integration | Data Gateway endpoints are inconsistent across watch/feature codepaths. |
 | TD-021 | Medium | ML | Default gold/features paths do not align with configured volume root. |
 | TD-022 | Medium | ML | Feature persistence to Gold is not wired; builder expects Parquet that is never written. |
@@ -745,6 +751,8 @@ Recommendation: Only ack on success, and add a DLQ stream for watch failures wit
 **TD-019: Time-of-day features are computed without timezone conversion.**
 Evidence: `heber/watch/features.py` uses `alert.ts_event.hour` and assumes ET market hours. If `ts_event` is UTC (likely), time features are wrong.
 Recommendation: Normalize timestamps to a market timezone before feature extraction (e.g., convert UTC to US/Eastern) and document the assumption.
+Update 2026-02-07: Remediated in `T-62` by normalizing alert timestamps to `America/New_York` before computing hour/minute/day and market-open/close timing features, with naive timestamps treated as UTC.
+Revalidated 2026-02-07 (Pass 57): Resolved. Watch timing features now use market-timezone normalized timestamps with regression coverage.
 
 **TD-020: Data Gateway endpoint paths are inconsistent.**
 Evidence: `SnapshotPoller` uses `/api/v1/alpaca/options/quotes`, while feature enrichment uses `/alpaca/...` and `/uw/...` paths. These may not exist on the same gateway.
@@ -1153,7 +1161,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-019..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-020..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

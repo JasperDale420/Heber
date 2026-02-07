@@ -7,8 +7,9 @@ which flow alerts will hit their target price before stop loss.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -182,6 +183,7 @@ class AlertFeatureExtractor:
     MARKET_OPEN_MIN = 30
     MARKET_CLOSE_HOUR = 16
     MARKET_CLOSE_MIN = 0
+    MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
     def __init__(
         self,
@@ -210,6 +212,7 @@ class AlertFeatureExtractor:
 
         # Parse alert time
         alert_time = alert.ts_event
+        market_time = self._to_market_time(alert_time)
 
         # Compute days to expiry
         dte = (alert.expiry - alert_time.date()).days
@@ -228,9 +231,9 @@ class AlertFeatureExtractor:
                 log_moneyness = math.log(moneyness)
 
         # Extract timing features
-        hour = alert_time.hour
-        minute = alert_time.minute
-        day_of_week = alert_time.weekday()
+        hour = market_time.hour
+        minute = market_time.minute
+        day_of_week = market_time.weekday()
 
         # Minutes since open (9:30 AM ET)
         market_open_minutes = self.MARKET_OPEN_HOUR * 60 + self.MARKET_OPEN_MIN
@@ -302,6 +305,15 @@ class AlertFeatureExtractor:
         features = await self._enrich_iv_rank(features)
 
         return features
+
+    def _to_market_time(self, dt: datetime) -> datetime:
+        """Normalize timestamps to market timezone for time-of-day features.
+
+        Naive datetimes are treated as UTC to match calendar normalization.
+        """
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(self.MARKET_TIMEZONE)
 
     async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
         """Enrich features with IV rank from Unusual Whales.

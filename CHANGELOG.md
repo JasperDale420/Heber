@@ -74,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 54: runtime metrics helper wiring remediation re-audit)
 - Expanded technical debt audit (pass 55: watch timestamp/polling cadence remediation re-audit)
 - Expanded technical debt audit (pass 56: consumer instrument-key validation remediation re-audit)
+- Expanded technical debt audit (pass 57: watch feature market-timezone normalization remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -269,6 +270,10 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Consumer processing now enforces canonical `instrument_key` format checks against `instrument_type` before Bronze/Silver writes
   - Invalid keys now fail processing early and follow the existing retry/DLQ failure path instead of persisting malformed records
   - Added regression coverage for invalid-key rejection and no-write behavior (`tests/test_writer_consumer_reliability.py`)
+- **Watch Feature Market-Timezone Normalization** (`heber/watch/features.py`)
+  - Watch timing features now normalize alert timestamps to `America/New_York` before computing hour/day/session-derived fields
+  - Naive alert timestamps are treated as UTC before market-time conversion to preserve consistent cross-service assumptions
+  - Added regression coverage for UTC-aware conversion and naive-as-UTC equivalence in timing outputs (`tests/test_watch_feature_timezones.py`)
 - **Hot Store Event Batching** (`heber/hotstore/sync.py`)
   - Added buffered quote/trade/bar event sync with configurable row and time flush thresholds
   - Replaced one-insert-per-event sync path with threshold-based batched inserts

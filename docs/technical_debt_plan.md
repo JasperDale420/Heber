@@ -69,6 +69,7 @@ Updated: 2026-02-07
 - `T-59` complete (`TD-014`): core consumer/silver/compactor runtime paths now emit concrete metrics via shared Prometheus helpers, with instrumentation regression tests.
 - `T-60` complete (`TD-031`, `TD-032`): watch model timestamps now default to aware UTC values and watch poller quote fetches now gate by per-horizon due intervals.
 - `T-61` complete (`TD-013`): consumer processing now enforces canonical instrument-key validation before Bronze/Silver writes and rejects invalid keys with regression coverage.
+- `T-62` complete (`TD-019`): watch feature extraction now normalizes alert timestamps to market timezone before computing time-of-day/session features, with naive timestamps treated as UTC.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -112,6 +113,7 @@ Updated: 2026-02-07
 - Audit Pass 54 revalidated `TD-014` as resolved via `T-59`.
 - Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`.
 - Audit Pass 56 revalidated `TD-013` as resolved via `T-61`.
+- Audit Pass 57 revalidated `TD-019` as resolved via `T-62`.
 
 ## Prioritization Approach
 
@@ -1110,6 +1112,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-62: Normalize Watch Timing Features To Market Timezone (TD-019)
+
+Priority: P1
+
+Description: Watch feature extraction computed hour/day/session timing directly from raw alert timestamps without ET normalization, producing incorrect market-time features when source timestamps are UTC.
+
+Scope:
+- `heber/watch/features.py`
+- `tests/test_watch_feature_timezones.py`
+
+Acceptance Criteria:
+- Alert timestamp normalization converts aware timestamps to `America/New_York` before timing-feature extraction.
+- Naive alert timestamps are treated as UTC before market-time conversion.
+- `hour_of_day`, `minute_of_hour`, `day_of_week`, `minutes_since_open`, and `minutes_to_close` derive from normalized market time.
+- Regression tests validate aware UTC conversion and naive-as-UTC equivalence.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1249,3 +1269,4 @@ Estimate: 1 day
 59. T-59 (Runtime metrics helper wiring)
 60. T-60 (Watch timestamp + polling cadence hardening)
 61. T-61 (Consumer instrument-key validation enforcement)
+62. T-62 (Watch timing market-timezone normalization)
