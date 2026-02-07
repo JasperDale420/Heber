@@ -118,13 +118,13 @@ DEFAULT_LOCAL_SERVICES: list[DockerComposeService] = [
     DockerComposeService(
         name="postgres",
         image="postgres:15",
-        ports=["5432:5432"],
+        ports=["5433:5432"],
         environment={"POSTGRES_DB": "heber_test", "POSTGRES_PASSWORD": "test"},
     ),
     DockerComposeService(
         name="redis",
         image="redis:7",
-        ports=["6379:6379"],
+        ports=["6380:6379"],
     ),
     DockerComposeService(
         name="minio",

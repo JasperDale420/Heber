@@ -74,6 +74,7 @@ Updated: 2026-02-07
 - `T-64` complete (`TD-021`, `TD-022`): meta-label dataset defaults now use configured Gold-root paths with legacy fallback, and watch feature extraction now persists feature rows to Gold partitions during ingestion.
 - `T-65` complete (`TD-023`): training feature order is now persisted in model metadata and inference uses that saved ordering when constructing feature vectors.
 - `T-66` complete (`TD-024`, `TD-025`): Soda scanner defaults now resolve from shared Silver-root settings and contract non-null reporting now uses each contract threshold.
+- `T-67` complete (`TD-026`, `TD-027`): framework schedule API presence is now explicitly regression-tested and testing environment local-service defaults now align with docker-compose host port mappings.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -122,6 +123,7 @@ Updated: 2026-02-07
 - Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`.
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`.
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`.
+- Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`.
 
 ## Prioritization Approach
 
@@ -1220,6 +1222,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-67: Revalidate Framework Schedule API + Align Test Environment Ports (TD-026, TD-027)
+
+Priority: P1
+
+Description: Debt audit flagged missing `E2ETestSuite.get_schedule()` and local test-environment port drift. Current framework API exists, but explicit regression coverage and default port alignment were still needed for sustained conformance.
+
+Scope:
+- `heber/testing/environments.py`
+- `heber/testing/framework.py`
+- `heber/testing/tests_framework.py`
+- `tests/test_testing_environment_defaults.py`
+
+Acceptance Criteria:
+- `E2ETestSuite.get_schedule()` remains present and regression-tested.
+- Local environment defaults match docker-compose host mappings for Postgres/Redis (`5433:5432`, `6380:6379`).
+- Regression tests validate both schedule API availability and local service port alignment.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1364,3 +1385,4 @@ Estimate: 1 day
 64. T-64 (Meta-label path + feature persistence alignment)
 65. T-65 (Training feature-order persistence for inference)
 66. T-66 (Soda path + contract-threshold quality alignment)
+67. T-67 (Framework schedule API + test-environment port alignment)

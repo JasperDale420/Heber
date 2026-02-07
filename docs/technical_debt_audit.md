@@ -486,9 +486,15 @@ Audit Pass 61 (2026-02-07, files reviewed directly):
 - heber/quality/tests.py
 - tests/test_quality_soda_contracts.py
 
+Audit Pass 62 (2026-02-07, files reviewed directly):
+- heber/testing/framework.py
+- heber/testing/tests_framework.py
+- heber/testing/environments.py
+- tests/test_testing_environment_defaults.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/testing/framework.py (`TD-026`) Missing `E2ETestSuite.get_schedule()` implementation re-audit.
-- heber/testing/environments.py (`TD-027`) Local testing defaults vs docker-compose alignment re-audit.
+- heber/iceberg/tables.py (`TD-028`) Partition spec API compatibility re-audit.
+- heber/bus/backpressure.py (`TD-029`) Quarantine envelope field-path alignment re-audit.
 
 ## Remediation Updates
 
@@ -553,6 +559,7 @@ Updated: 2026-02-07
 - `TD-021` and `TD-022` addressed via `T-64`: meta-label dataset defaults now resolve from configured Gold root with legacy-path fallback, and watch feature extraction now persists feature rows into Gold partitions during ingestion.
 - `TD-023` addressed via `T-65`: trained feature order is now persisted in model metadata and inference scoring uses that stored ordering for feature-vector construction.
 - `TD-024` and `TD-025` addressed via `T-66`: Soda scanner default Silver path now resolves from shared settings (`settings.silver_path`) and non-null per-column reporting now uses each contract threshold.
+- `TD-026` and `TD-027` addressed via `T-67`: E2E framework schedule API is now verified present by regression tests, and testing-environment local service defaults now align with docker-compose host port mappings.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -605,6 +612,7 @@ Updated: 2026-02-07
 - Audit Pass 59 revalidated `TD-021` and `TD-022` as resolved via `T-64`; meta-label paths now follow configured Gold roots and feature rows persist to Gold at watch-ingest time.
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`; inference now consumes persisted training feature order rather than relying on hardcoded feature extraction order.
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`; Soda scanner defaults now follow configured Silver root semantics and completeness reporting now uses contract-specific thresholds.
+- Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`; framework schedule API coverage is now explicit and testing environment defaults now match compose host-port expectations.
 
 ## Executive Summary
 
@@ -641,8 +649,8 @@ Severity key: High, Medium, Low
 | TD-023 | Medium | ML | Feature order is now persisted with trained models and reused during inference scoring. |
 | TD-024 | Low | Data Quality | Soda scanner defaults now resolve Silver root from shared settings (`settings.silver_path`) with env override support. |
 | TD-025 | Low | Data Quality | Non-null per-column threshold reporting now uses each contract threshold (no hard-coded 0.99). |
-| TD-026 | Medium | Testing | `tests_framework.py` calls missing `E2ETestSuite.get_schedule()`. |
-| TD-027 | Low | Environment | Testing environment defaults (ports/services) diverge from docker-compose. |
+| TD-026 | Low | Testing | `E2ETestSuite.get_schedule()` is present and now explicitly covered by regression tests. |
+| TD-027 | Low | Environment | Testing environment local-service defaults now align with docker-compose host port mappings. |
 | TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
 | TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
 | TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
@@ -828,10 +836,14 @@ Revalidated 2026-02-07 (Pass 61): Resolved. Per-column completeness reporting no
 **TD-026: `tests_framework.py` references a missing method.**
 Evidence: `TestE2ETestSuite.test_get_schedule()` calls `E2ETestSuite.get_schedule()` but the method does not exist in `heber/testing/framework.py`.
 Recommendation: Implement `get_schedule()` or remove the test to keep test suites consistent.
+Update 2026-02-07: Remediated in `T-67` by revalidating `E2ETestSuite.get_schedule()` in framework tests and adding explicit regression coverage under `tests/test_testing_environment_defaults.py`.
+Revalidated 2026-02-07 (Pass 62): Resolved. Schedule API exists and is now directly guarded by regression tests.
 
 **TD-027: Testing environment defaults diverge from docker-compose.**
 Evidence: `heber/testing/environments.py` defines local services on ports 5432/6379, while `docker-compose.yml` uses 5433/6380. This causes confusion in local testing guidance.
 Recommendation: Align testing defaults with compose ports or document the difference.
+Update 2026-02-07: Remediated in `T-67` by aligning `DEFAULT_LOCAL_SERVICES` host mappings to `5433:5432` (Postgres) and `6380:6379` (Redis), plus regression coverage for environment defaults.
+Revalidated 2026-02-07 (Pass 62): Resolved. Testing environment defaults now match compose host-port conventions.
 
 **TD-028: Iceberg partition spec format may not match PyIceberg API.**
 Evidence: `create_silver_table()` passes a list to `partition_spec`. PyIceberg typically expects a `PartitionSpec` object; this may break at runtime.
@@ -1208,7 +1220,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-026..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-028..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
