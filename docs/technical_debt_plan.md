@@ -86,6 +86,7 @@ Updated: 2026-02-07
 - `T-76` complete (`TD-090`): watch manager now normalizes Redis byte IDs before key lookups, preserving active/symbol watch retrieval under default `redis.from_url` byte-response behavior with regression coverage.
 - `T-77` complete (`TD-091`): watch poller/checker now treat `0.0` quote values as valid inputs (`None` checks instead of truthiness), preserving zero-price return paths and SL detection with regression coverage.
 - `T-78` complete (`TD-092`): label writer parquet part filenames are now collision-safe (unique suffix), preventing same-second flush overwrites with regression coverage.
+- `T-79` complete (`TD-093`): watch entrypoint now invokes `service.stop()` on unexpected runtime exceptions (not only keyboard interrupts), preserving shutdown cleanup/flush behavior with regression coverage.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -147,6 +148,7 @@ Updated: 2026-02-07
 - Audit Pass 72 revalidated `TD-090` as resolved via `T-76`.
 - Audit Pass 73 revalidated `TD-091` as resolved via `T-77`.
 - Audit Pass 74 revalidated `TD-092` as resolved via `T-78`.
+- Audit Pass 75 revalidated `TD-093` as resolved via `T-79`.
 
 ## Prioritization Approach
 

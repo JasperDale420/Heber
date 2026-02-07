@@ -90,6 +90,9 @@ Environment variables:
         asyncio.run(service.run())
     except KeyboardInterrupt:
         service.stop()
+    except Exception:
+        service.stop()
+        raise
     finally:
         logger.info("Watch service exited")
 

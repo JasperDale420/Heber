@@ -577,8 +577,17 @@ Audit Pass 74 (2026-02-07, files reviewed directly):
 - tests/test_watch_consumer_reliability.py
 - tests/test_watch_manager_redis_bytes.py
 
+Audit Pass 75 (2026-02-07, files reviewed directly):
+- heber/watch/__main__.py
+- tests/test_watch_entrypoint_shutdown.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/__main__.py line-by-line re-audit for runtime lifecycle/shutdown edge cases.
+- heber/watch/features.py line-by-line re-audit for persistence and extraction edge cases.
 
 ## Remediation Updates
 
@@ -715,6 +724,7 @@ Updated: 2026-02-07
 - Audit Pass 72 revalidated and remediated `TD-090`; watch lookups now normalize Redis byte IDs so active/symbol watch queries remain correct with default Redis client decoding behavior.
 - Audit Pass 73 revalidated and remediated `TD-091`; zero-price option snapshots now remain valid inputs for return/barrier evaluation instead of being dropped by truthiness checks.
 - Audit Pass 74 revalidated and remediated `TD-092`; label writer partition files now use collision-safe names so repeated flushes in the same second do not overwrite prior output.
+- Audit Pass 75 revalidated and remediated `TD-093`; watch entrypoint now guarantees service stop/flush on unexpected runtime failures rather than only on keyboard interrupts.
 
 ## Executive Summary
 
@@ -818,6 +828,7 @@ Severity key: High, Medium, Low
 | TD-090 | Medium | Watch Service | Watch manager assumed Redis set members were `str`; default `redis.from_url` responses are often `bytes`, which can silently break active/symbol watch retrieval. |
 | TD-091 | Medium | Watch Service | Zero-valued quote fields (`0.0`) were treated as falsy in poller/checker return-path logic, which could suppress `-100%` outcomes and miss SL barrier classification. |
 | TD-092 | Medium | Watch Service | Label writer used second-granularity parquet filenames, so multiple flushes in the same second could overwrite prior partition files and lose labels. |
+| TD-093 | Medium | Watch Service | Watch entrypoint only stopped service on `KeyboardInterrupt`; other runtime failures could bypass stop/flush cleanup and drop buffered labels. |
 
 ## Detailed Findings
 
@@ -1353,6 +1364,12 @@ Recommendation: Make output file names collision-safe (for example, microseconds
 Update 2026-02-07: Remediated in `T-78` by adding a unique suffix to parquet part filenames and adding a same-second collision regression test.
 Revalidated 2026-02-07 (Pass 74): Resolved. Repeated flushes within a single second no longer overwrite prior partition files.
 
+**TD-093: Watch entrypoint does not stop service on non-interrupt runtime failures.**
+Evidence: `heber.watch.__main__.run()` previously called `service.stop()` only on `KeyboardInterrupt`. If `asyncio.run(service.run())` failed due to any other exception, the process exited without invoking service stop hooks/flush semantics.
+Recommendation: Ensure `service.stop()` is invoked for unexpected runtime failures before re-raising, and add regression coverage for exception-driven shutdown behavior.
+Update 2026-02-07: Remediated in `T-79` by stopping service on generic exceptions in the entrypoint and adding a targeted regression test.
+Revalidated 2026-02-07 (Pass 75): Resolved. Runtime exceptions now trigger cleanup stop behavior before bubbling up.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1360,7 +1377,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
