@@ -17,8 +17,10 @@ from typing import Any
 
 import structlog
 from pyiceberg.catalog import Catalog, load_catalog
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table import Table
+from pyiceberg.transforms import DayTransform
 from pyiceberg.types import (
     BooleanType,
     DoubleType,
@@ -927,6 +929,19 @@ SILVER_SCHEMAS: dict[str, Schema] = {
 # =============================================================================
 
 
+def _build_daily_partition_spec(schema: Schema) -> PartitionSpec:
+    """Build daily partition spec for ts_event."""
+    ts_event_field = schema.find_field("ts_event")
+    return PartitionSpec(
+        PartitionField(
+            source_id=ts_event_field.field_id,
+            field_id=1000,
+            transform=DayTransform(),
+            name="ts_event_day",
+        )
+    )
+
+
 def create_silver_table(
     catalog: Catalog,
     table_name: str,
@@ -964,14 +979,13 @@ def create_silver_table(
     except Exception:
         pass  # Namespace already exists
 
+    partition_spec = _build_daily_partition_spec(schema)
+
     # Create table with partitioning by date
     return catalog.create_table(
         identifier=full_name,
         schema=schema,
-        partition_spec=[
-            # Partition by day extracted from ts_event
-            ("day", "ts_event"),
-        ],
+        partition_spec=partition_spec,
     )
 
 

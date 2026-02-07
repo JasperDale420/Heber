@@ -492,8 +492,11 @@ Audit Pass 62 (2026-02-07, files reviewed directly):
 - heber/testing/environments.py
 - tests/test_testing_environment_defaults.py
 
+Audit Pass 63 (2026-02-07, files reviewed directly):
+- heber/storage/iceberg_catalog.py
+- tests/test_iceberg_partition_spec_contract.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/iceberg/tables.py (`TD-028`) Partition spec API compatibility re-audit.
 - heber/bus/backpressure.py (`TD-029`) Quarantine envelope field-path alignment re-audit.
 
 ## Remediation Updates
@@ -560,6 +563,7 @@ Updated: 2026-02-07
 - `TD-023` addressed via `T-65`: trained feature order is now persisted in model metadata and inference scoring uses that stored ordering for feature-vector construction.
 - `TD-024` and `TD-025` addressed via `T-66`: Soda scanner default Silver path now resolves from shared settings (`settings.silver_path`) and non-null per-column reporting now uses each contract threshold.
 - `TD-026` and `TD-027` addressed via `T-67`: E2E framework schedule API is now verified present by regression tests, and testing-environment local service defaults now align with docker-compose host port mappings.
+- `TD-028` addressed via `T-68`: Iceberg Silver table creation now passes a concrete `PartitionSpec`/`DayTransform` object instead of list-form partition definitions, with regression coverage to prevent API drift.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -613,6 +617,7 @@ Updated: 2026-02-07
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`; inference now consumes persisted training feature order rather than relying on hardcoded feature extraction order.
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`; Soda scanner defaults now follow configured Silver root semantics and completeness reporting now uses contract-specific thresholds.
 - Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`; framework schedule API coverage is now explicit and testing environment defaults now match compose host-port expectations.
+- Audit Pass 63 revalidated `TD-028` as resolved via `T-68`; Iceberg Silver table creation now builds partition specs with PyIceberg `PartitionSpec` objects.
 
 ## Executive Summary
 
@@ -651,7 +656,7 @@ Severity key: High, Medium, Low
 | TD-025 | Low | Data Quality | Non-null per-column threshold reporting now uses each contract threshold (no hard-coded 0.99). |
 | TD-026 | Low | Testing | `E2ETestSuite.get_schedule()` is present and now explicitly covered by regression tests. |
 | TD-027 | Low | Environment | Testing environment local-service defaults now align with docker-compose host port mappings. |
-| TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
+| TD-028 | Low | Iceberg | `create_silver_table` now builds a concrete PyIceberg `PartitionSpec` with `DayTransform` for `ts_event`. |
 | TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
 | TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
 | TD-031 | Low | Watch Models | Watch model timestamp defaults now use timezone-aware UTC values with regression coverage. |
@@ -848,6 +853,8 @@ Revalidated 2026-02-07 (Pass 62): Resolved. Testing environment defaults now mat
 **TD-028: Iceberg partition spec format may not match PyIceberg API.**
 Evidence: `create_silver_table()` passes a list to `partition_spec`. PyIceberg typically expects a `PartitionSpec` object; this may break at runtime.
 Recommendation: Use `PartitionSpec` builders from PyIceberg and add a smoke test that initializes tables.
+Update 2026-02-07: Remediated in `T-68` by introducing `_build_daily_partition_spec()` in `heber/storage/iceberg_catalog.py` and wiring `create_silver_table()` to pass a concrete `PartitionSpec(PartitionField(..., DayTransform(), ...))`.
+Revalidated 2026-02-07 (Pass 63): Resolved. Partition spec wiring now follows PyIceberg object-style API expectations.
 
 **TD-029: Quarantine paths read provider/feed from `envelope.meta`.**
 Evidence: `heber/bus/backpressure.py` expects `envelope["meta"]["provider"]`/`["feed"]`, but `EventEnvelope` stores `provider` and `feed` at the top level.
@@ -1220,7 +1227,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-028..TD-029, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits

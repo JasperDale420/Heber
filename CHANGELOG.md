@@ -80,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 60: training/inference feature-order contract remediation re-audit)
 - Expanded technical debt audit (pass 61: Soda path + contract-threshold quality remediation re-audit)
 - Expanded technical debt audit (pass 62: framework schedule + test-environment port alignment re-audit)
+- Expanded technical debt audit (pass 63: Iceberg partition-spec API alignment re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -197,6 +198,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
 - **Testing Framework + Environment Defaults** (`heber/testing/environments.py`, `tests/test_testing_environment_defaults.py`)
   - Local testing environment defaults now align Postgres/Redis host mappings with docker-compose (`5433:5432`, `6380:6379`)
   - Added regression coverage for both `E2ETestSuite.get_schedule()` API availability and local service port alignment
+- **Iceberg PartitionSpec Alignment** (`heber/storage/iceberg_catalog.py`, `tests/test_iceberg_partition_spec_contract.py`)
+  - Silver Iceberg table creation now passes a concrete `PartitionSpec` object using `DayTransform()` on `ts_event`
+  - Added regression coverage to prevent list-based `partition_spec` wiring from reappearing
 - **Silver Writer Type Coercion** (`heber/writer/silver.py`)
   - Added `_coerce_value()` method for automatic type conversion to Arrow types
   - Added field name mapping for UW flow_alerts: `price`→`contract_px`, `underlying_price`→`spot_px`, `option_chain`→`occ_symbol`, `alert_rule`→`alert_type`

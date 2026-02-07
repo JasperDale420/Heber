@@ -75,6 +75,7 @@ Updated: 2026-02-07
 - `T-65` complete (`TD-023`): training feature order is now persisted in model metadata and inference uses that saved ordering when constructing feature vectors.
 - `T-66` complete (`TD-024`, `TD-025`): Soda scanner defaults now resolve from shared Silver-root settings and contract non-null reporting now uses each contract threshold.
 - `T-67` complete (`TD-026`, `TD-027`): framework schedule API presence is now explicitly regression-tested and testing environment local-service defaults now align with docker-compose host port mappings.
+- `T-68` complete (`TD-028`): Iceberg Silver table creation now builds a concrete PyIceberg `PartitionSpec` for day-partitioning on `ts_event`, with regression coverage preventing list-based partition drift.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -124,6 +125,7 @@ Updated: 2026-02-07
 - Audit Pass 60 revalidated `TD-023` as resolved via `T-65`.
 - Audit Pass 61 revalidated `TD-024` and `TD-025` as resolved via `T-66`.
 - Audit Pass 62 revalidated `TD-026` and `TD-027` as resolved via `T-67`.
+- Audit Pass 63 revalidated `TD-028` as resolved via `T-68`.
 
 ## Prioritization Approach
 
@@ -1241,6 +1243,23 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-68: Use PyIceberg PartitionSpec For Silver Table Creation (TD-028)
+
+Priority: P1
+
+Description: Iceberg Silver table creation previously passed a list-style partition definition to `partition_spec`, which risks incompatibility with PyIceberg APIs that expect `PartitionSpec` objects.
+
+Scope:
+- `heber/storage/iceberg_catalog.py`
+- `tests/test_iceberg_partition_spec_contract.py`
+
+Acceptance Criteria:
+- `create_silver_table()` passes a concrete `PartitionSpec` object to `catalog.create_table()`.
+- Partition transform remains day-based on `ts_event`.
+- Regression test prevents reintroduction of list-based `partition_spec` wiring.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1386,3 +1405,4 @@ Estimate: 1 day
 65. T-65 (Training feature-order persistence for inference)
 66. T-66 (Soda path + contract-threshold quality alignment)
 67. T-67 (Framework schedule API + test-environment port alignment)
+68. T-68 (Iceberg partition-spec object alignment)
