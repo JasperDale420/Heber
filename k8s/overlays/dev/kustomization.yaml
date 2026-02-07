@@ -39,8 +39,7 @@ patches:
 
 # Dev-specific image tag
 images:
-  - name: heber
-    newName: ghcr.io/jacobmcmillan/heber
+  - name: ghcr.io/jacobmcmillan/heber
     newTag: latest
 
 # Dev ConfigMap overrides

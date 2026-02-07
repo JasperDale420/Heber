@@ -78,6 +78,7 @@ Updated: 2026-02-07
 - `T-68` complete (`TD-028`): Iceberg Silver table creation now builds a concrete PyIceberg `PartitionSpec` for day-partitioning on `ts_event`, with regression coverage preventing list-based partition drift.
 - `T-69` complete (`TD-029`): quarantine partition routing now reads canonical envelope top-level `provider`/`feed` first, with legacy `meta` fallback retained for compatibility.
 - `T-70` complete (`TD-073`): Terraform root-module output references are now regression-tested against local module output declarations to prevent wiring drift.
+- `T-71` complete (`TD-077`): overlay image-transformer rules now target the base-rewritten image name so env tags override correctly, with regression checks for both kustomization config and rendered manifests.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -131,6 +132,7 @@ Updated: 2026-02-07
 - Audit Pass 64 revalidated `TD-029` as resolved via `T-69`.
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`.
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07` and `T-70`.
+- Audit Pass 67 revalidated `TD-077` as resolved via `T-71`.
 
 ## Prioritization Approach
 
@@ -1301,6 +1303,26 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-71: Align Overlay Image Transformers With Base-Rewritten Name (TD-077)
+
+Priority: P1
+
+Description: Overlay image-tag rules targeted `name: heber` while base kustomization rewrote images to `ghcr.io/jacobmcmillan/heber`. This caused overlay tags to be ignored during render for some environments.
+
+Scope:
+- `k8s/base/kustomization.yaml`
+- `k8s/overlays/dev/kustomization.yaml`
+- `k8s/overlays/staging/kustomization.yaml`
+- `k8s/overlays/prod/kustomization.yaml`
+- `tests/test_k8s_kustomize_image_tags.py`
+
+Acceptance Criteria:
+- Overlay image rules target the base-rewritten image name and apply expected tags per env.
+- Regression tests validate both YAML-level image-rule contracts and rendered `kubectl kustomize` image tags.
+- Audit docs/changelog record `TD-077` closure and pass-level revalidation.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1449,3 +1471,4 @@ Estimate: 1 day
 68. T-68 (Iceberg partition-spec object alignment)
 69. T-69 (Quarantine partition-key envelope alignment)
 70. T-70 (Terraform root-module output contract guard)
+71. T-71 (Overlay image-transformer name alignment)

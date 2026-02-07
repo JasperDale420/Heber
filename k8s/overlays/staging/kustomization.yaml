@@ -32,8 +32,7 @@ patches:
 
 # Staging image tag (semver or SHA)
 images:
-  - name: heber
-    newName: ghcr.io/jacobmcmillan/heber
+  - name: ghcr.io/jacobmcmillan/heber
     newTag: staging
 
 configMapGenerator:

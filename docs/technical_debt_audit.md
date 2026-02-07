@@ -513,8 +513,17 @@ Audit Pass 66 (2026-02-07, files reviewed directly):
 - tests/test_terraform_module_sources.py
 - tests/test_terraform_root_module_contract.py
 
+Audit Pass 67 (2026-02-07, files reviewed directly):
+- k8s/base/kustomization.yaml
+- k8s/base/deployments/*.yaml
+- k8s/overlays/dev/kustomization.yaml
+- k8s/overlays/staging/kustomization.yaml
+- k8s/overlays/prod/kustomization.yaml
+- tests/test_k8s_hpa_probe_conformance.py
+- tests/test_k8s_kustomize_image_tags.py
+
 Not yet audited in this run (recommend a future pass):
-- k8s/base/overlays/production/kustomization.yaml (`TD-077`) Image rewrite alignment re-audit.
+- k8s/base/namespace.yaml (`TD-078`) Namespace and secret/configmap reference drift re-audit.
 
 ## Remediation Updates
 
@@ -583,6 +592,7 @@ Updated: 2026-02-07
 - `TD-028` addressed via `T-68`: Iceberg Silver table creation now passes a concrete `PartitionSpec`/`DayTransform` object instead of list-form partition definitions, with regression coverage to prevent API drift.
 - `TD-029` addressed via `T-69`: quarantine partition extraction now prefers canonical top-level envelope `provider`/`feed` fields with legacy `meta` fallback, with regression tests for both payload shapes.
 - `TD-073` addressed via `T-70`: Terraform root-module output references are now regression-tested against local module outputs in addition to module-source existence checks.
+- `TD-077` addressed via `T-71`: overlay image transformers now target the base-rewritten image name (`ghcr.io/jacobmcmillan/heber`) so env-specific tags override correctly, with regression checks for both kustomization contracts and rendered output tags.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -640,6 +650,7 @@ Updated: 2026-02-07
 - Audit Pass 64 revalidated `TD-029` as resolved via `T-69`; quarantine partition paths now align with canonical envelope fields and preserve legacy fallback compatibility.
 - Audit Pass 65 revalidated `TD-004` as resolved via `T-09`; Hot Store facade/runtime paths remain unified on `clickhouse-connect` with regression coverage to prevent reintroduction of divergent client stacks.
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07`/`T-70`; Terraform module sources and root output wiring contracts now have regression coverage.
+- Audit Pass 67 revalidated `TD-077` as resolved via `T-71`; kustomize overlay image tag overrides now apply correctly across `dev`, `staging`, and `prod`.
 
 ## Executive Summary
 
@@ -727,7 +738,7 @@ Severity key: High, Medium, Low
 | TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
 | TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
 | TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
-| TD-077 | Medium | K8s | Images are referenced as `heber:<service>-latest`, but kustomize only rewrites `heber` image name. |
+| TD-077 | Low | K8s | Overlay image rewrite rules and rendered manifests are regression-tested to ensure env-specific tags apply after base image-name rewrites. |
 | TD-078 | Low | K8s | Namespace base is `heber` while overlays change namespace; secrets/configmap names may not be present in each namespace. |
 | TD-079 | Low | Infra | Terraform backends and module configs are hardcoded to `us-east-1` without variable override. |
 | TD-080 | Medium | Backfill | Backfill writes only Silver temp partitions and never updates Bronze, coverage, or catalog metadata. |
@@ -1173,9 +1184,11 @@ Revalidated 2026-02-06 (Pass 21): Still open. Consumer/writer deployments still 
 Update 2026-02-06: Remediated in `T-29` by switching worker liveness/readiness probes to exec checks that validate the expected process entrypoint in `/proc/1/cmdline`, with regression coverage to prevent HTTP-probe drift.
 Revalidated 2026-02-06 (Pass 35): Resolved. Worker manifests no longer probe non-existent HTTP health endpoints.
 
-**TD-077: Image references do not align with kustomize image rewrite.**
-Evidence: Deployments use images like `heber:writer-latest` and `heber:consumer-latest`. Kustomize rewrites only `name: heber` to `ghcr.io/jacobmcmillan/heber`, which will not match those images.
-Recommendation: Use a consistent image name (e.g., `ghcr.io/jacobmcmillan/heber:<tag>`) with distinct tags per component, or update kustomize image rules to match the actual names.
+**TD-077: Overlay image-tag overrides can fail when image transformer names do not match rewritten base image names.**
+Evidence: Base kustomization rewrites `name: heber` to `ghcr.io/jacobmcmillan/heber`, while overlays also targeted `name: heber`. `kubectl kustomize` output showed `prod` and `staging` images still rendered as `ghcr.io/jacobmcmillan/heber:latest` instead of overlay tags.
+Recommendation: Ensure overlay image transformers target the already rewritten base image name, and add regression coverage that validates rendered images for each overlay.
+Update 2026-02-07: Remediated in `T-71` by updating overlay image rules to `name: ghcr.io/jacobmcmillan/heber` (`dev`, `staging`, `prod`) and adding static/rendered conformance checks in `tests/test_k8s_kustomize_image_tags.py`.
+Revalidated 2026-02-07 (Pass 67): Resolved. Rendered overlays now preserve env-specific tags (`latest`, `staging`, `v1.0.0`) and no longer collapse to base `latest`.
 
 **TD-078: Namespace/secret references may drift across overlays.**
 Evidence: Base namespace is `heber` and secrets are referenced by name `heber-secrets`. Overlays change namespace but do not include secrets or ServiceAccount manifests, so deployments may reference missing secrets unless applied separately.
@@ -1254,8 +1267,8 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-077..TD-078.
-- Harden Kubernetes overlay image/namespace conformance checks with regression coverage.
+- Address TD-078.
+- Harden namespace/secret/configmap overlay prerequisite checks with regression coverage.
 
 ## Open Questions for Future Audits
 

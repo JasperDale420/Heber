@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 64: quarantine partition-key envelope alignment re-audit)
 - Expanded technical debt audit (pass 65: hotstore facade/client-stack revalidation)
 - Expanded technical debt audit (pass 66: Terraform module wiring/output-contract revalidation)
+- Expanded technical debt audit (pass 67: kustomize overlay image-tag alignment revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -268,6 +269,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
 - **Terraform Root-Module Output Contract Guard** (`tests/test_terraform_root_module_contract.py`)
   - Added static regression checks that every `module.<name>.<output>` reference in `infrastructure/terraform/main.tf` is backed by a declared output in the target local module
   - Prevents root-to-module wiring drift when module outputs are renamed or removed
+- **Kustomize Overlay Image-Tag Alignment** (`k8s/overlays/*/kustomization.yaml`, `tests/test_k8s_kustomize_image_tags.py`)
+  - Updated `dev`/`staging`/`prod` overlays to target `name: ghcr.io/jacobmcmillan/heber` so overlay tags apply after base image-name rewrite
+  - Added regression checks for both kustomization image-rule contracts and rendered `kubectl kustomize` image tags per environment
 - **SDK Catalog URL Alignment** (`heber/config.py`, `heber/sdk/client.py`)
   - Added `HEBER_CATALOG_URL` defaulting to `http://localhost:8085/api/v1` for SDK clients
   - `HeberClient` now defaults to `settings.catalog_url` instead of deriving URL from API service bind port
