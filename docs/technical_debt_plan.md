@@ -65,6 +65,7 @@ Updated: 2026-02-07
 - `T-55` complete (`TD-044`): dead-letter queue now persists queued failure events and reloads them on startup.
 - `T-56` complete (`TD-045`, `TD-046`): firewall SCD joins now resolve validity columns without suffix assumptions, and strict Gold validation now raises only on hard leakage violations.
 - `T-57` complete (`TD-047`, `TD-048`, `TD-049`): Silver models now normalize lineage JSON serialization, apply release-aware schema-version defaults, and align expiry/date typing with canonical Arrow schemas.
+- `T-58` complete (`TD-056`, `TD-057`, `TD-058`): Feast helpers now resolve repo path from config/env, return non-placeholder materialization counts, and support tag value / key:value search filters.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -104,6 +105,7 @@ Updated: 2026-02-07
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`.
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`.
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`.
+- Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`.
 
 ## Prioritization Approach
 
@@ -1021,6 +1023,28 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-58: Feast Materialization/Search Behavior Alignment (TD-056, TD-057, TD-058)
+
+Priority: P1
+
+Description: Feast helper defaults and outputs drifted from operational expectations (hardcoded repo path, placeholder `-1` row counts, and key-only tag filtering).
+
+Scope:
+- `heber/config.py`
+- `heber/feast/materialization.py`
+- `.env.example`
+- `docs/configuration.md`
+- `tests/test_feast_materialization_behavior.py`
+- `tests/test_sdk_catalog_defaults.py`
+
+Acceptance Criteria:
+- Feast helper default repo path resolves from `settings.feast_repo_path`, supporting `HEBER_FEAST_REPO_PATH` (and legacy `FEAST_REPO_PATH`) configuration.
+- `materialize_features()` no longer emits hardcoded `-1` row counts; it uses Feast-provided counts when available and falls back to offline-source row estimation.
+- `search_features()` supports case-insensitive key, value, and `key:value` tag filtering.
+- Regression tests cover default path wiring, count extraction/estimation behavior, and value-aware tag filtering.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1156,3 +1180,4 @@ Estimate: 1 day
 55. T-55 (Persistent DLQ queue state)
 56. T-56 (Firewall join + strict gate hardening)
 57. T-57 (Silver model defaults + schema type alignment)
+58. T-58 (Feast materialization/search behavior alignment)

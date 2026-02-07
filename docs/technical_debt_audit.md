@@ -433,8 +433,14 @@ Audit Pass 52 (2026-02-07, files reviewed directly):
 - heber/schemas/silver.py
 - tests/test_silver_model_schema_alignment.py
 
+Audit Pass 53 (2026-02-07, files reviewed directly):
+- heber/config.py
+- heber/feast/materialization.py
+- tests/test_feast_materialization_behavior.py
+- tests/test_sdk_catalog_defaults.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/feast/materialization.py (`TD-056`, `TD-057`, `TD-058`) feature-store behavior re-audit.
+- heber/ops/metrics.py (`TD-014`) metrics implementation depth re-audit.
 
 ## Remediation Updates
 
@@ -490,6 +496,7 @@ Updated: 2026-02-07
 - `TD-044` addressed via `T-55`: `DeadLetterQueue` now supports persistent storage and reload semantics so failed events survive process restarts.
 - `TD-045` and `TD-046` addressed via `T-56`: SCD reference joins now handle both suffixed and unsuffixed validity columns, and strict Gold validation now fails only on hard leakage violations (not warning-only timestamp checks).
 - `TD-047`, `TD-048`, and `TD-049` addressed via `T-57`: Silver models now normalize `lineage` serialization, apply release-aware `schema_version` defaults, and align date typing between Pydantic and Arrow schemas.
+- `TD-056`, `TD-057`, and `TD-058` addressed via `T-58`: Feast helpers now default repo path from configuration, report best-effort materialization row counts instead of `-1` placeholders, and support tag value/key:value matching in feature search.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -533,10 +540,11 @@ Updated: 2026-02-07
 - Audit Pass 50 revalidated `TD-044` as resolved via `T-55`; DLQ entries now persist across restarts with replay-safe queue semantics.
 - Audit Pass 51 revalidated `TD-045` and `TD-046` as resolved via `T-56`; firewall SCD join and strict Gold validation now match expected runtime semantics.
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`; Silver model defaults and field types now match schema contracts with regression coverage.
+- Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`; Feast helpers now use configuration-driven defaults, value-aware tag filtering, and non-placeholder materialization counts.
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). Feast helper path/count/search issues from prior passes are now remediated. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -599,9 +607,9 @@ Severity key: High, Medium, Low
 | TD-053 | Low | Retention | Reaper defaults now resolve storage roots from configured `HEBER_DATA_ROOT` / shared settings instead of hardcoded `/data/heber`. |
 | TD-054 | Medium | Gold Labels | `read_label()` now fails closed when `ts_available` is missing, preventing point-in-time guard bypass. |
 | TD-055 | Low | Retention | Version pruning now uses semantic-version-aware ordering (with fallback) instead of pure lexicographic sorting. |
-| TD-056 | Low | Feast | Default repo path is hardcoded to `features/`, ignoring configured locations. |
-| TD-057 | Low | Feast | Materialization returns `-1` counts and does not report actual rows materialized. |
-| TD-058 | Low | Feast | `search_features()` treats `tags` as keys and ignores tag values, leading to unexpected matches. |
+| TD-056 | Low | Feast | Feast helper defaults now resolve repo path from settings/env (`HEBER_FEAST_REPO_PATH`, legacy `FEAST_REPO_PATH`) instead of a hardcoded literal. |
+| TD-057 | Low | Feast | Materialization now reports row counts from Feast responses when available, with offline-source estimation fallback instead of `-1` placeholders. |
+| TD-058 | Low | Feast | `search_features()` now supports key, value, and `key:value` tag filters (case-insensitive) rather than key-only matches. |
 | TD-059 | Low | Scripts | ClickHouse backup script output now reflects config-managed remote destination without misleading hardcoded S3 path. |
 | TD-060 | Medium | Scripts | Catalog backup validation cleanup now runs on all exit paths (success/failure). |
 | TD-061 | Low | Scripts | Volume init script assumes macOS (`dot_clean`) without platform checks. |
@@ -900,14 +908,20 @@ Revalidated 2026-02-07 (Pass 47): Resolved. Version pruning now retains newer se
 **TD-056: Default Feast repo path is hardcoded.**
 Evidence: `DEFAULT_REPO_PATH = "features/"` and the helpers default to that location, ignoring any configured environment or settings for the repo path.
 Recommendation: Allow repo path to be set via config/env (e.g., `HEBER_FEAST_REPO_PATH`) and use that as the default.
+Update 2026-02-07: Remediated in `T-58` by wiring Feast helper defaults to `settings.feast_repo_path` with support for both `HEBER_FEAST_REPO_PATH` and legacy `FEAST_REPO_PATH`.
+Revalidated 2026-02-07 (Pass 53): Resolved. Default repo path is now configuration-driven instead of hardcoded.
 
 **TD-057: Materialization does not report row counts.**
 Evidence: `materialize_features()` returns `-1` for each view and does not surface actual row counts, making monitoring or alerting on materialization health impossible.
 Recommendation: Capture row counts from Feast logs/metrics or implement a lightweight count query after materialization where feasible.
+Update 2026-02-07: Remediated in `T-58` by extracting per-view counts from Feast materialization responses when available and adding a file-source row-count estimation fallback for views lacking direct counts.
+Revalidated 2026-02-07 (Pass 53): Resolved. Materialization results no longer rely on `-1` placeholders.
 
 **TD-058: `search_features()` matches tags by key only.**
 Evidence: `search_features()` checks `t in view_tags` where `view_tags` is a dict, so it only matches tag keys, not values. This can miss intended matches or produce false positives.
 Recommendation: Support key:value tag filters or compare against values explicitly.
+Update 2026-02-07: Remediated in `T-58` by adding case-insensitive tag matching for key-only, value-only, and `key:value` filter expressions.
+Revalidated 2026-02-07 (Pass 53): Resolved. Feature search now evaluates tag values in addition to keys.
 
 **TD-059: ClickHouse backup script logs S3 bucket/prefix but doesn’t enforce them.**
 Evidence: `scripts/backup/clickhouse-backup.sh` defines `S3_BUCKET` and `S3_PREFIX` but never passes them to `clickhouse-backup`. The printed S3 path may not match the actual upload destination, which is controlled by clickhouse-backup’s own config.
@@ -1104,7 +1118,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

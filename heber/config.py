@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     catalog_url: str = Field(
         default="http://localhost:8085/api/v1",
         description="Catalog API base URL used by SDK clients",
+    )
+    feast_repo_path: Path = Field(
+        default=Path("features"),
+        validation_alias=AliasChoices("HEBER_FEAST_REPO_PATH", "FEAST_REPO_PATH"),
+        description="Path to Feast feature repository",
     )
 
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
