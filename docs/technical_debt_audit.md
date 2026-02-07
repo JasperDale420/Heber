@@ -541,8 +541,13 @@ Audit Pass 69 (2026-02-07, files reviewed directly):
 - tests/test_worker_entrypoint_services.py
 - tests/test_k8s_hpa_probe_conformance.py
 
+Audit Pass 70 (2026-02-07, files reviewed directly):
+- heber/hotstore/tables.py
+- tests/test_hotstore_unification.py
+- tests/test_hotstore_facade_alignment.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/hotstore/tables.py (`TD-071`) sync/async table creation contract re-audit.
+- None in the current closure queue. Continue periodic re-audits for touched runtime paths.
 
 ## Remediation Updates
 
@@ -674,6 +679,7 @@ Updated: 2026-02-07
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`; kustomize overlay image tag overrides now apply correctly across `dev`, `staging`, and `prod`.
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`; overlay renders now include the required namespace-scoped runtime prerequisites for service accounts and secrets.
 - Audit Pass 69 revalidated `TD-074` as resolved via `T-06`/`T-73`; deployment runtime-entrypoint commands remain aligned with importable modules across all base worker/service deployments.
+- Audit Pass 70 revalidated `TD-071` as resolved via `T-09`/`T-74`; sync and async Hot Store table-creation helpers now enforce execution-mode boundaries with regression coverage.
 
 ## Executive Summary
 
@@ -755,7 +761,7 @@ Severity key: High, Medium, Low
 | TD-068 | Medium | Calendar | Market calendar naive datetime handling was remediated in `T-41` via UTC normalization and regression tests. |
 | TD-069 | Low | Calendar | `include_extended=True` is now explicitly rejected to avoid silent no-op behavior. |
 | TD-070 | Low | Hot Store | Hot Store DDL and sync mappings now preserve base provenance/quality fields (`quality_flags`, `lineage`). |
-| TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
+| TD-071 | Low | Hot Store | Hot Store table-creation helpers now preserve explicit sync/async boundaries, reject mode misuse, and are covered by regression tests. |
 | TD-072 | Low | Testing | Additional schema registry tests are now growth-tolerant and verify required schema contracts. |
 | TD-073 | Low | Infra | Terraform root module local sources and referenced module outputs are covered by regression checks. |
 | TD-074 | Low | K8s | Deployment runtime-entrypoint commands are regression-tested across all base deployments to ensure module paths remain importable. |
@@ -1170,9 +1176,10 @@ Revalidated 2026-02-06 (Pass 22): Still open. Current DDL still omits `quality_f
 Revalidated 2026-02-06 (Pass 26): Resolved. Hot Store DDL and sync inserts now include `quality_flags` and `lineage`.
 
 **TD-071: Hot Store DDL creation assumes async client.**
-Evidence: `create_all_tables()` is `async` and calls `await client.execute(stmt)`, but the repo’s primary ClickHouse client (`clickhouse_connect`) is synchronous. This mismatch can lead to runtime errors depending on which client is passed.
+Evidence: The original table-bootstrap helper awaited `client.execute(...)` in a path used with the synchronous `clickhouse_connect` client, so client-mode mismatches could fail at runtime.
 Recommendation: Provide separate sync/async helpers or normalize on a single client and call pattern.
 Revalidated 2026-02-06 (Pass 22): Resolved. `create_all_tables()` now supports sync clients and `create_all_tables_async()` handles awaitable execution.
+Revalidated 2026-02-07 (Pass 70): Resolved. Sync helper now fails fast when it receives an awaitable execute result (without leaking un-awaited coroutine warnings), and regression tests cover both sync misuse and async execution paths.
 
 **TD-072: Additional schema tests hardcode the schema count.**
 Evidence: `tests_additional.py` asserts `len(schemas) == 16`. As new schemas are added, the test will fail even if behavior is correct.
@@ -1294,7 +1301,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address remaining low-severity conformance drift (`TD-071`) via targeted re-audit.
+- Continue periodic conformance re-audits for resolved items (including `TD-071`) to prevent regressions.
 - Keep rendered-overlay and runtime-entrypoint conformance checks in CI.
 
 ## Open Questions for Future Audits

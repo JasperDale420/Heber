@@ -178,6 +178,10 @@ def create_all_tables(client) -> None:
     for stmt in statements:
         result = _execute_statement(client, stmt)
         if inspect.isawaitable(result):
+            # Close coroutine objects to avoid un-awaited coroutine warnings on the sync guard path.
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
             raise TypeError("create_all_tables() received an async client result. Use create_all_tables_async().")
 
 

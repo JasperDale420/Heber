@@ -6,7 +6,13 @@ import asyncio
 from dataclasses import dataclass
 
 from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
-from heber.hotstore.tables import BARS_HOT_DDL, QUOTES_HOT_DDL, TRADES_HOT_DDL, create_all_tables
+from heber.hotstore.tables import (
+    BARS_HOT_DDL,
+    QUOTES_HOT_DDL,
+    TRADES_HOT_DDL,
+    create_all_tables,
+    create_all_tables_async,
+)
 
 
 @dataclass
@@ -31,6 +37,14 @@ class _StubClickHouseClient:
         return _QueryResult(result_rows=[(1,)], column_names=["count"])
 
 
+class _StubAsyncClickHouseClient:
+    def __init__(self):
+        self.commands: list[str] = []
+
+    async def execute(self, statement: str) -> None:
+        self.commands.append(statement)
+
+
 class _StubHotStoreClient:
     def __init__(self):
         self.client = _StubClickHouseClient()
@@ -46,6 +60,23 @@ def test_create_all_tables_uses_sync_client_command() -> None:
     stub = _StubClickHouseClient()
     create_all_tables(stub)
     assert len(stub.commands) == 5
+
+
+def test_create_all_tables_rejects_async_client_result() -> None:
+    async_stub = _StubAsyncClickHouseClient()
+
+    try:
+        create_all_tables(async_stub)
+    except TypeError as exc:
+        assert "create_all_tables()" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError when sync helper receives async client result")
+
+
+def test_create_all_tables_async_awaits_async_client_execute() -> None:
+    async_stub = _StubAsyncClickHouseClient()
+    asyncio.run(create_all_tables_async(async_stub))
+    assert len(async_stub.commands) == 5
 
 
 def test_hotstore_sync_write_batch_uses_unified_insert_path() -> None:

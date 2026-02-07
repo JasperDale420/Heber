@@ -81,6 +81,7 @@ Updated: 2026-02-07
 - `T-71` complete (`TD-077`): overlay image-transformer rules now target the base-rewritten image name so env tags override correctly, with regression checks for both kustomization config and rendered manifests.
 - `T-72` complete (`TD-078`): base kustomize resources now include service-account and external-secret prerequisites, with rendered-overlay conformance tests guarding deployment `serviceAccountName` and `secretRef` contracts.
 - `T-73` complete (`TD-074`): runtime-entrypoint conformance checks now validate command-module wiring across all base deployments (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`).
+- `T-74` complete (`TD-071`): Hot Store table-creation helpers now harden sync/async contract boundaries by rejecting awaitable results on the sync path (with coroutine cleanup), plus regression tests for sync misuse and async-helper execution.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -137,6 +138,7 @@ Updated: 2026-02-07
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`.
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`.
 - Audit Pass 69 revalidated `TD-074` as resolved via `T-06` and `T-73`.
+- Audit Pass 70 revalidated `TD-071` as resolved via `T-09` and `T-74`.
 
 ## Prioritization Approach
 

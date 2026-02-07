@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `troubleshooting.md`: replaced stale `heber-redis` container references with `data-gateway-redis`
 - Fixed `troubleshooting.md` and `monitoring.md`: corrected DLQ commands from `LRANGE`/`LLEN` (list ops) to `XLEN` (stream op)
 - Added context note to `backup-dr-runbook.md` clarifying AWS procedures are aspirational for future production
+- Fixed `hotstore/tables.py`: sync table bootstrap now closes unexpected awaitable execute results before raising `TypeError`, preventing un-awaited coroutine warnings on sync misuse
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-071` revalidation in audit pass 70 and `T-74`
 
 ### Removed
 
@@ -110,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 67: kustomize overlay image-tag alignment revalidation)
 - Expanded technical debt audit (pass 68: k8s namespace/secret prerequisite conformance revalidation)
 - Expanded technical debt audit (pass 69: deployment runtime-entrypoint conformance revalidation)
+- Expanded technical debt audit (pass 70: Hot Store sync/async table-helper contract revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
