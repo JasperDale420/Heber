@@ -168,6 +168,7 @@ class SilverWriter:
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
+        flushed = False
         for partition_key, rows in list(self.buffers.items()):
             should_flush = (
                 len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
@@ -175,8 +176,10 @@ class SilverWriter:
             if should_flush and rows:
                 await self._flush_partition(partition_key, rows)
                 self.buffers[partition_key] = []
+                flushed = True
 
-        self.last_flush = now
+        if flushed:
+            self.last_flush = now
 
     async def flush(self) -> None:
         """Flush all buffers immediately."""

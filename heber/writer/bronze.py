@@ -56,6 +56,7 @@ class BronzeWriter:
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
+        flushed = False
         for partition_key, events in list(self.buffers.items()):
             should_flush = (
                 len(events) >= settings.bronze_max_batch_size or elapsed >= settings.bronze_flush_interval_seconds
@@ -63,8 +64,10 @@ class BronzeWriter:
             if should_flush and events:
                 await self._flush_partition(partition_key, events)
                 self.buffers[partition_key] = []
+                flushed = True
 
-        self.last_flush = now
+        if flushed:
+            self.last_flush = now
 
     async def flush(self) -> None:
         """Flush all buffers immediately."""

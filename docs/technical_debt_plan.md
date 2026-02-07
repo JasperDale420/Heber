@@ -62,6 +62,7 @@ Updated: 2026-02-07
 - `T-52` complete (`TD-051`, `TD-055`): retention now scans canonical Gold key-value layouts for dataset/version partitions and prunes versions using semantic-version-aware ordering.
 - `T-53` complete (`TD-052`, `TD-053`): reaper now enforces retention for `HOT_STORE` and `DLQ` layers, and default retention paths now resolve from configured data-root settings/env.
 - `T-54` complete (`TD-050`, `TD-054`): label reads now use semantic-version-aware latest resolution and fail closed when `ts_available` is missing.
+- `T-55` complete (`TD-044`): dead-letter queue now persists queued failure events and reloads them on startup.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -98,6 +99,7 @@ Updated: 2026-02-07
 - Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`.
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`.
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`.
+- Audit Pass 50 revalidated `TD-044` as resolved via `T-55`.
 
 ## Prioritization Approach
 
@@ -959,6 +961,24 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-55: Persist Dead-Letter Queue State Across Restarts (TD-044)
+
+Priority: P1
+
+Description: `DeadLetterQueue` existed only in-process, so restarts dropped failed events and removed replay visibility.
+
+Scope:
+- `heber/ops/reliability.py`
+- `tests/test_dead_letter_queue_persistence.py`
+
+Acceptance Criteria:
+- `DeadLetterQueue` supports optional persisted storage path with atomic writes.
+- Startup reload restores prior DLQ events and counters when a persisted file is present.
+- Queue add/retry/pop mutations persist state consistently.
+- Regression tests verify restart recovery, retry-attempt persistence, and persisted pop/reprocess semantics.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1091,3 +1111,4 @@ Estimate: 1 day
 52. T-52 (Gold retention layout + semver pruning)
 53. T-53 (Hot Store/DLQ retention + config-root defaults)
 54. T-54 (Label semver + PIT guard hardening)
+55. T-55 (Persistent DLQ queue state)

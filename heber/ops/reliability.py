@@ -7,11 +7,13 @@ Provides:
 """
 
 import hashlib
+import json
 import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -214,6 +216,20 @@ class DLQEvent:
             "last_failed_at": self.last_failed_at.isoformat(),
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DLQEvent":
+        return cls(
+            event_id=data["event_id"],
+            original_payload=data["original_payload"],
+            error_type=data["error_type"],
+            error_message=data["error_message"],
+            feed=data["feed"],
+            provider=data["provider"],
+            attempts=int(data.get("attempts", 1)),
+            first_failed_at=datetime.fromisoformat(data["first_failed_at"]),
+            last_failed_at=datetime.fromisoformat(data["last_failed_at"]),
+        )
+
 
 class DeadLetterQueue:
     """Dead Letter Queue for failed events (PRD §12.4).
@@ -224,10 +240,12 @@ class DeadLetterQueue:
     - Alert generation
     """
 
-    def __init__(self, max_size: int = 10000):
+    def __init__(self, max_size: int = 10000, persist_path: str | Path | None = None):
         self._queue: list[DLQEvent] = []
         self.max_size = max_size
+        self.persist_path = Path(persist_path) if persist_path else None
         self._stats = {"added": 0, "reprocessed": 0, "dropped": 0}
+        self._load()
 
     def add(
         self,
@@ -249,6 +267,7 @@ class DeadLetterQueue:
                     event_id=event_id,
                     attempts=existing.attempts,
                 )
+                self._persist()
                 return
 
         # Add new entry
@@ -268,6 +287,7 @@ class DeadLetterQueue:
             )
         )
         self._stats["added"] += 1
+        self._persist()
 
         logger.warning(
             "dlq_event_added",
@@ -282,6 +302,7 @@ class DeadLetterQueue:
         if self._queue:
             event = self._queue.pop(0)
             self._stats["reprocessed"] += 1
+            self._persist()
             return event
         return None
 
@@ -295,6 +316,38 @@ class DeadLetterQueue:
     @property
     def stats(self) -> dict:
         return {**self._stats, "current_size": len(self._queue)}
+
+    def _persist(self) -> None:
+        if not self.persist_path:
+            return
+        self.persist_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "events": [event.to_dict() for event in self._queue],
+            "stats": self._stats,
+        }
+        temp_path = self.persist_path.with_suffix(self.persist_path.suffix + ".tmp")
+        temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temp_path.replace(self.persist_path)
+
+    def _load(self) -> None:
+        if not self.persist_path or not self.persist_path.exists():
+            return
+        try:
+            data = json.loads(self.persist_path.read_text(encoding="utf-8"))
+            events = data.get("events", [])
+            self._queue = [DLQEvent.from_dict(event) for event in events]
+            loaded_stats = data.get("stats", {})
+            self._stats["added"] = int(loaded_stats.get("added", self._stats["added"]))
+            self._stats["reprocessed"] = int(loaded_stats.get("reprocessed", self._stats["reprocessed"]))
+            self._stats["dropped"] = int(loaded_stats.get("dropped", self._stats["dropped"]))
+        except Exception as exc:
+            logger.error(
+                "dlq_persist_load_failed",
+                path=str(self.persist_path),
+                error=str(exc),
+                exc_info=True,
+            )
+            self._queue = []
 
 
 def retry_with_backoff(

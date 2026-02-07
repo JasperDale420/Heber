@@ -419,8 +419,12 @@ Audit Pass 49 (2026-02-07, files reviewed directly):
 - heber/gold/labels.py
 - heber/gold/label_tests.py
 
+Audit Pass 50 (2026-02-07, files reviewed directly):
+- heber/ops/reliability.py
+- tests/test_dead_letter_queue_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/ops/reliability.py (`TD-044`) persistent DLQ strategy re-audit.
+- heber/hotstore/client.py (`TD-004`) duplicate Hot Store implementation drift re-audit.
 
 ## Remediation Updates
 
@@ -473,6 +477,7 @@ Updated: 2026-02-07
 - `TD-051` and `TD-055` addressed via `T-52`: retention now scans Gold key-value layouts (`dataset=.../(project|type)=.../version=...[/dt=...]`) and version-pruning order now uses semantic-version-aware sorting instead of lexicographic ordering.
 - `TD-052` and `TD-053` addressed via `T-53`: retention scheduler now enforces policies for `HOT_STORE` and `DLQ` layers, and reaper defaults now resolve storage roots from configured `HEBER_DATA_ROOT`/shared settings instead of hardcoded `/data/heber`.
 - `TD-050` and `TD-054` addressed via `T-54`: label reads now resolve latest versions with semantic-version-aware ordering and fail closed when `ts_available` is missing.
+- `TD-044` addressed via `T-55`: `DeadLetterQueue` now supports persistent storage and reload semantics so failed events survive process restarts.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -513,10 +518,11 @@ Updated: 2026-02-07
 - Audit Pass 47 revalidated `TD-051` and `TD-055` as resolved via `T-52`; Gold retention scan paths and version-pruning order now match actual Gold layout/version semantics.
 - Audit Pass 48 revalidated `TD-052` and `TD-053` as resolved via `T-53`; retention policy execution now includes `HOT_STORE`/`DLQ` and uses configuration-aligned storage roots by default.
 - Audit Pass 49 revalidated `TD-050` and `TD-054` as resolved via `T-54`; label latest-version selection and point-in-time fail-closed guards now align with intended behavior.
+- Audit Pass 50 revalidated `TD-044` as resolved via `T-55`; DLQ entries now persist across restarts with replay-safe queue semantics.
 
 ## Executive Summary
 
-The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In the Gold/retention layer, persistent DLQ storage strategy remains open in reliability handling. In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
+The core architecture is clear, but several operational hazards and correctness gaps remain. The most urgent issues are test discovery (most in-package tests are not being executed), mismatched service ports (SDK defaults do not match docker-compose), invalid Dockerfile targets, inconsistent Hot Store implementations, a broken meta-label training pipeline (label columns and paths do not match), an event-bus claim path that can silently drop messages, and a Feast/feature pipeline mismatch (feature views do not align with Gold layout or computed columns). In ops, tracing is not safe to disable (decorators crash when OpenTelemetry is missing), async shutdown signaling can hang, and deduplication can permanently drop valid events due to unbounded Bloom false positives. In the firewall/models layer, SCD joins can reference missing columns, Gold build validation treats warnings as hard failures, and Silver schemas drift between Pydantic models and Arrow definitions (lineage types, schema versions, and date representations). In Feast integration, materialization hides row counts, the default repo path is hardcoded, and search behavior treats `tags` as keys rather than values. In lakeFS versioning logic, repository creation is hardcoded to a fixed S3 namespace. In infrastructure manifests, Terraform references missing modules and Kubernetes configs reference images/commands that do not exist in this repo, while HPAs and probes assume metrics/health endpoints that are not implemented. In backfill/backtest, APIs allow unbounded background tasks with no persistence or cancellation signaling, and backtest reproducibility does not capture data as-of cutoffs. There are also multiple time-handling risks and data pipeline resiliency gaps that could lead to leakage or data loss.
 
 ## Findings Summary
 
@@ -567,7 +573,7 @@ Severity key: High, Medium, Low
 | TD-041 | Low | Lifecycle | Shutdown timeouts are logged but still reported as success in metrics. |
 | TD-042 | Low | Logging | `configure_logging()` accepts a log level but does not apply it. |
 | TD-043 | Medium | Reliability | Bloom filter dedupe has no TTL/rotation, causing rising false positives and potential drops without a backing store. |
-| TD-044 | Low | Reliability | In-memory DLQ is non-persistent; failures are lost on restart. |
+| TD-044 | Low | Reliability | Dead-letter queue now supports persistence and startup reload, preventing restart-time loss of failed events. |
 | TD-045 | Medium | Firewall | SCD join expects suffixed validity columns that may not exist, causing runtime failures. |
 | TD-046 | Low | Firewall | Gold build validation treats warning-level violations as hard failures in strict mode. |
 | TD-047 | Medium | Models | `lineage` is a dict in Pydantic but a string in Arrow schema; serialization is inconsistent. |
@@ -808,6 +814,8 @@ Revalidated 2026-02-06 (Pass 33): Resolved. No-backing-store mode now bounds har
 **TD-044: In-memory DLQ is non-persistent.**
 Evidence: `DeadLetterQueue` stores failed events in a process-local list. On restart, all queued failures are lost, and there is no disk or stream persistence.
 Recommendation: Back the DLQ with Redis/stream storage or write to disk and implement a replay path.
+Update 2026-02-07: Remediated in `T-55` by adding persisted DLQ storage with on-startup reload and queue mutation persistence on add/retry/pop paths.
+Revalidated 2026-02-07 (Pass 50): Resolved. Failed events now survive process restarts and remain replayable.
 
 **TD-045: SCD join expects suffixed validity columns that may not exist.**
 Evidence: `join_with_reference_asof()` always filters on `valid_from{suffix}`/`valid_to{suffix}`. Polars only applies suffixes on name collisions; if the left table does not have `valid_from` or `valid_to`, the reference columns are unsuffixed and the filter will fail with missing columns.
@@ -1076,7 +1084,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
