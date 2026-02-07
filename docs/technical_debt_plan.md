@@ -80,6 +80,7 @@ Updated: 2026-02-07
 - `T-70` complete (`TD-073`): Terraform root-module output references are now regression-tested against local module output declarations to prevent wiring drift.
 - `T-71` complete (`TD-077`): overlay image-transformer rules now target the base-rewritten image name so env tags override correctly, with regression checks for both kustomization config and rendered manifests.
 - `T-72` complete (`TD-078`): base kustomize resources now include service-account and external-secret prerequisites, with rendered-overlay conformance tests guarding deployment `serviceAccountName` and `secretRef` contracts.
+- `T-73` complete (`TD-074`): runtime-entrypoint conformance checks now validate command-module wiring across all base deployments (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`).
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -135,6 +136,7 @@ Updated: 2026-02-07
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07` and `T-70`.
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`.
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`.
+- Audit Pass 69 revalidated `TD-074` as resolved via `T-06` and `T-73`.
 
 ## Prioritization Approach
 
@@ -1346,6 +1348,28 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-73: Expand Deployment Entrypoint Conformance Coverage (TD-074)
+
+Priority: P1
+
+Description: Initial runtime-entrypoint checks guarded only a subset of deployment manifests. Expand conformance coverage so all base deployment command modules remain importable and legacy missing paths cannot reappear unnoticed.
+
+Scope:
+- `tests/test_runtime_entrypoints.py`
+- `k8s/base/deployments/catalog.yaml`
+- `k8s/base/deployments/consumer.yaml`
+- `k8s/base/deployments/writer.yaml`
+- `k8s/base/deployments/compactor.yaml`
+- `k8s/base/deployments/hotloader.yaml`
+- `k8s/base/deployments/backfill.yaml`
+
+Acceptance Criteria:
+- Regression tests validate Python command-module wiring for every base deployment.
+- Legacy missing module paths remain explicitly blocked.
+- Audit docs/changelog record pass-level revalidation for `TD-074`.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1496,3 +1520,4 @@ Estimate: 1 day
 70. T-70 (Terraform root-module output contract guard)
 71. T-71 (Overlay image-transformer name alignment)
 72. T-72 (Namespace-scoped runtime prerequisite conformance)
+73. T-73 (Deployment entrypoint conformance expansion)

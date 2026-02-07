@@ -109,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 66: Terraform module wiring/output-contract revalidation)
 - Expanded technical debt audit (pass 67: kustomize overlay image-tag alignment revalidation)
 - Expanded technical debt audit (pass 68: k8s namespace/secret prerequisite conformance revalidation)
+- Expanded technical debt audit (pass 69: deployment runtime-entrypoint conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -276,6 +277,9 @@ Updated `heber/features/pipelines/alert_labels.py`:
 - **K8s Namespace/Secret Prerequisite Conformance** (`k8s/base/kustomization.yaml`, `k8s/base/serviceaccount.yaml`, `tests/test_k8s_namespace_prerequisites.py`)
   - Added `serviceaccount.yaml` plus external-secret resources to base kustomize resources so overlay renders include runtime prerequisites referenced by deployments
   - Added rendered-overlay regression checks for `ServiceAccount heber`, `ExternalSecret heber-secrets`, `ClusterSecretStore aws-secrets-manager`, and deployment `envFrom` secret/config references
+- **Deployment Runtime Entrypoint Conformance Expansion** (`tests/test_runtime_entrypoints.py`)
+  - Expanded entrypoint conformance checks to cover all base deployments (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`) and validate importable command modules
+  - Preserved explicit guards against legacy missing module paths (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`)
 - **SDK Catalog URL Alignment** (`heber/config.py`, `heber/sdk/client.py`)
   - Added `HEBER_CATALOG_URL` defaulting to `http://localhost:8085/api/v1` for SDK clients
   - `HeberClient` now defaults to `settings.catalog_url` instead of deriving URL from API service bind port

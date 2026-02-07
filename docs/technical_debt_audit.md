@@ -534,8 +534,15 @@ Audit Pass 68 (2026-02-07, files reviewed directly):
 - k8s/overlays/prod/kustomization.yaml
 - tests/test_k8s_namespace_prerequisites.py
 
+Audit Pass 69 (2026-02-07, files reviewed directly):
+- k8s/base/deployments/*.yaml
+- Dockerfile
+- tests/test_runtime_entrypoints.py
+- tests/test_worker_entrypoint_services.py
+- tests/test_k8s_hpa_probe_conformance.py
+
 Not yet audited in this run (recommend a future pass):
-- k8s/base/deployments/consumer.yaml (`TD-074`) Runtime entrypoint alignment re-audit.
+- heber/hotstore/tables.py (`TD-071`) sync/async table creation contract re-audit.
 
 ## Remediation Updates
 
@@ -606,6 +613,7 @@ Updated: 2026-02-07
 - `TD-073` addressed via `T-70`: Terraform root-module output references are now regression-tested against local module outputs in addition to module-source existence checks.
 - `TD-077` addressed via `T-71`: overlay image transformers now target the base-rewritten image name (`ghcr.io/jacobmcmillan/heber`) so env-specific tags override correctly, with regression checks for both kustomization contracts and rendered output tags.
 - `TD-078` addressed via `T-72`: base kustomize resources now include `serviceaccount.yaml`, `secrets/cluster-secret-store.yaml`, and `secrets/external-secret.yaml`, with rendered-overlay tests asserting namespace-scoped runtime prerequisites (`heber` service account and `heber-secrets` external secret wiring).
+- `TD-074` addressed via `T-73`: deployment entrypoint conformance coverage now validates all base deployment command modules (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`) against importable Python modules.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -665,6 +673,7 @@ Updated: 2026-02-07
 - Audit Pass 66 revalidated `TD-073` as resolved via `T-07`/`T-70`; Terraform module sources and root output wiring contracts now have regression coverage.
 - Audit Pass 67 revalidated `TD-077` as resolved via `T-71`; kustomize overlay image tag overrides now apply correctly across `dev`, `staging`, and `prod`.
 - Audit Pass 68 revalidated `TD-078` as resolved via `T-72`; overlay renders now include the required namespace-scoped runtime prerequisites for service accounts and secrets.
+- Audit Pass 69 revalidated `TD-074` as resolved via `T-06`/`T-73`; deployment runtime-entrypoint commands remain aligned with importable modules across all base worker/service deployments.
 
 ## Executive Summary
 
@@ -749,7 +758,7 @@ Severity key: High, Medium, Low
 | TD-071 | Medium | Hot Store | `create_all_tables()` always awaits `client.execute`, but the primary ClickHouse client is sync. |
 | TD-072 | Low | Testing | Additional schema registry tests are now growth-tolerant and verify required schema contracts. |
 | TD-073 | Low | Infra | Terraform root module local sources and referenced module outputs are covered by regression checks. |
-| TD-074 | High | K8s | Deployments reference module paths that don’t exist (`heber.bus.consumer`, `heber.writer.service`, `heber.writer.compaction`). |
+| TD-074 | Low | K8s | Deployment runtime-entrypoint commands are regression-tested across all base deployments to ensure module paths remain importable. |
 | TD-075 | Medium | K8s | HPA targets custom metrics that are not exported by current metrics definitions. |
 | TD-076 | Medium | K8s | Liveness/readiness probes expect `/health` and `/ready` endpoints on metrics ports that are not implemented. |
 | TD-077 | Low | K8s | Overlay image rewrite rules and rendered manifests are regression-tested to ensure env-specific tags apply after base image-name rewrites. |
@@ -1179,6 +1188,8 @@ Revalidated 2026-02-07 (Pass 66): Resolved. Local module paths are present and r
 **TD-074: Kubernetes deployments reference non-existent module entrypoints.**
 Evidence: `k8s/base/deployments/consumer.yaml` runs `python -m heber.bus.consumer`, and writer/compactor run `heber.writer.service` and `heber.writer.compaction`. These module paths do not exist in the repo (writer is `consumer.py`/`compactor.py`).
 Recommendation: Update commands to valid module paths (e.g., `heber.writer.consumer`, `heber.writer.compactor`) and verify entrypoints.
+Update 2026-02-07: Revalidated and expanded in `T-73` by extending runtime-entrypoint regression coverage to all base deployments (`catalog`, `consumer`, `writer`, `compactor`, `hotloader`, `backfill`) and asserting referenced Python modules remain importable.
+Revalidated 2026-02-07 (Pass 69): Resolved. Base deployment commands no longer reference legacy missing modules and command-module mappings remain covered by regression tests.
 
 **TD-075: HPA targets custom metrics that are not exported.**
 Evidence: HPAs reference `heber_consumer_lag_seconds`, `heber_writer_pending_batch_rows`, and `heber_catalog_request_latency_p99_seconds`. Only `heber_consumer_lag_seconds` exists in `ops/metrics.py`, and the other two metrics are not defined.
@@ -1275,7 +1286,7 @@ Revalidated 2026-02-06 (Pass 39): Resolved. Scrape-annotated deployments now map
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
-- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039, TD-074.
+- Fix TD-001, TD-002, TD-003, TD-005, TD-015, TD-016, TD-033, TD-034, TD-039.
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
@@ -1283,8 +1294,8 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address remaining low-severity k8s deployment conformance drift (`TD-074`) via targeted re-audit.
-- Keep rendered-overlay conformance checks for image/tag and prerequisite resource wiring in CI.
+- Address remaining low-severity conformance drift (`TD-071`) via targeted re-audit.
+- Keep rendered-overlay and runtime-entrypoint conformance checks in CI.
 
 ## Open Questions for Future Audits
 
