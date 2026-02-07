@@ -213,6 +213,34 @@ class SilverWriter:
                 rows=len(rows),
                 file=str(file_path),
             )
+        except (pa.ArrowTypeError, pa.ArrowInvalid) as e:
+            # Type coercion failure - try writing rows one-by-one to salvage valid data
+            logger.warning(
+                "Silver batch type error, attempting row-by-row salvage",
+                partition=partition_key,
+                error=str(e),
+                total_rows=len(rows),
+            )
+            valid_rows = []
+            for i, row in enumerate(rows):
+                try:
+                    pa.Table.from_pylist([row], schema=schema)
+                    valid_rows.append(row)
+                except Exception:
+                    logger.debug("Skipping bad Silver row", index=i, feed=feed)
+
+            if valid_rows:
+                table = pa.Table.from_pylist(valid_rows, schema=schema)
+                pq.write_table(table, file_path, compression="snappy", row_group_size=100_000)
+                logger.info(
+                    "Flushed Silver partition (salvaged)",
+                    partition=partition_key,
+                    valid=len(valid_rows),
+                    skipped=len(rows) - len(valid_rows),
+                    file=str(file_path),
+                )
+            else:
+                logger.error("All Silver rows invalid, partition skipped", partition=partition_key)
         except Exception as e:
             logger.error(
                 "Failed to flush Silver partition",

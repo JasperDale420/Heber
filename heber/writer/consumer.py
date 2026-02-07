@@ -308,8 +308,7 @@ class EventConsumer:
         ack_ids, failed_ids = await self._process_stream_messages(claimed)
 
         # Flush to disk before acking claimed messages.
-        await self.bronze_writer.flush_if_needed()
-        await self.silver_writer.flush_if_needed()
+        await self._flush_layers()
 
         if ack_ids:
             await self.redis.xack(
@@ -376,6 +375,18 @@ class EventConsumer:
 
         await self._final_flush()
 
+    async def _flush_layers(self) -> None:
+        """Flush Bronze and Silver independently so one failure doesn't block the other."""
+        try:
+            await self.bronze_writer.flush_if_needed()
+        except Exception as e:
+            logger.error("Bronze flush failed", error=str(e), exc_info=True)
+
+        try:
+            await self.silver_writer.flush_if_needed()
+        except Exception as e:
+            logger.error("Silver flush failed", error=str(e), exc_info=True)
+
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
 
@@ -391,8 +402,7 @@ class EventConsumer:
             block=1000,
         )
         # Always check for flush even with no messages (handles idle periods)
-        await self.bronze_writer.flush_if_needed()
-        await self.silver_writer.flush_if_needed()
+        await self._flush_layers()
 
         if not messages:
             return
@@ -407,8 +417,7 @@ class EventConsumer:
             failed_ids.extend(stream_failed_ids)
 
         # Flush to disk BEFORE acknowledging
-        await self.bronze_writer.flush_if_needed()
-        await self.silver_writer.flush_if_needed()
+        await self._flush_layers()
 
         # Only ACK after successful flush
         if processed_ids:

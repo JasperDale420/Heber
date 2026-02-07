@@ -1,15 +1,15 @@
 # Heber Codebase
 
-*Generated: 2026-02-06T13:56:38*
+*Generated: 2026-02-06T14:56:59*
 
 ---
 
 ## Summary
 
 Directory: Users/jacobmcmillan/Empire/Heber
-Files analyzed: 252
+Files analyzed: 257
 
-Estimated tokens: 423.9k
+Estimated tokens: 428.4k
 
 ---
 
@@ -231,10 +231,13 @@ Directory structure:
     │       ├── main.tf
     │       ├── environments/
     │       │   ├── dev/
+    │       │   │   ├── backend.hcl
     │       │   │   └── main.tf
     │       │   ├── prod/
+    │       │   │   ├── backend.hcl
     │       │   │   └── main.tf
     │       │   └── staging/
+    │       │       ├── backend.hcl
     │       │       └── main.tf
     │       └── modules/
     │           ├── ecr/
@@ -302,6 +305,7 @@ Directory structure:
     │   ├── __init__.py
     │   ├── test_alert_label_intraday_windows.py
     │   ├── test_alert_labels_pipeline_keys.py
+    │   ├── test_backfill_writer_reliability.py
     │   ├── test_catalog_migrations.py
     │   ├── test_compactor_safety.py
     │   ├── test_edge_cases.py
@@ -325,6 +329,7 @@ Directory structure:
     │   ├── test_silver_flush_config.py
     │   ├── test_silver_schema_source.py
     │   ├── test_stream_naming_conventions.py
+    │   ├── test_terraform_environment_config.py
     │   ├── test_terraform_module_sources.py
     │   ├── test_tracing_no_otel.py
     │   ├── test_utcnow_regression.py
@@ -656,6 +661,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 38: worker entrypoint runtime remediation re-audit)
 - Expanded technical debt audit (pass 39: metrics-exporter wiring remediation re-audit)
 - Expanded technical debt audit (pass 40: lakeFS operation-metrics coverage remediation re-audit)
+- Expanded technical debt audit (pass 41: Terraform environment region/backend parameterization re-audit)
+- Expanded technical debt audit (pass 42: backfill Bronze/catalog write reliability remediation re-audit)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
@@ -895,6 +902,15 @@ Updated `heber/features/pipelines/alert_labels.py`:
   - Added success/error counter and duration histogram instrumentation for `create_tag`, `list_tags`, `merge`, and `diff`
   - Error paths now include repository-resolution and branch-resolution failures for these operations
   - Added regression tests for operation metrics coverage across success and error paths (`tests/test_lakefs_operation_metrics.py`)
+- **Terraform Environment Region/Backend Parameterization** (`infrastructure/terraform/environments/*`)
+  - Replaced hardcoded environment module region literals with `var.aws_region` in `dev`/`staging`/`prod` Terraform entrypoints
+  - Converted environment S3 backend blocks to partial configuration and moved backend defaults into per-environment `backend.hcl` files
+  - Removed hardcoded backend region keys and added regression checks for overrideable Terraform env wiring (`tests/test_terraform_environment_config.py`)
+- **Backfill Bronze/Catalog Write Reliability** (`heber/backfill/__init__.py`)
+  - Backfill writes now persist raw records into Bronze partitioned paths in addition to Silver temp parquet outputs
+  - Backfill coordinator now performs catalog dataset + coverage metadata updates after successful chunk writes (best effort when catalog is unavailable)
+  - Missing `pyarrow` in backfill parquet writes now raises a runtime failure instead of silently skipping writes
+  - Added regression coverage for Bronze+Silver writes, pyarrow failure handling, and catalog metadata updater invocation (`tests/test_backfill_writer_reliability.py`)
 - **Kubernetes HPA/Probe Runtime Conformance** (`k8s/base/hpa/*.yaml`, `k8s/base/deployments/*.yaml`)
   - Replaced stale custom HPA pod metrics with CPU/memory resource metrics for catalog/consumer/writer autoscalers
   - Replaced worker HTTP health probes with exec probes that verify expected runtime entrypoints
@@ -11952,9 +11968,21 @@ Audit Pass 40 (2026-02-06, files reviewed directly):
 - heber/versioning/__init__.py
 - tests/test_lakefs_operation_metrics.py
 
+Audit Pass 41 (2026-02-06, files reviewed directly):
+- infrastructure/terraform/environments/dev/main.tf
+- infrastructure/terraform/environments/staging/main.tf
+- infrastructure/terraform/environments/prod/main.tf
+- infrastructure/terraform/environments/dev/backend.hcl
+- infrastructure/terraform/environments/staging/backend.hcl
+- infrastructure/terraform/environments/prod/backend.hcl
+- tests/test_terraform_environment_config.py
+
+Audit Pass 42 (2026-02-06, files reviewed directly):
+- heber/backfill/__init__.py
+- tests/test_backfill_writer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- infrastructure/terraform/environments/dev/main.tf (`TD-079`) hardcoded region/backend re-audit.
-- heber/backfill/writer.py (`TD-080`, `TD-082`) Bronze/catalog update + missing-pyarrow failure-path re-audit.
+- heber/backfill/__init__.py (`TD-081`) in-memory job persistence and resume semantics re-audit.
 
 ## Remediation Updates
 
@@ -11998,6 +12026,8 @@ Updated: 2026-02-06
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
+- `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
+- `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -12029,6 +12059,8 @@ Updated: 2026-02-06
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37`/`T-38`; worker deployment entrypoint modules now execute with service-mode runtime behavior.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`; scraped deployments now map to metrics-exporter startup in service entrypoints.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`; lakeFS operation metrics now cover `create_tag`/`list_tags`/`merge`/`diff` success and error paths.
+- Audit Pass 41 revalidated `TD-079` as resolved via `T-46`; Terraform environment region/backend settings now support override without editing `main.tf`.
+- Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`; backfill now writes Bronze + catalog coverage metadata and no longer silently succeeds without `pyarrow`.
 
 ## Executive Summary
 
@@ -12510,10 +12542,14 @@ Recommendation: Add namespace-scoped secrets/serviceaccounts per overlay or docu
 **TD-079: Terraform environment settings are hardcoded.**
 Evidence: Each env `main.tf` pins `region = "us-east-1"` and backend config is fixed. This makes multi-region deployment or account reuse harder.
 Recommendation: Parameterize region and backend settings via variables or separate workspace configs.
+Update 2026-02-06: Remediated in `T-46` by switching env modules to `var.aws_region`, making backend blocks partial, and moving per-env backend defaults into `backend.hcl` files without hardcoded region keys.
+Revalidated 2026-02-06 (Pass 41): Resolved. Environment configs now support region/backend override workflows without changing source manifests.
 
 **TD-080: Backfill does not update Bronze or Catalog metadata.**
 Evidence: `BackfillWriter.write_batch()` writes only to Silver temp partitions and logs that compactor will merge. It does not write Bronze, nor does it update catalog coverage or schema metadata.
 Recommendation: Add an explicit Bronze write path (or document why it’s skipped), and update catalog coverage once backfill completes.
+Update 2026-02-06: Remediated in `T-47` by adding Bronze raw-write output in `BackfillWriter.write_batch()` and catalog metadata/coverage updates during chunk processing in `BackfillCoordinator`.
+Revalidated 2026-02-06 (Pass 42): Resolved. Backfill chunks now produce Bronze artifacts and trigger catalog dataset/coverage updates on successful writes.
 
 **TD-081: Backfill jobs are in-memory only.**
 Evidence: `BackfillCoordinator` stores jobs in a process-local dict. On restart, in-flight jobs and progress are lost; the API is described as in-memory only in docs.
@@ -12522,6 +12558,8 @@ Recommendation: Persist backfill state in the catalog DB or Redis and add resume
 **TD-082: Missing `pyarrow` silently drops backfill writes.**
 Evidence: `_write_parquet()` catches `ImportError` and logs `pyarrow_not_available` but does not raise, so the backfill job continues and reports progress even though nothing was written.
 Recommendation: Fail fast when `pyarrow` is missing, or track a failed write and mark the job as failed.
+Update 2026-02-06: Remediated in `T-47` by changing `_write_parquet()` to raise a runtime failure when `pyarrow` is unavailable.
+Revalidated 2026-02-06 (Pass 42): Resolved. Missing `pyarrow` now fails the write path instead of silently reporting success.
 
 **TD-083: Gap detection assumes a storage layout that may not exist.**
 Evidence: `GapDetector.detect_gaps()` reads `silver/{provider}_{feed}/dt=*`, while other components use feed/instrument_type/dt or dataset-based layouts. This can incorrectly report full gaps.
@@ -12562,11 +12600,11 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-082, TD-086, TD-087, TD-088.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-046..TD-049, TD-051, TD-056..TD-058, TD-066, TD-071, TD-075, TD-076, TD-081, TD-086, TD-087, TD-088.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-079, TD-080, TD-083..TD-085.
+- Address TD-004, TD-014, TD-019..TD-029, TD-031..TD-032, TD-044, TD-050, TD-052..TD-053, TD-055, TD-061, TD-073, TD-077..TD-078, TD-083..TD-085.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
@@ -12635,6 +12673,8 @@ Updated: 2026-02-06
 - `T-43` complete (`TD-070`): Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert mappings/tests were updated to preserve those fields.
 - `T-44` complete (`TD-072`): additional schema registry tests now validate required schema contracts and unknown-schema handling instead of asserting a fixed global schema count.
 - `T-45` complete (`TD-067`): lakeFS versioning now emits consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository-resolution failure paths covered by regression tests.
+- `T-46` complete (`TD-079`): Terraform environment modules now accept `aws_region` variables, backend blocks are partial, and per-env backend configuration moved to `backend.hcl` without hardcoded region keys.
+- `T-47` complete (`TD-080`, `TD-082`): backfill chunk writes now produce Bronze raw output, update catalog dataset/coverage metadata, and fail fast when `pyarrow` is unavailable.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -12662,6 +12702,8 @@ Updated: 2026-02-06
 - Audit Pass 38 revalidated `TD-086` and `TD-087` as resolved via `T-37` and `T-38`.
 - Audit Pass 39 revalidated `TD-088` as resolved via `T-40`.
 - Audit Pass 40 revalidated `TD-067` as resolved via `T-45`.
+- Audit Pass 41 revalidated `TD-079` as resolved via `T-46`.
+- Audit Pass 42 revalidated `TD-080` and `TD-082` as resolved via `T-47`.
 
 ## Prioritization Approach
 
@@ -13359,6 +13401,45 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-46: Parameterize Terraform Environment Region/Backend Wiring (TD-079)
+
+Priority: P1
+
+Description: Environment Terraform configs hardcoded `us-east-1` in module inputs and S3 backend blocks, reducing portability across regions/accounts.
+
+Scope:
+- `infrastructure/terraform/environments/dev/main.tf`
+- `infrastructure/terraform/environments/staging/main.tf`
+- `infrastructure/terraform/environments/prod/main.tf`
+- `infrastructure/terraform/environments/*/backend.hcl`
+- `tests/test_terraform_environment_config.py`
+
+Acceptance Criteria:
+- Environment module region inputs use `var.aws_region` instead of hardcoded region literals.
+- Environment `main.tf` files use partial backend blocks (`backend "s3" {}`) and backend settings are provided via per-env config files.
+- Backend config files keep bucket/key/lock defaults but do not hardcode `region`.
+- Regression tests verify env Terraform wiring remains overrideable.
+
+Estimate: 0.5 day
+
+### T-47: Harden Backfill Bronze/Catalog Writes and PyArrow Failure Path (TD-080, TD-082)
+
+Priority: P1
+
+Description: Backfill writes previously only produced Silver temp files and silently continued when `pyarrow` was missing. Add Bronze persistence + catalog coverage updates and fail-fast semantics for missing parquet dependencies.
+
+Scope:
+- `heber/backfill/__init__.py`
+- `tests/test_backfill_writer_reliability.py`
+
+Acceptance Criteria:
+- `BackfillWriter.write_batch()` writes raw records to Bronze partitions in addition to Silver temp outputs.
+- Backfill coordinator updates catalog dataset entries and coverage metadata for completed chunks (best effort when catalog DB is unavailable).
+- Missing `pyarrow` now raises a runtime error so backfill jobs fail instead of silently reporting progress.
+- Regression tests cover Bronze+Silver write behavior, missing-`pyarrow` failure behavior, and catalog metadata updater invocation.
+
+Estimate: 1 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -13482,6 +13563,8 @@ Estimate: 1 day
 43. T-43 (Hot Store DDL base-column conformance)
 44. T-44 (Additional schema test stability)
 45. T-45 (lakeFS operation metrics coverage)
+46. T-46 (Terraform environment region/backend parameterization)
+47. T-47 (Backfill Bronze/catalog write reliability)
 
 
 
@@ -15439,10 +15522,12 @@ Provides:
 """
 
 import asyncio
+import gzip
+import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -15683,10 +15768,12 @@ class BackfillWriter:
         storage_root: str = DEFAULT_STORAGE_ROOT,
         ts_available_policy: TsAvailablePolicy = TsAvailablePolicy.COMMIT,
         custom_delay_seconds: int | None = None,
+        parquet_writer: Callable[[list[dict[str, Any]], Path], None] | None = None,
     ):
         self.storage_root = Path(storage_root)
         self.ts_available_policy = ts_available_policy
         self.custom_delay_seconds = custom_delay_seconds
+        self._parquet_writer = parquet_writer
 
     def set_ts_available(
         self,
@@ -15740,6 +15827,9 @@ class BackfillWriter:
             record["backfill_id"] = job.backfill_id
             processed.append(record)
 
+        # Preserve raw payloads in Bronze alongside Silver backfill writes.
+        self._write_bronze(job, processed, chunk_date)
+
         # Write to temp partition per PRD §13.6
         temp_path = self._get_temp_path(job, chunk_date)
         self._write_parquet(processed, temp_path)
@@ -15764,6 +15854,66 @@ class BackfillWriter:
             / f"_backfill_{job.backfill_id}"
         )
 
+    def _get_bronze_partition_path(
+        self,
+        job: BackfillJob,
+        partition_date: date,
+        hour: int,
+    ) -> Path:
+        return (
+            self.storage_root
+            / "bronze"
+            / f"provider={job.provider}"
+            / f"feed={job.feed}"
+            / f"dt={partition_date.isoformat()}"
+            / f"hour={hour:02d}"
+        )
+
+    @staticmethod
+    def _parse_ts_event(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if isinstance(value, str):
+            normalized = value
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return None
+
+    def _write_bronze(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+    ) -> int:
+        partitions: dict[tuple[date, int], list[dict[str, Any]]] = {}
+        for record in records:
+            ts_event = self._parse_ts_event(record.get("ts_event"))
+            if ts_event is None:
+                partition_date = chunk_date
+                hour = 0
+            else:
+                ts_utc = ts_event.astimezone(UTC)
+                partition_date = ts_utc.date()
+                hour = ts_utc.hour
+            partitions.setdefault((partition_date, hour), []).append(record)
+
+        files_written = 0
+        for (partition_date, hour), partition_records in partitions.items():
+            partition_path = self._get_bronze_partition_path(job, partition_date, hour)
+            partition_path.mkdir(parents=True, exist_ok=True)
+            output_file = partition_path / f"events-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}.jsonl.gz"
+            with gzip.open(output_file, "wt", encoding="utf-8") as handle:
+                for record in partition_records:
+                    handle.write(json.dumps(record, default=str) + "\n")
+            files_written += 1
+
+        return files_written
+
     def _write_parquet(
         self,
         records: list[dict[str, Any]],
@@ -15773,14 +15923,21 @@ class BackfillWriter:
         path.mkdir(parents=True, exist_ok=True)
         output_file = path / f"{uuid.uuid4()}.parquet"
 
+        if self._parquet_writer is not None:
+            self._parquet_writer(records, output_file)
+            return
+
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
 
             table = pa.Table.from_pylist(records)
             pq.write_table(table, str(output_file))
-        except ImportError:
-            logger.warning("pyarrow_not_available")
+        except ImportError as exc:
+            logger.error("pyarrow_not_available", path=str(output_file))
+            raise RuntimeError(
+                "Backfill write failed because pyarrow is not installed. Install pyarrow to enable parquet writes."
+            ) from exc
 
 
 class BackfillCoordinator:
@@ -15795,9 +15952,14 @@ class BackfillCoordinator:
         self,
         storage_root: str = DEFAULT_STORAGE_ROOT,
         data_fetcher: Callable | None = None,
+        writer_factory: Callable[..., BackfillWriter] = BackfillWriter,
+        catalog_metadata_updater: Callable[[BackfillJob, list[dict[str, Any]], date, int], Awaitable[None]]
+        | None = None,
     ):
         self.storage_root = storage_root
         self.data_fetcher = data_fetcher
+        self.writer_factory = writer_factory
+        self.catalog_metadata_updater = catalog_metadata_updater
         self._jobs: dict[str, BackfillJob] = {}
         self._active_job: str | None = None
 
@@ -15858,6 +16020,117 @@ class BackfillCoordinator:
 
         return chunks
 
+    @staticmethod
+    def _coverage_dataset_names(job: BackfillJob) -> tuple[str, str]:
+        return f"{job.provider}_{job.feed}", f"{job.provider}_{job.feed}_raw"
+
+    @staticmethod
+    def _coverage_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in records:
+            instrument_key = str(record.get("instrument_key") or record.get("symbol") or "*")
+            counts[instrument_key] = counts.get(instrument_key, 0) + 1
+        return counts
+
+    async def _default_catalog_metadata_updater(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+        rows_written: int,
+    ) -> None:
+        if rows_written <= 0:
+            return
+
+        try:
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+            from heber.catalog.service import CatalogService
+            from heber.config import settings
+
+            engine = create_async_engine(settings.postgres_url, echo=False)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            silver_dataset, bronze_dataset = self._coverage_dataset_names(job)
+            coverage_counts = self._coverage_counts(records)
+
+            async with session_factory() as session:
+                service = CatalogService(session)
+
+                silver = await service.get_dataset(silver_dataset)
+                if silver is None:
+                    await service.create_dataset(
+                        name=silver_dataset,
+                        layer="silver",
+                        owner="shared",
+                        storage_root=str(Path(self.storage_root) / "silver"),
+                        description=f"Backfilled Silver dataset for {job.provider}/{job.feed}",
+                        path_template=f"silver/{job.provider}_{job.feed}/dt={{date}}",
+                        partition_cols=["dt"],
+                    )
+
+                bronze = await service.get_dataset(bronze_dataset)
+                if bronze is None:
+                    await service.create_dataset(
+                        name=bronze_dataset,
+                        layer="bronze",
+                        owner="shared",
+                        storage_root=str(Path(self.storage_root) / "bronze"),
+                        description=f"Backfilled Bronze dataset for {job.provider}/{job.feed}",
+                        path_template=f"bronze/provider={job.provider}/feed={job.feed}/dt={{date}}/hour={{hour}}",
+                        partition_cols=["dt", "hour"],
+                    )
+
+                dt_start = datetime.combine(chunk_date, time.min, tzinfo=UTC)
+                dt_end = datetime.combine(chunk_date, time.max, tzinfo=UTC)
+                for instrument_key, count in coverage_counts.items():
+                    await service.update_coverage(
+                        dataset_name=silver_dataset,
+                        instrument_key=instrument_key,
+                        dt_min=dt_start,
+                        dt_max=dt_end,
+                        approx_row_count=count,
+                    )
+                    await service.update_coverage(
+                        dataset_name=bronze_dataset,
+                        instrument_key=instrument_key,
+                        dt_min=dt_start,
+                        dt_max=dt_end,
+                        approx_row_count=count,
+                    )
+
+            await engine.dispose()
+            logger.info(
+                "backfill_catalog_metadata_updated",
+                backfill_id=job.backfill_id,
+                date=chunk_date.isoformat(),
+                rows=rows_written,
+                coverage_keys=len(coverage_counts),
+            )
+        except Exception as exc:
+            # Catalog metadata updates are best effort; data writes must still complete.
+            logger.warning(
+                "backfill_catalog_metadata_update_failed",
+                backfill_id=job.backfill_id,
+                date=chunk_date.isoformat(),
+                error=str(exc),
+            )
+
+    async def _update_catalog_metadata(
+        self,
+        job: BackfillJob,
+        records: list[dict[str, Any]],
+        chunk_date: date,
+        rows_written: int,
+    ) -> None:
+        if rows_written <= 0:
+            return
+
+        if self.catalog_metadata_updater is not None:
+            await self.catalog_metadata_updater(job, records, chunk_date, rows_written)
+            return
+
+        await self._default_catalog_metadata_updater(job, records, chunk_date, rows_written)
+
     async def run_job(
         self,
         backfill_id: str,
@@ -15877,7 +16150,7 @@ class BackfillCoordinator:
         self._active_job = backfill_id
         backfill_active_jobs.inc()
 
-        writer = BackfillWriter(
+        writer = self.writer_factory(
             storage_root=self.storage_root,
             ts_available_policy=job.ts_available_policy,
             custom_delay_seconds=definition.custom_delay_seconds,
@@ -15903,6 +16176,7 @@ class BackfillCoordinator:
                 await asyncio.sleep(1.0 / definition.rate_limit_per_second)
 
                 rows = writer.write_batch(job, records, chunk.chunk_date)
+                await self._update_catalog_metadata(job, records, chunk.chunk_date, rows)
 
                 # Update progress
                 job.rows_written += rows
@@ -50271,6 +50545,18 @@ output "redis_endpoint" {
 
 
 ================================================
+FILE: infrastructure/terraform/environments/dev/backend.hcl
+================================================
+bucket         = "heber-terraform-state"
+key            = "dev/terraform.tfstate"
+dynamodb_table = "heber-terraform-locks"
+encrypt        = true
+
+# Region comes from AWS SDK settings (AWS_REGION / AWS_DEFAULT_REGION)
+
+
+
+================================================
 FILE: infrastructure/terraform/environments/dev/main.tf
 ================================================
 # =============================================================================
@@ -50283,20 +50569,21 @@ FILE: infrastructure/terraform/environments/dev/main.tf
 # =============================================================================
 
 terraform {
-  backend "s3" {
-    bucket         = "heber-terraform-state"
-    key            = "dev/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "heber-terraform-locks"
-    encrypt        = true
-  }
+  # Intentionally partial: pass backend settings at init time, e.g.
+  # terraform init -backend-config=backend.hcl
+  backend "s3" {}
+}
+
+variable "aws_region" {
+  description = "AWS region for dev infrastructure"
+  type        = string
 }
 
 module "heber" {
   source = "../../"
 
   environment        = "dev"
-  region             = "us-east-1"
+  region             = var.aws_region
   eks_node_count     = 2
   rds_instance_class = "db.t3.small"
   redis_node_type    = "cache.t3.micro"
@@ -50321,6 +50608,18 @@ output "redis_endpoint" {
 
 
 ================================================
+FILE: infrastructure/terraform/environments/prod/backend.hcl
+================================================
+bucket         = "heber-terraform-state"
+key            = "prod/terraform.tfstate"
+dynamodb_table = "heber-terraform-locks"
+encrypt        = true
+
+# Region comes from AWS SDK settings (AWS_REGION / AWS_DEFAULT_REGION)
+
+
+
+================================================
 FILE: infrastructure/terraform/environments/prod/main.tf
 ================================================
 # =============================================================================
@@ -50334,20 +50633,21 @@ FILE: infrastructure/terraform/environments/prod/main.tf
 # =============================================================================
 
 terraform {
-  backend "s3" {
-    bucket         = "heber-terraform-state"
-    key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "heber-terraform-locks"
-    encrypt        = true
-  }
+  # Intentionally partial: pass backend settings at init time, e.g.
+  # terraform init -backend-config=backend.hcl
+  backend "s3" {}
+}
+
+variable "aws_region" {
+  description = "AWS region for production infrastructure"
+  type        = string
 }
 
 module "heber" {
   source = "../../"
 
   environment        = "prod"
-  region             = "us-east-1"
+  region             = var.aws_region
   eks_node_count     = 6
   rds_instance_class = "db.r6g.large"
   redis_node_type    = "cache.r6g.large"
@@ -50372,6 +50672,18 @@ output "redis_endpoint" {
 
 
 ================================================
+FILE: infrastructure/terraform/environments/staging/backend.hcl
+================================================
+bucket         = "heber-terraform-state"
+key            = "staging/terraform.tfstate"
+dynamodb_table = "heber-terraform-locks"
+encrypt        = true
+
+# Region comes from AWS SDK settings (AWS_REGION / AWS_DEFAULT_REGION)
+
+
+
+================================================
 FILE: infrastructure/terraform/environments/staging/main.tf
 ================================================
 # =============================================================================
@@ -50384,20 +50696,21 @@ FILE: infrastructure/terraform/environments/staging/main.tf
 # =============================================================================
 
 terraform {
-  backend "s3" {
-    bucket         = "heber-terraform-state"
-    key            = "staging/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "heber-terraform-locks"
-    encrypt        = true
-  }
+  # Intentionally partial: pass backend settings at init time, e.g.
+  # terraform init -backend-config=backend.hcl
+  backend "s3" {}
+}
+
+variable "aws_region" {
+  description = "AWS region for staging infrastructure"
+  type        = string
 }
 
 module "heber" {
   source = "../../"
 
   environment        = "staging"
-  region             = "us-east-1"
+  region             = var.aws_region
   eks_node_count     = 3
   rds_instance_class = "db.t3.medium"
   redis_node_type    = "cache.t3.small"
@@ -52731,6 +53044,131 @@ def test_normalize_alert_underlyings_converts_raw_symbols() -> None:
 
 
 ================================================
+FILE: tests/test_backfill_writer_reliability.py
+================================================
+"""Regression tests for backfill write-path reliability."""
+
+from __future__ import annotations
+
+import builtins
+import gzip
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pytest
+
+from heber.backfill import BackfillCoordinator, BackfillJob, BackfillJobDefinition, BackfillStatus, BackfillWriter
+
+
+def _new_job() -> BackfillJob:
+    definition = BackfillJobDefinition(
+        provider="alpaca",
+        feed="bars",
+        date_range_start=date(2026, 1, 2),
+        date_range_end=date(2026, 1, 2),
+    )
+    return BackfillJob.from_definition(definition)
+
+
+def test_write_batch_writes_bronze_and_silver_temp_partitions(tmp_path: Path) -> None:
+    job = _new_job()
+
+    def fake_parquet_writer(_records: list[dict], output_file: Path) -> None:
+        output_file.write_text("parquet", encoding="utf-8")
+
+    writer = BackfillWriter(storage_root=str(tmp_path), parquet_writer=fake_parquet_writer)
+
+    rows = writer.write_batch(
+        job,
+        [
+            {
+                "instrument_key": "equity:AAPL",
+                "ts_event": datetime(2026, 1, 2, 14, 30, tzinfo=UTC),
+                "open": 100.0,
+            }
+        ],
+        chunk_date=date(2026, 1, 2),
+    )
+
+    assert rows == 1
+
+    bronze_files = list((tmp_path / "bronze").glob("provider=alpaca/feed=bars/dt=2026-01-02/hour=14/events-*.jsonl.gz"))
+    assert len(bronze_files) == 1
+
+    with gzip.open(bronze_files[0], "rt", encoding="utf-8") as handle:
+        payload = handle.read()
+    assert "backfill_id" in payload
+    assert "quality_flags" in payload
+
+    silver_files = list((tmp_path / "silver").glob("alpaca_bars/dt=2026-01-02/*/*.parquet"))
+    assert len(silver_files) == 1
+
+
+def test_write_parquet_raises_when_pyarrow_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    writer = BackfillWriter(storage_root=str(tmp_path))
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        if name.startswith("pyarrow"):
+            raise ImportError("pyarrow unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="pyarrow"):
+        writer._write_parquet([{"a": 1}], tmp_path / "silver" / "test")
+
+
+@pytest.mark.asyncio
+async def test_run_job_invokes_catalog_metadata_updater(tmp_path: Path) -> None:
+    calls: list[tuple[str, date, int]] = []
+
+    async def fake_fetcher(**_kwargs):  # noqa: ANN003
+        return [
+            {
+                "instrument_key": "equity:AAPL",
+                "ts_event": datetime(2026, 1, 2, 14, 30, tzinfo=UTC),
+                "close": 101.5,
+            }
+        ]
+
+    def writer_factory(**kwargs) -> BackfillWriter:  # noqa: ANN003
+        kwargs["parquet_writer"] = lambda _records, output_file: output_file.write_text("parquet", encoding="utf-8")
+        return BackfillWriter(**kwargs)
+
+    async def fake_catalog_updater(job: BackfillJob, records: list[dict], chunk_date: date, rows_written: int) -> None:
+        calls.append((job.backfill_id, chunk_date, rows_written))
+        assert len(records) == 1
+
+    coordinator = BackfillCoordinator(
+        storage_root=str(tmp_path),
+        data_fetcher=fake_fetcher,
+        writer_factory=writer_factory,
+        catalog_metadata_updater=fake_catalog_updater,
+    )
+
+    definition = BackfillJobDefinition(
+        provider="alpaca",
+        feed="bars",
+        date_range_start=date(2026, 1, 2),
+        date_range_end=date(2026, 1, 2),
+        rate_limit_per_second=1_000_000.0,
+    )
+    job = coordinator.create_job(definition)
+
+    completed = await coordinator.run_job(job.backfill_id, definition)
+
+    assert completed.status == BackfillStatus.COMPLETED
+    assert completed.rows_written == 1
+    assert len(calls) == 1
+    assert calls[0][0] == job.backfill_id
+    assert calls[0][1] == date(2026, 1, 2)
+    assert calls[0][2] == 1
+
+
+
+================================================
 FILE: tests/test_catalog_migrations.py
 ================================================
 """Regression tests for Catalog migration strategy and startup behavior."""
@@ -54695,6 +55133,42 @@ def test_stream_registry_uses_events_namespace() -> None:
 def test_watch_consumer_defaults_to_configured_stream_name() -> None:
     consumer = AlertWatchConsumer(redis_client=object(), watch_manager=_NoopManager())
     assert consumer.stream_name == settings.redis_stream_name
+
+
+
+================================================
+FILE: tests/test_terraform_environment_config.py
+================================================
+"""Regression checks for Terraform environment region/backend configurability."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ENV_ROOT = ROOT / "infrastructure" / "terraform" / "environments"
+
+
+def test_environment_main_tf_uses_variable_region_and_partial_backend() -> None:
+    for env_name in ("dev", "staging", "prod"):
+        main_tf = (ENV_ROOT / env_name / "main.tf").read_text(encoding="utf-8")
+
+        assert 'backend "s3" {}' in main_tf, f"{env_name}: backend should be partial"
+        assert 'variable "aws_region"' in main_tf, f"{env_name}: missing aws_region variable"
+        assert "region             = var.aws_region" in main_tf, f"{env_name}: module region should use variable"
+
+
+def test_environment_backend_config_files_exist_without_hardcoded_region() -> None:
+    for env_name in ("dev", "staging", "prod"):
+        backend_hcl = ENV_ROOT / env_name / "backend.hcl"
+        assert backend_hcl.exists(), f"{env_name}: missing backend.hcl"
+
+        contents = backend_hcl.read_text(encoding="utf-8")
+        assert 'bucket         = "heber-terraform-state"' in contents
+        assert f'key            = "{env_name}/terraform.tfstate"' in contents
+        assert 'dynamodb_table = "heber-terraform-locks"' in contents
+        assert "encrypt        = true" in contents
+        assert "region" not in contents, f"{env_name}: backend config should not hardcode region"
 
 
 
