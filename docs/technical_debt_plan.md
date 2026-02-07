@@ -67,6 +67,7 @@ Updated: 2026-02-07
 - `T-57` complete (`TD-047`, `TD-048`, `TD-049`): Silver models now normalize lineage JSON serialization, apply release-aware schema-version defaults, and align expiry/date typing with canonical Arrow schemas.
 - `T-58` complete (`TD-056`, `TD-057`, `TD-058`): Feast helpers now resolve repo path from config/env, return non-placeholder materialization counts, and support tag value / key:value search filters.
 - `T-59` complete (`TD-014`): core consumer/silver/compactor runtime paths now emit concrete metrics via shared Prometheus helpers, with instrumentation regression tests.
+- `T-60` complete (`TD-031`, `TD-032`): watch model timestamps now default to aware UTC values and watch poller quote fetches now gate by per-horizon due intervals.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -108,6 +109,7 @@ Updated: 2026-02-07
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`.
 - Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`.
 - Audit Pass 54 revalidated `TD-014` as resolved via `T-59`.
+- Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`.
 
 ## Prioritization Approach
 
@@ -1068,6 +1070,25 @@ Acceptance Criteria:
 
 Estimate: 0.5 day
 
+### T-60: Watch Timestamp + Polling Cadence Hardening (TD-031, TD-032)
+
+Priority: P1
+
+Description: Watch model timestamps were still defaulting to naive UTC and poller quote fetches were not cadence-aware per horizon, causing avoidable over-polling for long-horizon watches.
+
+Scope:
+- `heber/watch/models.py`
+- `heber/watch/poller.py`
+- `tests/test_watch_async_redis.py`
+
+Acceptance Criteria:
+- `AlertWatch.created_at` and `AlertWatch.updated_at` default to timezone-aware UTC timestamps.
+- Poller evaluates per-watch due status from horizon interval configuration and skips quote fetches for not-yet-due watches.
+- Polling stats expose due-watch counts so behavior is observable in tests/runtime logs.
+- Regression tests cover aware timestamp defaults and cadence gating between intraday and long-horizon watches.
+
+Estimate: 0.5 day
+
 ## P2 Tickets (Structural)
 
 ### T-09: Unify Hot Store Implementation (TD-004)
@@ -1205,3 +1226,4 @@ Estimate: 1 day
 57. T-57 (Silver model defaults + schema type alignment)
 58. T-58 (Feast materialization/search behavior alignment)
 59. T-59 (Runtime metrics helper wiring)
+60. T-60 (Watch timestamp + polling cadence hardening)

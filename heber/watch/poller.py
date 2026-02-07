@@ -65,16 +65,21 @@ class SnapshotPoller:
         if not active:
             return {"watches": 0, "quotes": 0, "errors": 0}
 
+        now = datetime.now(UTC)
+        due_watches = [watch for watch in active if self._is_watch_due(watch, now)]
+        if not due_watches:
+            return {"watches": len(active), "due_watches": 0, "quotes": 0, "errors": 0}
+
         # Group by unique symbol
         symbol_to_watches: dict[str, list[AlertWatch]] = {}
-        for watch in active:
+        for watch in due_watches:
             symbol = watch.occ_symbol
             if symbol not in symbol_to_watches:
                 symbol_to_watches[symbol] = []
             symbol_to_watches[symbol].append(watch)
 
         symbols = list(symbol_to_watches.keys())
-        logger.info("Polling quotes", symbols=len(symbols), watches=len(active))
+        logger.info("Polling quotes", symbols=len(symbols), watches=len(active), due_watches=len(due_watches))
 
         # Fetch quotes in batches
         quotes = await self._fetch_quotes(symbols)
@@ -94,6 +99,7 @@ class SnapshotPoller:
 
         return {
             "watches": len(active),
+            "due_watches": len(due_watches),
             "quotes": len(quotes),
             "updated": updated,
         }
@@ -215,3 +221,25 @@ class SnapshotPoller:
             underlying_price=quote.get("underlying_price"),
             return_pct=return_pct,
         )
+
+    @staticmethod
+    def _horizon_interval_seconds(horizon: Any) -> int:
+        """Resolve polling interval from watch horizon value."""
+        if horizon in POLL_CONFIG:
+            return int(POLL_CONFIG[horizon]["interval_seconds"])
+
+        horizon_str = str(horizon)
+        for config_horizon, config in POLL_CONFIG.items():
+            if horizon_str == getattr(config_horizon, "value", str(config_horizon)):
+                return int(config["interval_seconds"])
+
+        # Fail-safe: use the shortest interval for unknown horizon values.
+        return min(int(config["interval_seconds"]) for config in POLL_CONFIG.values())
+
+    def _is_watch_due(self, watch: AlertWatch, now: datetime) -> bool:
+        """Return True when the watch should be polled at current time."""
+        interval_seconds = self._horizon_interval_seconds(getattr(watch, "horizon", None))
+        last_polled = getattr(watch, "updated_at", None) or getattr(watch, "alert_time", None)
+        if not isinstance(last_polled, datetime):
+            return True
+        return (now - last_polled).total_seconds() >= interval_seconds

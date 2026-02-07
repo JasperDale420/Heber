@@ -6,7 +6,7 @@ if they would have produced acceptable trade outcomes.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -74,8 +74,8 @@ class AlertWatch(BaseModel):
     bars_to_hit: int | None = Field(None, description="Snapshots until barrier hit")
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     class Config:
         use_enum_values = True

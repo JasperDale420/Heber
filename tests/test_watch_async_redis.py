@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from heber.watch.consumer import AlertWatchConsumer
-from heber.watch.models import WatchHorizon
+from heber.watch.models import AlertWatch, WatchHorizon
 from heber.watch.poller import SnapshotPoller
 
 
@@ -121,5 +122,71 @@ async def test_poller_uses_async_manager_methods() -> None:
 
     assert stats["watches"] == 1
     assert stats["updated"] == 1
+    assert manager.snapshots == 1
+    assert manager.updated == 1
+
+
+def test_alert_watch_timestamps_default_to_aware_utc() -> None:
+    now = datetime.now(UTC)
+    watch = AlertWatch(
+        watch_id="watch-1",
+        alert_id="alert-1",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.5,
+        spot_at_alert=200.0,
+        alert_time=now,
+        window_end=now + timedelta(hours=1),
+        horizon=WatchHorizon.SWING,
+        tp_threshold=0.25,
+        sl_threshold=0.15,
+    )
+
+    assert watch.created_at.tzinfo is not None
+    assert watch.updated_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_poller_skips_watches_not_due_by_horizon() -> None:
+    manager = _AsyncOnlyManager()
+    now = datetime.now(UTC)
+    manager.get_active_watches_async = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            SimpleNamespace(
+                watch_id="watch-intraday-due",
+                occ_symbol="AAPL260220C00100000",
+                entry_price=1.0,
+                horizon=WatchHorizon.INTRADAY,
+                updated_at=now - timedelta(minutes=6),
+            ),
+            SimpleNamespace(
+                watch_id="watch-leap-not-due",
+                occ_symbol="AAPL260220P00100000",
+                entry_price=1.0,
+                horizon=WatchHorizon.LEAP,
+                updated_at=now - timedelta(minutes=10),
+            ),
+        ]
+    )
+    poller = SnapshotPoller(manager)
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": 1.0,
+                "ap": 1.2,
+                "last_price": 1.1,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["watches"] == 2
+    assert stats["due_watches"] == 1
+    assert stats["quotes"] == 1
     assert manager.snapshots == 1
     assert manager.updated == 1

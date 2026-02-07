@@ -446,8 +446,13 @@ Audit Pass 54 (2026-02-07, files reviewed directly):
 - heber/writer/compactor.py
 - tests/test_metrics_runtime_wiring.py
 
+Audit Pass 55 (2026-02-07, files reviewed directly):
+- heber/watch/models.py
+- heber/watch/poller.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/models.py (`TD-031`, `TD-032`) watch timestamp/polling behavior re-audit.
+- heber/models/envelope.py + heber/writer/consumer.py (`TD-013`) instrument-key validation enforcement re-audit.
 
 ## Remediation Updates
 
@@ -505,6 +510,7 @@ Updated: 2026-02-07
 - `TD-047`, `TD-048`, and `TD-049` addressed via `T-57`: Silver models now normalize `lineage` serialization, apply release-aware `schema_version` defaults, and align date typing between Pydantic and Arrow schemas.
 - `TD-056`, `TD-057`, and `TD-058` addressed via `T-58`: Feast helpers now default repo path from configuration, report best-effort materialization row counts instead of `-1` placeholders, and support tag value/key:value matching in feature search.
 - `TD-014` addressed via `T-59`: metrics recording is now wired into core consumer/silver/compactor runtime paths with explicit exporter startup and regression coverage for metric emission.
+- `TD-031` and `TD-032` addressed via `T-60`: watch model timestamp defaults are now timezone-aware UTC, and poller quote fetches now respect per-horizon cadence gates to avoid over-polling long-horizon watches.
 - `TD-065` addressed via `T-32`: filesystem Trivy scan now uses explicit `--exit-code 1` gating and script control flow reports/returns failure for HIGH/CRITICAL findings.
 - `TD-060` addressed via `T-31`: catalog backup validation now guarantees test-instance cleanup via `EXIT` trap, including failure paths.
 - `TD-059` addressed via `T-30`: clickhouse backup script now reports config-driven remote destination/entry instead of a hardcoded S3 path not enforced by the command.
@@ -550,6 +556,7 @@ Updated: 2026-02-07
 - Audit Pass 52 revalidated `TD-047`, `TD-048`, and `TD-049` as resolved via `T-57`; Silver model defaults and field types now match schema contracts with regression coverage.
 - Audit Pass 53 revalidated `TD-056`, `TD-057`, and `TD-058` as resolved via `T-58`; Feast helpers now use configuration-driven defaults, value-aware tag filtering, and non-placeholder materialization counts.
 - Audit Pass 54 revalidated `TD-014` as resolved via `T-59`; core ingestion/storage runtime paths now emit concrete metrics rather than placeholder-only counters.
+- Audit Pass 55 revalidated `TD-031` and `TD-032` as resolved via `T-60`; watch timestamps now use aware UTC defaults and poller cadence now honors horizon intervals.
 
 ## Executive Summary
 
@@ -591,8 +598,8 @@ Severity key: High, Medium, Low
 | TD-028 | Medium | Iceberg | `create_silver_table` uses a partition spec format that may not match PyIceberg API. |
 | TD-029 | Low | Backpressure | Quarantine path reads provider/feed from `envelope.meta` which doesn't exist. |
 | TD-030 | Medium | Streams | Stream naming diverges (`stream:*` vs `heber:events`) across code/docs. |
-| TD-031 | Low | Watch Models | `created_at`/`updated_at` use naive `datetime.utcnow()` defaults. |
-| TD-032 | Low | Watch Poller | Polling interval ignores per-horizon settings and over-polls long horizons. |
+| TD-031 | Low | Watch Models | Watch model timestamp defaults now use timezone-aware UTC values with regression coverage. |
+| TD-032 | Low | Watch Poller | Poller quote fetches now honor per-horizon cadence gates to avoid long-horizon over-polling. |
 | TD-033 | High | Feast/Features | Feature views hardcode paths and schemas that do not match Gold layout or computed columns. |
 | TD-034 | High | Features | Feature templates set `ts_available` to current time, breaking point-in-time correctness. |
 | TD-035 | Medium | Label Pipeline | Alert label pipeline queries bars using raw symbols, not canonical instrument keys. |
@@ -778,10 +785,14 @@ Update 2026-02-05: Remediated in `T-20` by standardizing bus and stream registry
 **TD-031: Watch model timestamps use naive `datetime.utcnow()` defaults.**
 Evidence: `heber/watch/models.py` sets `created_at` and `updated_at` with `datetime.utcnow()` (naive), while other parts expect timezone-aware UTC.
 Recommendation: Use `datetime.now(UTC)` or enforce timezone-aware defaults across models.
+Update 2026-02-07: Remediated in `T-60` by switching `AlertWatch` timestamp defaults to `datetime.now(UTC)` and adding regression coverage.
+Revalidated 2026-02-07 (Pass 55): Resolved. Default watch timestamps are now UTC-aware.
 
 **TD-032: Watch poller ignores per-horizon intervals.**
 Evidence: `SnapshotPoller.run()` uses the minimum interval from `POLL_CONFIG` for all watches, which over-polls swing/LEAP horizons.
 Recommendation: Respect per-watch polling intervals or schedule per-horizon polling loops.
+Update 2026-02-07: Remediated in `T-60` by introducing per-watch due checks before quote fetches based on each watch horizon interval.
+Revalidated 2026-02-07 (Pass 55): Resolved. Poller now skips not-yet-due long-horizon watches.
 
 **TD-033: Feast feature views hardcode paths and schemas that do not match Gold layout or computed columns.**
 Evidence: Feature views in `features/feature_views/*` point to `/data/gold/dataset=.../type=...` while the Gold layout is `dataset/project/version/dt`. Several schemas do not match template outputs (e.g., `microstructure.py` view expects `bid_ask_spread_pct` and `quoted_depth_*` while templates output `spread_bps` and `bid_depth`/`ask_depth`; `flow.py` view expects `net_call_premium` but templates output `call_premium_24h`; `volatility.py` view expects `bollinger_upper/lower` but templates output `bb_width_20`). Feast registry paths are also hardcoded to `/data/feast/...`.
@@ -1133,7 +1144,7 @@ Phase 2 (Operational reliability, 2-4 days):
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
-- Address TD-004, TD-019..TD-029, TD-031..TD-032, TD-061, TD-073, TD-077..TD-078.
+- Address TD-004, TD-019..TD-029, TD-061, TD-073, TD-077..TD-078.
 - Unify Hot Store implementation and schema definitions.
 
 ## Open Questions for Future Audits
