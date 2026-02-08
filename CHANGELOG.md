@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/gateway.py`: gateway route candidate construction now normalizes custom `api_prefix` values without leading slash (e.g. `api/v1`) to avoid malformed prefixed URLs
 - Added gateway prefix-normalization regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-095` remediation in audit pass 77 and `T-81`
+- Fixed `watch/consumer.py`: entry-price quote midpoint logic now treats zero-valued bid/ask fields as valid values instead of dropping to fallback paths
+- Added consumer zero-bid quote regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-096` remediation in audit pass 78 and `T-82`
 
 ### Removed
 
@@ -145,6 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 75: watch entrypoint runtime-failure shutdown conformance revalidation)
 - Expanded technical debt audit (pass 76: watch feature Greeks zero-value preservation conformance revalidation)
 - Expanded technical debt audit (pass 77: watch gateway api-prefix normalization conformance revalidation)
+- Expanded technical debt audit (pass 78: watch consumer zero-bid quote midpoint conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

@@ -114,3 +114,33 @@ async def test_consumer_entry_price_falls_back_to_legacy_route(monkeypatch: pyte
     assert price == 1.1
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_keeps_zero_bid_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(
+            200,
+            {
+                "data": {
+                    "quotes": {
+                        "AAPL260220C00100000": {
+                            "bp": 0.0,
+                            "ap": 1.2,
+                        }
+                    }
+                }
+            },
+        ),
+    }
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+    assert price == 0.6

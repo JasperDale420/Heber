@@ -599,8 +599,13 @@ Audit Pass 77 (2026-02-07, files reviewed directly):
 - heber/watch/poller.py
 - heber/watch/consumer.py
 
+Audit Pass 78 (2026-02-07, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for quote-retry and error-classification edge cases.
+- heber/watch/poller.py line-by-line re-audit for quote normalization and fallback edge cases.
 
 ## Remediation Updates
 
@@ -740,6 +745,7 @@ Updated: 2026-02-07
 - Audit Pass 75 revalidated and remediated `TD-093`; watch entrypoint now guarantees service stop/flush on unexpected runtime failures rather than only on keyboard interrupts.
 - Audit Pass 76 revalidated and remediated `TD-094`; Greeks enrichment now preserves valid zero values instead of dropping them via truthiness checks.
 - Audit Pass 77 revalidated and remediated `TD-095`; gateway route construction now normalizes `api_prefix` values without a leading slash to prevent malformed prefixed URLs.
+- Audit Pass 78 revalidated and remediated `TD-096`; consumer entry-price logic now treats zero bid/ask quotes as valid values when computing midpoint price.
 
 ## Executive Summary
 
@@ -846,6 +852,7 @@ Severity key: High, Medium, Low
 | TD-093 | Medium | Watch Service | Watch entrypoint only stopped service on `KeyboardInterrupt`; other runtime failures could bypass stop/flush cleanup and drop buffered labels. |
 | TD-094 | Medium | Watch Service | Features Greeks enrichment used truthiness checks, so valid `0.0` values (`delta/gamma/theta/vega/iv`) were coerced to `None`. |
 | TD-095 | Medium | Watch Service | Gateway URL helper did not normalize custom `api_prefix` values (e.g. `api/v1`), producing malformed prefixed URLs and bypassing prefix-first routing. |
+| TD-096 | Medium | Watch Service | Consumer quote midpoint logic treated `0.0` bid/ask values as missing, so valid quotes could return `None` entry prices and fall back to stale alert prices. |
 
 ## Detailed Findings
 
@@ -1399,6 +1406,12 @@ Recommendation: Normalize non-empty prefixes to canonical `/prefix` form and add
 Update 2026-02-07: Remediated in `T-81` by normalizing `api_prefix` with both leading/trailing slash handling and adding a route-construction regression test.
 Revalidated 2026-02-07 (Pass 77): Resolved. Prefix-first URL candidates are now valid for both `/api/v1` and `api/v1` inputs.
 
+**TD-096: Consumer entry-price midpoint drops valid zero bid/ask values.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously used truthiness checks (`if bid and ask`) after reading quote fields. Valid `0.0` bid/ask values evaluated false, causing midpoint logic to be skipped and often returning `None`.
+Recommendation: Treat bid/ask as present when values are not `None`, cast numerics explicitly, and add regression coverage for zero-valued quote fields.
+Update 2026-02-07: Remediated in `T-82` by replacing truthiness checks with explicit `None` checks and adding regression coverage for zero-bid quote scenarios.
+Revalidated 2026-02-07 (Pass 78): Resolved. Midpoint prices now compute correctly for quotes containing zero-valued bid/ask fields.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1406,7 +1419,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

@@ -433,12 +433,21 @@ class AlertWatchConsumer:
                     quotes = data.get("data", {}).get("quotes", {})
                     quote = quotes.get(occ_symbol)
                     if quote:
-                        bid = quote.get("bp") or quote.get("bid_price", 0)
-                        ask = quote.get("ap") or quote.get("ask_price", 0)
+                        bid = quote.get("bp")
+                        if bid is None:
+                            bid = quote.get("bid_price")
 
-                        if bid and ask:
-                            return (bid + ask) / 2
-                        return quote.get("last_price")
+                        ask = quote.get("ap")
+                        if ask is None:
+                            ask = quote.get("ask_price")
+
+                        if bid is not None and ask is not None:
+                            return (float(bid) + float(ask)) / 2
+
+                        last_price = quote.get("last_price")
+                        if last_price is not None:
+                            return float(last_price)
+                        return None
 
                 return None
 
