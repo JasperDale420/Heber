@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/checker.py`: watches with invalid/non-positive entry prices now still complete as `EXPIRED` when their watch window elapses, instead of remaining stuck due to missing return-path computation
 - Added checker zero-entry expiry regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-100` remediation in audit pass 82 and `T-86`
+- Fixed `watch/writer.py`: legacy `run_watch_service()` now stops the watch service on runtime exceptions before re-raising, preserving cleanup/flush behavior
+- Added writer entrypoint shutdown regression test (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-101` remediation in audit pass 83 and `T-87`
 
 ### Removed
 
@@ -165,6 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 80: watch manager zero-entry update conformance revalidation)
 - Expanded technical debt audit (pass 81: watch models pydantic-config warning conformance revalidation)
 - Expanded technical debt audit (pass 82: watch checker zero-entry expiry conformance revalidation)
+- Expanded technical debt audit (pass 83: watch writer legacy-entrypoint shutdown conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

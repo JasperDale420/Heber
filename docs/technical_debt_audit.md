@@ -627,8 +627,14 @@ Audit Pass 82 (2026-02-07, files reviewed directly):
 - tests/test_watch_manager_redis_bytes.py
 - tests/test_watch_async_redis.py
 
+Audit Pass 83 (2026-02-07, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_entrypoint_shutdown.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/writer.py line-by-line re-audit for flush retry and partition-layout edge cases.
+- heber/watch/__main__.py line-by-line re-audit for runtime-failure cleanup parity with legacy entrypoints.
 
 ## Remediation Updates
 
@@ -773,6 +779,7 @@ Updated: 2026-02-07
 - Audit Pass 80 revalidated and remediated `TD-098`; watch-manager price updates now handle non-positive entry prices without division errors.
 - Audit Pass 81 revalidated and remediated `TD-099`; watch models now use Pydantic v2 `ConfigDict` to remove class-based config deprecation warnings.
 - Audit Pass 82 revalidated and remediated `TD-100`; checker now expires invalid-entry watches even when a return path cannot be computed.
+- Audit Pass 83 revalidated and remediated `TD-101`; legacy writer entrypoint now stops services on runtime exceptions rather than only on keyboard interrupts.
 
 ## Executive Summary
 
@@ -884,6 +891,7 @@ Severity key: High, Medium, Low
 | TD-098 | Medium | Watch Service | Watch manager divided by `entry_price` unconditionally during updates; `entry_price=0.0` raised `ZeroDivisionError` and could break poll cycles. |
 | TD-099 | Low | Watch Service | `AlertWatch` used class-based Pydantic `Config`, emitting `PydanticDeprecatedSince20` warnings on import/reload and masking real warnings in test output. |
 | TD-100 | Medium | Watch Service | Checker returned early when no return path was computable, so expired watches with invalid entry pricing remained stuck in `WATCHING` state indefinitely. |
+| TD-101 | Medium | Watch Service | Legacy `run_watch_service()` only stopped on `KeyboardInterrupt`; runtime exceptions bypassed stop/flush cleanup and could drop buffered labels. |
 
 ## Detailed Findings
 
@@ -1467,6 +1475,12 @@ Recommendation: Keep expiry handling active even when no return path exists, and
 Update 2026-02-07: Remediated in `T-86` by handling the no-return-path expiry branch explicitly and adding a regression test for zero-entry expired watches.
 Revalidated 2026-02-07 (Pass 82): Resolved. Expired invalid-entry watches now complete with `EXPIRED` status instead of remaining stuck.
 
+**TD-101: Writer legacy entrypoint skips cleanup on runtime failures.**
+Evidence: `run_watch_service()` previously called `service.stop()` only for `KeyboardInterrupt`. If `service.run()` raised any other exception, control exited without stop/flush cleanup.
+Recommendation: Invoke `service.stop()` for unexpected runtime errors before re-raising, and add regression coverage mirroring the shutdown contract enforced in `watch.__main__`.
+Update 2026-02-07: Remediated in `T-87` by adding generic exception cleanup in `run_watch_service()` and a targeted shutdown regression test.
+Revalidated 2026-02-07 (Pass 83): Resolved. Runtime exceptions now trigger writer-service cleanup before bubbling up.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1474,7 +1488,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
