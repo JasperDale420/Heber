@@ -93,6 +93,7 @@ Updated: 2026-02-07
 - `T-83` complete (`TD-097`): watch poller now preserves valid zero midpoint values when updating watch prices (`mid_px` vs `last_px`) and normalizes zero bid/ask extraction via explicit `None` checks.
 - `T-84` complete (`TD-098`): watch manager now guards return/MFE/MAE calculations when `entry_price <= 0`, avoiding division errors while preserving price/snapshot updates.
 - `T-85` complete (`TD-099`): watch models now use Pydantic v2 `ConfigDict` for enum-value serialization, removing class-based config deprecation warnings on import/reload.
+- `T-86` complete (`TD-100`): barrier checker now expires watches lacking a computable return path once their window elapses, preventing indefinite `WATCHING` state for invalid-entry edge cases.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -161,6 +162,7 @@ Updated: 2026-02-07
 - Audit Pass 79 revalidated `TD-097` as resolved via `T-83`.
 - Audit Pass 80 revalidated `TD-098` as resolved via `T-84`.
 - Audit Pass 81 revalidated `TD-099` as resolved via `T-85`.
+- Audit Pass 82 revalidated `TD-100` as resolved via `T-86`.
 
 ## Prioritization Approach
 

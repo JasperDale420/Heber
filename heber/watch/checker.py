@@ -74,6 +74,8 @@ class BarrierChecker:
         if not snapshots:
             return None
 
+        now = datetime.now(UTC)
+
         # Build return path
         returns = []
         for snap in snapshots:
@@ -84,7 +86,45 @@ class BarrierChecker:
                 returns.append(snap.return_pct)
 
         if not returns:
-            return None
+            if now < watch.window_end:
+                return None
+
+            bars_to_hit = len(snapshots)
+            self.manager.complete_watch(
+                watch.watch_id,
+                WatchStatus.EXPIRED,
+                0.0,
+                bars_to_hit,
+            )
+
+            window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
+            trading_mins = self.calendar.trading_minutes_until(
+                watch.alert_time,
+                now,
+            )
+
+            return WatchOutcome(
+                watch_id=watch.watch_id,
+                alert_id=watch.alert_id,
+                occ_symbol=watch.occ_symbol,
+                underlying=watch.underlying,
+                put_call=watch.put_call,
+                horizon=watch.horizon,
+                status=WatchStatus.EXPIRED,
+                outcome_time=now,
+                outcome_return=0.0,
+                bars_to_hit=bars_to_hit,
+                mfe=0.0,
+                mae=0.0,
+                mfe_adj=self.slippage.adjust_option_mfe(0.0),
+                mae_adj=self.slippage.adjust_option_mae(0.0),
+                hit_tp_first=0,
+                entry_price=watch.entry_price,
+                spot_at_alert=watch.spot_at_alert,
+                alert_time=watch.alert_time,
+                window_duration_hours=window_hours,
+                trading_minutes_to_hit=trading_mins,
+            )
 
         returns_arr = np.array(returns)
 
@@ -100,7 +140,6 @@ class BarrierChecker:
         )
 
         # Check expiry
-        now = datetime.now(UTC)
         if status == WatchStatus.WATCHING and now >= watch.window_end:
             status = WatchStatus.EXPIRED
             bars_to_hit = len(returns)

@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/models.py`: migrated `AlertWatch` config to Pydantic v2 `ConfigDict`, removing class-based `Config` deprecation warnings while preserving enum-value serialization behavior
 - Added watch-model config warning regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-099` remediation in audit pass 81 and `T-85`
+- Fixed `watch/checker.py`: watches with invalid/non-positive entry prices now still complete as `EXPIRED` when their watch window elapses, instead of remaining stuck due to missing return-path computation
+- Added checker zero-entry expiry regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-100` remediation in audit pass 82 and `T-86`
 
 ### Removed
 
@@ -161,6 +164,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 79: watch poller zero-midpoint update conformance revalidation)
 - Expanded technical debt audit (pass 80: watch manager zero-entry update conformance revalidation)
 - Expanded technical debt audit (pass 81: watch models pydantic-config warning conformance revalidation)
+- Expanded technical debt audit (pass 82: watch checker zero-entry expiry conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

@@ -621,8 +621,14 @@ Audit Pass 81 (2026-02-07, files reviewed directly):
 - tests/test_watch_manager_redis_bytes.py
 - tests/test_watch_async_redis.py
 
+Audit Pass 82 (2026-02-07, files reviewed directly):
+- heber/watch/checker.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/checker.py line-by-line re-audit for barrier-first tie-breaking and expiry edge cases.
+- heber/watch/writer.py line-by-line re-audit for flush retry and partition-layout edge cases.
 
 ## Remediation Updates
 
@@ -766,6 +772,7 @@ Updated: 2026-02-07
 - Audit Pass 79 revalidated and remediated `TD-097`; poller now preserves zero-valued midpoint prices when updating watch state instead of falling back to `last_price`.
 - Audit Pass 80 revalidated and remediated `TD-098`; watch-manager price updates now handle non-positive entry prices without division errors.
 - Audit Pass 81 revalidated and remediated `TD-099`; watch models now use Pydantic v2 `ConfigDict` to remove class-based config deprecation warnings.
+- Audit Pass 82 revalidated and remediated `TD-100`; checker now expires invalid-entry watches even when a return path cannot be computed.
 
 ## Executive Summary
 
@@ -876,6 +883,7 @@ Severity key: High, Medium, Low
 | TD-097 | Medium | Watch Service | Poller watch-price updates used `snapshot.mid_px or snapshot.last_px`, so valid `mid_px=0.0` was overwritten by `last_price` and drifted watch state. |
 | TD-098 | Medium | Watch Service | Watch manager divided by `entry_price` unconditionally during updates; `entry_price=0.0` raised `ZeroDivisionError` and could break poll cycles. |
 | TD-099 | Low | Watch Service | `AlertWatch` used class-based Pydantic `Config`, emitting `PydanticDeprecatedSince20` warnings on import/reload and masking real warnings in test output. |
+| TD-100 | Medium | Watch Service | Checker returned early when no return path was computable, so expired watches with invalid entry pricing remained stuck in `WATCHING` state indefinitely. |
 
 ## Detailed Findings
 
@@ -1453,6 +1461,12 @@ Recommendation: Replace class-based config with `model_config = ConfigDict(...)`
 Update 2026-02-07: Remediated in `T-85` by migrating `AlertWatch` to `ConfigDict(use_enum_values=True)` and adding a warning-regression test.
 Revalidated 2026-02-07 (Pass 81): Resolved. Reloading watch models no longer emits class-based config deprecation warnings.
 
+**TD-100: Checker can leave invalid-entry watches stuck without expiry outcome.**
+Evidence: `BarrierChecker.check_watch()` built returns only from computable return fields. For watches with `entry_price <= 0` and snapshots lacking `return_pct`, it returned early on `if not returns` before checking `window_end`, so expired watches stayed `WATCHING` indefinitely.
+Recommendation: Keep expiry handling active even when no return path exists, and emit an explicit `EXPIRED` outcome with neutral return statistics for this edge case.
+Update 2026-02-07: Remediated in `T-86` by handling the no-return-path expiry branch explicitly and adding a regression test for zero-entry expired watches.
+Revalidated 2026-02-07 (Pass 82): Resolved. Expired invalid-entry watches now complete with `EXPIRED` status instead of remaining stuck.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1460,7 +1474,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

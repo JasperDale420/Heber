@@ -90,3 +90,42 @@ def test_poller_snapshot_sets_return_pct_when_mid_is_zero() -> None:
 
     assert snapshot.mid_px == 0.0
     assert snapshot.return_pct == -1.0
+
+
+def test_checker_expires_zero_entry_watch_even_without_return_path() -> None:
+    now = datetime.now(UTC)
+    watch = AlertWatch(
+        watch_id="watch-zero-entry",
+        alert_id="alert-zero-entry",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=0.0,
+        spot_at_alert=200.0,
+        alert_time=now - timedelta(hours=2),
+        window_end=now - timedelta(minutes=5),
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+    )
+    snapshots = [
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=now - timedelta(minutes=30),
+            mid_px=1.0,
+            return_pct=None,
+        )
+    ]
+    manager = _CheckerManagerStub(snapshots)
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.EXPIRED
+    assert outcome.outcome_return == 0.0
+    assert manager.completed is not None
+    assert manager.completed[1] == WatchStatus.EXPIRED
