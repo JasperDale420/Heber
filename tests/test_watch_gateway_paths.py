@@ -50,6 +50,18 @@ def test_gateway_url_candidates_prefix_first_and_deduped() -> None:
     assert already_prefixed == ["http://gateway/api/v1/alpaca/options/quotes"]
 
 
+def test_gateway_url_candidates_normalizes_prefix_without_leading_slash() -> None:
+    candidates = gateway_url_candidates(
+        "http://gateway",
+        "/alpaca/options/quotes",
+        api_prefix="api/v1",
+    )
+    assert candidates == [
+        "http://gateway/api/v1/alpaca/options/quotes",
+        "http://gateway/alpaca/options/quotes",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_poller_fetch_quotes_falls_back_to_legacy_route(monkeypatch: pytest.MonkeyPatch) -> None:
     _StubAsyncClient.calls = []

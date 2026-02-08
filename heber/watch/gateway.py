@@ -18,10 +18,13 @@ def gateway_url_candidates(
     """
     base = gateway_url.rstrip("/")
     normalized_route = route if route.startswith("/") else f"/{route}"
-    normalized_prefix = api_prefix.rstrip("/")
+    stripped_prefix = api_prefix.strip().strip("/")
+    normalized_prefix = f"/{stripped_prefix}" if stripped_prefix else ""
 
     prefixed_route = normalized_route
-    if normalized_prefix and not normalized_route.startswith(f"{normalized_prefix}/"):
+    if normalized_prefix and not (
+        normalized_route == normalized_prefix or normalized_route.startswith(f"{normalized_prefix}/")
+    ):
         prefixed_route = f"{normalized_prefix}{normalized_route}"
 
     prefixed = f"{base}{prefixed_route}"

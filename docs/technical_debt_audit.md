@@ -593,8 +593,14 @@ Audit Pass 76 (2026-02-07, files reviewed directly):
 - tests/test_watch_feature_persistence.py
 - tests/test_meta_label_dataset_paths.py
 
+Audit Pass 77 (2026-02-07, files reviewed directly):
+- heber/watch/gateway.py
+- tests/test_watch_gateway_paths.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/gateway.py line-by-line re-audit for route fallback edge cases.
+- heber/watch/consumer.py line-by-line re-audit for quote-retry and error-classification edge cases.
 
 ## Remediation Updates
 
@@ -733,6 +739,7 @@ Updated: 2026-02-07
 - Audit Pass 74 revalidated and remediated `TD-092`; label writer partition files now use collision-safe names so repeated flushes in the same second do not overwrite prior output.
 - Audit Pass 75 revalidated and remediated `TD-093`; watch entrypoint now guarantees service stop/flush on unexpected runtime failures rather than only on keyboard interrupts.
 - Audit Pass 76 revalidated and remediated `TD-094`; Greeks enrichment now preserves valid zero values instead of dropping them via truthiness checks.
+- Audit Pass 77 revalidated and remediated `TD-095`; gateway route construction now normalizes `api_prefix` values without a leading slash to prevent malformed prefixed URLs.
 
 ## Executive Summary
 
@@ -838,6 +845,7 @@ Severity key: High, Medium, Low
 | TD-092 | Medium | Watch Service | Label writer used second-granularity parquet filenames, so multiple flushes in the same second could overwrite prior partition files and lose labels. |
 | TD-093 | Medium | Watch Service | Watch entrypoint only stopped service on `KeyboardInterrupt`; other runtime failures could bypass stop/flush cleanup and drop buffered labels. |
 | TD-094 | Medium | Watch Service | Features Greeks enrichment used truthiness checks, so valid `0.0` values (`delta/gamma/theta/vega/iv`) were coerced to `None`. |
+| TD-095 | Medium | Watch Service | Gateway URL helper did not normalize custom `api_prefix` values (e.g. `api/v1`), producing malformed prefixed URLs and bypassing prefix-first routing. |
 
 ## Detailed Findings
 
@@ -1385,6 +1393,12 @@ Recommendation: Use explicit `is not None` checks for Greeks/IV extraction and a
 Update 2026-02-07: Remediated in `T-80` by switching to explicit `None` checks and adding an async regression test for zero-valued Greeks/IV responses.
 Revalidated 2026-02-07 (Pass 76): Resolved. Zero-valued Greeks/IV now persist as numeric features.
 
+**TD-095: Gateway API prefix handling can build malformed URLs.**
+Evidence: `gateway_url_candidates()` previously used `api_prefix.rstrip("/")` without enforcing a leading slash. Supplying `api_prefix=\"api/v1\"` produced malformed URLs (`http://gatewayapi/v1/...`) and broke prefix-first fallback semantics.
+Recommendation: Normalize non-empty prefixes to canonical `/prefix` form and add regression coverage for custom prefix inputs without a leading slash.
+Update 2026-02-07: Remediated in `T-81` by normalizing `api_prefix` with both leading/trailing slash handling and adding a route-construction regression test.
+Revalidated 2026-02-07 (Pass 77): Resolved. Prefix-first URL candidates are now valid for both `/api/v1` and `api/v1` inputs.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1392,7 +1406,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

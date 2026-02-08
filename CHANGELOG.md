@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/features.py`: Greeks enrichment now preserves valid `0.0` values (delta/gamma/theta/vega/IV) by using explicit `None` checks instead of truthiness
 - Added zero-valued Greeks regression test (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-094` remediation in audit pass 76 and `T-80`
+- Fixed `watch/gateway.py`: gateway route candidate construction now normalizes custom `api_prefix` values without leading slash (e.g. `api/v1`) to avoid malformed prefixed URLs
+- Added gateway prefix-normalization regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-095` remediation in audit pass 77 and `T-81`
 
 ### Removed
 
@@ -141,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 74: watch writer same-second file-collision conformance revalidation)
 - Expanded technical debt audit (pass 75: watch entrypoint runtime-failure shutdown conformance revalidation)
 - Expanded technical debt audit (pass 76: watch feature Greeks zero-value preservation conformance revalidation)
+- Expanded technical debt audit (pass 77: watch gateway api-prefix normalization conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

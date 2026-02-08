@@ -88,6 +88,7 @@ Updated: 2026-02-07
 - `T-78` complete (`TD-092`): label writer parquet part filenames are now collision-safe (unique suffix), preventing same-second flush overwrites with regression coverage.
 - `T-79` complete (`TD-093`): watch entrypoint now invokes `service.stop()` on unexpected runtime exceptions (not only keyboard interrupts), preserving shutdown cleanup/flush behavior with regression coverage.
 - `T-80` complete (`TD-094`): watch feature Greeks enrichment now preserves valid `0.0` values (explicit `None` checks), with regression coverage for zero-valued delta/gamma/theta/vega/IV payloads.
+- `T-81` complete (`TD-095`): gateway URL candidate construction now normalizes custom `api_prefix` values without a leading slash, preventing malformed prefix-first URLs and preserving fallback behavior.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -151,6 +152,7 @@ Updated: 2026-02-07
 - Audit Pass 74 revalidated `TD-092` as resolved via `T-78`.
 - Audit Pass 75 revalidated `TD-093` as resolved via `T-79`.
 - Audit Pass 76 revalidated `TD-094` as resolved via `T-80`.
+- Audit Pass 77 revalidated `TD-095` as resolved via `T-81`.
 
 ## Prioritization Approach
 
