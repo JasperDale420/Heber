@@ -100,6 +100,7 @@ Updated: 2026-02-07
 - `T-90` complete (`TD-104`): poller due-check logic now normalizes naive/aware watch timestamps to UTC before interval subtraction, preventing poll-loop crashes from mixed datetime types.
 - `T-91` complete (`TD-105`): manager expiry cleanup now normalizes naive `window_end` timestamps to UTC before comparison, preventing cleanup failures from mixed datetime types.
 - `T-92` complete (`TD-106`): consumer alert-field mapping now treats only `None` as missing for `spot_px`/`contract_px`, preserving valid zero-valued prices instead of falling back to alternate fields.
+- `T-93` complete (`TD-107`): market-context enrichment now preserves daily bar alignment when close prices include zero/invalid values, preventing 1-day returns from silently skipping invalid prior sessions.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -175,6 +176,7 @@ Updated: 2026-02-07
 - Audit Pass 86 revalidated `TD-104` as resolved via `T-90`.
 - Audit Pass 87 revalidated `TD-105` as resolved via `T-91`.
 - Audit Pass 88 revalidated `TD-106` as resolved via `T-92`.
+- Audit Pass 89 revalidated `TD-107` as resolved via `T-93`.
 
 ## Prioritization Approach
 

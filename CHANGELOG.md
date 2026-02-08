@@ -95,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/consumer.py`: alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values by treating only `None` as missing before fallback
 - Added consumer zero-price field-mapping regression test (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-106` remediation in audit pass 88 and `T-92`
+- Fixed `watch/features.py`: market-context close-series handling now preserves day alignment for zero/invalid closes so return horizons do not silently skip prior sessions
+- Added market-context zero-close alignment regression test (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-107` remediation in audit pass 89 and `T-93`
 
 ### Removed
 

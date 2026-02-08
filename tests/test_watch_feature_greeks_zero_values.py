@@ -72,3 +72,38 @@ async def test_enrich_greeks_preserves_zero_values(monkeypatch: pytest.MonkeyPat
     assert enriched.theta == 0.0
     assert enriched.vega == 0.0
     assert enriched.iv == 0.0
+
+
+@pytest.mark.asyncio
+async def test_market_context_does_not_skip_zero_close_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "data": {
+                    "bars": [
+                        {"t": "2026-02-07T00:00:00Z", "c": 100.0},
+                        {"t": "2026-02-06T00:00:00Z", "c": 0.0},
+                        {"t": "2026-02-05T00:00:00Z", "c": 50.0},
+                    ]
+                }
+            }
+
+    class _Client:
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
+
+    extractor = AlertFeatureExtractor(gateway_url="http://gateway:8000")
+    enriched = await extractor._enrich_market_context(_base_features())
+
+    assert enriched.underlying_1d_return is None

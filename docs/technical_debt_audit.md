@@ -662,12 +662,18 @@ Audit Pass 88 (2026-02-08, files reviewed directly):
 - tests/test_watch_zero_price_handling.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 89 (2026-02-08, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/features.py line-by-line re-audit for fallback/default behavior around sparse/zero-valued payload fields.
+- heber/watch/models.py line-by-line re-audit for serialization defaults and timestamp compatibility edge cases.
 
 ## Remediation Updates
 
-Updated: 2026-02-07
+Updated: 2026-02-08
 
 - `TD-015` addressed via `T-01`: Redis pending claims are consumed instead of dropped.
 - `TD-016` addressed via `T-02`: meta-label writer and dataset builder columns are aligned.
@@ -814,6 +820,7 @@ Updated: 2026-02-07
 - Audit Pass 86 revalidated and remediated `TD-104`; poll scheduling now handles naive `updated_at`/`alert_time` timestamps without aware/naive subtraction failures.
 - Audit Pass 87 revalidated and remediated `TD-105`; expiry cleanup now handles naive `window_end` timestamps without aware/naive comparison failures.
 - Audit Pass 88 revalidated and remediated `TD-106`; consumer alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values instead of overwriting them via truthiness fallback.
+- Audit Pass 89 revalidated and remediated `TD-107`; market-context returns no longer skip zero/invalid close days and silently shift return baselines to older sessions.
 
 ## Executive Summary
 
@@ -931,6 +938,7 @@ Severity key: High, Medium, Low
 | TD-104 | Medium | Watch Service | Poller due-check logic subtracted aware `now` from potentially naive watch timestamps, causing `TypeError` and aborting poll cycles. |
 | TD-105 | Medium | Watch Service | Expiry cleanup compared aware `now` to potentially naive `window_end`, causing `TypeError` and blocking expired-watch finalization. |
 | TD-106 | Medium | Watch Service | Consumer alert-field mapping used truthiness fallback for `spot_px`/`contract_px`, so valid `0.0` values were replaced by alternate fields (`underlying_price`/`price`). |
+| TD-107 | Medium | Watch Features | Market-context enrichment dropped zero/invalid close values before return calculations, allowing 1-day/5-day/30-day returns to silently use older sessions. |
 
 ## Detailed Findings
 
@@ -1550,6 +1558,12 @@ Recommendation: Treat only `None` as missing for mapped price fields and add reg
 Update 2026-02-08: Remediated in `T-92` by switching to explicit `None` checks for `spot_px`/`contract_px` fallback selection and adding a targeted consumer parsing regression test.
 Revalidated 2026-02-08 (Pass 88): Resolved. Consumer mapping now preserves valid zero-valued prices.
 
+**TD-107: Market-context returns can skip invalid prior sessions.**
+Evidence: `AlertFeatureExtractor._enrich_market_context()` previously built closes with `if b.get(\"c\")`, which dropped `0.0` values. When the immediate prior day close was zero/invalid, return calculations could silently skip that day and compute 1-day return against an older bar.
+Recommendation: Preserve bar-day alignment (including zero/invalid placeholders) and compute horizon returns only when the exact denominator day is present and strictly positive.
+Update 2026-02-08: Remediated in `T-93` by preserving close-series alignment (`None` placeholders for invalid values), gating denominator checks per horizon, and adding regression coverage for zero-close prior-day behavior.
+Revalidated 2026-02-08 (Pass 89): Resolved. Market-context returns now avoid shifted-baseline calculations when prior sessions contain invalid close values.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1557,7 +1571,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

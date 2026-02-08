@@ -528,32 +528,44 @@ class AlertFeatureExtractor:
             # Sort by timestamp descending (most recent first)
             bars = sorted(bars, key=lambda b: b.get("t", ""), reverse=True)
 
-            # Get close prices
-            closes = [b.get("c", 0.0) for b in bars if b.get("c")]
+            # Preserve day alignment (including zero closes) so return horizons
+            # do not silently skip invalid days and shift to older bars.
+            closes: list[float | None] = []
+            for bar in bars:
+                close_raw = bar.get("c")
+                if close_raw is None:
+                    closes.append(None)
+                    continue
+                try:
+                    closes.append(float(close_raw))
+                except (TypeError, ValueError):
+                    closes.append(None)
 
             if len(closes) < 2:
                 return features
 
             # Compute returns
             current_close = closes[0]
+            if current_close is None or current_close <= 0:
+                return features
 
             # 1-day return
-            if len(closes) >= 2:
+            if len(closes) >= 2 and closes[1] is not None and closes[1] > 0:
                 features.underlying_1d_return = (current_close / closes[1]) - 1.0
 
             # 5-day return
-            if len(closes) >= 6:
+            if len(closes) >= 6 and closes[5] is not None and closes[5] > 0:
                 features.underlying_5d_return = (current_close / closes[5]) - 1.0
 
             # 30-day return
-            if len(closes) >= 31:
+            if len(closes) >= 31 and closes[30] is not None and closes[30] > 0:
                 features.underlying_30d_return = (current_close / closes[30]) - 1.0
 
             # 20-day realized volatility (annualized)
             if len(closes) >= 21:
                 daily_returns = []
                 for i in range(20):
-                    if closes[i] > 0 and closes[i + 1] > 0:
+                    if closes[i] is not None and closes[i + 1] is not None and closes[i] > 0 and closes[i + 1] > 0:
                         daily_returns.append(math.log(closes[i] / closes[i + 1]))
 
                 if daily_returns:
