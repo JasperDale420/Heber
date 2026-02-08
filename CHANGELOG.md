@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/__main__.py`: entrypoint now always performs `service.stop()` in `finally`, ensuring cleanup on normal completion as well as error paths
 - Added normal-completion shutdown regression test (`tests/test_watch_entrypoint_shutdown.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-102` remediation in audit pass 84 and `T-88`
+- Fixed `watch/consumer.py`: `_is_flow_alert()` now supports both byte-key and string-key stream payloads (`b\"data\"` / `\"data\"`) across bytes/str/dict envelope shapes
+- Added consumer string-key envelope regression test (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-103` remediation in audit pass 85 and `T-89`
 
 ### Removed
 
@@ -173,6 +176,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 82: watch checker zero-entry expiry conformance revalidation)
 - Expanded technical debt audit (pass 83: watch writer legacy-entrypoint shutdown conformance revalidation)
 - Expanded technical debt audit (pass 84: watch main-entrypoint normal-exit cleanup conformance revalidation)
+- Expanded technical debt audit (pass 85: watch consumer decoded-stream payload conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

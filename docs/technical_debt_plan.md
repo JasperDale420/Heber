@@ -96,6 +96,7 @@ Updated: 2026-02-07
 - `T-86` complete (`TD-100`): barrier checker now expires watches lacking a computable return path once their window elapses, preventing indefinite `WATCHING` state for invalid-entry edge cases.
 - `T-87` complete (`TD-101`): legacy writer entrypoint (`run_watch_service`) now invokes `service.stop()` on runtime exceptions, preserving cleanup/flush behavior outside keyboard interrupts.
 - `T-88` complete (`TD-102`): main watch entrypoint now centralizes `service.stop()` in `finally`, guaranteeing cleanup on normal completion and exception paths.
+- `T-89` complete (`TD-103`): consumer flow-alert detection now supports both byte-key and string-key stream payload envelopes (`b\"data\"` and `\"data\"`), preserving ingestion under decoded Redis response modes.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -167,6 +168,7 @@ Updated: 2026-02-07
 - Audit Pass 82 revalidated `TD-100` as resolved via `T-86`.
 - Audit Pass 83 revalidated `TD-101` as resolved via `T-87`.
 - Audit Pass 84 revalidated `TD-102` as resolved via `T-88`.
+- Audit Pass 85 revalidated `TD-103` as resolved via `T-89`.
 
 ## Prioritization Approach
 

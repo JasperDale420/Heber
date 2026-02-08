@@ -236,15 +236,25 @@ class AlertWatchConsumer:
         The configured events stream contains multiple feed types
         (flow_alerts, darkpool, market_tide, etc.). We only process flow_alerts.
         """
-        # The 'data' field contains JSON string with event envelope
-        if b"data" in data:
-            import json
+        # The 'data' field contains JSON string with event envelope.
+        payload = data.get(b"data")
+        if payload is None:
+            payload = data.get("data")
+        if payload is None:
+            return False
 
-            try:
-                envelope = json.loads(data[b"data"])
-                return envelope.get("feed") == FLOW_ALERTS_FEED
-            except (json.JSONDecodeError, TypeError):
-                pass
+        try:
+            if isinstance(payload, bytes):
+                payload = payload.decode()
+            if isinstance(payload, str):
+                envelope = json.loads(payload)
+            elif isinstance(payload, dict):
+                envelope = payload
+            else:
+                return False
+            return envelope.get("feed") == FLOW_ALERTS_FEED
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            pass
         return False
 
     async def _process_alert(self, msg_id: str, data: dict) -> bool:

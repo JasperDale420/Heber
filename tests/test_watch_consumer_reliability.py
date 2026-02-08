@@ -85,3 +85,12 @@ async def test_handle_message_skips_non_flow_alerts_with_ack() -> None:
     should_ack = await consumer._handle_message("3-0", {b"data": b"{}"})
 
     assert should_ack is True
+
+
+def test_is_flow_alert_supports_string_data_key() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    is_flow = consumer._is_flow_alert({"data": '{"feed":"flow_alerts","payload":{}}'})
+
+    assert is_flow is True

@@ -638,8 +638,14 @@ Audit Pass 84 (2026-02-07, files reviewed directly):
 - tests/test_watch_entrypoint_shutdown.py
 - tests/test_watch_writer_entrypoint_shutdown.py
 
+Audit Pass 85 (2026-02-07, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for envelope parsing and fallback default edge cases.
+- heber/watch/poller.py line-by-line re-audit for batch error handling and quote-shape edge cases.
 
 ## Remediation Updates
 
@@ -786,6 +792,7 @@ Updated: 2026-02-07
 - Audit Pass 82 revalidated and remediated `TD-100`; checker now expires invalid-entry watches even when a return path cannot be computed.
 - Audit Pass 83 revalidated and remediated `TD-101`; legacy writer entrypoint now stops services on runtime exceptions rather than only on keyboard interrupts.
 - Audit Pass 84 revalidated and remediated `TD-102`; watch entrypoint now runs cleanup stop logic for normal completion in addition to exception paths.
+- Audit Pass 85 revalidated and remediated `TD-103`; flow-alert feed detection now supports both byte-key and string-key stream payloads.
 
 ## Executive Summary
 
@@ -899,6 +906,7 @@ Severity key: High, Medium, Low
 | TD-100 | Medium | Watch Service | Checker returned early when no return path was computable, so expired watches with invalid entry pricing remained stuck in `WATCHING` state indefinitely. |
 | TD-101 | Medium | Watch Service | Legacy `run_watch_service()` only stopped on `KeyboardInterrupt`; runtime exceptions bypassed stop/flush cleanup and could drop buffered labels. |
 | TD-102 | Medium | Watch Service | Main watch entrypoint did not call `service.stop()` on normal completion, so shutdown cleanup/flush behavior was inconsistent across exit paths. |
+| TD-103 | Medium | Watch Service | Consumer flow-alert detection only checked byte-key payloads (`b\"data\"`), so string-key stream records (`\"data\"`) were skipped and never processed. |
 
 ## Detailed Findings
 
@@ -1494,6 +1502,12 @@ Recommendation: Move cleanup stop semantics into a shared `finally` path so serv
 Update 2026-02-07: Remediated in `T-88` by centralizing `service.stop()` in `finally` and adding a regression test for normal completion.
 Revalidated 2026-02-07 (Pass 84): Resolved. Watch entrypoint now applies consistent cleanup behavior across normal and exceptional exits.
 
+**TD-103: Consumer misses flow alerts when stream payload uses string keys.**
+Evidence: `AlertWatchConsumer._is_flow_alert()` previously checked only `b\"data\"` and ignored `\"data\"` keys. Redis clients configured with decoded responses can deliver string keys, causing valid flow alerts to be treated as non-target messages.
+Recommendation: Accept both byte-key and string-key payload fields, with safe decode/JSON parse handling for bytes/str/dict payload shapes.
+Update 2026-02-07: Remediated in `T-89` by normalizing payload lookup and adding regression coverage for string-key `data` envelopes.
+Revalidated 2026-02-07 (Pass 85): Resolved. Consumer feed detection now works for both decoded and byte-oriented Redis stream payloads.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1501,7 +1515,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
