@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/__main__.py`: entrypoint now stops the watch service on non-interrupt runtime failures before re-raising, preserving cleanup/flush behavior
 - Added watch entrypoint shutdown regression test (`tests/test_watch_entrypoint_shutdown.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-093` remediation in audit pass 75 and `T-79`
+- Fixed `watch/features.py`: Greeks enrichment now preserves valid `0.0` values (delta/gamma/theta/vega/IV) by using explicit `None` checks instead of truthiness
+- Added zero-valued Greeks regression test (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-094` remediation in audit pass 76 and `T-80`
 
 ### Removed
 
@@ -137,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 73: watch zero-price return-path/barrier conformance revalidation)
 - Expanded technical debt audit (pass 74: watch writer same-second file-collision conformance revalidation)
 - Expanded technical debt audit (pass 75: watch entrypoint runtime-failure shutdown conformance revalidation)
+- Expanded technical debt audit (pass 76: watch feature Greeks zero-value preservation conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

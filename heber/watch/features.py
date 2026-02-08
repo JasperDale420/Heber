@@ -435,11 +435,17 @@ class AlertFeatureExtractor:
                 contract = contracts[0]  # Use first if no exact match
 
             # Extract Greeks
-            features.delta = float(contract.get("delta")) if contract.get("delta") else None
-            features.gamma = float(contract.get("gamma")) if contract.get("gamma") else None
-            features.theta = float(contract.get("theta")) if contract.get("theta") else None
-            features.vega = float(contract.get("vega")) if contract.get("vega") else None
-            features.iv = float(contract.get("implied_volatility")) if contract.get("implied_volatility") else None
+            delta = contract.get("delta")
+            gamma = contract.get("gamma")
+            theta = contract.get("theta")
+            vega = contract.get("vega")
+            implied_vol = contract.get("implied_volatility")
+
+            features.delta = float(delta) if delta is not None else None
+            features.gamma = float(gamma) if gamma is not None else None
+            features.theta = float(theta) if theta is not None else None
+            features.vega = float(vega) if vega is not None else None
+            features.iv = float(implied_vol) if implied_vol is not None else None
 
             logger.debug(
                 "Enriched Greeks",

@@ -586,8 +586,15 @@ Audit Pass 75 (2026-02-07, files reviewed directly):
 - tests/test_watch_async_redis.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 76 (2026-02-07, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_persistence.py
+- tests/test_meta_label_dataset_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/features.py line-by-line re-audit for persistence and extraction edge cases.
+- heber/watch/gateway.py line-by-line re-audit for route fallback edge cases.
 
 ## Remediation Updates
 
@@ -725,6 +732,7 @@ Updated: 2026-02-07
 - Audit Pass 73 revalidated and remediated `TD-091`; zero-price option snapshots now remain valid inputs for return/barrier evaluation instead of being dropped by truthiness checks.
 - Audit Pass 74 revalidated and remediated `TD-092`; label writer partition files now use collision-safe names so repeated flushes in the same second do not overwrite prior output.
 - Audit Pass 75 revalidated and remediated `TD-093`; watch entrypoint now guarantees service stop/flush on unexpected runtime failures rather than only on keyboard interrupts.
+- Audit Pass 76 revalidated and remediated `TD-094`; Greeks enrichment now preserves valid zero values instead of dropping them via truthiness checks.
 
 ## Executive Summary
 
@@ -829,6 +837,7 @@ Severity key: High, Medium, Low
 | TD-091 | Medium | Watch Service | Zero-valued quote fields (`0.0`) were treated as falsy in poller/checker return-path logic, which could suppress `-100%` outcomes and miss SL barrier classification. |
 | TD-092 | Medium | Watch Service | Label writer used second-granularity parquet filenames, so multiple flushes in the same second could overwrite prior partition files and lose labels. |
 | TD-093 | Medium | Watch Service | Watch entrypoint only stopped service on `KeyboardInterrupt`; other runtime failures could bypass stop/flush cleanup and drop buffered labels. |
+| TD-094 | Medium | Watch Service | Features Greeks enrichment used truthiness checks, so valid `0.0` values (`delta/gamma/theta/vega/iv`) were coerced to `None`. |
 
 ## Detailed Findings
 
@@ -1370,6 +1379,12 @@ Recommendation: Ensure `service.stop()` is invoked for unexpected runtime failur
 Update 2026-02-07: Remediated in `T-79` by stopping service on generic exceptions in the entrypoint and adding a targeted regression test.
 Revalidated 2026-02-07 (Pass 75): Resolved. Runtime exceptions now trigger cleanup stop behavior before bubbling up.
 
+**TD-094: Greeks enrichment drops valid zero values.**
+Evidence: `AlertFeatureExtractor._enrich_greeks()` previously used truthiness checks (`if contract.get("delta")`) to map Greeks. When providers return valid `0.0` values, those checks evaluated false and set features to `None`, degrading model input quality.
+Recommendation: Use explicit `is not None` checks for Greeks/IV extraction and add regression coverage for zero-valued payloads.
+Update 2026-02-07: Remediated in `T-80` by switching to explicit `None` checks and adding an async regression test for zero-valued Greeks/IV responses.
+Revalidated 2026-02-07 (Pass 76): Resolved. Zero-valued Greeks/IV now persist as numeric features.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1377,7 +1392,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
