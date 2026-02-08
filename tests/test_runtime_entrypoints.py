@@ -14,7 +14,6 @@ def test_legacy_missing_modules_are_not_referenced() -> None:
     files = [
         ROOT / "Dockerfile",
         ROOT / "k8s/base/deployments/consumer.yaml",
-        ROOT / "k8s/base/deployments/writer.yaml",
         ROOT / "k8s/base/deployments/compactor.yaml",
         ROOT / "k8s/base/deployments/hotloader.yaml",
         ROOT / "k8s/base/deployments/backfill.yaml",
@@ -43,7 +42,6 @@ def test_base_deployments_reference_valid_python_entrypoints() -> None:
     deployment_files = [
         ROOT / "k8s/base/deployments/catalog.yaml",
         ROOT / "k8s/base/deployments/consumer.yaml",
-        ROOT / "k8s/base/deployments/writer.yaml",
         ROOT / "k8s/base/deployments/compactor.yaml",
         ROOT / "k8s/base/deployments/hotloader.yaml",
         ROOT / "k8s/base/deployments/backfill.yaml",

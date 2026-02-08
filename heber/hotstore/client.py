@@ -166,7 +166,7 @@ class HotStoreClient:
             now() - max(ts_available) as lag_seconds
         FROM {table}
         WHERE ts_event > now() - INTERVAL 1 HOUR
-        """
+        """  # nosec B608 - table from internal config, not user input
         result = self.client.query(query)
         if result.result_rows and result.result_rows[0][0]:
             return float(result.result_rows[0][0])
@@ -187,7 +187,7 @@ class HotStoreClient:
         SELECT count()
         FROM {table}
         WHERE dt >= today() - INTERVAL {days} DAY
-        """
+        """  # nosec B608 - table from internal config, not user input
         result = self.client.query(query)
         return result.result_rows[0][0] if result.result_rows else 0
 

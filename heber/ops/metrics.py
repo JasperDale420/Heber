@@ -9,9 +9,21 @@ Naming convention: heber_<service>_<metric_name>{<labels>}
 import os
 
 import structlog
-from prometheus_client import Counter, Gauge, Histogram, Info, start_http_server
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, start_http_server
 
 logger = structlog.get_logger(__name__)
+
+
+def _get_or_create(metric_cls, name, *args, **kwargs):
+    """Return an existing metric or create a new one.
+
+    Prevents ``ValueError: Duplicated timeseries`` when the module is
+    re-imported (e.g. across test files that transitively import ops.metrics).
+    """
+    existing = REGISTRY._names_to_collectors.get(name)
+    if existing is not None:
+        return existing
+    return metric_cls(name, *args, **kwargs)
 
 
 # Default metrics port (PRD §12.5.1)
@@ -19,39 +31,44 @@ METRICS_PORT = 9100
 
 
 # Service info
-heber_info = Info("heber", "Heber Data Lakehouse service info")
+heber_info = _get_or_create(Info, "heber", "Heber Data Lakehouse service info")
 
 
 # =============================================================================
 # Consumer Metrics (PRD §12.5.2)
 # =============================================================================
 
-consumer_events_received_total = Counter(
+consumer_events_received_total = _get_or_create(
+    Counter,
     "heber_consumer_events_received_total",
     "Total events received from event bus",
     ["feed", "provider"],
 )
 
-consumer_events_processed_total = Counter(
+consumer_events_processed_total = _get_or_create(
+    Counter,
     "heber_consumer_events_processed_total",
     "Total events processed",
     ["feed", "provider", "status"],  # status: success, error, dropped
 )
 
-consumer_batch_size = Histogram(
+consumer_batch_size = _get_or_create(
+    Histogram,
     "heber_consumer_batch_size",
     "Batch sizes for processing",
     ["feed"],
     buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
 
-consumer_lag_seconds = Gauge(
+consumer_lag_seconds = _get_or_create(
+    Gauge,
     "heber_consumer_lag_seconds",
     "Consumer lag behind stream head in seconds",
     ["stream"],
 )
 
-consumer_dedupe_drops_total = Counter(
+consumer_dedupe_drops_total = _get_or_create(
+    Counter,
     "heber_consumer_dedupe_drops_total",
     "Events dropped by deduplication (Bloom filter)",
     ["feed"],
@@ -62,32 +79,37 @@ consumer_dedupe_drops_total = Counter(
 # Writer Metrics (PRD §12.5.2)
 # =============================================================================
 
-writer_rows_written_total = Counter(
+writer_rows_written_total = _get_or_create(
+    Counter,
     "heber_writer_rows_written_total",
     "Total rows written",
     ["layer", "dataset"],
 )
 
-writer_bytes_written_total = Counter(
+writer_bytes_written_total = _get_or_create(
+    Counter,
     "heber_writer_bytes_written_total",
     "Total bytes written",
     ["layer", "dataset"],
 )
 
-writer_files_written_total = Counter(
+writer_files_written_total = _get_or_create(
+    Counter,
     "heber_writer_files_written_total",
     "Total files created",
     ["layer", "dataset"],
 )
 
-writer_flush_duration_seconds = Histogram(
+writer_flush_duration_seconds = _get_or_create(
+    Histogram,
     "heber_writer_flush_duration_seconds",
     "Time to flush a batch to storage",
     ["layer"],
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
 )
 
-writer_errors_total = Counter(
+writer_errors_total = _get_or_create(
+    Counter,
     "heber_writer_errors_total",
     "Write failures by type",
     ["layer", "error_type"],
@@ -98,25 +120,29 @@ writer_errors_total = Counter(
 # Compactor Metrics (PRD §12.5.2)
 # =============================================================================
 
-compactor_runs_total = Counter(
+compactor_runs_total = _get_or_create(
+    Counter,
     "heber_compactor_runs_total",
     "Total compaction runs",
     ["dataset", "status"],  # status: success, error
 )
 
-compactor_files_merged_total = Counter(
+compactor_files_merged_total = _get_or_create(
+    Counter,
     "heber_compactor_files_merged_total",
     "Total files merged during compaction",
     ["dataset"],
 )
 
-compactor_bytes_reclaimed_total = Counter(
+compactor_bytes_reclaimed_total = _get_or_create(
+    Counter,
     "heber_compactor_bytes_reclaimed_total",
     "Bytes reclaimed (space saved) by compaction",
     ["dataset"],
 )
 
-compactor_duration_seconds = Histogram(
+compactor_duration_seconds = _get_or_create(
+    Histogram,
     "heber_compactor_duration_seconds",
     "Compaction duration",
     ["dataset"],
@@ -128,20 +154,23 @@ compactor_duration_seconds = Histogram(
 # Catalog Metrics (PRD §12.5.2)
 # =============================================================================
 
-catalog_requests_total = Counter(
+catalog_requests_total = _get_or_create(
+    Counter,
     "heber_catalog_requests_total",
     "Total API requests",
     ["endpoint", "status_code"],
 )
 
-catalog_request_duration_seconds = Histogram(
+catalog_request_duration_seconds = _get_or_create(
+    Histogram,
     "heber_catalog_request_duration_seconds",
     "API request latency",
     ["endpoint"],
     buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
 )
 
-catalog_db_connections_active = Gauge(
+catalog_db_connections_active = _get_or_create(
+    Gauge,
     "heber_catalog_db_connections_active",
     "Active database connections",
 )
@@ -151,19 +180,22 @@ catalog_db_connections_active = Gauge(
 # Hot Store Metrics (PRD §12.5.2)
 # =============================================================================
 
-hotstore_rows_synced_total = Counter(
+hotstore_rows_synced_total = _get_or_create(
+    Counter,
     "heber_hotstore_rows_synced_total",
     "Rows synced to Hot Store",
     ["dataset"],
 )
 
-hotstore_lag_seconds = Gauge(
+hotstore_lag_seconds = _get_or_create(
+    Gauge,
     "heber_hotstore_lag_seconds",
     "Sync lag behind Silver in seconds",
     ["dataset"],
 )
 
-hotstore_sync_errors_total = Counter(
+hotstore_sync_errors_total = _get_or_create(
+    Counter,
     "heber_hotstore_sync_errors_total",
     "Sync failures",
     ["dataset", "error_type"],
@@ -174,21 +206,24 @@ hotstore_sync_errors_total = Counter(
 # Anti-Leakage Latency Metrics (PRD §12.5.3)
 # =============================================================================
 
-ingest_lag_seconds = Histogram(
+ingest_lag_seconds = _get_or_create(
+    Histogram,
     "heber_ingest_lag_seconds",
     "Lag from ts_event to ts_ingest (ts_ingest - ts_event)",
     ["feed", "provider"],
     buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
 )
 
-availability_lag_seconds = Histogram(
+availability_lag_seconds = _get_or_create(
+    Histogram,
     "heber_availability_lag_seconds",
     "Lag from ts_event to ts_available (ts_available - ts_event)",
     ["feed", "provider"],
     buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
 )
 
-commit_lag_seconds = Histogram(
+commit_lag_seconds = _get_or_create(
+    Histogram,
     "heber_commit_lag_seconds",
     "Lag from ts_ingest to file commit (ts_commit - ts_ingest)",
     ["feed"],
@@ -200,13 +235,15 @@ commit_lag_seconds = Histogram(
 # DLQ Metrics
 # =============================================================================
 
-dlq_events_total = Counter(
+dlq_events_total = _get_or_create(
+    Counter,
     "heber_dlq_events_total",
     "Events sent to dead-letter queue",
     ["feed", "error_type"],
 )
 
-dlq_size = Gauge(
+dlq_size = _get_or_create(
+    Gauge,
     "heber_dlq_size",
     "Current dead-letter queue size",
     ["feed"],

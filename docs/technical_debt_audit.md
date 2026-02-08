@@ -650,8 +650,14 @@ Audit Pass 86 (2026-02-07, files reviewed directly):
 - tests/test_watch_gateway_paths.py
 - tests/test_watch_zero_price_handling.py
 
+Audit Pass 87 (2026-02-07, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_zero_price_handling.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/manager.py line-by-line re-audit for lifecycle/index drift and time-normalization edge cases.
+- heber/watch/models.py line-by-line re-audit for enum/timestamp compatibility and persistence edge cases.
 
 ## Remediation Updates
 
@@ -800,6 +806,7 @@ Updated: 2026-02-07
 - Audit Pass 84 revalidated and remediated `TD-102`; watch entrypoint now runs cleanup stop logic for normal completion in addition to exception paths.
 - Audit Pass 85 revalidated and remediated `TD-103`; flow-alert feed detection now supports both byte-key and string-key stream payloads.
 - Audit Pass 86 revalidated and remediated `TD-104`; poll scheduling now handles naive `updated_at`/`alert_time` timestamps without aware/naive subtraction failures.
+- Audit Pass 87 revalidated and remediated `TD-105`; expiry cleanup now handles naive `window_end` timestamps without aware/naive comparison failures.
 
 ## Executive Summary
 
@@ -915,6 +922,7 @@ Severity key: High, Medium, Low
 | TD-102 | Medium | Watch Service | Main watch entrypoint did not call `service.stop()` on normal completion, so shutdown cleanup/flush behavior was inconsistent across exit paths. |
 | TD-103 | Medium | Watch Service | Consumer flow-alert detection only checked byte-key payloads (`b\"data\"`), so string-key stream records (`\"data\"`) were skipped and never processed. |
 | TD-104 | Medium | Watch Service | Poller due-check logic subtracted aware `now` from potentially naive watch timestamps, causing `TypeError` and aborting poll cycles. |
+| TD-105 | Medium | Watch Service | Expiry cleanup compared aware `now` to potentially naive `window_end`, causing `TypeError` and blocking expired-watch finalization. |
 
 ## Detailed Findings
 
@@ -1522,6 +1530,12 @@ Recommendation: Normalize both `now` and `last_polled` to timezone-aware UTC bef
 Update 2026-02-07: Remediated in `T-90` by normalizing naive timestamps to UTC inside `_is_watch_due()` and adding an async regression test for naive `updated_at` values.
 Revalidated 2026-02-07 (Pass 86): Resolved. Poll cycles now safely evaluate due intervals with naive or aware watch timestamps.
 
+**TD-105: Manager expiry cleanup crashes on naive `window_end` values.**
+Evidence: `WatchManager.get_expired_watches()` previously compared `w.window_end <= now` directly. When `window_end` was naive, Python raised `TypeError: can't compare offset-naive and offset-aware datetimes`, interrupting expiry cleanup.
+Recommendation: Normalize `window_end` to aware UTC before comparison and add regression coverage for naive-window expiry paths.
+Update 2026-02-07: Remediated in `T-91` by normalizing naive `window_end` timestamps before expiry comparison and adding regression coverage for naive-window cleanup.
+Revalidated 2026-02-07 (Pass 87): Resolved. Expiry cleanup now handles naive and aware watch window timestamps safely.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1529,7 +1543,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

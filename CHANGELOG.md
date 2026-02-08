@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Repo Hygiene Remediation
+
+- Fixed Prometheus metric registry collision: wrapped all 26 metrics in `_get_or_create()` helper to prevent `ValueError: Duplicated timeseries` during test collection (201 tests now pass, was 0)
+- Expanded `.gitignore` from 2 entries to comprehensive Python project patterns; removed 81 tracked `.pyc` files
+- Removed `openmetadata-ingestion` from `[catalog]` optional deps (unsatisfiable SQLAlchemy <2.0 conflict)
+- Pinned Docker images: `minio:RELEASE.2025-01-20T14-49-07Z`, `lakefs:1.48.0` (was `:latest`)
+- Removed duplicate k8s writer deployment (4 manifests: deployment, service, PDB, HPA) — identical to consumer
+- Removed stale `heber-redis` container from `docker-compose.yml`; catalog now uses Data Gateway Redis via `host.docker.internal`
+- Removed duplicate Dockerfile `writer` stage (same CMD as `consumer`)
+- Suppressed Bandit B608 false positives on ClickHouse queries (table names from internal enums)
+- Updated 3 test files to remove references to deleted writer k8s manifests
+
 #### Codebase Audit Fixes
 
 - Fixed `cli.py` backfill: `--since`/`--until` args are now passed to `transform()` when `--feed` is specified (previously silently ignored)
@@ -77,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py`: due-check scheduling now normalizes naive and aware timestamps to UTC before subtraction, preventing mixed-datetime `TypeError` crashes during polling
 - Added poller naive-timestamp due-check regression test (`tests/test_watch_async_redis.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-104` remediation in audit pass 86 and `T-90`
+- Fixed `watch/manager.py`: expired-watch detection now normalizes naive `window_end` timestamps to UTC before comparison, preventing cleanup crashes on mixed datetime types
+- Added manager naive-window expiry regression test (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-105` remediation in audit pass 87 and `T-91`
 
 ### Removed
 
@@ -181,6 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 84: watch main-entrypoint normal-exit cleanup conformance revalidation)
 - Expanded technical debt audit (pass 85: watch consumer decoded-stream payload conformance revalidation)
 - Expanded technical debt audit (pass 86: watch poller naive-timestamp due-check conformance revalidation)
+- Expanded technical debt audit (pass 87: watch manager naive-window expiry conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

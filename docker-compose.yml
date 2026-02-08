@@ -27,27 +27,6 @@ services:
         max-file: "5"
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: heber-redis
-    user: "999:1000" # redis:redis — skips root chown on startup
-    command: redis-server --appendonly yes
-    volumes:
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/redis/data:/data
-    ports:
-      - "6380:6379"
-    healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: unless-stopped
-
   clickhouse:
     image: clickhouse/clickhouse-server:24.1
     container_name: heber-clickhouse
@@ -80,7 +59,7 @@ services:
 
   # MinIO - S3-compatible object storage for Iceberg and lakeFS
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     container_name: heber-minio
     command: server /data --console-address ":9001"
     environment:
@@ -105,7 +84,7 @@ services:
 
   # lakeFS - Git for data (Phase 2)
   lakefs:
-    image: treeverse/lakefs:latest
+    image: treeverse/lakefs:1.48.0
     container_name: heber-lakefs
     environment:
       LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_SECRET_KEY:-some-random-secret-key-min-32-chars}
@@ -233,16 +212,16 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://redis:6379
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_CLICKHOUSE_HOST=clickhouse
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
       - "8085:8080"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\"" ]

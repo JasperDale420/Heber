@@ -315,8 +315,13 @@ class WatchManager:
         """Get watches that have passed their window_end time."""
         now = datetime.now(UTC)
         active = self.get_active_watches()
-
-        return [w for w in active if w.window_end <= now]
+        expired: list[AlertWatch] = []
+        for watch in active:
+            window_end = watch.window_end
+            normalized_window_end = window_end if window_end.tzinfo is not None else window_end.replace(tzinfo=UTC)
+            if normalized_window_end <= now:
+                expired.append(watch)
+        return expired
 
     def cleanup_expired(self) -> int:
         """Mark expired watches as EXPIRED and remove from active.

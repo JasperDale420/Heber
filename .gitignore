@@ -1,2 +1,37 @@
+# Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+
+# Jupyter
+.ipynb_checkpoints/

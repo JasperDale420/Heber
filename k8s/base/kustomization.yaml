@@ -19,21 +19,17 @@ resources:
   - secrets/cluster-secret-store.yaml
   - secrets/external-secret.yaml
   - deployments/consumer.yaml
-  - deployments/writer.yaml
   - deployments/compactor.yaml
   - deployments/catalog.yaml
   - deployments/hotloader.yaml
   - deployments/backfill.yaml
   - services/consumer.yaml
-  - services/writer.yaml
   - services/catalog.yaml
   - services/hotloader.yaml
   - pdb/consumer.yaml
-  - pdb/writer.yaml
   - pdb/catalog.yaml
   - pdb/hotloader.yaml
   - hpa/consumer.yaml
-  - hpa/writer.yaml
   - hpa/catalog.yaml
 
 commonLabels:

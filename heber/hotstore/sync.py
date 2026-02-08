@@ -439,7 +439,7 @@ class HotStoreReader:
         if "instrument_key" in filters:
             where.append("instrument_key = %(instrument_key)s")
             params["instrument_key"] = filters["instrument_key"]
-        query = f"SELECT * FROM {table} WHERE {' AND '.join(where)} ORDER BY ts_event"
+        query = f"SELECT * FROM {table} WHERE {' AND '.join(where)} ORDER BY ts_event"  # nosec B608 — table from HotStoreTable enum
         result = self.syncer.client.client.query(query, parameters=params)
         return [dict(zip(result.column_names, row, strict=False)) for row in result.result_rows]
 

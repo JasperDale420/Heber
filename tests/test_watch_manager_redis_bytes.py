@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from heber.watch.manager import WatchManager
-from heber.watch.models import WatchHorizon
+from heber.watch.models import WatchHorizon, WatchStatus
 
 
 class _BytesRedis:
@@ -115,3 +115,18 @@ def test_update_watch_price_handles_zero_entry_price() -> None:
     assert updated.current_price == 0.5
     assert updated.current_return is None
     assert updated.snapshot_count == 1
+
+
+def test_cleanup_expired_handles_naive_window_end() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    watch.window_end = datetime.now() - timedelta(minutes=1)
+    manager._save_watch(watch)
+
+    expired = manager.cleanup_expired()
+
+    assert expired == 1
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.status == WatchStatus.EXPIRED
