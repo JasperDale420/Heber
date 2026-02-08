@@ -214,3 +214,37 @@ async def test_poller_updates_watch_with_zero_mid_price() -> None:
 
     assert stats["updated"] == 1
     assert manager.updated_prices == [0.0]
+
+
+@pytest.mark.asyncio
+async def test_poller_handles_naive_last_polled_timestamps() -> None:
+    manager = _AsyncOnlyManager()
+    naive_now = datetime.now()
+    manager.get_active_watches_async = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            SimpleNamespace(
+                watch_id="watch-naive",
+                occ_symbol="AAPL260220C00100000",
+                entry_price=1.0,
+                horizon=WatchHorizon.INTRADAY,
+                updated_at=naive_now - timedelta(minutes=10),
+            ),
+        ]
+    )
+    poller = SnapshotPoller(manager)
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": 1.0,
+                "ap": 1.2,
+                "last_price": 1.1,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["due_watches"] == 1
+    assert stats["updated"] == 1
+    assert manager.updated == 1

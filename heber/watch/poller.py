@@ -261,4 +261,6 @@ class SnapshotPoller:
         last_polled = getattr(watch, "updated_at", None) or getattr(watch, "alert_time", None)
         if not isinstance(last_polled, datetime):
             return True
-        return (now - last_polled).total_seconds() >= interval_seconds
+        normalized_now = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+        normalized_last_polled = last_polled if last_polled.tzinfo is not None else last_polled.replace(tzinfo=UTC)
+        return (normalized_now - normalized_last_polled).total_seconds() >= interval_seconds

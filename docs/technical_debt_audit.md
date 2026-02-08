@@ -644,8 +644,14 @@ Audit Pass 85 (2026-02-07, files reviewed directly):
 - tests/test_watch_gateway_paths.py
 - tests/test_watch_async_redis.py
 
+Audit Pass 86 (2026-02-07, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_zero_price_handling.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py line-by-line re-audit for batch error handling and quote-shape edge cases.
+- heber/watch/manager.py line-by-line re-audit for lifecycle/index drift and time-normalization edge cases.
 
 ## Remediation Updates
 
@@ -793,6 +799,7 @@ Updated: 2026-02-07
 - Audit Pass 83 revalidated and remediated `TD-101`; legacy writer entrypoint now stops services on runtime exceptions rather than only on keyboard interrupts.
 - Audit Pass 84 revalidated and remediated `TD-102`; watch entrypoint now runs cleanup stop logic for normal completion in addition to exception paths.
 - Audit Pass 85 revalidated and remediated `TD-103`; flow-alert feed detection now supports both byte-key and string-key stream payloads.
+- Audit Pass 86 revalidated and remediated `TD-104`; poll scheduling now handles naive `updated_at`/`alert_time` timestamps without aware/naive subtraction failures.
 
 ## Executive Summary
 
@@ -907,6 +914,7 @@ Severity key: High, Medium, Low
 | TD-101 | Medium | Watch Service | Legacy `run_watch_service()` only stopped on `KeyboardInterrupt`; runtime exceptions bypassed stop/flush cleanup and could drop buffered labels. |
 | TD-102 | Medium | Watch Service | Main watch entrypoint did not call `service.stop()` on normal completion, so shutdown cleanup/flush behavior was inconsistent across exit paths. |
 | TD-103 | Medium | Watch Service | Consumer flow-alert detection only checked byte-key payloads (`b\"data\"`), so string-key stream records (`\"data\"`) were skipped and never processed. |
+| TD-104 | Medium | Watch Service | Poller due-check logic subtracted aware `now` from potentially naive watch timestamps, causing `TypeError` and aborting poll cycles. |
 
 ## Detailed Findings
 
@@ -1508,6 +1516,12 @@ Recommendation: Accept both byte-key and string-key payload fields, with safe de
 Update 2026-02-07: Remediated in `T-89` by normalizing payload lookup and adding regression coverage for string-key `data` envelopes.
 Revalidated 2026-02-07 (Pass 85): Resolved. Consumer feed detection now works for both decoded and byte-oriented Redis stream payloads.
 
+**TD-104: Poller due-check crashes on naive timestamps.**
+Evidence: `SnapshotPoller._is_watch_due()` previously computed `(now - last_polled)` directly. If persisted watch timestamps were naive (no timezone), this raised `TypeError: can't subtract offset-naive and offset-aware datetimes` and interrupted polling.
+Recommendation: Normalize both `now` and `last_polled` to timezone-aware UTC before subtraction and add regression coverage for naive timestamp inputs.
+Update 2026-02-07: Remediated in `T-90` by normalizing naive timestamps to UTC inside `_is_watch_due()` and adding an async regression test for naive `updated_at` values.
+Revalidated 2026-02-07 (Pass 86): Resolved. Poll cycles now safely evaluate due intervals with naive or aware watch timestamps.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1515,7 +1529,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
