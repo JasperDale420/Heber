@@ -615,8 +615,14 @@ Audit Pass 80 (2026-02-07, files reviewed directly):
 - tests/test_watch_manager_redis_bytes.py
 - tests/test_watch_async_redis.py
 
+Audit Pass 81 (2026-02-07, files reviewed directly):
+- heber/watch/models.py
+- tests/test_watch_models_config.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/models.py line-by-line re-audit for numeric constraints and serialization edge cases.
+- heber/watch/checker.py line-by-line re-audit for barrier-first tie-breaking and expiry edge cases.
 
 ## Remediation Updates
 
@@ -759,6 +765,7 @@ Updated: 2026-02-07
 - Audit Pass 78 revalidated and remediated `TD-096`; consumer entry-price logic now treats zero bid/ask quotes as valid values when computing midpoint price.
 - Audit Pass 79 revalidated and remediated `TD-097`; poller now preserves zero-valued midpoint prices when updating watch state instead of falling back to `last_price`.
 - Audit Pass 80 revalidated and remediated `TD-098`; watch-manager price updates now handle non-positive entry prices without division errors.
+- Audit Pass 81 revalidated and remediated `TD-099`; watch models now use Pydantic v2 `ConfigDict` to remove class-based config deprecation warnings.
 
 ## Executive Summary
 
@@ -868,6 +875,7 @@ Severity key: High, Medium, Low
 | TD-096 | Medium | Watch Service | Consumer quote midpoint logic treated `0.0` bid/ask values as missing, so valid quotes could return `None` entry prices and fall back to stale alert prices. |
 | TD-097 | Medium | Watch Service | Poller watch-price updates used `snapshot.mid_px or snapshot.last_px`, so valid `mid_px=0.0` was overwritten by `last_price` and drifted watch state. |
 | TD-098 | Medium | Watch Service | Watch manager divided by `entry_price` unconditionally during updates; `entry_price=0.0` raised `ZeroDivisionError` and could break poll cycles. |
+| TD-099 | Low | Watch Service | `AlertWatch` used class-based Pydantic `Config`, emitting `PydanticDeprecatedSince20` warnings on import/reload and masking real warnings in test output. |
 
 ## Detailed Findings
 
@@ -1439,6 +1447,12 @@ Recommendation: Guard return/MFE/MAE computation when `entry_price <= 0`, preser
 Update 2026-02-07: Remediated in `T-84` by adding explicit `entry_price > 0` guards in manager update logic and adding regression coverage for zero-entry updates.
 Revalidated 2026-02-07 (Pass 80): Resolved. Manager updates now avoid division errors and keep watch state writable for invalid-entry edge cases.
 
+**TD-099: Watch models still use deprecated class-based Pydantic config.**
+Evidence: `AlertWatch` defined an inner `class Config` with `use_enum_values = True`, which emits `PydanticDeprecatedSince20` warnings under Pydantic v2 on module import/reload.
+Recommendation: Replace class-based config with `model_config = ConfigDict(...)` and add regression coverage asserting the module reload path does not emit class-config deprecation warnings.
+Update 2026-02-07: Remediated in `T-85` by migrating `AlertWatch` to `ConfigDict(use_enum_values=True)` and adding a warning-regression test.
+Revalidated 2026-02-07 (Pass 81): Resolved. Reloading watch models no longer emits class-based config deprecation warnings.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1446,7 +1460,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
