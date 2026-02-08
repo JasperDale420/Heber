@@ -92,6 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/manager.py`: expired-watch detection now normalizes naive `window_end` timestamps to UTC before comparison, preventing cleanup crashes on mixed datetime types
 - Added manager naive-window expiry regression test (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-105` remediation in audit pass 87 and `T-91`
+- Fixed `watch/consumer.py`: alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values by treating only `None` as missing before fallback
+- Added consumer zero-price field-mapping regression test (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-106` remediation in audit pass 88 and `T-92`
 
 ### Removed
 

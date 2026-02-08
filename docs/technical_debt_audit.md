@@ -656,8 +656,14 @@ Audit Pass 87 (2026-02-07, files reviewed directly):
 - tests/test_watch_async_redis.py
 - tests/test_watch_zero_price_handling.py
 
+Audit Pass 88 (2026-02-08, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/models.py line-by-line re-audit for enum/timestamp compatibility and persistence edge cases.
+- heber/watch/features.py line-by-line re-audit for fallback/default behavior around sparse/zero-valued payload fields.
 
 ## Remediation Updates
 
@@ -807,6 +813,7 @@ Updated: 2026-02-07
 - Audit Pass 85 revalidated and remediated `TD-103`; flow-alert feed detection now supports both byte-key and string-key stream payloads.
 - Audit Pass 86 revalidated and remediated `TD-104`; poll scheduling now handles naive `updated_at`/`alert_time` timestamps without aware/naive subtraction failures.
 - Audit Pass 87 revalidated and remediated `TD-105`; expiry cleanup now handles naive `window_end` timestamps without aware/naive comparison failures.
+- Audit Pass 88 revalidated and remediated `TD-106`; consumer alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values instead of overwriting them via truthiness fallback.
 
 ## Executive Summary
 
@@ -923,6 +930,7 @@ Severity key: High, Medium, Low
 | TD-103 | Medium | Watch Service | Consumer flow-alert detection only checked byte-key payloads (`b\"data\"`), so string-key stream records (`\"data\"`) were skipped and never processed. |
 | TD-104 | Medium | Watch Service | Poller due-check logic subtracted aware `now` from potentially naive watch timestamps, causing `TypeError` and aborting poll cycles. |
 | TD-105 | Medium | Watch Service | Expiry cleanup compared aware `now` to potentially naive `window_end`, causing `TypeError` and blocking expired-watch finalization. |
+| TD-106 | Medium | Watch Service | Consumer alert-field mapping used truthiness fallback for `spot_px`/`contract_px`, so valid `0.0` values were replaced by alternate fields (`underlying_price`/`price`). |
 
 ## Detailed Findings
 
@@ -1536,6 +1544,12 @@ Recommendation: Normalize `window_end` to aware UTC before comparison and add re
 Update 2026-02-07: Remediated in `T-91` by normalizing naive `window_end` timestamps before expiry comparison and adding regression coverage for naive-window cleanup.
 Revalidated 2026-02-07 (Pass 87): Resolved. Expiry cleanup now handles naive and aware watch window timestamps safely.
 
+**TD-106: Consumer field mapping overwrites valid zero prices.**
+Evidence: `AlertWatchConsumer._map_alert_fields()` previously used `parsed.get(\"spot_px\") or parsed.get(\"underlying_price\")` and `parsed.get(\"contract_px\") or parsed.get(\"price\")`. When a valid `0.0` value was present, truthiness fallback replaced it with the alternate field, corrupting alert pricing inputs used for watch creation/features.
+Recommendation: Treat only `None` as missing for mapped price fields and add regression coverage ensuring zero-valued prices are preserved.
+Update 2026-02-08: Remediated in `T-92` by switching to explicit `None` checks for `spot_px`/`contract_px` fallback selection and adding a targeted consumer parsing regression test.
+Revalidated 2026-02-08 (Pass 88): Resolved. Consumer mapping now preserves valid zero-valued prices.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1543,7 +1557,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

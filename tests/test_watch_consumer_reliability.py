@@ -94,3 +94,20 @@ def test_is_flow_alert_supports_string_data_key() -> None:
     is_flow = consumer._is_flow_alert({"data": '{"feed":"flow_alerts","payload":{}}'})
 
     assert is_flow is True
+
+
+def test_map_alert_fields_preserves_zero_price_values() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    mapped = consumer._map_alert_fields(
+        {
+            "spot_px": 0.0,
+            "underlying_price": 125.5,
+            "contract_px": 0.0,
+            "price": 3.25,
+        }
+    )
+
+    assert mapped["spot_px"] == 0.0
+    assert mapped["contract_px"] == 0.0

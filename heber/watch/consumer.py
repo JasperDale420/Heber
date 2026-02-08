@@ -378,6 +378,12 @@ class AlertWatchConsumer:
         """Map various field name conventions to standard fields."""
         put_call_raw = parsed.get("put_call") or parsed.get("type", "C")
         put_call = put_call_raw[0].upper() if put_call_raw else "C"
+        spot_px = parsed.get("spot_px")
+        if spot_px is None:
+            spot_px = parsed.get("underlying_price", 0)
+        contract_px = parsed.get("contract_px")
+        if contract_px is None:
+            contract_px = parsed.get("price", 0)
 
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
@@ -386,8 +392,8 @@ class AlertWatchConsumer:
             "put_call": put_call,
             "expiry": parsed.get("expiry"),
             "strike": float(parsed.get("strike", 0) or 0),
-            "spot_px": float(parsed.get("spot_px") or parsed.get("underlying_price", 0) or 0),
-            "contract_px": float(parsed.get("contract_px") or parsed.get("price", 0) or 0),
+            "spot_px": float(spot_px or 0),
+            "contract_px": float(contract_px or 0),
         }
 
     def _calculate_dte(self, expiry: str | None) -> int:
