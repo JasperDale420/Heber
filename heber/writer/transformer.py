@@ -28,31 +28,11 @@ logger = structlog.get_logger(__name__)
 
 
 # Field mappings: payload field -> Silver schema field
-# These handle naming differences between provider payloads and our schema
+# These handle naming differences between provider payloads and our schema.
+# Feeds with direct name matching use empty dicts to document coverage.
 FIELD_MAPPINGS: dict[str, dict[str, str]] = {
-    # Options Flow
-    "flow_alerts": {
-        "price": "contract_px",
-        "underlying_price": "spot_px",
-        "option_chain": "occ_symbol",
-        "symbol": "underlying",
-        "alert_rule": "alert_type",
-        "ticker": "underlying",
-    },
-    # Darkpool
-    "darkpool": {
-        "symbol": "underlying",
-        "exchange": "venue",
-        "tracking_id": "print_id",
-        "ask": "nbbo_ask",
-        "bid": "nbbo_bid",
-    },
-    # Market Tide
-    "market_tide": {
-        "net_call_premium": "total_call_premium",
-        "net_put_premium": "total_put_premium",
-    },
-    # Bars (Alpaca)
+    # ── Core Market Data ──────────────────────────────────────────────
+    # Bars (Alpaca short-name fields)
     "bars": {
         "t": "bar_start_ts",
         "o": "open",
@@ -63,7 +43,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "n": "trade_count",
         "vw": "vwap",
     },
-    # Quotes (Alpaca)
+    # Quotes (Alpaca short-name fields)
     "quotes": {
         "bp": "bid_px",
         "bs": "bid_sz",
@@ -72,7 +52,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "bx": "bid_exchange",
         "ax": "ask_exchange",
     },
-    # Trades (Alpaca)
+    # Trades (Alpaca short-name fields)
     "trades": {
         "p": "price",
         "s": "size",
@@ -80,64 +60,176 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "i": "trade_id",
         "z": "tape",
     },
-    # Insider Trades
-    "insider_trades": {
-        "transaction_date": "ts_event",
-        "name": "insider_name",
-        "title": "insider_title",
-        "type": "transaction_type",
-        "shares": "shares",
-        "price_per_share": "price",
-        "total_value": "value",
+    # ── Options Flow ──────────────────────────────────────────────────
+    "flow_alerts": {
+        "price": "contract_px",
+        "underlying_price": "spot_px",
+        "option_chain": "occ_symbol",
+        "symbol": "underlying",
+        "alert_rule": "alert_type",
+        "ticker": "underlying",
     },
-    # Institution Holdings
-    "institution_holdings": {
-        "institution": "institution_name",
-        "cik": "institution_id",
-        "shares": "shares",
-        "value": "market_value",
-        "percent_portfolio": "portfolio_pct",
-        "percent_outstanding": "outstanding_pct",
+    "darkpool": {
+        "symbol": "underlying",
+        "exchange": "venue",
+        "tracking_id": "print_id",
+        "ask": "nbbo_ask",
+        "bid": "nbbo_bid",
     },
-    # Politician Trades
-    "politician_trades": {
-        "politician": "politician_name",
-        "transaction_date": "ts_event",
-        "type": "transaction_type",
-        "amount": "amount_range",
-        "asset": "asset_type",
+    # ── Sentiment ─────────────────────────────────────────────────────
+    "sector_tide": {},  # NormalizedSectorTide fields match Silver directly
+    "market_tide": {
+        "net_call_premium": "total_call_premium",
+        "net_put_premium": "total_put_premium",
     },
-    # Congress Trades
-    "congress_trades": {
-        "representative": "representative_name",
-        "transaction_date": "ts_event",
-        "type": "transaction_type",
-        "amount": "amount_range",
-        "asset": "asset_type",
-    },
-    # Stock Fundamentals
-    "stock_fundamentals": {
-        "market_cap": "market_cap",
-        "pe_ratio": "pe_ratio",
-        "dividend_yield": "dividend_yield",
-    },
-    # News
-    "news": {
-        "headline": "headline",
-        "summary": "summary",
-        "url": "url",
-        "author": "author",
-        "published_at": "ts_event",
-    },
-    # Earnings
+    # ── Phase 1: Core Analytics ───────────────────────────────────────
+    "greek_exposure": {},  # NormalizedGreekExposure fields match Silver directly
+    "max_pain": {},  # NormalizedMaxPain fields match Silver directly
+    "net_premium_tick": {},  # NormalizedNetPremiumTick fields match Silver directly
+    "hottest_chain": {},  # NormalizedHottestChain fields match Silver directly
+    # ── Phase 2: Reference Data ───────────────────────────────────────
     "earnings": {
         "report_date": "ts_event",
+        "date": "earnings_date",
         "quarter": "fiscal_quarter",
         "year": "fiscal_year",
-        "eps_estimate": "eps_estimate",
-        "eps_actual": "eps_actual",
-        "revenue_estimate": "revenue_estimate",
-        "revenue_actual": "revenue_actual",
+    },
+    "corporate_action": {},  # NormalizedCorporateAction fields match Silver directly
+    # ── Phase 3: Screeners ────────────────────────────────────────────
+    "most_active": {},  # NormalizedMostActive fields match Silver directly
+    "mover": {},  # NormalizedMover fields match Silver directly
+    "screener_result": {},  # NormalizedScreenerResult fields match Silver directly
+    # ── Phase 4: Advanced Analytics ───────────────────────────────────
+    "iv_rank": {},  # NormalizedIVRank fields match Silver directly
+    "iv_term_structure": {},  # NormalizedIVTermStructure fields match Silver directly
+    "volatility_stats": {},  # NormalizedVolatilityStats fields match Silver directly
+    "oi_change": {
+        "date": "oi_date",
+    },
+    # ── ETF Feeds ─────────────────────────────────────────────────────
+    "etf_holding": {},  # NormalizedETFHolding fields match Silver directly
+    "etf_flow": {
+        "date": "flow_date",
+    },
+    # ── Short / FTD ───────────────────────────────────────────────────
+    "short_data": {
+        "date": "short_date",
+    },
+    "ftd": {
+        "date": "ftd_date",
+    },
+    # ── Seasonality ───────────────────────────────────────────────────
+    "seasonality": {},  # NormalizedSeasonality fields match Silver directly
+    # ── Reference Data (SCD) ──────────────────────────────────────────
+    "option_contract": {
+        "contract_symbol": "occ_symbol",
+        "expiration": "expiry",
+        "option_type": "put_call",
+    },
+    "news": {
+        "article_id": "news_id",
+        "published_at": "ts_published",
+        "source": "source_name",
+    },
+    "orderbook": {
+        "bids": "bids_json",
+        "asks": "asks_json",
+    },
+    # ── V3: Alternative Data ──────────────────────────────────────────
+    "congress_trades": {
+        "representative": "politician_name",
+        "party": "politician_party",
+        "state": "politician_state",
+        "chamber": "politician_chamber",
+        "transaction_type": "trade_type",
+        "transaction_date": "trade_date",
+        "filing_date": "disclosure_date",
+        "transaction_id": "trade_id",
+    },
+    "insider_trades": {
+        "insider_name": "insider_name",
+        "insider_title": "insider_title",
+        "transaction_type": "trade_type",
+        "transaction_date": "trade_date",
+        "shares_owned": "shares_owned_after",
+        "transaction_id": "filing_id",
+        "is_10b5_1": "insider_relationship",
+    },
+    "insider_flow": {},  # Direct match with Silver schema
+    "institution_holdings": {
+        "institution_name": "institution_name",
+        "institution_id": "institution_cik",
+        "market_value": "value",
+        "percent_portfolio": "portfolio_pct",
+        "change_shares": "change_shares",
+        "change_type": "change_pct",
+        "report_date": "quarter_end",
+    },
+    "institution_activity": {
+        "institution": "institution_name",
+        "cik": "institution_cik",
+    },
+    "politician_trades": {
+        "politician_name": "politician_name",
+        "politician_id": "politician_id",
+        "transaction_type": "trade_type",
+        "transaction_date": "trade_date",
+        "amount_range": "amount_min",
+        "description": "asset_description",
+        "transaction_id": "trade_id",
+    },
+    # ── V4: Market Analytics ──────────────────────────────────────────
+    "analyst_ratings": {
+        "firm": "analyst_firm",
+        "analyst": "analyst_name",
+        "rating_current": "rating",
+        "date": "rating_date",
+        "id": "rating_id",
+    },
+    "stock_fundamentals": {
+        "name": "company_name",
+        "week_52_high": "high_52w",
+        "week_52_low": "low_52w",
+        "date": "snapshot_date",
+    },
+    "economic_events": {
+        "name": "event_name",
+        "type": "event_type",
+        "date": "event_date",
+        "time": "event_time",
+    },
+    "market_indicators": {
+        "name": "indicator_name",
+        "date": "indicator_date",
+        "time": "indicator_time",
+    },
+    # ── V5: Options Deep Data ─────────────────────────────────────────
+    "option_history": {
+        "contract_symbol": "occ_symbol",
+        "date": "history_date",
+    },
+    "option_chain_snapshot": {
+        "timestamp": "snapshot_ts",
+    },
+    "volume_profile": {
+        "contract_symbol": "occ_symbol",
+        "date": "profile_date",
+    },
+    "group_flow": {
+        "flow_group": "group_name",
+        "type": "group_type",
+        "date": "flow_date",
+    },
+    # ── V6: ETF Deep Data ─────────────────────────────────────────────
+    "etf_metadata": {
+        "name": "fund_name",
+        "date": "snapshot_date",
+    },
+    "etf_sector_weights": {
+        "date": "weight_date",
+        "type": "weight_type",
+        "name": "weight_name",
+        "weight": "weight_pct",
     },
 }
 
