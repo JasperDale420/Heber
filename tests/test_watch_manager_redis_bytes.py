@@ -64,6 +64,23 @@ def _create_watch(manager: WatchManager):
     )
 
 
+def _create_zero_entry_watch(manager: WatchManager):
+    return manager.create_watch(
+        alert_id="alert-zero",
+        occ_symbol="AAPL260220P00100000",
+        underlying="AAPL",
+        put_call="P",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=0.0,
+        spot_at_alert=190.0,
+        alert_time=datetime.now(UTC),
+        horizon=WatchHorizon.SWING,
+        tp_threshold=0.25,
+        sl_threshold=0.15,
+    )
+
+
 def test_get_active_watches_supports_redis_byte_ids() -> None:
     manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
     watch = _create_watch(manager)
@@ -82,3 +99,19 @@ def test_get_watches_for_symbol_supports_redis_byte_ids() -> None:
 
     assert len(by_symbol) == 1
     assert by_symbol[0].watch_id == watch.watch_id
+
+
+def test_update_watch_price_handles_zero_entry_price() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_zero_entry_watch(manager)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=0.5,
+        timestamp=datetime.now(UTC),
+    )
+
+    assert updated is not None
+    assert updated.current_price == 0.5
+    assert updated.current_return is None
+    assert updated.snapshot_count == 1

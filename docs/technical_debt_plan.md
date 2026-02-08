@@ -91,6 +91,7 @@ Updated: 2026-02-07
 - `T-81` complete (`TD-095`): gateway URL candidate construction now normalizes custom `api_prefix` values without a leading slash, preventing malformed prefix-first URLs and preserving fallback behavior.
 - `T-82` complete (`TD-096`): watch consumer entry-price midpoint logic now preserves zero-valued bid/ask quotes via explicit `None` checks, with regression coverage for zero-bid quote payloads.
 - `T-83` complete (`TD-097`): watch poller now preserves valid zero midpoint values when updating watch prices (`mid_px` vs `last_px`) and normalizes zero bid/ask extraction via explicit `None` checks.
+- `T-84` complete (`TD-098`): watch manager now guards return/MFE/MAE calculations when `entry_price <= 0`, avoiding division errors while preserving price/snapshot updates.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -157,6 +158,7 @@ Updated: 2026-02-07
 - Audit Pass 77 revalidated `TD-095` as resolved via `T-81`.
 - Audit Pass 78 revalidated `TD-096` as resolved via `T-82`.
 - Audit Pass 79 revalidated `TD-097` as resolved via `T-83`.
+- Audit Pass 80 revalidated `TD-098` as resolved via `T-84`.
 
 ## Prioritization Approach
 

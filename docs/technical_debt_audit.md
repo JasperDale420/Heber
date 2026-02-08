@@ -610,8 +610,13 @@ Audit Pass 79 (2026-02-07, files reviewed directly):
 - tests/test_watch_zero_price_handling.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 80 (2026-02-07, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/manager.py line-by-line re-audit for watch lifecycle and index maintenance edge cases.
+- heber/watch/models.py line-by-line re-audit for numeric constraints and serialization edge cases.
 
 ## Remediation Updates
 
@@ -753,6 +758,7 @@ Updated: 2026-02-07
 - Audit Pass 77 revalidated and remediated `TD-095`; gateway route construction now normalizes `api_prefix` values without a leading slash to prevent malformed prefixed URLs.
 - Audit Pass 78 revalidated and remediated `TD-096`; consumer entry-price logic now treats zero bid/ask quotes as valid values when computing midpoint price.
 - Audit Pass 79 revalidated and remediated `TD-097`; poller now preserves zero-valued midpoint prices when updating watch state instead of falling back to `last_price`.
+- Audit Pass 80 revalidated and remediated `TD-098`; watch-manager price updates now handle non-positive entry prices without division errors.
 
 ## Executive Summary
 
@@ -861,6 +867,7 @@ Severity key: High, Medium, Low
 | TD-095 | Medium | Watch Service | Gateway URL helper did not normalize custom `api_prefix` values (e.g. `api/v1`), producing malformed prefixed URLs and bypassing prefix-first routing. |
 | TD-096 | Medium | Watch Service | Consumer quote midpoint logic treated `0.0` bid/ask values as missing, so valid quotes could return `None` entry prices and fall back to stale alert prices. |
 | TD-097 | Medium | Watch Service | Poller watch-price updates used `snapshot.mid_px or snapshot.last_px`, so valid `mid_px=0.0` was overwritten by `last_price` and drifted watch state. |
+| TD-098 | Medium | Watch Service | Watch manager divided by `entry_price` unconditionally during updates; `entry_price=0.0` raised `ZeroDivisionError` and could break poll cycles. |
 
 ## Detailed Findings
 
@@ -1426,6 +1433,12 @@ Recommendation: Use explicit `None` checks when selecting update price (`mid_px 
 Update 2026-02-07: Remediated in `T-83` by switching poller update selection to explicit `None` handling and normalizing bid/ask extraction for zero-valued quote fields.
 Revalidated 2026-02-07 (Pass 79): Resolved. Poller now persists `0.0` midpoint prices correctly during watch updates.
 
+**TD-098: Manager update path can divide by zero on invalid entry price.**
+Evidence: `WatchManager.update_watch_price()` previously computed `(current_price - watch.entry_price) / watch.entry_price` without guarding `entry_price`. Watches created with `entry_price=0.0` triggered `ZeroDivisionError`, interrupting update and poll flows.
+Recommendation: Guard return/MFE/MAE computation when `entry_price <= 0`, preserve price/snapshot tracking, and add regression coverage for zero-entry watch updates.
+Update 2026-02-07: Remediated in `T-84` by adding explicit `entry_price > 0` guards in manager update logic and adding regression coverage for zero-entry updates.
+Revalidated 2026-02-07 (Pass 80): Resolved. Manager updates now avoid division errors and keep watch state writable for invalid-entry edge cases.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1433,7 +1446,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

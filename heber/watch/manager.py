@@ -223,12 +223,14 @@ class WatchManager:
         if not watch:
             return None
 
-        # Compute return
-        current_return = (current_price - watch.entry_price) / watch.entry_price
-
-        # Update MFE/MAE
-        mfe = max(watch.mfe or -float("inf"), current_return)
-        mae = min(watch.mae or float("inf"), current_return)
+        # Compute return only when entry price is valid.
+        current_return: float | None = None
+        mfe = watch.mfe
+        mae = watch.mae
+        if watch.entry_price > 0:
+            current_return = (current_price - watch.entry_price) / watch.entry_price
+            mfe = max(watch.mfe or -float("inf"), current_return)
+            mae = min(watch.mae or float("inf"), current_return)
 
         # Update watch
         watch.current_price = current_price
