@@ -91,9 +91,10 @@ class SnapshotPoller:
             for watch in symbol_to_watches.get(symbol, []):
                 snapshot = self._create_snapshot(watch, quote)
                 await self.manager.add_snapshot_async(snapshot)
+                price_for_watch = snapshot.mid_px if snapshot.mid_px is not None else snapshot.last_px
                 await self.manager.update_watch_price_async(
                     watch.watch_id,
-                    snapshot.mid_px or snapshot.last_px,
+                    price_for_watch,
                     snapshot.timestamp,
                 )
                 updated += 1
@@ -211,8 +212,13 @@ class SnapshotPoller:
         quote: dict,
     ) -> WatchSnapshot:
         """Create a snapshot from quote data."""
-        bid = quote.get("bp") or quote.get("bid_price")
-        ask = quote.get("ap") or quote.get("ask_price")
+        bid = quote.get("bp")
+        if bid is None:
+            bid = quote.get("bid_price")
+
+        ask = quote.get("ap")
+        if ask is None:
+            ask = quote.get("ask_price")
 
         if bid is not None and ask is not None:
             mid = (bid + ask) / 2

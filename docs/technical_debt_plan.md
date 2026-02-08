@@ -90,6 +90,7 @@ Updated: 2026-02-07
 - `T-80` complete (`TD-094`): watch feature Greeks enrichment now preserves valid `0.0` values (explicit `None` checks), with regression coverage for zero-valued delta/gamma/theta/vega/IV payloads.
 - `T-81` complete (`TD-095`): gateway URL candidate construction now normalizes custom `api_prefix` values without a leading slash, preventing malformed prefix-first URLs and preserving fallback behavior.
 - `T-82` complete (`TD-096`): watch consumer entry-price midpoint logic now preserves zero-valued bid/ask quotes via explicit `None` checks, with regression coverage for zero-bid quote payloads.
+- `T-83` complete (`TD-097`): watch poller now preserves valid zero midpoint values when updating watch prices (`mid_px` vs `last_px`) and normalizes zero bid/ask extraction via explicit `None` checks.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -155,6 +156,7 @@ Updated: 2026-02-07
 - Audit Pass 76 revalidated `TD-094` as resolved via `T-80`.
 - Audit Pass 77 revalidated `TD-095` as resolved via `T-81`.
 - Audit Pass 78 revalidated `TD-096` as resolved via `T-82`.
+- Audit Pass 79 revalidated `TD-097` as resolved via `T-83`.
 
 ## Prioritization Approach
 

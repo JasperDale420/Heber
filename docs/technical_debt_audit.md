@@ -604,8 +604,14 @@ Audit Pass 78 (2026-02-07, files reviewed directly):
 - tests/test_watch_gateway_paths.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 79 (2026-02-07, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py line-by-line re-audit for quote normalization and fallback edge cases.
+- heber/watch/manager.py line-by-line re-audit for watch lifecycle and index maintenance edge cases.
 
 ## Remediation Updates
 
@@ -746,6 +752,7 @@ Updated: 2026-02-07
 - Audit Pass 76 revalidated and remediated `TD-094`; Greeks enrichment now preserves valid zero values instead of dropping them via truthiness checks.
 - Audit Pass 77 revalidated and remediated `TD-095`; gateway route construction now normalizes `api_prefix` values without a leading slash to prevent malformed prefixed URLs.
 - Audit Pass 78 revalidated and remediated `TD-096`; consumer entry-price logic now treats zero bid/ask quotes as valid values when computing midpoint price.
+- Audit Pass 79 revalidated and remediated `TD-097`; poller now preserves zero-valued midpoint prices when updating watch state instead of falling back to `last_price`.
 
 ## Executive Summary
 
@@ -853,6 +860,7 @@ Severity key: High, Medium, Low
 | TD-094 | Medium | Watch Service | Features Greeks enrichment used truthiness checks, so valid `0.0` values (`delta/gamma/theta/vega/iv`) were coerced to `None`. |
 | TD-095 | Medium | Watch Service | Gateway URL helper did not normalize custom `api_prefix` values (e.g. `api/v1`), producing malformed prefixed URLs and bypassing prefix-first routing. |
 | TD-096 | Medium | Watch Service | Consumer quote midpoint logic treated `0.0` bid/ask values as missing, so valid quotes could return `None` entry prices and fall back to stale alert prices. |
+| TD-097 | Medium | Watch Service | Poller watch-price updates used `snapshot.mid_px or snapshot.last_px`, so valid `mid_px=0.0` was overwritten by `last_price` and drifted watch state. |
 
 ## Detailed Findings
 
@@ -1412,6 +1420,12 @@ Recommendation: Treat bid/ask as present when values are not `None`, cast numeri
 Update 2026-02-07: Remediated in `T-82` by replacing truthiness checks with explicit `None` checks and adding regression coverage for zero-bid quote scenarios.
 Revalidated 2026-02-07 (Pass 78): Resolved. Midpoint prices now compute correctly for quotes containing zero-valued bid/ask fields.
 
+**TD-097: Poller watch-price updates drop valid zero midpoint values.**
+Evidence: `SnapshotPoller.poll_once()` previously updated watches with `snapshot.mid_px or snapshot.last_px`. For valid `mid_px=0.0`, this expression selected `last_price`, so persisted watch state no longer matched computed midpoint snapshots.
+Recommendation: Use explicit `None` checks when selecting update price (`mid_px if mid_px is not None else last_px`) and add a regression test that exercises zero-midpoint quote updates in the poll loop.
+Update 2026-02-07: Remediated in `T-83` by switching poller update selection to explicit `None` handling and normalizing bid/ask extraction for zero-valued quote fields.
+Revalidated 2026-02-07 (Pass 79): Resolved. Poller now persists `0.0` midpoint prices correctly during watch updates.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1419,7 +1433,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

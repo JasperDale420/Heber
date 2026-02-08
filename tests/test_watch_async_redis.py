@@ -33,6 +33,7 @@ class _AsyncOnlyManager:
         self.created = 0
         self.snapshots = 0
         self.updated = 0
+        self.updated_prices: list[float | None] = []
 
     def create_watch(self, *args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("sync create_watch should not be called in async flow")
@@ -58,6 +59,7 @@ class _AsyncOnlyManager:
 
     async def update_watch_price_async(self, _watch_id, _price, _timestamp):  # noqa: ANN001
         self.updated += 1
+        self.updated_prices.append(_price)
         return None
 
 
@@ -190,3 +192,25 @@ async def test_poller_skips_watches_not_due_by_horizon() -> None:
     assert stats["quotes"] == 1
     assert manager.snapshots == 1
     assert manager.updated == 1
+
+
+@pytest.mark.asyncio
+async def test_poller_updates_watch_with_zero_mid_price() -> None:
+    manager = _AsyncOnlyManager()
+    poller = SnapshotPoller(manager)
+
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": 0.0,
+                "ap": 0.0,
+                "last_price": 1.1,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["updated"] == 1
+    assert manager.updated_prices == [0.0]
