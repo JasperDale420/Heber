@@ -633,8 +633,13 @@ Audit Pass 83 (2026-02-07, files reviewed directly):
 - tests/test_watch_writer_file_collisions.py
 - tests/test_watch_entrypoint_shutdown.py
 
+Audit Pass 84 (2026-02-07, files reviewed directly):
+- heber/watch/__main__.py
+- tests/test_watch_entrypoint_shutdown.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/__main__.py line-by-line re-audit for runtime-failure cleanup parity with legacy entrypoints.
+- heber/watch/consumer.py line-by-line re-audit for envelope parsing and fallback default edge cases.
 
 ## Remediation Updates
 
@@ -780,6 +785,7 @@ Updated: 2026-02-07
 - Audit Pass 81 revalidated and remediated `TD-099`; watch models now use Pydantic v2 `ConfigDict` to remove class-based config deprecation warnings.
 - Audit Pass 82 revalidated and remediated `TD-100`; checker now expires invalid-entry watches even when a return path cannot be computed.
 - Audit Pass 83 revalidated and remediated `TD-101`; legacy writer entrypoint now stops services on runtime exceptions rather than only on keyboard interrupts.
+- Audit Pass 84 revalidated and remediated `TD-102`; watch entrypoint now runs cleanup stop logic for normal completion in addition to exception paths.
 
 ## Executive Summary
 
@@ -892,6 +898,7 @@ Severity key: High, Medium, Low
 | TD-099 | Low | Watch Service | `AlertWatch` used class-based Pydantic `Config`, emitting `PydanticDeprecatedSince20` warnings on import/reload and masking real warnings in test output. |
 | TD-100 | Medium | Watch Service | Checker returned early when no return path was computable, so expired watches with invalid entry pricing remained stuck in `WATCHING` state indefinitely. |
 | TD-101 | Medium | Watch Service | Legacy `run_watch_service()` only stopped on `KeyboardInterrupt`; runtime exceptions bypassed stop/flush cleanup and could drop buffered labels. |
+| TD-102 | Medium | Watch Service | Main watch entrypoint did not call `service.stop()` on normal completion, so shutdown cleanup/flush behavior was inconsistent across exit paths. |
 
 ## Detailed Findings
 
@@ -1481,6 +1488,12 @@ Recommendation: Invoke `service.stop()` for unexpected runtime errors before re-
 Update 2026-02-07: Remediated in `T-87` by adding generic exception cleanup in `run_watch_service()` and a targeted shutdown regression test.
 Revalidated 2026-02-07 (Pass 83): Resolved. Runtime exceptions now trigger writer-service cleanup before bubbling up.
 
+**TD-102: Main entrypoint misses cleanup on normal service completion.**
+Evidence: `watch.__main__.run()` previously called `service.stop()` in exception handlers but not on the normal-return path, so cleanup behavior differed between successful and exceptional exits.
+Recommendation: Move cleanup stop semantics into a shared `finally` path so service stop/flush always executes exactly once regardless of exit path.
+Update 2026-02-07: Remediated in `T-88` by centralizing `service.stop()` in `finally` and adding a regression test for normal completion.
+Revalidated 2026-02-07 (Pass 84): Resolved. Watch entrypoint now applies consistent cleanup behavior across normal and exceptional exits.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1488,7 +1501,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
