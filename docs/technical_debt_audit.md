@@ -680,8 +680,14 @@ Audit Pass 91 (2026-02-09, files reviewed directly):
 - tests/test_watch_entrypoint_shutdown.py
 - tests/test_watch_writer_file_collisions.py
 
+Audit Pass 92 (2026-02-09, files reviewed directly):
+- heber/watch/checker.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_meta_label_alignment.py
+- tests/test_watch_writer_file_collisions.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/checker.py line-by-line re-audit for path-statistics consistency and barrier edge-case sequencing.
+- heber/watch/gateway.py line-by-line re-audit for prefix fallback behavior and malformed base-url edge cases.
 
 ## Remediation Updates
 
@@ -835,6 +841,7 @@ Updated: 2026-02-09
 - Audit Pass 89 revalidated and remediated `TD-107`; market-context returns no longer skip zero/invalid close days and silently shift return baselines to older sessions.
 - Audit Pass 90 revalidated and remediated `TD-108`; watch outcomes now enforce horizon enum validation (`intraday`/`swing`/`leap`) to prevent invalid horizon labels from entering storage/training paths.
 - Audit Pass 91 revalidated and remediated `TD-109`; writer entrypoint now guarantees `WatchService.stop()` on normal completion so buffered outcomes and component shutdown cleanup are not skipped.
+- Audit Pass 92 revalidated and remediated `TD-110`; checker now normalizes naive watch timestamps before comparisons/duration math, preventing mixed naive/aware datetime failures during expiry and outcome creation.
 
 ## Executive Summary
 
@@ -955,6 +962,7 @@ Severity key: High, Medium, Low
 | TD-107 | Medium | Watch Features | Market-context enrichment dropped zero/invalid close values before return calculations, allowing 1-day/5-day/30-day returns to silently use older sessions. |
 | TD-108 | Medium | Watch Models | `WatchOutcome.horizon` accepted arbitrary strings, allowing invalid horizon labels to enter outcome rows and downstream datasets. |
 | TD-109 | Medium | Watch Service | Writer CLI entrypoint did not stop service on normal completion, so buffered-label flush and component cleanup were only guaranteed on exceptional exits. |
+| TD-110 | Medium | Watch Service | Checker compared aware `now` with potentially naive `alert_time`/`window_end`, causing `TypeError` in expiry checks and outcome duration calculations. |
 
 ## Detailed Findings
 
@@ -1592,6 +1600,12 @@ Recommendation: Move service shutdown into a shared `finally` path so cleanup ru
 Update 2026-02-09: Remediated in `T-95` by executing `service.stop()` in `finally` and adding regression coverage for normal-completion shutdown.
 Revalidated 2026-02-09 (Pass 91): Resolved. Writer entrypoint now guarantees cleanup/flush regardless of exit path.
 
+**TD-110: Checker crashes on naive watch timestamps.**
+Evidence: `BarrierChecker.check_watch()` previously compared aware `now` directly against `watch.window_end` and computed `watch.window_end - watch.alert_time` without normalization. Naive persisted timestamps raised `TypeError` on comparison/arithmetic and aborted outcome resolution.
+Recommendation: Normalize watch `alert_time`/`window_end` to UTC-aware datetimes before comparisons and duration calculations; add regression coverage for naive timestamp inputs.
+Update 2026-02-09: Remediated in `T-96` by normalizing `alert_time` and `window_end` inside checker flow and adding a targeted naive-timestamp regression test.
+Revalidated 2026-02-09 (Pass 92): Resolved. Checker now handles naive/aware watch timestamps safely during expiry/outcome evaluation.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1599,7 +1613,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

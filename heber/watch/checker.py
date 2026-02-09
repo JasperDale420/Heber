@@ -75,6 +75,8 @@ class BarrierChecker:
             return None
 
         now = datetime.now(UTC)
+        alert_time = watch.alert_time if watch.alert_time.tzinfo is not None else watch.alert_time.replace(tzinfo=UTC)
+        window_end = watch.window_end if watch.window_end.tzinfo is not None else watch.window_end.replace(tzinfo=UTC)
 
         # Build return path
         returns = []
@@ -86,7 +88,7 @@ class BarrierChecker:
                 returns.append(snap.return_pct)
 
         if not returns:
-            if now < watch.window_end:
+            if now < window_end:
                 return None
 
             bars_to_hit = len(snapshots)
@@ -97,9 +99,9 @@ class BarrierChecker:
                 bars_to_hit,
             )
 
-            window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
+            window_hours = (window_end - alert_time).total_seconds() / 3600
             trading_mins = self.calendar.trading_minutes_until(
-                watch.alert_time,
+                alert_time,
                 now,
             )
 
@@ -121,7 +123,7 @@ class BarrierChecker:
                 hit_tp_first=0,
                 entry_price=watch.entry_price,
                 spot_at_alert=watch.spot_at_alert,
-                alert_time=watch.alert_time,
+                alert_time=alert_time,
                 window_duration_hours=window_hours,
                 trading_minutes_to_hit=trading_mins,
             )
@@ -140,7 +142,7 @@ class BarrierChecker:
         )
 
         # Check expiry
-        if status == WatchStatus.WATCHING and now >= watch.window_end:
+        if status == WatchStatus.WATCHING and now >= window_end:
             status = WatchStatus.EXPIRED
             bars_to_hit = len(returns)
 
@@ -163,11 +165,11 @@ class BarrierChecker:
         )
 
         # Build outcome
-        window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
+        window_hours = (window_end - alert_time).total_seconds() / 3600
 
         # Compute trading time to hit barrier
         trading_mins = self.calendar.trading_minutes_until(
-            watch.alert_time,
+            alert_time,
             now,
         )
 
@@ -189,7 +191,7 @@ class BarrierChecker:
             hit_tp_first=1 if status == WatchStatus.HIT_TP else 0,
             entry_price=watch.entry_price,
             spot_at_alert=watch.spot_at_alert,
-            alert_time=watch.alert_time,
+            alert_time=alert_time,
             window_duration_hours=window_hours,
             trading_minutes_to_hit=trading_mins,
         )

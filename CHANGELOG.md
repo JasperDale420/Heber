@@ -104,6 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/writer.py`: `run_watch_service()` now executes `service.stop()` in a `finally` block so normal completion still performs shutdown cleanup/flush
 - Added writer normal-completion shutdown regression test (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-109` remediation in audit pass 91 and `T-95`
+- Fixed `watch/checker.py`: watch outcome evaluation now normalizes naive `alert_time`/`window_end` timestamps to UTC-aware values before comparisons and window-duration calculations
+- Added checker naive-timestamp regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-110` remediation in audit pass 92 and `T-96`
 
 ### Removed
 
