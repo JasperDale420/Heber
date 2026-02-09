@@ -132,6 +132,7 @@ Updated: 2026-02-09
 - `T-122` complete (`TD-157`, `TD-158`, `TD-159`): consumer retry flow now classifies parse failures as non-retriable, emits terminal retry reasons in DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retries.
 - `T-123` complete (`TD-160`, `TD-161`, `TD-162`): poller/consumer gateway route-failure telemetry now shares timeout/transport/request exception taxonomy, includes exception type metadata, and records expected payload type for shape mismatches.
 - `T-124` complete (`TD-163`, `TD-164`, `TD-165`): poller now treats partial/invalid per-symbol quote coverage as fallback-eligible degradation and preserves best partial results when all routes are incomplete, while consumer entry-price lookup now falls back when requested symbol quotes are missing, malformed, or non-usable.
+- `T-125` complete (`TD-166`, `TD-167`, `TD-168`): poller/consumer route selection now applies shared quote-age staleness checks, falls back to fresher route data when prefixed quotes are stale, and preserves freshest stale fallback coverage when all routes are stale.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -239,6 +240,7 @@ Updated: 2026-02-09
 - Audit Pass 118 revalidated `TD-157`, `TD-158`, and `TD-159` as resolved via `T-122`.
 - Audit Pass 119 revalidated `TD-160`, `TD-161`, and `TD-162` as resolved via `T-123`.
 - Audit Pass 120 revalidated `TD-163`, `TD-164`, and `TD-165` as resolved via `T-124`.
+- Audit Pass 121 revalidated `TD-166`, `TD-167`, and `TD-168` as resolved via `T-125`.
 
 ## Prioritization Approach
 

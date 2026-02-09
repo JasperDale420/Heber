@@ -12,7 +12,10 @@ import structlog
 
 from heber.calendar import MarketCalendar
 from heber.watch.gateway import (
+    DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+    extract_quote_timestamp,
     gateway_url_candidates,
+    quote_age_seconds,
     route_failure_for_exception,
     route_failure_for_http_status,
     route_failure_for_partial_quotes,
@@ -185,9 +188,13 @@ class SnapshotPoller:
                     self.gateway_url,
                     "/alpaca/options/quotes",
                 )
+                now_utc = datetime.now(UTC)
                 batch_quotes: dict[str, dict] | None = None
                 best_partial_quotes: dict[str, dict] = {}
                 best_partial_failure: dict[str, Any] | None = None
+                best_stale_quotes: dict[str, dict] = {}
+                best_stale_failure: dict[str, Any] | None = None
+                best_stale_avg_age: float | None = None
                 route_failures: list[dict[str, Any]] = []
 
                 try:
@@ -254,7 +261,10 @@ class SnapshotPoller:
                             continue
 
                         route_valid_quotes: dict[str, dict] = {}
+                        route_stale_quotes: dict[str, dict] = {}
                         invalid_symbols: list[str] = []
+                        stale_symbols: list[str] = []
+                        stale_ages: list[float] = []
                         for symbol in batch:
                             quote_payload = quotes_payload.get(symbol)
                             if quote_payload is None:
@@ -262,9 +272,15 @@ class SnapshotPoller:
                             if not isinstance(quote_payload, dict):
                                 invalid_symbols.append(symbol)
                                 continue
+                            quote_age = quote_age_seconds(quote_payload, now_utc)
+                            if quote_age is not None and quote_age > DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS:
+                                stale_symbols.append(symbol)
+                                stale_ages.append(quote_age)
+                                route_stale_quotes[symbol] = quote_payload
+                                continue
                             route_valid_quotes[symbol] = quote_payload
 
-                        if len(route_valid_quotes) == len(batch) and not invalid_symbols:
+                        if len(route_valid_quotes) == len(batch) and not invalid_symbols and not stale_symbols:
                             batch_quotes = route_valid_quotes
                             break
 
@@ -273,17 +289,34 @@ class SnapshotPoller:
                             requested_symbols=batch,
                             available_symbols=list(route_valid_quotes.keys()),
                             invalid_symbols=invalid_symbols,
+                            stale_symbols=stale_symbols,
                         )
                         route_failures.append(partial_failure)
                         if len(route_valid_quotes) > len(best_partial_quotes):
                             best_partial_quotes = route_valid_quotes
                             best_partial_failure = partial_failure
+                        if route_stale_quotes:
+                            avg_age = sum(stale_ages) / len(stale_ages)
+                            if len(route_stale_quotes) > len(best_stale_quotes) or (
+                                len(route_stale_quotes) == len(best_stale_quotes)
+                                and (best_stale_avg_age is None or avg_age < best_stale_avg_age)
+                            ):
+                                best_stale_quotes = route_stale_quotes
+                                best_stale_failure = {
+                                    "route": route,
+                                    "failure": "quote_coverage_stale",
+                                    "stale_count": len(stale_symbols),
+                                    "avg_stale_age_seconds": avg_age,
+                                    "stale_symbols": stale_symbols[:5],
+                                }
+                                best_stale_avg_age = avg_age
                         logger.warning(
                             "Quote response partial coverage",
                             route=route,
                             requested_count=partial_failure["requested_count"],
                             available_count=partial_failure["available_count"],
                             invalid_count=partial_failure["invalid_count"],
+                            stale_count=partial_failure["stale_count"],
                             missing_count=partial_failure["missing_count"],
                         )
                         continue
@@ -298,6 +331,16 @@ class SnapshotPoller:
                             returned_quotes=len(best_partial_quotes),
                             routes=routes,
                             best_partial_failure=best_partial_failure,
+                            failures=route_failures,
+                        )
+                    elif best_stale_quotes:
+                        quotes.update(best_stale_quotes)
+                        logger.warning(
+                            "Quote fetch using stale fallback coverage",
+                            batch_size=len(batch),
+                            returned_quotes=len(best_stale_quotes),
+                            routes=routes,
+                            best_stale_failure=best_stale_failure,
                             failures=route_failures,
                         )
                     else:
@@ -369,39 +412,11 @@ class SnapshotPoller:
         except (TypeError, ValueError):
             return None
 
-    @staticmethod
-    def _coerce_timestamp(value: Any) -> datetime | None:
-        """Convert quote timestamp payload values into UTC-aware datetimes."""
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=UTC)
-            return value.astimezone(UTC)
-        if isinstance(value, int | float):
-            try:
-                return datetime.fromtimestamp(value, tz=UTC)
-            except (OSError, OverflowError, ValueError):
-                return None
-        if isinstance(value, str):
-            try:
-                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                try:
-                    return datetime.fromtimestamp(float(value), tz=UTC)
-                except (OSError, OverflowError, ValueError):
-                    return None
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-        return None
-
     def _parse_quote_timestamp(self, quote: dict[str, Any]) -> datetime:
         """Resolve snapshot timestamp from quote payload with UTC fallback."""
-        for key in ("timestamp", "ts_event", "t"):
-            parsed = self._coerce_timestamp(quote.get(key))
-            if parsed is not None:
-                return parsed
+        parsed = extract_quote_timestamp(quote)
+        if parsed is not None:
+            return parsed
         return datetime.now(UTC)
 
     @staticmethod

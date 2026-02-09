@@ -24,7 +24,9 @@ from heber.features.templates.alert_labels import (
 )
 from heber.watch.features import AlertFeatureExtractor, persist_features_to_gold, store_features
 from heber.watch.gateway import (
+    DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     gateway_url_candidates,
+    quote_age_seconds,
     route_failure_for_exception,
     route_failure_for_http_status,
     route_failure_for_payload_shape,
@@ -542,6 +544,9 @@ class AlertWatchConsumer:
                     self.gateway_url,
                     "/alpaca/options/quotes",
                 )
+                now_utc = datetime.now(UTC)
+                best_stale_price: float | None = None
+                best_stale_age_seconds: float | None = None
                 route_failures: list[dict[str, Any]] = []
                 for route in routes:
                     try:
@@ -620,20 +625,46 @@ class AlertWatchConsumer:
                         ask = self._coerce_optional_float(quote_payload.get("ask_price"))
 
                     if bid is not None and ask is not None:
-                        return (bid + ask) / 2
+                        computed_price = (bid + ask) / 2
+                    else:
+                        last_price = self._coerce_optional_float(quote_payload.get("last_price"))
+                        if last_price is not None:
+                            computed_price = last_price
+                        else:
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "quote_price_unusable",
+                                    "symbol": occ_symbol,
+                                }
+                            )
+                            continue
 
-                    last_price = self._coerce_optional_float(quote_payload.get("last_price"))
-                    if last_price is not None:
-                        return last_price
+                    quote_age = quote_age_seconds(quote_payload, now_utc)
+                    if quote_age is not None and quote_age > DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS:
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "quote_stale",
+                                "symbol": occ_symbol,
+                                "quote_age_seconds": quote_age,
+                                "max_quote_age_seconds": DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+                            }
+                        )
+                        if best_stale_age_seconds is None or quote_age < best_stale_age_seconds:
+                            best_stale_price = computed_price
+                            best_stale_age_seconds = quote_age
+                        continue
 
-                    route_failures.append(
-                        {
-                            "route": route,
-                            "failure": "quote_price_unusable",
-                            "symbol": occ_symbol,
-                        }
+                    return computed_price
+                if best_stale_price is not None:
+                    logger.warning(
+                        "Entry price using stale quote fallback",
+                        occ_symbol=occ_symbol,
+                        quote_age_seconds=best_stale_age_seconds,
+                        max_quote_age_seconds=DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
                     )
-                    continue
+                    return best_stale_price
                 if route_failures:
                     logger.warning(
                         "Entry price fetch failed across routes",

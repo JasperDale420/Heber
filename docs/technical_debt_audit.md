@@ -827,8 +827,14 @@ Audit Pass 120 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 121 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py and heber/watch/consumer.py line-by-line re-audit for route-level quote staleness handling and fallback policy when quote timestamps differ materially between prefixed and legacy gateways.
+- heber/watch/poller.py and heber/watch/consumer.py line-by-line re-audit for cross-route quote timestamp normalization parity when providers return epoch-millisecond `t` fields versus ISO `timestamp` fields under fallback paths.
 
 ## Remediation Updates
 
@@ -897,6 +903,7 @@ Updated: 2026-02-09
 - `TD-157`, `TD-158`, and `TD-159` addressed via `T-122`: consumer retry flow now classifies non-retriable parse failures, carries terminal retry reasons into DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retry semantics.
 - `TD-160`, `TD-161`, and `TD-162` addressed via `T-123`: watch gateway route-failure telemetry now classifies timeout vs transport request failures, includes exception type metadata for exception-driven failures, and adds expected-type metadata for payload-shape failures in both poller and consumer paths.
 - `TD-163`, `TD-164`, and `TD-165` addressed via `T-124`: poller quote batch routing now attempts fallback routes when prefixed responses provide partial/invalid per-symbol coverage, preserves best partial coverage when all routes are incomplete, and consumer entry-price lookup now falls back when requested symbol quote payloads are missing, malformed, or unusable.
+- `TD-166`, `TD-167`, and `TD-168` addressed via `T-125`: poller and consumer now classify route quotes as stale via shared timestamp-age helpers, fall back to fresher legacy routes when prefixed quotes are stale, and preserve freshest stale fallback coverage only when all routes are stale.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1037,6 +1044,7 @@ Updated: 2026-02-09
 - Audit Pass 118 revalidated and remediated `TD-157`, `TD-158`, and `TD-159`; consumer retry flow now short-circuits deterministic parse failures as non-retriable, propagates terminal retry reasons to DLQ error metadata, and supports backward-compatible bool/tuple process-result contracts.
 - Audit Pass 119 revalidated and remediated `TD-160`, `TD-161`, and `TD-162`; poller/consumer gateway-route failures now share timeout/transport/request taxonomy, carry exception-type metadata, and include expected payload-type metadata for shape mismatches.
 - Audit Pass 120 revalidated and remediated `TD-163`, `TD-164`, and `TD-165`; poller batch quote fetch now falls back on partial/invalid symbol coverage while retaining best-effort partial results, and consumer entry-price fetch now falls back when the requested symbol quote is missing, malformed, or non-usable on a candidate route.
+- Audit Pass 121 revalidated and remediated `TD-166`, `TD-167`, and `TD-168`; poller/consumer route selection now applies shared quote-staleness checks, prefers fresher route data over stale prefixed responses, and keeps freshest stale fallback coverage when no fresh route is available.
 
 ## Executive Summary
 
@@ -1213,6 +1221,9 @@ Severity key: High, Medium, Low
 | TD-163 | Medium | Watch Service | Poller accepted route responses with partial or invalid per-symbol quote coverage as terminal successes, skipping fallback routes and reducing quote update completeness in mixed-route degradation scenarios. |
 | TD-164 | Medium | Watch Service | Poller dropped all quote coverage when no route returned full-symbol batches, instead of preserving best-effort partial coverage for valid symbols. |
 | TD-165 | Medium | Watch Service | Consumer entry-price lookup treated missing, malformed, or non-usable requested symbol quotes as terminal outcomes on the first 200-route response, skipping fallback candidates that could provide valid prices. |
+| TD-166 | Medium | Watch Service | Poller route selection treated complete stale quote batches as terminal successes, preventing fallback to fresher legacy route data when prefixed and legacy gateways diverged in quote recency. |
+| TD-167 | Medium | Watch Service | Consumer entry-price lookup accepted stale requested-symbol quotes as terminal route success, skipping fallback routes that could provide fresher executable entry prices. |
+| TD-168 | Medium | Watch Service | When all routes returned stale quotes, poller/consumer lacked a consistent freshest-stale fallback policy, risking either stale-route bias or dropped quote coverage under multi-route degradation. |
 
 ## Detailed Findings
 
@@ -2186,6 +2197,24 @@ Recommendation: Treat symbol-level missing/malformed/unusable quotes as route fa
 Update 2026-02-09: Remediated in `T-124` by classifying symbol-level quote issues as route failures and continuing fallback until a usable entry price is found.
 Revalidated 2026-02-09 (Pass 120): Resolved. Consumer now falls back across routes for missing/malformed/unusable requested symbol quote payloads.
 
+**TD-166: Poller considered stale complete batches as terminal route success.**
+Evidence: `_fetch_quotes()` previously accepted complete per-symbol batches from the first successful route without evaluating quote-age recency, so stale prefixed batches could block fresher legacy fallbacks when routes diverged in timestamp freshness.
+Recommendation: Apply shared quote-age checks during route selection and continue fallback for stale symbol coverage.
+Update 2026-02-09: Remediated in `T-125` by introducing shared quote-age helpers and classifying stale per-symbol coverage as fallback-eligible degradation in poller route selection.
+Revalidated 2026-02-09 (Pass 121): Resolved. Poller now prefers fresher route coverage over stale prefixed batches.
+
+**TD-167: Consumer entry-price route selection accepted stale symbol quotes without fallback.**
+Evidence: `_get_entry_price()` previously returned midpoint/last price immediately when symbol payload shape was valid, without checking quote timestamp age, which allowed stale route data to bypass fresher fallback candidates.
+Recommendation: Classify stale symbol quotes as route failures and continue fallback until fresh data is found (or stale fallback is explicitly selected).
+Update 2026-02-09: Remediated in `T-125` by adding symbol-level quote-age checks with stale-route fallback continuation in consumer entry-price lookup.
+Revalidated 2026-02-09 (Pass 121): Resolved. Consumer now falls back to fresher routes when prefixed symbol quotes are stale.
+
+**TD-168: No consistent freshest-stale fallback policy when all routes were stale.**
+Evidence: Poller and consumer previously had no explicit strategy for selecting stale data when every route quote exceeded freshness thresholds, risking dropped coverage or stale-route bias.
+Recommendation: Preserve freshest stale candidate(s) as explicit fallback only when no fresh route data is available.
+Update 2026-02-09: Remediated in `T-125` by storing freshest stale route candidates and using them as controlled fallback coverage when all routes are stale.
+Revalidated 2026-02-09 (Pass 121): Resolved. Poller/consumer now apply consistent freshest-stale fallback behavior under all-stale route conditions.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2193,7 +2222,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

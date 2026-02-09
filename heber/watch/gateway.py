@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
+DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
 
 
 def gateway_url_candidates(
@@ -124,12 +126,17 @@ def route_failure_for_partial_quotes(
     requested_symbols: list[str],
     available_symbols: list[str],
     invalid_symbols: list[str],
+    stale_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build standardized payload for partial quote coverage across a batch."""
+    stale_symbols = stale_symbols or []
     available_set = set(available_symbols)
     invalid_set = set(invalid_symbols)
+    stale_set = set(stale_symbols)
     missing_symbols = [
-        symbol for symbol in requested_symbols if symbol not in available_set and symbol not in invalid_set
+        symbol
+        for symbol in requested_symbols
+        if symbol not in available_set and symbol not in invalid_set and symbol not in stale_set
     ]
     return {
         "route": route,
@@ -137,7 +144,54 @@ def route_failure_for_partial_quotes(
         "requested_count": len(requested_symbols),
         "available_count": len(available_symbols),
         "invalid_count": len(invalid_symbols),
+        "stale_count": len(stale_symbols),
         "missing_count": len(missing_symbols),
         "missing_symbols": missing_symbols[:5],
         "invalid_symbols": invalid_symbols[:5],
+        "stale_symbols": stale_symbols[:5],
     }
+
+
+def coerce_utc_timestamp(value: Any) -> datetime | None:
+    """Convert timestamp payload values into UTC-aware datetimes."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, int | float):
+        try:
+            return datetime.fromtimestamp(value, tz=UTC)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.fromtimestamp(float(value), tz=UTC)
+            except (OSError, OverflowError, ValueError):
+                return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def extract_quote_timestamp(quote: dict[str, Any]) -> datetime | None:
+    """Extract quote timestamp from known payload keys."""
+    for key in ("timestamp", "ts_event", "t"):
+        parsed = coerce_utc_timestamp(quote.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def quote_age_seconds(quote: dict[str, Any], now: datetime) -> float | None:
+    """Compute quote age in seconds from payload timestamp to now."""
+    ts = extract_quote_timestamp(quote)
+    if ts is None:
+        return None
+    now_utc = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    return max(0.0, (now_utc - ts).total_seconds())
