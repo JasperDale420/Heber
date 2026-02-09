@@ -241,15 +241,27 @@ def run_watch_service(
     path = Path(output_path) if output_path else None
 
     service = WatchService(r, gateway_url=gateway_url, output_path=path)
+    run_error: BaseException | None = None
+    run_error_tb = None
+
+    def _safe_stop() -> None:
+        try:
+            service.stop()
+        except Exception as stop_error:
+            logger.error("Watch service stop failed", error=str(stop_error))
 
     try:
         asyncio.run(service.run())
     except KeyboardInterrupt:
         pass
-    except Exception:
-        raise
+    except Exception as exc:
+        run_error = exc
+        run_error_tb = exc.__traceback__
     finally:
-        service.stop()
+        _safe_stop()
+
+    if run_error is not None:
+        raise run_error.with_traceback(run_error_tb)
 
 
 if __name__ == "__main__":

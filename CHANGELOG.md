@@ -140,6 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/checker.py`: return-path extraction now filters non-finite snapshot returns so malformed `NaN` values do not propagate into MFE/MAE or expired outcome returns
 - Added checker non-finite return regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-126` remediation in audit pass 101 and `T-105`
+- Fixed `watch/writer.py`: `run_watch_service()` now preserves primary `service.run()` failures even when `service.stop()` cleanup fails
+- Fixed `watch/writer.py`: stop failures during normal completion are now logged and treated as non-fatal
+- Added writer entrypoint stop-failure regression tests (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-127`/`TD-128` remediation in audit pass 102 and `T-106`
 
 ### Removed
 
@@ -258,6 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 99: watch manager byte-ID deletion + active-index consistency conformance revalidation)
 - Expanded technical debt audit (pass 100: watch poller non-finite quote + missing-price update conformance revalidation)
 - Expanded technical debt audit (pass 101: watch checker non-finite return-path conformance revalidation)
+- Expanded technical debt audit (pass 102: watch writer entrypoint stop-failure isolation conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
