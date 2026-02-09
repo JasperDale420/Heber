@@ -7,7 +7,6 @@ Provides:
 - Dependency health check framework
 """
 
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -118,11 +117,11 @@ def unregister_dependency_check(name: str) -> None:
 
 
 def get_service_info() -> tuple[str, str, str]:
-    """Get service name, instance ID, and version from environment."""
-    service = os.environ.get("SERVICE_NAME", "heber")
-    instance_id = os.environ.get("INSTANCE_ID", os.environ.get("HOSTNAME", "unknown"))
-    version = os.environ.get("SERVICE_VERSION", "0.1.0")
-    return service, instance_id, version
+    """Get service name, instance ID, and version from settings."""
+    from heber.config import get_settings
+
+    settings = get_settings()
+    return settings.service_name, settings.instance_id, settings.service_version
 
 
 def get_uptime_seconds() -> int:

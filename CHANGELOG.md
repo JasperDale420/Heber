@@ -106,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Pydantic Settings Migration** — Migrated all `os.getenv`/`os.environ` calls to centralized `pydantic-settings.BaseSettings` class (`heber/config.py`)
+  - Updated 14 files: `schema/registry_client.py`, `storage/iceberg_catalog.py`, `versioning/__init__.py`, `ops/logging.py`, `ops/health.py`, `ops/tracing.py`, `bus/__init__.py`, `watch/__main__.py`, `retention/__init__.py`, `catalog/api.py`, `backfill/__main__.py`, `writer/hotstore.py`, `ops/lifecycle.py`, `ops/metrics.py`
+  - Removed all unused `import os` statements from migrated files
+  - External service configs (Iceberg, LakeFS, Schema Registry) use `AliasChoices` for backward-compatible env var names
+  - Redis event bus now parses connection details from `settings.redis_url` instead of individual `REDIS_HOST`/`REDIS_PORT`/`REDIS_DB` env vars
 - Updated `writer/transformer.py`: `transform()` now accepts `since`/`until` parameters for date-range filtering
 - Updated `test_hotstore_facade_alignment.py` to assert aliases stay removed
 

@@ -9,7 +9,6 @@ Provides:
 """
 
 import json
-import os
 import random
 import time
 import traceback
@@ -532,7 +531,9 @@ def create_dlq_handler(
         bus: Event bus instance
         quarantine_path: Base path for quarantine storage
     """
-    path = quarantine_path or os.environ.get("HEBER_QUARANTINE_PATH", "quarantine")
+    from heber.config import get_settings
+
+    path = quarantine_path or get_settings().quarantine_path
     return DLQHandler(bus, path)
 
 

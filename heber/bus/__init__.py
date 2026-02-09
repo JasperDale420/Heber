@@ -10,7 +10,6 @@ Provides:
 
 import asyncio
 import json
-import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -521,11 +520,17 @@ def create_event_bus(bus_type: str = "redis", **kwargs) -> EventBus:
         **kwargs: Bus-specific configuration
     """
     if bus_type == "redis":
+        from urllib.parse import urlparse
+
+        from heber.config import get_settings
+
+        settings = get_settings()
+        parsed = urlparse(settings.redis_url)
         return RedisEventBus(
-            host=kwargs.get("host", os.environ.get("REDIS_HOST", "localhost")),
-            port=kwargs.get("port", int(os.environ.get("REDIS_PORT", "6379"))),
-            db=kwargs.get("db", int(os.environ.get("REDIS_DB", "0"))),
-            password=kwargs.get("password", os.environ.get("REDIS_PASSWORD")),
+            host=kwargs.get("host", parsed.hostname or "localhost"),
+            port=kwargs.get("port", parsed.port or 6379),
+            db=kwargs.get("db", int((parsed.path or "/0").lstrip("/") or "0")),
+            password=kwargs.get("password", parsed.password),
         )
     elif bus_type == "memory":
         return InMemoryEventBus()

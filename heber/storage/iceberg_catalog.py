@@ -9,7 +9,6 @@ Phase 1 of OSS Migration Roadmap.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -64,17 +63,17 @@ class IcebergConfig:
 
     @classmethod
     def from_env(cls) -> IcebergConfig:
-        """Load configuration from environment variables."""
+        """Load configuration from Heber settings."""
+        from heber.config import get_settings
+
+        settings = get_settings()
         return cls(
-            catalog_type=IcebergCatalogType(os.getenv("ICEBERG_CATALOG_TYPE", "sql")),
-            catalog_uri=os.getenv(
-                "ICEBERG_CATALOG_URI",
-                "postgresql://heber:heber@localhost:5432/heber_iceberg",  # pragma: allowlist secret
-            ),
-            warehouse=os.getenv("ICEBERG_WAREHOUSE", "s3://heber-lakehouse/warehouse"),
-            s3_endpoint=os.getenv("ICEBERG_S3_ENDPOINT"),
-            s3_access_key=os.getenv("ICEBERG_S3_ACCESS_KEY"),
-            s3_secret_key=os.getenv("ICEBERG_S3_SECRET_KEY"),
+            catalog_type=IcebergCatalogType(settings.iceberg_catalog_type),
+            catalog_uri=settings.iceberg_catalog_uri,
+            warehouse=settings.iceberg_warehouse,
+            s3_endpoint=settings.iceberg_s3_endpoint,
+            s3_access_key=settings.iceberg_s3_access_key,
+            s3_secret_key=settings.iceberg_s3_secret_key,
         )
 
 

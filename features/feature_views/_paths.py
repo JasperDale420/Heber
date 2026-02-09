@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from heber.config import get_settings
 
 
 def gold_dataset_glob(dataset: str) -> str:
@@ -12,10 +11,10 @@ def gold_dataset_glob(dataset: str) -> str:
     Layout:
       <gold_root>/dataset=<dataset>/project=<project>/version=<version>/dt=<date>/*.parquet
     """
-    data_root = Path(os.getenv("HEBER_DATA_ROOT", "/data"))
-    gold_root = Path(os.getenv("HEBER_GOLD_ROOT", str(data_root / "gold")))
-    project_glob = os.getenv("HEBER_GOLD_PROJECT", "*")
-    version_glob = os.getenv("HEBER_GOLD_VERSION", "*")
+    settings = get_settings()
+    gold_root = settings.gold_path
+    project_glob = settings.gold_project
+    version_glob = settings.gold_version
 
     return str(
         gold_root / f"dataset={dataset}" / f"project={project_glob}" / f"version={version_glob}" / "dt=*" / "*.parquet"

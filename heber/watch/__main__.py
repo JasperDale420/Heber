@@ -12,19 +12,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import signal
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_REDIS_URL = os.environ.get("HEBER_REDIS_URL", "redis://localhost:6379")
-DEFAULT_GATEWAY_URL = os.environ.get("DATA_GATEWAY_URL", "http://localhost:8000")
-DEFAULT_OUTPUT_PATH = os.environ.get(
-    "HEBER_GOLD_PATH",
-    "/Volumes/heber/data/gold",
-)
+
+def _get_defaults() -> tuple[str, str, str]:
+    """Load defaults from settings to avoid module-level env reads."""
+    from heber.config import get_settings
+
+    s = get_settings()
+    return s.watch_redis_url, s.watch_gateway_url, str(s.gold_path)
 
 
 def run() -> None:
@@ -34,6 +34,8 @@ def run() -> None:
     import redis
 
     from heber.watch.writer import WatchService
+
+    redis_url, gateway_url, output_path = _get_defaults()
 
     parser = argparse.ArgumentParser(
         description="Run the alert watch service",
@@ -50,18 +52,18 @@ Environment variables:
     )
     parser.add_argument(
         "--redis",
-        default=DEFAULT_REDIS_URL,
-        help=f"Redis URL (default: {DEFAULT_REDIS_URL})",
+        default=redis_url,
+        help=f"Redis URL (default: {redis_url})",
     )
     parser.add_argument(
         "--gateway",
-        default=DEFAULT_GATEWAY_URL,
-        help=f"Data Gateway URL (default: {DEFAULT_GATEWAY_URL})",
+        default=gateway_url,
+        help=f"Data Gateway URL (default: {gateway_url})",
     )
     parser.add_argument(
         "--output",
-        default=DEFAULT_OUTPUT_PATH,
-        help=f"Gold output path (default: {DEFAULT_OUTPUT_PATH})",
+        default=output_path,
+        help=f"Gold output path (default: {output_path})",
     )
 
     args = parser.parse_args()

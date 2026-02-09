@@ -17,12 +17,16 @@ import structlog
 
 def get_instance_id() -> str:
     """Get unique instance identifier."""
-    return os.environ.get("INSTANCE_ID", os.environ.get("HOSTNAME", "unknown"))
+    from heber.config import get_settings
+
+    return get_settings().instance_id
 
 
 def get_service_name() -> str:
-    """Get service name from environment."""
-    return os.environ.get("SERVICE_NAME", "heber")
+    """Get service name."""
+    from heber.config import get_settings
+
+    return get_settings().service_name
 
 
 def add_timestamp(
@@ -59,7 +63,7 @@ def configure_logging(
         json_output: If True, output JSON; otherwise, dev-friendly format
     """
     if service_name:
-        os.environ["SERVICE_NAME"] = service_name
+        os.environ["SERVICE_NAME"] = service_name  # Keep env sync for child processes
 
     normalized_level = log_level.strip().upper()
     level_value = logging.getLevelName(normalized_level)

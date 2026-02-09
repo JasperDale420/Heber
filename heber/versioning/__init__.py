@@ -8,7 +8,6 @@ Phase 2 of OSS Migration Roadmap.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -56,14 +55,17 @@ class LakeFSConfig:
 
     @classmethod
     def from_env(cls) -> LakeFSConfig:
-        """Load configuration from environment variables."""
+        """Load configuration from Heber settings."""
+        from heber.config import get_settings
+
+        settings = get_settings()
         return cls(
-            endpoint=os.getenv("LAKEFS_ENDPOINT", "http://localhost:8000"),
-            access_key=os.getenv("LAKEFS_ACCESS_KEY", ""),
-            secret_key=os.getenv("LAKEFS_SECRET_KEY", ""),
-            default_repo=os.getenv("LAKEFS_DEFAULT_REPO", "heber-gold"),
-            storage_namespace_base=os.getenv("LAKEFS_STORAGE_NAMESPACE_BASE", "s3://heber-lakehouse"),
-            storage_namespace_template=os.getenv("LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
+            endpoint=settings.lakefs_endpoint,
+            access_key=settings.lakefs_access_key,
+            secret_key=settings.lakefs_secret_key,
+            default_repo=settings.lakefs_default_repo,
+            storage_namespace_base=settings.lakefs_storage_namespace_base,
+            storage_namespace_template=settings.lakefs_storage_namespace_template,
         )
 
     def resolve_storage_namespace(self, repo_name: str) -> str:

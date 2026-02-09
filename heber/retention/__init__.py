@@ -9,7 +9,6 @@ Provides:
 
 import asyncio
 import json
-import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -308,18 +307,14 @@ class ReaperWorker:
 
     @staticmethod
     def _resolve_storage_root(storage_root: str | Path | None) -> Path:
-        """Resolve storage root from explicit arg, env, shared settings, then legacy fallback."""
+        """Resolve storage root from explicit arg or shared settings."""
         if storage_root is not None:
             return Path(storage_root)
 
-        env_root = os.getenv("HEBER_DATA_ROOT")
-        if env_root:
-            return Path(env_root)
-
         try:
-            from heber.config import settings as heber_settings
+            from heber.config import get_settings
 
-            return Path(heber_settings.data_root)
+            return Path(get_settings().data_root)
         except Exception:
             return Path(DEFAULT_STORAGE_ROOT)
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import signal
 from collections.abc import Callable
 
@@ -34,15 +33,19 @@ def _parse_datasets(value: str) -> list[str]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from heber.config import get_settings
+
+    settings = get_settings()
+
     parser = argparse.ArgumentParser(description="Run Heber hotloader service.")
     parser.add_argument(
         "--datasets",
-        default=os.getenv("HEBER_HOTLOADER_DATASETS", "quotes,trades,bars"),
+        default=settings.hotloader_datasets,
         help="Comma-separated datasets to sync",
     )
     parser.add_argument(
         "--silver-base-path",
-        default=os.getenv("HEBER_HOTLOADER_SILVER_BASE_PATH"),
+        default=settings.hotloader_silver_base_path,
         help="Optional Silver base path override",
     )
     parser.add_argument(

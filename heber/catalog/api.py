@@ -3,7 +3,6 @@
 See PRD Section 11.7 for API contract.
 """
 
-import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -36,7 +35,7 @@ def _should_auto_create_catalog_tables() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    if os.getenv("HEBER_METRICS_PORT"):
+    if settings.metrics_port:
         start_metrics_server_from_env(default_port=9090)
 
     if _should_auto_create_catalog_tables():
