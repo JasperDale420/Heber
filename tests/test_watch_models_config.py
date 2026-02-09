@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import heber.watch.models as watch_models
-from heber.watch.models import WatchOutcome, WatchStatus
+from heber.watch.models import AlertWatch, WatchHorizon, WatchOutcome, WatchStatus
 
 
 def test_watch_models_do_not_emit_class_config_deprecation_warning() -> None:
@@ -49,3 +49,30 @@ def test_watch_outcome_rejects_unknown_horizon_value() -> None:
             window_duration_hours=4.0,
             trading_minutes_to_hit=45,
         )
+
+
+def test_alert_watch_normalizes_naive_datetimes_to_utc() -> None:
+    now_naive = datetime(2026, 2, 9, 10, 0, 0)
+    watch = AlertWatch(
+        watch_id="w1",
+        alert_id="a1",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=2.5,
+        spot_at_alert=150.0,
+        alert_time=now_naive,
+        window_end=datetime(2026, 2, 9, 14, 0, 0),
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+        created_at=datetime(2026, 2, 9, 10, 1, 0),
+        updated_at=datetime(2026, 2, 9, 10, 2, 0),
+    )
+
+    assert watch.alert_time.tzinfo is UTC
+    assert watch.window_end.tzinfo is UTC
+    assert watch.created_at.tzinfo is UTC
+    assert watch.updated_at.tzinfo is UTC

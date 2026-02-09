@@ -147,6 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/consumer.py`: quote numeric coercion now rejects non-finite values (`NaN`/`inf`) so entry-price midpoint logic falls back to finite `last_price` values
 - Added consumer non-finite quote regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-129` remediation in audit pass 103 and `T-107`
+- Fixed `watch/models.py`: watch datetime fields now normalize to UTC-aware values at validation time (naive inputs treated as UTC), removing mixed naive/aware timestamp drift
+- Added watch-model naive-datetime normalization regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-130` remediation in audit pass 104 and `T-108`
 
 ### Removed
 
@@ -267,6 +270,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 101: watch checker non-finite return-path conformance revalidation)
 - Expanded technical debt audit (pass 102: watch writer entrypoint stop-failure isolation conformance revalidation)
 - Expanded technical debt audit (pass 103: watch consumer non-finite quote coercion conformance revalidation)
+- Expanded technical debt audit (pass 104: watch model UTC datetime-normalization conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
