@@ -788,8 +788,14 @@ Audit Pass 112 (2026-02-09, files reviewed directly):
 - tests/test_watch_zero_price_handling.py
 - tests/test_watch_manager_redis_bytes.py
 
+Audit Pass 113 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_zero_price_handling.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py line-by-line re-audit for snapshot ordering and timestamp propagation semantics.
+- heber/watch/consumer.py line-by-line re-audit for timeout/backoff behavior and retry observability on repeated route failures.
 
 ## Remediation Updates
 
@@ -850,6 +856,7 @@ Updated: 2026-02-09
 - `TD-137` addressed via `T-114`: writer parquet flush now rolls back already-promoted partition files when promotion fails mid-batch.
 - `TD-138` addressed via `T-115`: manager watch updates now persist normalized snapshot timestamps as `updated_at` instead of wall-clock update time.
 - `TD-139`, `TD-140`, and `TD-141` addressed via `T-116`: checker now evaluates snapshots in chronological order and persists barrier/expiry-derived outcome timestamps and trading-minute metrics through manager completion.
+- `TD-142`, `TD-143`, and `TD-144` addressed via `T-117`: poller/consumer quote fetch now validate decoded payload shape before accepting a route as successful, and poller snapshots now preserve quote-provided timestamps where available.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -982,6 +989,7 @@ Updated: 2026-02-09
 - Audit Pass 110 revalidated and remediated `TD-137`; writer parquet flush now removes already-promoted outputs when later partition promotion fails in the same batch.
 - Audit Pass 111 revalidated and remediated `TD-138`; manager watch updates now preserve source snapshot timestamps in persisted watch metadata.
 - Audit Pass 112 revalidated and remediated `TD-139`, `TD-140`, and `TD-141`; checker outcome evaluation now respects chronological snapshot ordering and records barrier/expiry timing metadata from source events rather than processing time.
+- Audit Pass 113 revalidated and remediated `TD-142`, `TD-143`, and `TD-144`; poller/consumer route fallbacks now recover from malformed 200-payload shapes and poller snapshot timestamps now align with source quote timing.
 
 ## Executive Summary
 
@@ -1134,6 +1142,9 @@ Severity key: High, Medium, Low
 | TD-139 | Medium | Watch Service | Checker barrier evaluation depended on snapshot list order rather than snapshot timestamps, allowing out-of-order ingestion to produce incorrect TP/SL-first outcomes. |
 | TD-140 | Medium | Watch Service | Checker used processing time for outcome metadata (`outcome_time` and `trading_minutes_to_hit`) instead of barrier-hit or expiry-window timestamps, skewing label timing semantics. |
 | TD-141 | Medium | Watch Service | Manager completion API did not accept explicit outcome timestamps, forcing checker-derived timing to be replaced with wall-clock completion time during persistence. |
+| TD-142 | Medium | Watch Service | Poller accepted malformed 200-response payload shapes as successful routes, which could abort batch parsing and skip legacy fallback candidates. |
+| TD-143 | Medium | Watch Service | Consumer entry-price lookup accepted malformed 200-response payload shapes as successful routes, causing lookup failures without trying legacy routes. |
+| TD-144 | Medium | Watch Service | Poller snapshot timestamps always used local processing time instead of quote-provided event timestamps, causing source-time drift in downstream watch metadata. |
 
 ## Detailed Findings
 
@@ -1963,6 +1974,24 @@ Recommendation: Accept optional `outcome_time` input, normalize to UTC, and use 
 Update 2026-02-09: Remediated in `T-116` by adding an optional `outcome_time` parameter to completion paths and normalizing persisted values.
 Revalidated 2026-02-09 (Pass 112): Resolved. Persisted watch outcomes now retain checker-derived outcome timing semantics.
 
+**TD-142: Poller route fallback skipped malformed 200-response payload shapes.**
+Evidence: `SnapshotPoller._fetch_quotes()` previously treated any JSON-decodable 200 response as successful and immediately processed `data.quotes`. If `quotes` was malformed (for example list instead of dict), parsing raised and aborted the batch without trying legacy route candidates.
+Recommendation: Validate decoded response shape (`dict` -> `data` dict -> `quotes` dict) per route and continue fallback when shape is invalid.
+Update 2026-02-09: Remediated in `T-117` by adding route-level payload-shape validation and fallback continuation, with regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Poller now falls back cleanly when prefixed route payload shape is malformed.
+
+**TD-143: Consumer route fallback skipped malformed 200-response payload shapes.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously accepted any JSON-decodable 200 response and directly accessed `data.quotes`. Invalid payload shapes raised during parsing and exited lookup flow before trying legacy fallback routes.
+Recommendation: Validate decoded response shape at route level and continue to next candidate on shape mismatch.
+Update 2026-02-09: Remediated in `T-117` by adding route-level payload-shape validation with fallback continuation and regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Consumer now recovers from malformed 200 payload shapes via legacy route fallback.
+
+**TD-144: Poller snapshots ignored source quote timestamps.**
+Evidence: `SnapshotPoller._create_snapshot()` previously always used `datetime.now(UTC)` for snapshot timestamps, ignoring quote payload time fields. This introduced source-time drift and weakened timing fidelity for downstream watch state updates.
+Recommendation: Parse quote timestamp fields (`timestamp`/`ts_event`/`t`) with UTC normalization and fall back to processing time only when absent or invalid.
+Update 2026-02-09: Remediated in `T-117` by adding quote timestamp coercion/parsing helpers and using parsed quote timestamps in snapshot creation, with regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Snapshot timestamps now preserve source quote timing when available.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1970,7 +1999,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

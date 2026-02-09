@@ -462,8 +462,7 @@ class AlertWatchConsumer:
                     )
                     if response.status_code == 200:
                         try:
-                            data = response.json()
-                            break
+                            decoded = response.json()
                         except (TypeError, ValueError) as decode_error:
                             logger.warning(
                                 "Entry price response JSON decode failed",
@@ -471,11 +470,36 @@ class AlertWatchConsumer:
                                 error=str(decode_error),
                             )
                             continue
+                        if not isinstance(decoded, dict):
+                            logger.warning(
+                                "Entry price payload shape invalid",
+                                route=route,
+                                payload_type=type(decoded).__name__,
+                            )
+                            continue
+                        data_payload = decoded.get("data", {})
+                        if not isinstance(data_payload, dict):
+                            logger.warning(
+                                "Entry price data payload shape invalid",
+                                route=route,
+                                payload_type=type(data_payload).__name__,
+                            )
+                            continue
+                        quotes_payload = data_payload.get("quotes", {})
+                        if not isinstance(quotes_payload, dict):
+                            logger.warning(
+                                "Entry price quotes payload shape invalid",
+                                route=route,
+                                payload_type=type(quotes_payload).__name__,
+                            )
+                            continue
+                        data = decoded
+                        break
 
                 if data is not None:
                     quotes = data.get("data", {}).get("quotes", {})
                     quote = quotes.get(occ_symbol)
-                    if quote:
+                    if isinstance(quote, dict):
                         bid = self._coerce_optional_float(quote.get("bp"))
                         if bid is None:
                             bid = self._coerce_optional_float(quote.get("bid_price"))

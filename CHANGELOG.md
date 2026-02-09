@@ -177,6 +177,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/manager.py`: `complete_watch()` now accepts explicit `outcome_time` and persists it (UTC-normalized), enabling checker-derived timing semantics
 - Added checker ordering/timing and manager completion-time regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-139`/`TD-140`/`TD-141` remediation in audit pass 112 and `T-116`
+- Fixed `watch/poller.py`: quote-fetch route fallback now treats malformed JSON payload shapes on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Fixed `watch/consumer.py`: entry-price route fallback now treats malformed JSON payload shapes on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Fixed `watch/poller.py`: snapshots now use quote-provided timestamps (`timestamp`/`ts_event`/`t`) with UTC normalization when available
+- Added payload-shape fallback and quote-timestamp regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-142`/`TD-143`/`TD-144` remediation in audit pass 113 and `T-117`
 - Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
 - Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
 - Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface

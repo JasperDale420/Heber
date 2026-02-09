@@ -136,6 +136,22 @@ def test_poller_snapshot_ignores_non_numeric_bid_ask_and_uses_last() -> None:
     assert snapshot.return_pct == 0.25
 
 
+def test_poller_snapshot_uses_quote_timestamp_when_present() -> None:
+    poller = SnapshotPoller(SimpleNamespace())
+    watch = _build_watch()
+
+    snapshot = poller._create_snapshot(
+        watch,
+        {
+            "bp": 1.0,
+            "ap": 1.2,
+            "timestamp": "2026-02-09T14:30:00Z",
+        },
+    )
+
+    assert snapshot.timestamp == datetime(2026, 2, 9, 14, 30, tzinfo=UTC)
+
+
 def test_poller_snapshot_treats_non_finite_quote_values_as_missing() -> None:
     poller = SnapshotPoller(SimpleNamespace())
     watch = _build_watch()

@@ -191,8 +191,7 @@ class SnapshotPoller:
                         last_status = response.status_code
                         if response.status_code == 200:
                             try:
-                                batch_data = response.json()
-                                break
+                                decoded = response.json()
                             except (ValueError, TypeError) as decode_error:
                                 logger.warning(
                                     "Quote response JSON decode failed",
@@ -200,10 +199,42 @@ class SnapshotPoller:
                                     error=str(decode_error),
                                 )
                                 continue
+                            if not isinstance(decoded, dict):
+                                logger.warning(
+                                    "Quote response payload shape invalid",
+                                    route=route,
+                                    payload_type=type(decoded).__name__,
+                                )
+                                continue
+                            data_payload = decoded.get("data", {})
+                            if not isinstance(data_payload, dict):
+                                logger.warning(
+                                    "Quote response data payload shape invalid",
+                                    route=route,
+                                    payload_type=type(data_payload).__name__,
+                                )
+                                continue
+                            quotes_payload = data_payload.get("quotes", {})
+                            if not isinstance(quotes_payload, dict):
+                                logger.warning(
+                                    "Quote response quotes payload shape invalid",
+                                    route=route,
+                                    payload_type=type(quotes_payload).__name__,
+                                )
+                                continue
+                            batch_data = decoded
+                            break
 
                     if batch_data is not None:
                         for symbol, quote in batch_data.get("data", {}).get("quotes", {}).items():
-                            quotes[symbol] = quote
+                            if isinstance(quote, dict):
+                                quotes[symbol] = quote
+                            else:
+                                logger.warning(
+                                    "Quote payload item shape invalid",
+                                    symbol=symbol,
+                                    payload_type=type(quote).__name__,
+                                )
                     else:
                         logger.warning(
                             "Quote fetch failed",
@@ -251,7 +282,7 @@ class SnapshotPoller:
         return WatchSnapshot(
             watch_id=watch.watch_id,
             occ_symbol=watch.occ_symbol,
-            timestamp=datetime.now(UTC),
+            timestamp=self._parse_quote_timestamp(quote),
             bid_px=bid,
             ask_px=ask,
             mid_px=mid,
@@ -272,6 +303,41 @@ class SnapshotPoller:
             return numeric
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _coerce_timestamp(value: Any) -> datetime | None:
+        """Convert quote timestamp payload values into UTC-aware datetimes."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+        if isinstance(value, int | float):
+            try:
+                return datetime.fromtimestamp(value, tz=UTC)
+            except (OSError, OverflowError, ValueError):
+                return None
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    return datetime.fromtimestamp(float(value), tz=UTC)
+                except (OSError, OverflowError, ValueError):
+                    return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        return None
+
+    def _parse_quote_timestamp(self, quote: dict[str, Any]) -> datetime:
+        """Resolve snapshot timestamp from quote payload with UTC fallback."""
+        for key in ("timestamp", "ts_event", "t"):
+            parsed = self._coerce_timestamp(quote.get(key))
+            if parsed is not None:
+                return parsed
+        return datetime.now(UTC)
 
     @staticmethod
     def _horizon_interval_seconds(horizon: Any) -> int:
