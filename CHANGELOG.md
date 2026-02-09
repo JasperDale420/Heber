@@ -101,6 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/models.py`: `WatchOutcome.horizon` now enforces `WatchHorizon` enum values instead of accepting arbitrary strings
 - Added watch-outcome invalid-horizon regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-108` remediation in audit pass 90 and `T-94`
+- Fixed `watch/writer.py`: `run_watch_service()` now executes `service.stop()` in a `finally` block so normal completion still performs shutdown cleanup/flush
+- Added writer normal-completion shutdown regression test (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-109` remediation in audit pass 91 and `T-95`
 
 ### Removed
 

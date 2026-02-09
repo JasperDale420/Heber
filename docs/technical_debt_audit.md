@@ -674,8 +674,14 @@ Audit Pass 90 (2026-02-09, files reviewed directly):
 - tests/test_meta_label_alignment.py
 - tests/test_watch_writer_file_collisions.py
 
+Audit Pass 91 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_entrypoint_shutdown.py
+- tests/test_watch_writer_file_collisions.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/writer.py line-by-line re-audit for buffer flush/error-path durability and label serialization edge cases.
+- heber/watch/checker.py line-by-line re-audit for path-statistics consistency and barrier edge-case sequencing.
 
 ## Remediation Updates
 
@@ -828,6 +834,7 @@ Updated: 2026-02-09
 - Audit Pass 88 revalidated and remediated `TD-106`; consumer alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values instead of overwriting them via truthiness fallback.
 - Audit Pass 89 revalidated and remediated `TD-107`; market-context returns no longer skip zero/invalid close days and silently shift return baselines to older sessions.
 - Audit Pass 90 revalidated and remediated `TD-108`; watch outcomes now enforce horizon enum validation (`intraday`/`swing`/`leap`) to prevent invalid horizon labels from entering storage/training paths.
+- Audit Pass 91 revalidated and remediated `TD-109`; writer entrypoint now guarantees `WatchService.stop()` on normal completion so buffered outcomes and component shutdown cleanup are not skipped.
 
 ## Executive Summary
 
@@ -947,6 +954,7 @@ Severity key: High, Medium, Low
 | TD-106 | Medium | Watch Service | Consumer alert-field mapping used truthiness fallback for `spot_px`/`contract_px`, so valid `0.0` values were replaced by alternate fields (`underlying_price`/`price`). |
 | TD-107 | Medium | Watch Features | Market-context enrichment dropped zero/invalid close values before return calculations, allowing 1-day/5-day/30-day returns to silently use older sessions. |
 | TD-108 | Medium | Watch Models | `WatchOutcome.horizon` accepted arbitrary strings, allowing invalid horizon labels to enter outcome rows and downstream datasets. |
+| TD-109 | Medium | Watch Service | Writer CLI entrypoint did not stop service on normal completion, so buffered-label flush and component cleanup were only guaranteed on exceptional exits. |
 
 ## Detailed Findings
 
@@ -1578,6 +1586,12 @@ Recommendation: Type `WatchOutcome.horizon` as `WatchHorizon` and add regression
 Update 2026-02-09: Remediated in `T-94` by changing `WatchOutcome.horizon` to `WatchHorizon` and adding a targeted model-validation regression test for invalid horizon strings.
 Revalidated 2026-02-09 (Pass 90): Resolved. Watch outcomes now enforce horizon enum membership during validation.
 
+**TD-109: Writer entrypoint skips cleanup on normal completion.**
+Evidence: `run_watch_service()` previously called `service.stop()` only inside exception handlers. If `service.run()` returned normally, stop/flush cleanup was skipped and buffered outcomes could remain unwritten.
+Recommendation: Move service shutdown into a shared `finally` path so cleanup runs on both normal and exceptional exits.
+Update 2026-02-09: Remediated in `T-95` by executing `service.stop()` in `finally` and adding regression coverage for normal-completion shutdown.
+Revalidated 2026-02-09 (Pass 91): Resolved. Writer entrypoint now guarantees cleanup/flush regardless of exit path.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1585,7 +1599,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

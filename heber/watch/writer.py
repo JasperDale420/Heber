@@ -225,10 +225,11 @@ def run_watch_service(
     try:
         asyncio.run(service.run())
     except KeyboardInterrupt:
-        service.stop()
+        pass
     except Exception:
-        service.stop()
         raise
+    finally:
+        service.stop()
 
 
 if __name__ == "__main__":
