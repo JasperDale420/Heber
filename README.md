@@ -11,6 +11,10 @@ Centralized storage and retrieval for market + intelligence data across all trad
 # Copy environment template
 cp .env.example .env
 
+# Add any required API keys in .env
+# - OPENAI_API_KEY for OpenAI
+# - DASHSCOPE_API_KEY for Qwen 2.5 (set HEBER_LLM_PROVIDER=qwen)
+
 # Start infrastructure + Heber services
 docker compose up -d
 
@@ -77,6 +81,13 @@ Environment variables:
 - `HEBER_REDIS_URL` - Redis connection (default: `redis://localhost:6380`)
 - `DATA_GATEWAY_URL` - Data Gateway for option quotes (default: `http://localhost:8000`)
 - `HEBER_GOLD_PATH` - Gold layer output path
+
+LLM provider variables (OpenAI-compatible):
+
+- `HEBER_LLM_PROVIDER` - `openai` (default) or `qwen`
+- `HEBER_LLM_MODEL` - model name (for example `gpt-4o-mini` or `qwen-plus`)
+- `OPENAI_API_KEY` / `DASHSCOPE_API_KEY` - provider key aliases
+- `HEBER_LLM_BASE_URL` - optional explicit provider endpoint override
 
 ### ML Package (`heber/ml/`)
 

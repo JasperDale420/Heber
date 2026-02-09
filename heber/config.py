@@ -88,6 +88,38 @@ class Settings(BaseSettings):
         description="Path to Feast feature repository",
     )
 
+    # LLM (OpenAI-compatible providers)
+    llm_provider: Literal["openai", "qwen"] = Field(
+        default="openai",
+        validation_alias=AliasChoices("HEBER_LLM_PROVIDER", "LLM_PROVIDER"),
+        description="LLM provider selector for OpenAI-compatible clients",
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("HEBER_LLM_MODEL", "LLM_MODEL"),
+        description="Default chat model name",
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_LLM_BASE_URL", "LLM_BASE_URL"),
+        description="Optional override for OpenAI-compatible base URL",
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "HEBER_LLM_API_KEY",
+            "LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "DASHSCOPE_API_KEY",
+        ),
+        description="API key for OpenAI-compatible model providers",
+    )
+    llm_qwen_region: Literal["intl", "us", "cn"] = Field(
+        default="intl",
+        validation_alias=AliasChoices("HEBER_LLM_QWEN_REGION", "LLM_QWEN_REGION"),
+        description="Default Qwen endpoint region (intl/us/cn) when provider=qwen",
+    )
+
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
     bronze_max_batch_size: int = Field(default=10000, description="Max events per Bronze file")
@@ -250,6 +282,22 @@ class Settings(BaseSettings):
         if self.gold_root:
             return self.gold_root
         return self.data_root / "gold"
+
+    @property
+    def llm_effective_base_url(self) -> str | None:
+        """Resolve base URL for the configured OpenAI-compatible provider."""
+        if self.llm_base_url:
+            return self.llm_base_url
+
+        if self.llm_provider == "qwen":
+            qwen_endpoints = {
+                "intl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "us": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+                "cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            }
+            return qwen_endpoints[self.llm_qwen_region]
+
+        return None
 
 
 @lru_cache
