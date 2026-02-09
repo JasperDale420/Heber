@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -92,6 +93,13 @@ class SnapshotPoller:
                 snapshot = self._create_snapshot(watch, quote)
                 await self.manager.add_snapshot_async(snapshot)
                 price_for_watch = snapshot.mid_px if snapshot.mid_px is not None else snapshot.last_px
+                if price_for_watch is None:
+                    logger.warning(
+                        "Skipping watch update due to missing price",
+                        watch_id=watch.watch_id,
+                        occ_symbol=watch.occ_symbol,
+                    )
+                    continue
                 await self.manager.update_watch_price_async(
                     watch.watch_id,
                     price_for_watch,
@@ -250,7 +258,10 @@ class SnapshotPoller:
         if value is None:
             return None
         try:
-            return float(value)
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                return None
+            return numeric
         except (TypeError, ValueError):
             return None
 

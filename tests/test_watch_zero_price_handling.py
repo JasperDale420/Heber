@@ -135,6 +135,28 @@ def test_poller_snapshot_ignores_non_numeric_bid_ask_and_uses_last() -> None:
     assert snapshot.return_pct == 0.25
 
 
+def test_poller_snapshot_treats_non_finite_quote_values_as_missing() -> None:
+    poller = SnapshotPoller(SimpleNamespace())
+    watch = _build_watch()
+
+    snapshot = poller._create_snapshot(
+        watch,
+        {
+            "bp": "NaN",
+            "ap": "inf",
+            "last_price": "1.25",
+            "underlying_price": "-inf",
+        },
+    )
+
+    assert snapshot.bid_px is None
+    assert snapshot.ask_px is None
+    assert snapshot.mid_px == 1.25
+    assert snapshot.last_px == 1.25
+    assert snapshot.underlying_price is None
+    assert snapshot.return_pct == 0.25
+
+
 def test_checker_expires_zero_entry_watch_even_without_return_path() -> None:
     now = datetime.now(UTC)
     watch = AlertWatch(

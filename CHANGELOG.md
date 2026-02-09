@@ -133,6 +133,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/manager.py`: `_save_watch()` now removes non-watching statuses from `ACTIVE_WATCHES`, preventing stale active-index memberships after status transitions
 - Added watch-manager byte-delete and active-index reconciliation regression tests (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-122`/`TD-123` remediation in audit pass 99 and `T-103`
+- Fixed `watch/poller.py`: numeric quote coercion now rejects non-finite values (`NaN`/`inf`) so invalid payload numerics are treated as missing rather than propagating into snapshots/watch updates
+- Fixed `watch/poller.py`: poll cycle now skips `update_watch_price_async()` when neither midpoint nor last price is available, preventing `None` watch-price updates
+- Added poller non-finite-quote and missing-price update regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-124`/`TD-125` remediation in audit pass 100 and `T-104`
 
 ### Removed
 
@@ -249,6 +253,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 97: watch writer atomic-flush durability conformance revalidation)
 - Expanded technical debt audit (pass 98: watch entrypoint shutdown error-isolation conformance revalidation)
 - Expanded technical debt audit (pass 99: watch manager byte-ID deletion + active-index consistency conformance revalidation)
+- Expanded technical debt audit (pass 100: watch poller non-finite quote + missing-price update conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
