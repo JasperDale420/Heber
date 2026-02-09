@@ -73,6 +73,28 @@ def test_gateway_url_candidates_avoids_double_prefix_when_base_already_has_prefi
     ]
 
 
+def test_gateway_url_candidates_does_not_treat_partial_suffix_as_prefix() -> None:
+    candidates = gateway_url_candidates(
+        "http://gateway/notapi/v1",
+        "/alpaca/options/quotes",
+    )
+    assert candidates == [
+        "http://gateway/notapi/v1/api/v1/alpaca/options/quotes",
+        "http://gateway/notapi/v1/alpaca/options/quotes",
+    ]
+
+
+def test_gateway_url_candidates_strips_query_from_base_url() -> None:
+    candidates = gateway_url_candidates(
+        "http://gateway/api/v1?token=abc123",
+        "/alpaca/options/quotes",
+    )
+    assert candidates == [
+        "http://gateway/api/v1/alpaca/options/quotes",
+        "http://gateway/alpaca/options/quotes",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_poller_fetch_quotes_falls_back_to_legacy_route(monkeypatch: pytest.MonkeyPatch) -> None:
     _StubAsyncClient.calls = []

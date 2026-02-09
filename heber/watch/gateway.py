@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 
 
@@ -16,7 +18,13 @@ def gateway_url_candidates(
     paths. This helper standardizes construction while preserving compatibility
     through fallback ordering.
     """
-    base = gateway_url.strip().rstrip("/")
+    raw_base = gateway_url.strip()
+    parsed_base = urlsplit(raw_base)
+    if parsed_base.scheme and parsed_base.netloc:
+        # Base URLs should not carry query/fragment parts when building API routes.
+        base = urlunsplit((parsed_base.scheme, parsed_base.netloc, parsed_base.path, "", "")).rstrip("/")
+    else:
+        base = raw_base.split("?", 1)[0].split("#", 1)[0].rstrip("/")
     normalized_route = route if route.startswith("/") else f"/{route}"
     stripped_prefix = api_prefix.strip().strip("/")
     normalized_prefix = f"/{stripped_prefix}" if stripped_prefix else ""

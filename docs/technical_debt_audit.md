@@ -748,8 +748,12 @@ Audit Pass 104 (2026-02-09, files reviewed directly):
 - heber/watch/models.py
 - tests/test_watch_models_config.py
 
+Audit Pass 105 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/gateway.py line-by-line re-audit for candidate ordering, dedupe behavior, and prefix edge cases.
+- heber/watch/features.py line-by-line re-audit for chain-lookup resilience and persistence-path edge cases.
 
 ## Remediation Updates
 
@@ -802,6 +806,7 @@ Updated: 2026-02-09
 - `TD-127` and `TD-128` addressed via `T-106`: writer entrypoint now preserves primary runtime failures when stop cleanup fails and treats stop failures on normal completion as non-fatal.
 - `TD-129` addressed via `T-107`: consumer quote coercion now rejects non-finite numeric values so entry-price selection correctly falls back to finite `last_price`.
 - `TD-130` addressed via `T-108`: watch models now normalize naive datetime fields to UTC-aware values during validation to eliminate mixed naive/aware timestamp semantics.
+- `TD-131` addressed via `T-109`: gateway URL candidate helpers now strip query/fragment components from base URLs before building prefixed and legacy route candidates.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -926,6 +931,7 @@ Updated: 2026-02-09
 - Audit Pass 102 revalidated and remediated `TD-127` and `TD-128`; writer entrypoint now isolates stop failures from run-error propagation and normal-exit behavior.
 - Audit Pass 103 revalidated and remediated `TD-129`; consumer entry-price parsing now filters non-finite quote values to prevent NaN midpoint propagation.
 - Audit Pass 104 revalidated and remediated `TD-130`; watch model datetime fields now normalize to UTC-aware values at validation time.
+- Audit Pass 105 revalidated and remediated `TD-131`; gateway route candidate generation now strips query/fragment components from base URLs to avoid malformed request URLs.
 
 ## Executive Summary
 
@@ -1067,6 +1073,7 @@ Severity key: High, Medium, Low
 | TD-128 | Medium | Watch Service | Writer `run_watch_service()` treated stop failures on normal completion as fatal, causing avoidable CLI errors after successful runs. |
 | TD-129 | Medium | Watch Service | Consumer quote coercion accepted non-finite numeric strings (`NaN`/`inf`), causing invalid midpoint entry prices and bypassing valid last-price fallback. |
 | TD-130 | Medium | Watch Service | Watch models accepted naive datetime fields unchanged, allowing mixed naive/aware timestamp semantics to propagate into watch lifecycle logic. |
+| TD-131 | Medium | Watch Service | Gateway URL candidate construction accepted base URLs with query/fragment components, producing malformed downstream request URLs when joining routes. |
 
 ## Detailed Findings
 
@@ -1830,6 +1837,12 @@ Recommendation: Normalize model datetime fields to UTC-aware values during valid
 Update 2026-02-09: Remediated in `T-108` by adding model-level datetime validators across watch models and regression coverage for naive datetime normalization.
 Revalidated 2026-02-09 (Pass 104): Resolved. Watch model timestamps now persist as UTC-aware datetimes by default.
 
+**TD-131: Gateway candidate builder can generate malformed URLs from query-bearing base values.**
+Evidence: `gateway_url_candidates()` previously concatenated route paths directly onto raw `gateway_url` strings. If a base URL contained query/fragment components (for example `http://gateway/api/v1?token=abc`), candidates were malformed (`...?.../api/v1/...`) and request routing failed.
+Recommendation: Normalize base URLs by stripping query/fragment components before constructing prefixed/legacy route candidates.
+Update 2026-02-09: Remediated in `T-109` by sanitizing base URL components via URL parsing and dropping query/fragment before route joining, with regression coverage.
+Revalidated 2026-02-09 (Pass 105): Resolved. Gateway candidate construction now returns valid request URLs even when configured base values carry query metadata.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1837,7 +1850,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

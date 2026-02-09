@@ -150,6 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/models.py`: watch datetime fields now normalize to UTC-aware values at validation time (naive inputs treated as UTC), removing mixed naive/aware timestamp drift
 - Added watch-model naive-datetime normalization regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-130` remediation in audit pass 104 and `T-108`
+- Fixed `watch/gateway.py`: base gateway URLs now strip query/fragment components before candidate route construction, preventing malformed request URLs
+- Added gateway base-query sanitization regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-131` remediation in audit pass 105 and `T-109`
 
 ### Removed
 
@@ -271,6 +274,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 102: watch writer entrypoint stop-failure isolation conformance revalidation)
 - Expanded technical debt audit (pass 103: watch consumer non-finite quote coercion conformance revalidation)
 - Expanded technical debt audit (pass 104: watch model UTC datetime-normalization conformance revalidation)
+- Expanded technical debt audit (pass 105: watch gateway base-url sanitization conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)
