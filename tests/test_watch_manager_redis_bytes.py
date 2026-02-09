@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon, WatchKeys, WatchStatus
 
@@ -134,6 +136,44 @@ def test_update_watch_price_uses_snapshot_timestamp() -> None:
     stored = manager.get_watch(watch.watch_id)
     assert stored is not None
     assert stored.updated_at == snapshot_time
+
+
+def test_update_watch_price_preserves_zero_mfe_baseline() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.mfe = 0.0
+    watch.mae = 0.0
+    manager._save_watch(watch)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=0.9,
+        timestamp=datetime.now(UTC),
+    )
+
+    assert updated is not None
+    assert updated.current_return == pytest.approx((0.9 - watch.entry_price) / watch.entry_price)
+    assert updated.mfe == 0.0
+    assert updated.mae == pytest.approx((0.9 - watch.entry_price) / watch.entry_price)
+
+
+def test_update_watch_price_preserves_zero_mae_baseline() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.mfe = 0.0
+    watch.mae = 0.0
+    manager._save_watch(watch)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=1.65,
+        timestamp=datetime.now(UTC),
+    )
+
+    assert updated is not None
+    assert updated.current_return == pytest.approx(0.1)
+    assert updated.mfe == pytest.approx(0.1)
+    assert updated.mae == 0.0
 
 
 def test_cleanup_expired_handles_naive_window_end() -> None:

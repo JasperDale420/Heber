@@ -210,6 +210,81 @@ async def test_enrich_greeks_treats_non_finite_values_as_missing(
 
 
 @pytest.mark.asyncio
+async def test_enrich_greeks_treats_boolean_values_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "data": {
+                    "contracts": [
+                        {
+                            "strike_price": 100.0,
+                            "delta": True,
+                            "gamma": False,
+                            "theta": True,
+                            "vega": 0.44,
+                            "implied_volatility": False,
+                        },
+                    ]
+                }
+            }
+
+    class _Client:
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
+
+    extractor = AlertFeatureExtractor(gateway_url="http://gateway:8000")
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.gamma is None
+    assert enriched.theta is None
+    assert enriched.vega == 0.44
+    assert enriched.iv is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_iv_rank_treats_non_finite_values_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"data": {"iv_rank": "NaN"}}
+
+    class _Client:
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
+
+    extractor = AlertFeatureExtractor(gateway_url="http://gateway:8000")
+    enriched = await extractor._enrich_iv_rank(_base_features())
+
+    assert enriched.iv_rank is None
+
+
+@pytest.mark.asyncio
 async def test_market_context_treats_non_finite_close_as_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

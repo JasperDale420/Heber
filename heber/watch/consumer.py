@@ -521,6 +521,8 @@ class AlertWatchConsumer:
     def _coerce_optional_float(value: Any) -> float | None:
         if value is None:
             return None
+        if isinstance(value, bool):
+            return None
         try:
             numeric = float(value)
             if not math.isfinite(numeric):

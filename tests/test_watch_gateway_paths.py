@@ -828,3 +828,36 @@ async def test_consumer_entry_price_uses_last_price_when_bid_ask_non_finite(
 
     price = await consumer._get_entry_price("AAPL260220C00100000")
     assert price == 1.25
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_uses_last_price_when_bid_ask_are_boolean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(
+            200,
+            {
+                "data": {
+                    "quotes": {
+                        "AAPL260220C00100000": {
+                            "bp": True,
+                            "ap": False,
+                            "last_price": "1.25",
+                        }
+                    }
+                }
+            },
+        ),
+    }
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+    assert price == 1.25

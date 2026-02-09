@@ -134,6 +134,7 @@ Updated: 2026-02-09
 - `T-124` complete (`TD-163`, `TD-164`, `TD-165`): poller now treats partial/invalid per-symbol quote coverage as fallback-eligible degradation and preserves best partial results when all routes are incomplete, while consumer entry-price lookup now falls back when requested symbol quotes are missing, malformed, or non-usable.
 - `T-125` complete (`TD-166`, `TD-167`, `TD-168`): poller/consumer route selection now applies shared quote-age staleness checks, falls back to fresher route data when prefixed quotes are stale, and preserves freshest stale fallback coverage when all routes are stale.
 - `T-126` complete (audit residual from Pass 121): gateway timestamp coercion now normalizes epoch-millisecond quote timestamps (`t`, including numeric-string values) so stale-route fallback parity matches ISO `timestamp` behavior across poller/consumer paths.
+- `T-127` complete (audit residual bundle from Pass 122): watch numeric coercion now rejects boolean payload values across poller/consumer/features paths, IV-rank enrichment now filters non-finite values, and watch manager MFE/MAE updates now preserve prior zero baselines instead of resetting via truthiness fallbacks.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -243,6 +244,7 @@ Updated: 2026-02-09
 - Audit Pass 120 revalidated `TD-163`, `TD-164`, and `TD-165` as resolved via `T-124`.
 - Audit Pass 121 revalidated `TD-166`, `TD-167`, and `TD-168` as resolved via `T-125`.
 - Audit Pass 122 revalidated and closed the epoch-millisecond quote timestamp parity residual via `T-126`.
+- Audit Pass 123 revalidated and closed boolean-coercion / zero-baseline residuals via `T-127`.
 
 ## Prioritization Approach
 

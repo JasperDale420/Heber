@@ -229,8 +229,10 @@ class WatchManager:
         mae = watch.mae
         if watch.entry_price > 0:
             current_return = (current_price - watch.entry_price) / watch.entry_price
-            mfe = max(watch.mfe or -float("inf"), current_return)
-            mae = min(watch.mae or float("inf"), current_return)
+            prior_mfe = watch.mfe if watch.mfe is not None else -float("inf")
+            prior_mae = watch.mae if watch.mae is not None else float("inf")
+            mfe = max(prior_mfe, current_return)
+            mae = min(prior_mae, current_return)
 
         # Update watch
         normalized_timestamp = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)

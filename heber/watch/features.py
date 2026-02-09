@@ -333,6 +333,8 @@ class AlertFeatureExtractor:
 
         if value is None:
             return None
+        if isinstance(value, bool):
+            return None
         try:
             numeric = float(value)
             if not math.isfinite(numeric):
@@ -379,8 +381,10 @@ class AlertFeatureExtractor:
 
             # Extract IV rank from response
             iv_data = data.get("data", {})
-            if iv_data and iv_data.get("iv_rank") is not None:
-                features.iv_rank = float(iv_data["iv_rank"])
+            if iv_data:
+                parsed_iv_rank = self._coerce_optional_float(iv_data.get("iv_rank"))
+                if parsed_iv_rank is not None:
+                    features.iv_rank = parsed_iv_rank
                 logger.debug(
                     "Enriched IV rank",
                     symbol=features.underlying,

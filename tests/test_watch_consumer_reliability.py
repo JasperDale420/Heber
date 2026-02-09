@@ -274,6 +274,18 @@ def test_parse_timestamp_interprets_epoch_milliseconds() -> None:
     assert ts_from_str == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 
 
+def test_parse_timestamp_boolean_value_falls_back_to_now_utc() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    before = datetime.now(UTC)
+
+    ts = consumer._parse_timestamp({"timestamp": True})
+
+    after = datetime.now(UTC)
+    assert ts.tzinfo is UTC
+    assert before <= ts <= after
+
+
 def test_decode_stream_data_handles_invalid_utf8_bytes() -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(redis_client, _NoopManager())

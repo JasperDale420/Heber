@@ -404,6 +404,8 @@ class SnapshotPoller:
         """Convert quote payload values to float when possible."""
         if value is None:
             return None
+        if isinstance(value, bool):
+            return None
         try:
             numeric = float(value)
             if not math.isfinite(numeric):

@@ -225,6 +225,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/gateway.py`: timestamp coercion now normalizes epoch-millisecond quote timestamps (numeric and numeric-string forms) so stale-route fallback behavior stays consistent across `t` and ISO `timestamp` payloads
 - Added epoch-millisecond timestamp parity regression tests (`tests/test_watch_gateway_paths.py`) for helper coercion and stale-route fallback selection
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 122 closure via `T-126`
+- Fixed `watch/manager.py`: MFE/MAE update baselines now preserve prior `0.0` values instead of resetting through truthiness fallbacks during price updates
+- Fixed `watch/poller.py`, `watch/consumer.py`, and `watch/features.py`: numeric coercion now rejects boolean payload values so quote prices, timestamps, Greeks, and market-context features are not polluted by `True`/`False` inputs
+- Fixed `watch/features.py`: IV-rank enrichment now ignores non-finite payload values (`NaN`/`inf`) instead of persisting invalid metrics
+- Added reliability regression tests (`tests/test_watch_manager_redis_bytes.py`, `tests/test_watch_zero_price_handling.py`, `tests/test_watch_gateway_paths.py`, `tests/test_watch_feature_greeks_zero_values.py`, `tests/test_watch_consumer_reliability.py`) covering zero-baseline MFE/MAE behavior, boolean quote handling, and non-finite IV-rank filtering
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 123 closure via `T-127`
 - Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
 - Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
 - Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring
