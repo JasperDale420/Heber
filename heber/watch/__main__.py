@@ -79,11 +79,19 @@ Environment variables:
     output_path = Path(args.output) if args.output else None
 
     service = WatchService(r, gateway_url=args.gateway, output_path=output_path)
+    run_error: BaseException | None = None
+    run_error_tb = None
+
+    def _safe_stop(source: str) -> None:
+        try:
+            service.stop()
+        except Exception as stop_error:
+            logger.error("Watch service stop failed", source=source, error=str(stop_error))
 
     # Handle graceful shutdown
     def shutdown_handler(sig: int, frame: object) -> None:
         logger.info("Shutdown signal received", signal=sig)
-        service.stop()
+        _safe_stop(source=f"signal:{sig}")
 
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
@@ -92,11 +100,15 @@ Environment variables:
         asyncio.run(service.run())
     except KeyboardInterrupt:
         pass
-    except Exception:
-        raise
+    except Exception as exc:
+        run_error = exc
+        run_error_tb = exc.__traceback__
     finally:
-        service.stop()
+        _safe_stop(source="finally")
         logger.info("Watch service exited")
+
+    if run_error is not None:
+        raise run_error.with_traceback(run_error_tb)
 
 
 if __name__ == "__main__":

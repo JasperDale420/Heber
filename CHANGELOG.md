@@ -125,6 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/writer.py`: flush failure paths now clean staged temp files before re-raising write errors
 - Added writer atomic-flush regression test (`tests/test_watch_writer_file_collisions.py`) covering partial-failure rollback and temp-file cleanup
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-118`/`TD-119` remediation in audit pass 97 and `T-101`
+- Fixed `watch/__main__.py`: shutdown cleanup now isolates `service.stop()` failures so they do not mask original `service.run()` runtime errors
+- Fixed `watch/__main__.py`: stop failures during normal completion are now logged and treated as non-fatal, preserving graceful CLI exit behavior
+- Added watch entrypoint shutdown regression tests (`tests/test_watch_entrypoint_shutdown.py`) for stop-failure masking and normal-completion stop-failure handling
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-120`/`TD-121` remediation in audit pass 98 and `T-102`
 
 ### Removed
 
@@ -239,6 +243,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 95: watch consumer timestamp/entry-price parsing conformance revalidation)
 - Expanded technical debt audit (pass 96: watch feature deserialization + Greeks fallback conformance revalidation)
 - Expanded technical debt audit (pass 97: watch writer atomic-flush durability conformance revalidation)
+- Expanded technical debt audit (pass 98: watch entrypoint shutdown error-isolation conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

@@ -109,6 +109,7 @@ Updated: 2026-02-09
 - `T-99` complete (`TD-114`, `TD-115`): consumer now normalizes quote payload numeric fields for entry-price fallback (`bp`/`ap`/`last_price`) and parses ISO alert timestamps into UTC-aware values with fail-soft fallback for invalid strings.
 - `T-100` complete (`TD-116`, `TD-117`): feature deserialization now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed option-chain strike rows while safely coercing numeric Greek fields.
 - `T-101` complete (`TD-118`, `TD-119`): writer parquet flushes now stage per-partition outputs as temp files and only promote after full batch success, with cleanup on failures to prevent partial commits and temp-file drift.
+- `T-102` complete (`TD-120`, `TD-121`): watch entrypoint shutdown now uses safe-stop handling so stop failures are logged without masking original runtime exceptions or failing normal-completion exits.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -193,6 +194,7 @@ Updated: 2026-02-09
 - Audit Pass 95 revalidated `TD-114` and `TD-115` as resolved via `T-99`.
 - Audit Pass 96 revalidated `TD-116` and `TD-117` as resolved via `T-100`.
 - Audit Pass 97 revalidated `TD-118` and `TD-119` as resolved via `T-101`.
+- Audit Pass 98 revalidated `TD-120` and `TD-121` as resolved via `T-102`.
 
 ## Prioritization Approach
 
