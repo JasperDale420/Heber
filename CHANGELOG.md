@@ -144,6 +144,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/writer.py`: stop failures during normal completion are now logged and treated as non-fatal
 - Added writer entrypoint stop-failure regression tests (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-127`/`TD-128` remediation in audit pass 102 and `T-106`
+- Fixed `watch/consumer.py`: quote numeric coercion now rejects non-finite values (`NaN`/`inf`) so entry-price midpoint logic falls back to finite `last_price` values
+- Added consumer non-finite quote regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-129` remediation in audit pass 103 and `T-107`
 
 ### Removed
 
@@ -263,6 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 100: watch poller non-finite quote + missing-price update conformance revalidation)
 - Expanded technical debt audit (pass 101: watch checker non-finite return-path conformance revalidation)
 - Expanded technical debt audit (pass 102: watch writer entrypoint stop-failure isolation conformance revalidation)
+- Expanded technical debt audit (pass 103: watch consumer non-finite quote coercion conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

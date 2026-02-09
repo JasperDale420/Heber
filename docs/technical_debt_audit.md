@@ -739,8 +739,13 @@ Audit Pass 102 (2026-02-09, files reviewed directly):
 - tests/test_watch_writer_entrypoint_shutdown.py
 - tests/test_watch_writer_file_collisions.py
 
+Audit Pass 103 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for payload-parse resilience and alert-validation edge cases.
+- heber/watch/models.py line-by-line re-audit for enum/type coercion and timestamp default edge cases.
 
 ## Remediation Updates
 
@@ -791,6 +796,7 @@ Updated: 2026-02-09
 - `TD-124` and `TD-125` addressed via `T-104`: poller now treats non-finite quote numerics as missing and avoids watch-price updates when a quote payload has no usable price.
 - `TD-126` addressed via `T-105`: checker now filters non-finite snapshot return values before barrier evaluation and fallback expiry outcome generation.
 - `TD-127` and `TD-128` addressed via `T-106`: writer entrypoint now preserves primary runtime failures when stop cleanup fails and treats stop failures on normal completion as non-fatal.
+- `TD-129` addressed via `T-107`: consumer quote coercion now rejects non-finite numeric values so entry-price selection correctly falls back to finite `last_price`.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -913,6 +919,7 @@ Updated: 2026-02-09
 - Audit Pass 100 revalidated and remediated `TD-124` and `TD-125`; poller now filters non-finite quote values and skips state updates for quote payloads without any usable option price.
 - Audit Pass 101 revalidated and remediated `TD-126`; checker now ignores non-finite snapshot returns so NaN payload artifacts cannot corrupt MFE/MAE, barrier checks, or expired outcomes.
 - Audit Pass 102 revalidated and remediated `TD-127` and `TD-128`; writer entrypoint now isolates stop failures from run-error propagation and normal-exit behavior.
+- Audit Pass 103 revalidated and remediated `TD-129`; consumer entry-price parsing now filters non-finite quote values to prevent NaN midpoint propagation.
 
 ## Executive Summary
 
@@ -1052,6 +1059,7 @@ Severity key: High, Medium, Low
 | TD-126 | Medium | Watch Service | Checker accepted non-finite snapshot returns (`NaN`), allowing invalid values to propagate into barrier/MFE/MAE calculations and expired outcome returns. |
 | TD-127 | Medium | Watch Service | Writer `run_watch_service()` could let `service.stop()` errors in `finally` mask primary runtime failures from `service.run()`. |
 | TD-128 | Medium | Watch Service | Writer `run_watch_service()` treated stop failures on normal completion as fatal, causing avoidable CLI errors after successful runs. |
+| TD-129 | Medium | Watch Service | Consumer quote coercion accepted non-finite numeric strings (`NaN`/`inf`), causing invalid midpoint entry prices and bypassing valid last-price fallback. |
 
 ## Detailed Findings
 
@@ -1803,6 +1811,12 @@ Recommendation: Treat stop failures as logged cleanup events on normal completio
 Update 2026-02-09: Remediated in `T-106` by logging stop errors and keeping normal completion non-fatal.
 Revalidated 2026-02-09 (Pass 102): Resolved. Writer entrypoint now exits cleanly on successful runs even if cleanup emits stop errors.
 
+**TD-129: Consumer can propagate non-finite quote values into entry prices.**
+Evidence: `AlertWatchConsumer._coerce_optional_float()` previously returned `float(value)` directly. Quote payload values like `"NaN"` and `"inf"` were accepted and midpoint logic in `_get_entry_price()` returned non-finite results, bypassing valid `last_price` fallback.
+Recommendation: Reject non-finite numerics in quote coercion (`math.isfinite`) and treat them as missing values to preserve fallback behavior.
+Update 2026-02-09: Remediated in `T-107` by filtering non-finite coerced values in consumer quote parsing, with regression coverage for non-finite bid/ask payloads.
+Revalidated 2026-02-09 (Pass 103): Resolved. Consumer entry-price extraction now remains finite and deterministic under malformed quote numerics.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1810,7 +1824,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

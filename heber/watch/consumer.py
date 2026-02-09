@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -431,7 +432,10 @@ class AlertWatchConsumer:
         if value is None:
             return None
         try:
-            return float(value)
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                return None
+            return numeric
         except (TypeError, ValueError):
             return None
 
