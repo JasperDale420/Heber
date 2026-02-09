@@ -21,6 +21,14 @@ class _StubResponse:
         return self._payload
 
 
+class _InvalidJsonResponse(_StubResponse):
+    def __init__(self, status_code: int):
+        super().__init__(status_code=status_code, payload={})
+
+    def json(self) -> dict[str, Any]:
+        raise ValueError("invalid json")
+
+
 class _StubAsyncClient:
     responses: dict[str, _StubResponse] = {}
     calls: list[tuple[str, dict[str, Any] | None]] = []
@@ -100,6 +108,28 @@ async def test_poller_fetch_quotes_falls_back_to_legacy_route(monkeypatch: pytes
     _StubAsyncClient.calls = []
     _StubAsyncClient.responses = {
         "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(404, {}),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2}}}},
+        ),
+    }
+    monkeypatch.setattr(poller_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
+    quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
+
+    assert "AAPL260220C00100000" in quotes
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
+    assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_poller_fetch_quotes_falls_back_when_prefixed_json_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _InvalidJsonResponse(200),
         "http://gateway/alpaca/options/quotes": _StubResponse(
             200,
             {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2}}}},

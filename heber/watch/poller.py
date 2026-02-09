@@ -190,8 +190,16 @@ class SnapshotPoller:
                         )
                         last_status = response.status_code
                         if response.status_code == 200:
-                            batch_data = response.json()
-                            break
+                            try:
+                                batch_data = response.json()
+                                break
+                            except (ValueError, TypeError) as decode_error:
+                                logger.warning(
+                                    "Quote response JSON decode failed",
+                                    route=route,
+                                    error=str(decode_error),
+                                )
+                                continue
 
                     if batch_data is not None:
                         for symbol, quote in batch_data.get("data", {}).get("quotes", {}).items():

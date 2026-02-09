@@ -160,6 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/__main__.py`: signal-hook registration is now best-effort, so non-main-thread contexts no longer fail startup with `ValueError`
 - Added watch entrypoint signal-registration failure regression test (`tests/test_watch_entrypoint_shutdown.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-134` remediation in audit pass 107 and `T-111`
+- Fixed `watch/poller.py`: quote-fetch route fallback now treats malformed JSON on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Added malformed-prefixed-response fallback regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-135` remediation in audit pass 108 and `T-112`
+- Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface
 
 ### Removed
 
