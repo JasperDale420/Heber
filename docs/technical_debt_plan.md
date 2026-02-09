@@ -127,6 +127,7 @@ Updated: 2026-02-09
 - `T-117` complete (`TD-142`, `TD-143`, `TD-144`): poller/consumer quote fetchers now treat malformed JSON payload shapes as route-level failures with legacy fallback, and poller snapshots now use quote-provided timestamps when available.
 - `T-118` complete (`TD-145`, `TD-146`, `TD-147`): poller/consumer quote lookup now handles route-level timeout/transport failures as fallback-eligible errors and emits aggregated route-failure summaries when all route candidates fail.
 - `T-119` complete (`TD-148`, `TD-149`, `TD-150`): consumer backoff now preserves explicit zero values, clamps negative retry delays, and fail-soft parses malformed/non-finite alert numeric and timestamp payload fields.
+- `T-120` complete (`TD-151`, `TD-152`, `TD-153`): consumer now enforces a minimum retry-attempt count, decodes malformed UTF-8 stream bytes with fail-soft replacement, and normalizes epoch-millisecond numeric timestamps.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -229,6 +230,7 @@ Updated: 2026-02-09
 - Audit Pass 113 revalidated `TD-142`, `TD-143`, and `TD-144` as resolved via `T-117`.
 - Audit Pass 114 revalidated `TD-145`, `TD-146`, and `TD-147` as resolved via `T-118`.
 - Audit Pass 115 revalidated `TD-148`, `TD-149`, and `TD-150` as resolved via `T-119`.
+- Audit Pass 116 revalidated `TD-151`, `TD-152`, and `TD-153` as resolved via `T-120`.
 
 ## Prioritization Approach
 

@@ -86,7 +86,8 @@ class AlertWatchConsumer:
         self.gateway_url = gateway_url
         self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
-        self.max_process_retries = max_process_retries or settings.redis_process_max_retries
+        configured_retries = settings.redis_process_max_retries if max_process_retries is None else max_process_retries
+        self.max_process_retries = max(1, int(configured_retries))
         configured_backoff = (
             settings.redis_retry_backoff_seconds if retry_backoff_seconds is None else retry_backoff_seconds
         )
@@ -357,8 +358,8 @@ class AlertWatchConsumer:
         """Decode bytes and parse nested JSON from stream message."""
         parsed = {}
         for k, v in data.items():
-            key = k.decode() if isinstance(k, bytes) else k
-            val = v.decode() if isinstance(v, bytes) else v
+            key = k.decode(errors="replace") if isinstance(k, bytes) else k
+            val = v.decode(errors="replace") if isinstance(v, bytes) else v
 
             if isinstance(val, str) and val.startswith("{"):
                 try:
@@ -434,10 +435,7 @@ class AlertWatchConsumer:
                 numeric = self._coerce_optional_float(ts)
                 if numeric is None:
                     return datetime.now(UTC)
-                try:
-                    return datetime.fromtimestamp(numeric, tz=UTC)
-                except (OverflowError, OSError, ValueError):
-                    return datetime.now(UTC)
+                return self._timestamp_from_numeric(numeric)
             if parsed_ts.tzinfo is None:
                 return parsed_ts.replace(tzinfo=UTC)
             return parsed_ts.astimezone(UTC)
@@ -445,11 +443,17 @@ class AlertWatchConsumer:
             numeric = self._coerce_optional_float(ts)
             if numeric is None:
                 return datetime.now(UTC)
-            try:
-                return datetime.fromtimestamp(numeric, tz=UTC)
-            except (OverflowError, OSError, ValueError):
-                return datetime.now(UTC)
+            return self._timestamp_from_numeric(numeric)
         return datetime.now(UTC)
+
+    @staticmethod
+    def _timestamp_from_numeric(numeric: float) -> datetime:
+        """Parse numeric epoch values (seconds or milliseconds) with fail-soft fallback."""
+        epoch = numeric / 1000.0 if abs(numeric) >= 100_000_000_000 else numeric
+        try:
+            return datetime.fromtimestamp(epoch, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return datetime.now(UTC)
 
     @staticmethod
     def _coerce_optional_float(value: Any) -> float | None:

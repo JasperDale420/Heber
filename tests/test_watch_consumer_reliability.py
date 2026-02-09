@@ -69,6 +69,26 @@ def test_retry_backoff_preserves_explicit_zero_value() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_flow_alert_zero_retries_clamped_to_single_attempt() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=0,
+        retry_backoff_seconds=0.0,
+        dlq_stream_name="heber:watch:dlq",
+    )
+    consumer._process_alert = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    ackable = await consumer._process_flow_alert_with_retries("11-0", {b"data": b"{}"})
+
+    assert ackable is True
+    assert consumer.max_process_retries == 1
+    assert consumer._process_alert.await_count == 1
+    assert len(redis_client.added) == 1
+
+
+@pytest.mark.asyncio
 async def test_process_flow_alert_negative_backoff_is_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(
@@ -197,3 +217,24 @@ def test_parse_timestamp_non_finite_numeric_falls_back_to_now_utc() -> None:
     after = datetime.now(UTC)
     assert ts.tzinfo is UTC
     assert before <= ts <= after
+
+
+def test_parse_timestamp_interprets_epoch_milliseconds() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    ts_from_int = consumer._parse_timestamp({"timestamp": 1_704_067_200_000})
+    ts_from_str = consumer._parse_timestamp({"timestamp": "1704067200000"})
+
+    assert ts_from_int == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+    assert ts_from_str == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+
+
+def test_decode_stream_data_handles_invalid_utf8_bytes() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    parsed = consumer._decode_stream_data({b"\xffdata": b"\xfe\xff", b"payload": b'{"x":1}'})
+
+    assert all(isinstance(key, str) for key in parsed)
+    assert all(not isinstance(value, bytes) for value in parsed.values())

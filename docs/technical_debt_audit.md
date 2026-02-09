@@ -803,8 +803,12 @@ Audit Pass 115 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 116 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for parse-envelope normalization and downstream field-typing consistency on malformed upstream alert payloads.
+- heber/watch/consumer.py line-by-line re-audit for required-field validation and downstream watch-creation fallback behavior when upstream envelopes omit `id`/`underlying`.
 
 ## Remediation Updates
 
@@ -868,6 +872,7 @@ Updated: 2026-02-09
 - `TD-142`, `TD-143`, and `TD-144` addressed via `T-117`: poller/consumer quote fetch now validate decoded payload shape before accepting a route as successful, and poller snapshots now preserve quote-provided timestamps where available.
 - `TD-145`, `TD-146`, and `TD-147` addressed via `T-118`: poller/consumer quote lookups now treat request-layer route failures (timeouts/transport errors) as fallback-eligible per-route failures, and both services now emit aggregated route-failure telemetry when all candidates fail.
 - `TD-148`, `TD-149`, and `TD-150` addressed via `T-119`: consumer retry backoff now preserves explicit zero configuration and clamps invalid negative delays, while alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults.
+- `TD-151`, `TD-152`, and `TD-153` addressed via `T-120`: consumer retry attempt configuration now clamps to a minimum of one attempt, stream payload decoding now tolerates invalid UTF-8 bytes, and numeric timestamp parsing now normalizes epoch-millisecond values.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1003,6 +1008,7 @@ Updated: 2026-02-09
 - Audit Pass 113 revalidated and remediated `TD-142`, `TD-143`, and `TD-144`; poller/consumer route fallbacks now recover from malformed 200-payload shapes and poller snapshot timestamps now align with source quote timing.
 - Audit Pass 114 revalidated and remediated `TD-145`, `TD-146`, and `TD-147`; poller/consumer route fallbacks now continue after route-level timeout/transport errors and emit route-failure summaries for repeated lookup failures.
 - Audit Pass 115 revalidated and remediated `TD-148`, `TD-149`, and `TD-150`; consumer retry backoff now handles explicit zero/negative configuration safely and alert parse paths now fail soft on malformed/non-finite numeric timestamp payloads.
+- Audit Pass 116 revalidated and remediated `TD-151`, `TD-152`, and `TD-153`; consumer retry attempts now enforce a safe minimum, stream decode now fails soft on invalid UTF-8, and epoch-millisecond timestamps now normalize correctly.
 
 ## Executive Summary
 
@@ -1164,6 +1170,9 @@ Severity key: High, Medium, Low
 | TD-148 | Medium | Watch Service | Consumer backoff configuration used truthy fallback semantics, so explicit `retry_backoff_seconds=0.0` was ignored and replaced by default settings. |
 | TD-149 | Medium | Watch Service | Consumer retry loop could pass negative delays to `asyncio.sleep()` when backoff configuration was negative, causing avoidable runtime failures in retry handling. |
 | TD-150 | Medium | Watch Service | Consumer alert numeric/timestamp parsing accepted malformed or non-finite values that could raise parse errors or propagate invalid numeric values into watch creation fields. |
+| TD-151 | Medium | Watch Service | Consumer retry-attempt configuration used truthy fallback semantics, so explicit `max_process_retries=0` was replaced by defaults instead of applying a safe minimum attempt policy. |
+| TD-152 | Medium | Watch Service | Consumer stream decode paths raised on invalid UTF-8 byte keys/values, causing avoidable alert parse failures for malformed payloads. |
+| TD-153 | Medium | Watch Service | Consumer numeric timestamp parsing treated epoch-millisecond values as seconds and fell back to processing time, causing source-time drift under millisecond-precision payloads. |
 
 ## Detailed Findings
 
@@ -2047,6 +2056,24 @@ Recommendation: Reuse finite numeric coercion for alert fields/timestamps and fa
 Update 2026-02-09: Remediated in `T-119` by routing alert numeric/timestamp parsing through finite-safe coercion and fail-soft fallback handling.
 Revalidated 2026-02-09 (Pass 115): Resolved. Consumer parsing now handles malformed/non-finite numeric payloads without raising and avoids invalid numeric propagation.
 
+**TD-151: Retry-attempt configuration ignored explicit low values.**
+Evidence: `AlertWatchConsumer.__init__()` previously used `max_process_retries or settings.redis_process_max_retries`, so explicit `0` reverted to defaults and bypassed intentional minimum-attempt semantics.
+Recommendation: Use explicit-`None` fallback and clamp configured retry attempts to a minimum of one.
+Update 2026-02-09: Remediated in `T-120` by switching to `None`-based fallback and enforcing `max(1, int(configured_retries))`.
+Revalidated 2026-02-09 (Pass 116): Resolved. Consumer retry-attempt configuration now applies a safe minimum and no longer silently reverts to defaults on explicit zero.
+
+**TD-152: Invalid UTF-8 payload bytes could abort consumer parsing.**
+Evidence: `_decode_stream_data()` previously decoded byte keys/values with strict UTF-8 decoding, which raised `UnicodeDecodeError` on malformed payload bytes and aborted alert parsing.
+Recommendation: Decode stream bytes with fail-soft semantics (`errors=\"replace\"`) to preserve processing continuity and observability.
+Update 2026-02-09: Remediated in `T-120` by using replacement-decoding for byte keys and values.
+Revalidated 2026-02-09 (Pass 116): Resolved. Malformed UTF-8 stream payload bytes now fail soft instead of crashing parse flow.
+
+**TD-153: Millisecond-epoch timestamps fell back to processing time.**
+Evidence: `_parse_timestamp()` previously passed numeric payloads directly to `datetime.fromtimestamp(...)` as seconds. Millisecond epoch values overflowed and failed over to `datetime.now(UTC)`, introducing source-time drift.
+Recommendation: Detect numeric epoch units and normalize millisecond values to seconds before timestamp conversion.
+Update 2026-02-09: Remediated in `T-120` by adding numeric timestamp normalization with millisecond detection and safe fallback behavior.
+Revalidated 2026-02-09 (Pass 116): Resolved. Consumer timestamp parsing now normalizes millisecond epoch values correctly.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2054,7 +2081,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
