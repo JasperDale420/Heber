@@ -346,6 +346,14 @@ class AlertWatchConsumer:
         try:
             parsed = self._decode_stream_data(data)
             result = self._map_alert_fields(parsed)
+            if not result.get("id") or not result.get("underlying"):
+                logger.warning(
+                    "Alert missing required fields",
+                    has_id=bool(result.get("id")),
+                    has_underlying=bool(result.get("underlying")),
+                    has_occ_symbol=bool(result.get("occ_symbol")),
+                )
+                return None
             result["dte"] = self._calculate_dte(result.get("expiry"))
             result["ts_event"] = self._parse_timestamp(parsed)
             return result
@@ -361,7 +369,7 @@ class AlertWatchConsumer:
             key = k.decode(errors="replace") if isinstance(k, bytes) else k
             val = v.decode(errors="replace") if isinstance(v, bytes) else v
 
-            if isinstance(val, str) and val.startswith("{"):
+            if isinstance(val, str) and val.lstrip().startswith(("{", "[")):
                 try:
                     val = json.loads(val)
                 except json.JSONDecodeError:
@@ -381,8 +389,7 @@ class AlertWatchConsumer:
 
     def _map_alert_fields(self, parsed: dict) -> dict:
         """Map various field name conventions to standard fields."""
-        put_call_raw = parsed.get("put_call") or parsed.get("type", "C")
-        put_call = put_call_raw[0].upper() if put_call_raw else "C"
+        put_call = self._normalize_put_call(parsed.get("put_call") or parsed.get("type", "C"))
         spot_px = parsed.get("spot_px")
         if spot_px is None:
             spot_px = parsed.get("underlying_price", 0)
@@ -409,6 +416,17 @@ class AlertWatchConsumer:
             "spot_px": normalized_spot_px,
             "contract_px": normalized_contract_px,
         }
+
+    @staticmethod
+    def _normalize_put_call(value: Any) -> str:
+        """Normalize put/call values to C/P with a stable default."""
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            if normalized.startswith("P"):
+                return "P"
+            if normalized.startswith("C"):
+                return "C"
+        return "C"
 
     def _calculate_dte(self, expiry: str | None) -> int:
         """Calculate days to expiry from expiry string."""

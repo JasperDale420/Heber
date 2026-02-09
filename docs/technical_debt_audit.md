@@ -807,8 +807,12 @@ Audit Pass 116 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 117 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for required-field validation and downstream watch-creation fallback behavior when upstream envelopes omit `id`/`underlying`.
+- heber/watch/consumer.py line-by-line re-audit for malformed envelope classification and non-retriable error handling policy during `_process_alert` retries.
 
 ## Remediation Updates
 
@@ -873,6 +877,7 @@ Updated: 2026-02-09
 - `TD-145`, `TD-146`, and `TD-147` addressed via `T-118`: poller/consumer quote lookups now treat request-layer route failures (timeouts/transport errors) as fallback-eligible per-route failures, and both services now emit aggregated route-failure telemetry when all candidates fail.
 - `TD-148`, `TD-149`, and `TD-150` addressed via `T-119`: consumer retry backoff now preserves explicit zero configuration and clamps invalid negative delays, while alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults.
 - `TD-151`, `TD-152`, and `TD-153` addressed via `T-120`: consumer retry attempt configuration now clamps to a minimum of one attempt, stream payload decoding now tolerates invalid UTF-8 bytes, and numeric timestamp parsing now normalizes epoch-millisecond values.
+- `TD-154`, `TD-155`, and `TD-156` addressed via `T-121`: consumer alert decode now parses whitespace-prefixed JSON envelopes, put/call normalization now handles malformed non-string values safely, and parse flow now validates required alert identity fields before watch creation.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1009,6 +1014,7 @@ Updated: 2026-02-09
 - Audit Pass 114 revalidated and remediated `TD-145`, `TD-146`, and `TD-147`; poller/consumer route fallbacks now continue after route-level timeout/transport errors and emit route-failure summaries for repeated lookup failures.
 - Audit Pass 115 revalidated and remediated `TD-148`, `TD-149`, and `TD-150`; consumer retry backoff now handles explicit zero/negative configuration safely and alert parse paths now fail soft on malformed/non-finite numeric timestamp payloads.
 - Audit Pass 116 revalidated and remediated `TD-151`, `TD-152`, and `TD-153`; consumer retry attempts now enforce a safe minimum, stream decode now fails soft on invalid UTF-8, and epoch-millisecond timestamps now normalize correctly.
+- Audit Pass 117 revalidated and remediated `TD-154`, `TD-155`, and `TD-156`; consumer parse paths now handle whitespace-prefixed JSON, normalize malformed put/call values safely, and reject missing required alert identity fields before watch creation.
 
 ## Executive Summary
 
@@ -1173,6 +1179,9 @@ Severity key: High, Medium, Low
 | TD-151 | Medium | Watch Service | Consumer retry-attempt configuration used truthy fallback semantics, so explicit `max_process_retries=0` was replaced by defaults instead of applying a safe minimum attempt policy. |
 | TD-152 | Medium | Watch Service | Consumer stream decode paths raised on invalid UTF-8 byte keys/values, causing avoidable alert parse failures for malformed payloads. |
 | TD-153 | Medium | Watch Service | Consumer numeric timestamp parsing treated epoch-millisecond values as seconds and fell back to processing time, causing source-time drift under millisecond-precision payloads. |
+| TD-154 | Medium | Watch Service | Consumer stream decode only parsed JSON strings starting at column 0, so whitespace-prefixed JSON envelopes were left unparsed and downstream field extraction silently degraded. |
+| TD-155 | Medium | Watch Service | Consumer put/call normalization assumed subscriptable string values, allowing malformed non-string payloads to raise parse exceptions and trigger avoidable retries. |
+| TD-156 | Medium | Watch Service | Consumer parse flow lacked explicit required-field validation for alert identity (`id`, `underlying`), allowing missing-field payloads to fail later during watch creation via generic exception handling. |
 
 ## Detailed Findings
 
@@ -2074,6 +2083,24 @@ Recommendation: Detect numeric epoch units and normalize millisecond values to s
 Update 2026-02-09: Remediated in `T-120` by adding numeric timestamp normalization with millisecond detection and safe fallback behavior.
 Revalidated 2026-02-09 (Pass 116): Resolved. Consumer timestamp parsing now normalizes millisecond epoch values correctly.
 
+**TD-154: Whitespace-prefixed JSON envelopes were not decoded.**
+Evidence: `_decode_stream_data()` previously parsed string values only when `val.startswith("{")`, so payloads with leading whitespace remained as raw strings and were not flattened into alert fields.
+Recommendation: Trim leading whitespace before JSON-shape detection and parse both object/array JSON payloads when possible.
+Update 2026-02-09: Remediated in `T-121` by using `val.lstrip().startswith(("{", "["))` before JSON decoding.
+Revalidated 2026-02-09 (Pass 117): Resolved. Whitespace-prefixed JSON envelopes now decode and flatten correctly.
+
+**TD-155: Put/call normalization could raise on malformed non-string values.**
+Evidence: `_map_alert_fields()` previously indexed `put_call_raw[0]` without type normalization, which raised on non-string payload values (for example integers).
+Recommendation: Add explicit put/call normalization with safe defaults for malformed values.
+Update 2026-02-09: Remediated in `T-121` by adding `_normalize_put_call()` and defaulting invalid inputs to `"C"`.
+Revalidated 2026-02-09 (Pass 117): Resolved. Put/call normalization now handles malformed values without raising.
+
+**TD-156: Missing required alert identity fields were not validated early.**
+Evidence: `_parse_alert()` previously returned mapped alert payloads without validating required identity fields (`id`, `underlying`), so missing-field payloads failed later in `_process_alert()` during watch creation with generic exception logs.
+Recommendation: Validate required alert identity fields during parse and fail early with explicit structured warning context.
+Update 2026-02-09: Remediated in `T-121` by adding required-field checks in `_parse_alert()` with explicit warning metadata.
+Revalidated 2026-02-09 (Pass 117): Resolved. Missing required identity fields now fail early at parse time with clear diagnostics.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2081,7 +2108,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

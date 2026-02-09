@@ -238,3 +238,52 @@ def test_decode_stream_data_handles_invalid_utf8_bytes() -> None:
 
     assert all(isinstance(key, str) for key in parsed)
     assert all(not isinstance(value, bytes) for value in parsed.values())
+
+
+def test_decode_stream_data_parses_json_with_leading_whitespace() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    parsed = consumer._decode_stream_data(
+        {
+            b"data": b' { "id": "a1", "feed": "flow_alerts" }',
+            b"payload": b' { "option_chain": "AAPL260220C00100000" }',
+        }
+    )
+
+    assert parsed["id"] == "a1"
+    assert parsed["option_chain"] == "AAPL260220C00100000"
+
+
+def test_map_alert_fields_normalizes_non_string_put_call() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    mapped = consumer._map_alert_fields(
+        {
+            "put_call": 1,
+            "type": None,
+        }
+    )
+
+    assert mapped["put_call"] == "C"
+
+    mapped = consumer._map_alert_fields(
+        {
+            "put_call": "put",
+        }
+    )
+    assert mapped["put_call"] == "P"
+
+
+def test_parse_alert_missing_required_fields_returns_none() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    parsed = consumer._parse_alert(
+        {
+            b"data": b'{"payload":{"option_chain":"AAPL260220C00100000","put_call":"C"}}',
+        }
+    )
+
+    assert parsed is None
