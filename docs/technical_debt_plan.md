@@ -107,6 +107,7 @@ Updated: 2026-02-09
 - `T-97` complete (`TD-111`): gateway URL candidate builder now avoids double `/api/v1` prefixing when base URLs already include the API prefix, while preserving prefix-first legacy fallback behavior.
 - `T-98` complete (`TD-112`, `TD-113`): poller now normalizes quote payload numeric fields (`bp`/`ap`/`last_price`/`underlying_price`) before midpoint math and treats future-skewed `updated_at` timestamps as immediately due to avoid poll starvation.
 - `T-99` complete (`TD-114`, `TD-115`): consumer now normalizes quote payload numeric fields for entry-price fallback (`bp`/`ap`/`last_price`) and parses ISO alert timestamps into UTC-aware values with fail-soft fallback for invalid strings.
+- `T-100` complete (`TD-116`, `TD-117`): feature deserialization now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed option-chain strike rows while safely coercing numeric Greek fields.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -189,6 +190,7 @@ Updated: 2026-02-09
 - Audit Pass 93 revalidated `TD-111` as resolved via `T-97`.
 - Audit Pass 94 revalidated `TD-112` and `TD-113` as resolved via `T-98`.
 - Audit Pass 95 revalidated `TD-114` and `TD-115` as resolved via `T-99`.
+- Audit Pass 96 revalidated `TD-116` and `TD-117` as resolved via `T-100`.
 
 ## Prioritization Approach
 

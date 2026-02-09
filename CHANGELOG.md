@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/consumer.py`: timestamp parsing now normalizes ISO strings to UTC-aware datetimes and falls back to `datetime.now(UTC)` for invalid timestamp strings
 - Added consumer entry-price fallback and timestamp-normalization regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_consumer_reliability.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-114`/`TD-115` remediation in audit pass 95 and `T-99`
+- Fixed `watch/features.py`: `AlertFeatures.from_dict()` now normalizes naive serialized `alert_time` values to UTC-aware datetimes during reconstruction
+- Fixed `watch/features.py`: Greeks enrichment now skips malformed option-chain `strike_price` rows and continues extracting from valid contracts with tolerant numeric coercion
+- Added feature deserialization timezone + malformed-strike Greeks regression tests (`tests/test_watch_feature_timezones.py`, `tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-116`/`TD-117` remediation in audit pass 96 and `T-100`
 
 ### Removed
 
@@ -229,6 +233,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 87: watch manager naive-window expiry conformance revalidation)
 - Expanded technical debt audit (pass 94: watch poller payload-normalization + future-timestamp cadence conformance revalidation)
 - Expanded technical debt audit (pass 95: watch consumer timestamp/entry-price parsing conformance revalidation)
+- Expanded technical debt audit (pass 96: watch feature deserialization + Greeks fallback conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

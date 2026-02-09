@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from heber.models.silver import FlowAlertRecord
-from heber.watch.features import AlertFeatureExtractor
+from heber.watch.features import AlertFeatureExtractor, AlertFeatures
 
 
 def _build_alert(ts_event: datetime) -> FlowAlertRecord:
@@ -65,3 +65,30 @@ async def test_extract_treats_naive_alert_time_as_utc() -> None:
     assert naive_features.day_of_week == aware_features.day_of_week
     assert naive_features.minutes_since_open == aware_features.minutes_since_open
     assert naive_features.minutes_to_close == aware_features.minutes_to_close
+
+
+def test_alert_features_from_dict_normalizes_naive_alert_time_to_utc() -> None:
+    restored = AlertFeatures.from_dict(
+        {
+            "alert_id": "a1",
+            "alert_time": "2026-01-05T15:00:00",
+            "symbol": "AAPL",
+            "occ_symbol": "AAPL260220C00100000",
+            "underlying": "AAPL",
+            "strike": 100.0,
+            "expiry": "2026-02-20",
+            "put_call": "C",
+            "days_to_expiry": 46,
+            "premium": 12500.0,
+            "volume": 100.0,
+            "open_interest": 200.0,
+            "volume_oi_ratio": 0.5,
+            "alert_type": "SWEEP",
+            "side": "ask",
+            "aggressor": "ask",
+            "spot_price": 195.0,
+            "contract_price": 1.25,
+        }
+    )
+
+    assert restored.alert_time.tzinfo is UTC

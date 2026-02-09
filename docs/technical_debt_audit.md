@@ -704,8 +704,14 @@ Audit Pass 95 (2026-02-09, files reviewed directly):
 - tests/test_watch_gateway_paths.py
 - tests/test_watch_async_redis.py
 
+Audit Pass 96 (2026-02-09, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/features.py line-by-line re-audit for enrichment fallback and timestamp normalization edge cases.
+- heber/watch/writer.py line-by-line re-audit for flush durability and lifecycle shutdown edge cases.
 
 ## Remediation Updates
 
@@ -749,6 +755,7 @@ Updated: 2026-02-09
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-114` and `TD-115` addressed via `T-99`: watch consumer now normalizes quote payload numeric fields before midpoint/last-price entry calculations and parses alert timestamps as UTC-aware values with fail-soft fallback for invalid ISO strings.
+- `TD-116` and `TD-117` addressed via `T-100`: feature reconstruction now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed contract strikes while continuing to valid contracts with tolerant numeric parsing.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -864,6 +871,7 @@ Updated: 2026-02-09
 - Audit Pass 93 revalidated and remediated `TD-111`; gateway URL candidate construction now avoids duplicate `/api/v1` prefixing when base URLs already include the API prefix.
 - Audit Pass 94 revalidated and remediated `TD-112` and `TD-113`; poller now normalizes numeric quote payload fields before midpoint math and treats future-skewed last-polled timestamps as immediately due to avoid watch starvation.
 - Audit Pass 95 revalidated and remediated `TD-114` and `TD-115`; consumer now tolerates malformed quote payload numerics when deriving entry prices and normalizes parsed alert timestamps to UTC-aware values with invalid-string fallback.
+- Audit Pass 96 revalidated and remediated `TD-116` and `TD-117`; feature deserialization now normalizes naive `alert_time` strings to UTC and Greeks enrichment now skips malformed contract strikes instead of aborting enrichment for the entire option chain.
 
 ## Executive Summary
 
@@ -990,6 +998,8 @@ Severity key: High, Medium, Low
 | TD-113 | Medium | Watch Service | Poller due-check logic treated future-skewed `updated_at` values as not-due, which could stall watch polling indefinitely under clock-skewed timestamps. |
 | TD-114 | Medium | Watch Service | Consumer entry-price parsing assumed numeric `bp`/`ap` fields; malformed string values could short-circuit quote handling and drop valid `last_price` fallback. |
 | TD-115 | Medium | Watch Service | Consumer timestamp parsing returned naive datetimes for timezone-less ISO strings and raised on invalid strings, causing avoidable parse failures and inconsistent timezone semantics. |
+| TD-116 | Medium | Watch Features | `AlertFeatures.from_dict()` reconstructed timezone-less `alert_time` strings as naive datetimes, reintroducing mixed timezone semantics when reading legacy-serialized feature rows. |
+| TD-117 | Medium | Watch Features | Greeks enrichment aborted on malformed contract `strike_price` values, preventing extraction from later valid contracts in the same option-chain response. |
 
 ## Detailed Findings
 
@@ -1663,6 +1673,18 @@ Recommendation: Parse ISO strings with fail-soft fallback, normalize parsed date
 Update 2026-02-09: Remediated in `T-99` by normalizing parsed ISO timestamps to UTC-aware values and returning `datetime.now(UTC)` for invalid string inputs, with regression coverage.
 Revalidated 2026-02-09 (Pass 95): Resolved. Consumer timestamp parsing is now UTC-consistent and robust to malformed input strings.
 
+**TD-116: Feature deserialization can reintroduce naive alert timestamps.**
+Evidence: `AlertFeatures.from_dict()` previously used `datetime.fromisoformat()` directly. Legacy serialized feature rows with timezone-less `alert_time` values were reconstructed as naive datetimes and could propagate mixed timezone behavior into downstream training/analysis code.
+Recommendation: Normalize deserialized `alert_time` values to UTC-aware datetimes; treat naive parsed values as UTC.
+Update 2026-02-09: Remediated in `T-100` by normalizing parsed `alert_time` to UTC (naive -> `replace(tzinfo=UTC)`, aware -> `astimezone(UTC)`) and adding regression coverage.
+Revalidated 2026-02-09 (Pass 96): Resolved. Feature deserialization now preserves UTC-aware timestamp semantics for both naive and aware serialized inputs.
+
+**TD-117: Greeks enrichment aborts on malformed contract strikes.**
+Evidence: `_enrich_greeks()` previously did `float(c.get("strike_price", 0))` inside the contract scan loop. A single malformed strike (for example `"bad-strike"`) raised `ValueError`, short-circuited the entire enrichment, and prevented use of later valid contracts in the same response.
+Recommendation: Use tolerant numeric coercion for strike parsing, skip malformed contracts, and continue scanning for valid strike matches; apply tolerant coercion to extracted Greek values as well.
+Update 2026-02-09: Remediated in `T-100` by adding `_coerce_optional_float()` to features extraction, skipping malformed strike rows, and safely coercing extracted Greek fields.
+Revalidated 2026-02-09 (Pass 96): Resolved. Greeks enrichment now remains resilient to malformed contract rows and still enriches from valid contracts.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1670,7 +1692,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

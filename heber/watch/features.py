@@ -108,12 +108,18 @@ class AlertFeatures:
     @classmethod
     def from_dict(cls, data: dict) -> AlertFeatures:
         """Reconstruct from dictionary."""
+        parsed_data = dict(data)
         # Convert date/time strings back
-        if isinstance(data.get("alert_time"), str):
-            data["alert_time"] = datetime.fromisoformat(data["alert_time"])
-        if isinstance(data.get("expiry"), str):
-            data["expiry"] = date.fromisoformat(data["expiry"])
-        return cls(**data)
+        if isinstance(parsed_data.get("alert_time"), str):
+            alert_time = datetime.fromisoformat(parsed_data["alert_time"])
+            if alert_time.tzinfo is None:
+                alert_time = alert_time.replace(tzinfo=UTC)
+            else:
+                alert_time = alert_time.astimezone(UTC)
+            parsed_data["alert_time"] = alert_time
+        if isinstance(parsed_data.get("expiry"), str):
+            parsed_data["expiry"] = date.fromisoformat(parsed_data["expiry"])
+        return cls(**parsed_data)
 
     def to_feature_array(self, feature_names: list[str] | None = None) -> list[float]:
         """Convert to numeric array for model input.
@@ -321,6 +327,15 @@ class AlertFeatureExtractor:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(self.MARKET_TIMEZONE)
 
+    @staticmethod
+    def _coerce_optional_float(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
         """Enrich features with IV rank from Unusual Whales.
 
@@ -427,12 +442,21 @@ class AlertFeatureExtractor:
             # Find matching contract by strike
             contract = None
             for c in contracts:
-                if abs(float(c.get("strike_price", 0)) - features.strike) < 0.01:
+                strike_price = self._coerce_optional_float(c.get("strike_price"))
+                if strike_price is None:
+                    continue
+                if abs(strike_price - features.strike) < 0.01:
                     contract = c
                     break
 
             if not contract:
-                contract = contracts[0]  # Use first if no exact match
+                for c in contracts:
+                    if self._coerce_optional_float(c.get("strike_price")) is not None:
+                        contract = c
+                        break
+            if not contract:
+                logger.debug("No valid contracts found for Greeks", symbol=features.underlying)
+                return features
 
             # Extract Greeks
             delta = contract.get("delta")
@@ -441,11 +465,11 @@ class AlertFeatureExtractor:
             vega = contract.get("vega")
             implied_vol = contract.get("implied_volatility")
 
-            features.delta = float(delta) if delta is not None else None
-            features.gamma = float(gamma) if gamma is not None else None
-            features.theta = float(theta) if theta is not None else None
-            features.vega = float(vega) if vega is not None else None
-            features.iv = float(implied_vol) if implied_vol is not None else None
+            features.delta = self._coerce_optional_float(delta)
+            features.gamma = self._coerce_optional_float(gamma)
+            features.theta = self._coerce_optional_float(theta)
+            features.vega = self._coerce_optional_float(vega)
+            features.iv = self._coerce_optional_float(implied_vol)
 
             logger.debug(
                 "Enriched Greeks",

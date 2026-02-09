@@ -107,3 +107,57 @@ async def test_market_context_does_not_skip_zero_close_day(monkeypatch: pytest.M
     enriched = await extractor._enrich_market_context(_base_features())
 
     assert enriched.underlying_1d_return is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_greeks_skips_malformed_contract_strike_and_uses_valid_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "data": {
+                    "contracts": [
+                        {
+                            "strike_price": "bad-strike",
+                            "delta": 0.99,
+                            "gamma": 0.99,
+                            "theta": 0.99,
+                            "vega": 0.99,
+                            "implied_volatility": 0.99,
+                        },
+                        {
+                            "strike_price": 100.0,
+                            "delta": 0.11,
+                            "gamma": 0.22,
+                            "theta": -0.03,
+                            "vega": 0.44,
+                            "implied_volatility": 0.55,
+                        },
+                    ]
+                }
+            }
+
+    class _Client:
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+            return _Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
+
+    extractor = AlertFeatureExtractor(gateway_url="http://gateway:8000")
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta == 0.11
+    assert enriched.gamma == 0.22
+    assert enriched.theta == -0.03
+    assert enriched.vega == 0.44
+    assert enriched.iv == 0.55
