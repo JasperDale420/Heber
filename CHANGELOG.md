@@ -157,6 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/features.py`: market-context close parsing now treats non-finite close values as missing, preventing `NaN` return features
 - Added non-finite feature enrichment regression tests (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-132`/`TD-133` remediation in audit pass 106 and `T-110`
+- Fixed `watch/__main__.py`: signal-hook registration is now best-effort, so non-main-thread contexts no longer fail startup with `ValueError`
+- Added watch entrypoint signal-registration failure regression test (`tests/test_watch_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-134` remediation in audit pass 107 and `T-111`
 
 ### Removed
 
@@ -280,6 +283,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 104: watch model UTC datetime-normalization conformance revalidation)
 - Expanded technical debt audit (pass 105: watch gateway base-url sanitization conformance revalidation)
 - Expanded technical debt audit (pass 106: watch feature non-finite numeric filtering conformance revalidation)
+- Expanded technical debt audit (pass 107: watch entrypoint signal-registration resilience conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

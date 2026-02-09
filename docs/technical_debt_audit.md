@@ -758,8 +758,12 @@ Audit Pass 106 (2026-02-09, files reviewed directly):
 - tests/test_watch_feature_timezones.py
 - tests/test_watch_feature_persistence.py
 
+Audit Pass 107 (2026-02-09, files reviewed directly):
+- heber/watch/__main__.py
+- tests/test_watch_entrypoint_shutdown.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/__main__.py line-by-line re-audit for signal/shutdown edge cases and runtime-exception preservation behavior.
+- heber/watch/poller.py line-by-line re-audit for batching/network-fallback edge cases and no-price update behavior.
 
 ## Remediation Updates
 
@@ -814,6 +818,7 @@ Updated: 2026-02-09
 - `TD-130` addressed via `T-108`: watch models now normalize naive datetime fields to UTC-aware values during validation to eliminate mixed naive/aware timestamp semantics.
 - `TD-131` addressed via `T-109`: gateway URL candidate helpers now strip query/fragment components from base URLs before building prefixed and legacy route candidates.
 - `TD-132` and `TD-133` addressed via `T-110`: feature numeric coercion now rejects non-finite values and market-context close parsing now treats non-finite closes as missing data.
+- `TD-134` addressed via `T-111`: watch entrypoint signal registration is now best-effort so non-main-thread contexts do not fail startup.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -940,6 +945,7 @@ Updated: 2026-02-09
 - Audit Pass 104 revalidated and remediated `TD-130`; watch model datetime fields now normalize to UTC-aware values at validation time.
 - Audit Pass 105 revalidated and remediated `TD-131`; gateway route candidate generation now strips query/fragment components from base URLs to avoid malformed request URLs.
 - Audit Pass 106 revalidated and remediated `TD-132` and `TD-133`; feature enrichment now filters non-finite numeric inputs so Greeks and return context metrics remain finite.
+- Audit Pass 107 revalidated and remediated `TD-134`; watch entrypoint now handles unavailable signal hooks as non-fatal startup conditions.
 
 ## Executive Summary
 
@@ -1084,6 +1090,7 @@ Severity key: High, Medium, Low
 | TD-131 | Medium | Watch Service | Gateway URL candidate construction accepted base URLs with query/fragment components, producing malformed downstream request URLs when joining routes. |
 | TD-132 | Medium | Watch Features | Feature numeric coercion accepted non-finite values (`NaN`/`inf`), allowing invalid Greeks/IV values to propagate into model features. |
 | TD-133 | Medium | Watch Features | Market-context close parsing accepted non-finite values, causing `NaN` underlying return features instead of fail-soft missing values. |
+| TD-134 | Medium | Watch Service | Entrypoint startup failed when signal registration raised (for example non-main-thread execution), preventing service initialization in embedded/test harness contexts. |
 
 ## Detailed Findings
 
@@ -1865,6 +1872,12 @@ Recommendation: Route close parsing through finite-safe numeric coercion and tre
 Update 2026-02-09: Remediated in `T-110` by reusing finite-safe coercion for close-series extraction and preserving fail-soft missing-value semantics.
 Revalidated 2026-02-09 (Pass 106): Resolved. Market-context return features no longer emit non-finite values from malformed close payloads.
 
+**TD-134: Entrypoint signal registration can fail startup in non-main-thread contexts.**
+Evidence: `heber/watch/__main__.py` previously called `signal.signal(...)` unguarded. In non-main-thread contexts this raises `ValueError` and aborts startup before the service run-loop begins.
+Recommendation: Treat signal-hook registration as best-effort with warning logs on failure, and continue service startup/shutdown flow.
+Update 2026-02-09: Remediated in `T-111` by guarding signal registration with exception handling for unsupported runtime contexts and adding regression coverage.
+Revalidated 2026-02-09 (Pass 107): Resolved. Entrypoint startup now continues when process signal hooks are unavailable.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1872,7 +1885,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

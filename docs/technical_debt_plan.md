@@ -118,6 +118,7 @@ Updated: 2026-02-09
 - `T-108` complete (`TD-130`): watch models now normalize naive datetime fields to UTC-aware values at validation time to prevent mixed naive/aware timestamp semantics.
 - `T-109` complete (`TD-131`): gateway URL candidate construction now strips query/fragment components from base URLs before route joining to prevent malformed request URLs.
 - `T-110` complete (`TD-132`, `TD-133`): feature enrichment now rejects non-finite numeric payloads so Greeks and market-context returns do not propagate `NaN`/`inf` values.
+- `T-111` complete (`TD-134`): watch entrypoint now treats signal registration as best-effort, preventing startup failure when running outside the main thread.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -211,6 +212,7 @@ Updated: 2026-02-09
 - Audit Pass 104 revalidated `TD-130` as resolved via `T-108`.
 - Audit Pass 105 revalidated `TD-131` as resolved via `T-109`.
 - Audit Pass 106 revalidated `TD-132` and `TD-133` as resolved via `T-110`.
+- Audit Pass 107 revalidated `TD-134` as resolved via `T-111`.
 
 ## Prioritization Approach
 

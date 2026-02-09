@@ -93,8 +93,14 @@ Environment variables:
         logger.info("Shutdown signal received", signal=sig)
         _safe_stop(source=f"signal:{sig}")
 
-    signal.signal(signal.SIGTERM, shutdown_handler)
-    signal.signal(signal.SIGINT, shutdown_handler)
+    try:
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        signal.signal(signal.SIGINT, shutdown_handler)
+    except (ValueError, RuntimeError) as signal_error:
+        logger.warning(
+            "Signal handlers unavailable, continuing without process signal hooks",
+            error=str(signal_error),
+        )
 
     try:
         asyncio.run(service.run())
