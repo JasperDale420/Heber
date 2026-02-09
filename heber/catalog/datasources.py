@@ -161,40 +161,95 @@ class DatasetSpec:
         }
 
 
-# Dataset catalog from PRD §57
+# Dataset catalog — aligned with all 44 Silver schemas
 DEFAULT_DATASETS: list[DatasetSpec] = [
-    # Market Data
-    DatasetSpec("bars", "market_data", "OHLCV minute bars", [PROVIDER_ALPACA, PROVIDER_FINNHUB], True),
-    DatasetSpec("quotes", "market_data", "Level 1 quotes", [PROVIDER_ALPACA], True),
-    DatasetSpec("trades", "market_data", "Individual trades", [PROVIDER_ALPACA], True),
-    DatasetSpec("bars_daily", "market_data", "Daily OHLCV bars", [PROVIDER_ALPACA, PROVIDER_YFINANCE], False),
-    # Options
-    DatasetSpec("option_quotes", "options", "Option chain quotes", [PROVIDER_ALPACA], False),
-    DatasetSpec("option_trades", "options", "Option trades", [PROVIDER_ALPACA], False),
-    # Alternative
-    DatasetSpec("congress_trades", "alternative", "Congress trading activity", [PROVIDER_UNUSUAL_WHALES], False),
-    DatasetSpec("lobbying", "alternative", "Lobbying disclosures", [PROVIDER_UNUSUAL_WHALES], False),
-    DatasetSpec("flow_alerts", "alternative", "Options flow alerts", [PROVIDER_UNUSUAL_WHALES], False),
-    DatasetSpec("darkpool_trades", "alternative", "Dark pool transactions", [PROVIDER_UNUSUAL_WHALES], False),
-    # Fundamentals
-    DatasetSpec("company_info", "fundamentals", "Company metadata", [PROVIDER_SEC_EDGAR], False),
-    DatasetSpec("income_statement", "fundamentals", "Income statements", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("balance_sheet", "fundamentals", "Balance sheets", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("cash_flow", "fundamentals", "Cash flow statements", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("ratios", "fundamentals", "Financial ratios", [PROVIDER_ALPHA_VANTAGE], False),
-    # Economic
-    DatasetSpec("gdp", "economic", "Gross Domestic Product", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("cpi", "economic", "Consumer Price Index", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("unemployment", "economic", "Unemployment rate", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("interest_rate", "economic", "Fed funds rate", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("treasury_yield", "economic", "Treasury yields", [PROVIDER_ALPHA_VANTAGE], False),
-    # Forex & Crypto
-    DatasetSpec("forex_rates", "forex_crypto", "Currency exchange rates", [PROVIDER_ALPHA_VANTAGE], False),
-    DatasetSpec("crypto_bars", "forex_crypto", "Cryptocurrency OHLCV", [PROVIDER_ALPACA], False),
-    DatasetSpec("crypto_quotes", "forex_crypto", "Cryptocurrency quotes", [PROVIDER_ALPACA], False),
-    # News
-    DatasetSpec("news_articles", "news", "News article metadata", [PROVIDER_NEWS_API, PROVIDER_ALPACA], False),
-    DatasetSpec("news_sentiment", "news", "Sentiment scores", [PROVIDER_FINNHUB], False),
+    # Core Market Data
+    DatasetSpec("bars", "market_data", "OHLCV minute/daily bars", [PROVIDER_ALPACA], True),
+    DatasetSpec("quotes", "market_data", "Level 1 bid/ask quotes", [PROVIDER_ALPACA], True),
+    DatasetSpec("trades", "market_data", "Individual trade prints", [PROVIDER_ALPACA], True),
+    DatasetSpec("orderbook", "market_data", "Order book snapshots", [PROVIDER_ALPACA], True),
+    DatasetSpec(
+        "news", "market_data", "News articles with headlines and summaries", [PROVIDER_ALPACA, PROVIDER_NEWS_API], True
+    ),
+    # Options Flow
+    DatasetSpec("flow_alerts", "options_flow", "Unusual options flow alerts", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("darkpool", "options_flow", "Dark pool trade prints", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("hottest_chain", "options_flow", "Most active option contracts", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("net_premium_tick", "options_flow", "Net premium ticks (call vs put)", [PROVIDER_UNUSUAL_WHALES], True),
+    # Sentiment
+    DatasetSpec("sector_tide", "sentiment", "Sector-level options sentiment", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("market_tide", "sentiment", "Market-wide options sentiment", [PROVIDER_UNUSUAL_WHALES], True),
+    # Greeks / Analytics
+    DatasetSpec("greek_exposure", "analytics", "GEX/DEX/Vanna/Charm exposure", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("max_pain", "analytics", "Max pain strike and OI distribution", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("iv_rank", "analytics", "IV rank and percentile", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("iv_term_structure", "analytics", "IV term structure by expiry", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("volatility_stats", "analytics", "Realized vs implied volatility", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("oi_change", "analytics", "Open interest changes (call/put)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("seasonality", "analytics", "Historical monthly return seasonality", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("volume_profile", "analytics", "Option volume profile by price", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("group_flow", "analytics", "Grouped GEX/DEX flow by sector/index", [PROVIDER_UNUSUAL_WHALES], True),
+    # Options Deep Data
+    DatasetSpec("option_contract", "options", "Option contract reference data (SCD)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec(
+        "option_history", "options", "Historical option contract OHLCV + Greeks", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec(
+        "option_chain_snapshot",
+        "options",
+        "Full option chain snapshots with IV/volume",
+        [PROVIDER_UNUSUAL_WHALES],
+        True,
+    ),
+    # ETF
+    DatasetSpec("etf_holding", "etf", "ETF constituent holdings and weights", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("etf_flow", "etf", "ETF fund flow data (inflows/outflows)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec(
+        "etf_metadata", "etf", "ETF fund metadata (issuer, AUM, expense ratio)", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec(
+        "etf_sector_weights", "etf", "ETF sector/country/asset class breakdowns", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    # Short / FTD
+    DatasetSpec(
+        "short_data", "short_interest", "Short interest, days to cover, float %", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec("ftd", "short_interest", "Failures to deliver from SEC data", [PROVIDER_UNUSUAL_WHALES], True),
+    # Screeners
+    DatasetSpec("most_active", "screener", "Most actively traded symbols", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("mover", "screener", "Biggest price movers (gainers/losers)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec(
+        "screener_result", "screener", "Stock screener with fundamentals overlay", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    # Reference / Fundamentals
+    DatasetSpec(
+        "earnings", "fundamentals", "Earnings dates, EPS estimates and actuals", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec(
+        "corporate_action", "fundamentals", "Dividends, splits, corporate actions", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec(
+        "stock_fundamentals",
+        "fundamentals",
+        "Company fundamentals snapshot (P/E, mcap)",
+        [PROVIDER_UNUSUAL_WHALES],
+        True,
+    ),
+    DatasetSpec(
+        "analyst_ratings", "fundamentals", "Analyst ratings, price targets, upgrades", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    # Alternative Data
+    DatasetSpec("congress_trades", "alternative", "Congressional trading disclosures", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("insider_trades", "alternative", "SEC Form 4 insider trading filings", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("insider_flow", "alternative", "Aggregated insider buy/sell flow", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("institution_holdings", "alternative", "13F institutional holdings", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec(
+        "institution_activity", "alternative", "Institutional portfolio activity", [PROVIDER_UNUSUAL_WHALES], True
+    ),
+    DatasetSpec("politician_trades", "alternative", "Politician trading disclosures", [PROVIDER_UNUSUAL_WHALES], True),
+    # Economic / Market
+    DatasetSpec("economic_events", "economic", "Economic calendar (GDP, CPI, etc.)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec("market_indicators", "economic", "Market-wide indicators and breadth", [PROVIDER_UNUSUAL_WHALES], True),
 ]
 
 
