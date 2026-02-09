@@ -58,6 +58,50 @@ async def test_process_flow_alert_retries_then_dead_letters() -> None:
     assert redis_client.added[0][0] == "heber:watch:dlq"
 
 
+@pytest.mark.asyncio
+async def test_process_flow_alert_non_retriable_failure_skips_retries_and_dlq() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=5,
+        retry_backoff_seconds=0.0,
+        dlq_stream_name="heber:watch:dlq",
+    )
+    consumer._process_alert = AsyncMock(return_value=(False, False, "alert_parse_failed"))  # type: ignore[method-assign]
+
+    ackable = await consumer._process_flow_alert_with_retries("1-9", {b"data": b"{}"})
+
+    assert ackable is True
+    assert consumer._process_alert.await_count == 1
+    assert redis_client.added == []
+
+
+@pytest.mark.asyncio
+async def test_process_flow_alert_dead_letter_error_includes_last_retry_reason() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=2,
+        retry_backoff_seconds=0.0,
+        dlq_stream_name="heber:watch:dlq",
+    )
+    consumer._process_alert = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (False, True, "gateway_timeout"),
+            (False, True, "gateway_payload_invalid"),
+        ]
+    )
+
+    ackable = await consumer._process_flow_alert_with_retries("5-0", {b"data": b"{}"})
+
+    assert ackable is True
+    assert consumer._process_alert.await_count == 2
+    assert len(redis_client.added) == 1
+    assert redis_client.added[0][1]["error"] == "processing_failed_after_retries:gateway_payload_invalid"
+
+
 def test_retry_backoff_preserves_explicit_zero_value() -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(
@@ -287,3 +331,14 @@ def test_parse_alert_missing_required_fields_returns_none() -> None:
     )
 
     assert parsed is None
+
+
+@pytest.mark.asyncio
+async def test_process_alert_parse_failure_is_non_retriable() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    consumer._parse_alert = lambda _data: None  # type: ignore[method-assign]
+
+    result = await consumer._process_alert("2-1", {b"data": b"{}"})
+
+    assert result == (False, False, "alert_parse_failed")

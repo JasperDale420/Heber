@@ -184,8 +184,18 @@ class AlertWatchConsumer:
     async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
         """Process one flow alert with retry + DLQ behavior."""
         msg_id_text = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+        last_reason = "processing_failed"
         for attempt in range(1, self.max_process_retries + 1):
-            if await self._process_alert(msg_id_text, data):
+            success, retryable, reason = self._normalize_process_result(await self._process_alert(msg_id_text, data))
+            if success:
+                return True
+            last_reason = reason
+            if not retryable:
+                logger.warning(
+                    "Non-retriable flow alert failure",
+                    msg_id=msg_id_text,
+                    reason=reason,
+                )
                 return True
             if attempt < self.max_process_retries:
                 await asyncio.sleep(max(0.0, self.retry_backoff_seconds * attempt))
@@ -194,8 +204,33 @@ class AlertWatchConsumer:
             msg_id=msg_id_text,
             data=data,
             attempts=self.max_process_retries,
-            error="processing_failed_after_retries",
+            error=f"processing_failed_after_retries:{last_reason}",
         )
+
+    @staticmethod
+    def _normalize_process_result(result: Any) -> tuple[bool, bool, str]:
+        """Normalize process results from bool or tuple return conventions."""
+        if isinstance(result, tuple):
+            if len(result) >= 3:
+                success = bool(result[0])
+                retryable = bool(result[1])
+                reason = str(result[2]) if result[2] else ("processed" if success else "processing_failed")
+                return success, retryable, reason
+            if len(result) == 2:
+                success = bool(result[0])
+                retryable = bool(result[1])
+                reason = "processed" if success else "processing_failed"
+                return success, retryable, reason
+            if len(result) == 1:
+                success = bool(result[0])
+                reason = "processed" if success else "processing_failed"
+                return success, not success, reason
+
+        if isinstance(result, bool):
+            return result, not result, "processed" if result else "processing_failed"
+
+        success = bool(result)
+        return success, not success, "processed" if success else "processing_failed"
 
     async def _handle_message(self, msg_id: str, data: dict) -> bool:
         """Handle one stream entry and indicate whether it should be ACKed."""
@@ -262,7 +297,7 @@ class AlertWatchConsumer:
             pass
         return False
 
-    async def _process_alert(self, msg_id: str, data: dict) -> bool:
+    async def _process_alert(self, msg_id: str, data: dict) -> tuple[bool, bool, str]:
         """Process a single alert and create a watch.
 
         Args:
@@ -275,12 +310,12 @@ class AlertWatchConsumer:
 
             if not alert:
                 logger.warning("Could not parse alert", msg_id=msg_id)
-                return False
+                return False, False, "alert_parse_failed"
 
             # Skip if no OCC symbol
             if not alert.get("occ_symbol"):
                 logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
-                return True
+                return True, False, "missing_occ_symbol"
 
             # Determine horizon based on DTE
             dte = alert.get("dte", 5)
@@ -324,7 +359,7 @@ class AlertWatchConsumer:
                 occ_symbol=alert["occ_symbol"],
                 horizon=watch_horizon.value,
             )
-            return True
+            return True, False, "watch_created"
 
         except Exception as e:
             logger.error(
@@ -332,7 +367,7 @@ class AlertWatchConsumer:
                 msg_id=msg_id,
                 error=str(e),
             )
-            return False
+            return False, True, "processing_exception"
 
     def _parse_alert(self, data: dict) -> dict | None:
         """Parse alert data from stream message.

@@ -811,8 +811,12 @@ Audit Pass 117 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 118 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for malformed envelope classification and non-retriable error handling policy during `_process_alert` retries.
+- heber/watch/consumer.py line-by-line re-audit for `_get_entry_price()` route-failure reason taxonomy and parity with poller telemetry payloads.
 
 ## Remediation Updates
 
@@ -878,6 +882,7 @@ Updated: 2026-02-09
 - `TD-148`, `TD-149`, and `TD-150` addressed via `T-119`: consumer retry backoff now preserves explicit zero configuration and clamps invalid negative delays, while alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults.
 - `TD-151`, `TD-152`, and `TD-153` addressed via `T-120`: consumer retry attempt configuration now clamps to a minimum of one attempt, stream payload decoding now tolerates invalid UTF-8 bytes, and numeric timestamp parsing now normalizes epoch-millisecond values.
 - `TD-154`, `TD-155`, and `TD-156` addressed via `T-121`: consumer alert decode now parses whitespace-prefixed JSON envelopes, put/call normalization now handles malformed non-string values safely, and parse flow now validates required alert identity fields before watch creation.
+- `TD-157`, `TD-158`, and `TD-159` addressed via `T-122`: consumer retry flow now classifies non-retriable parse failures, carries terminal retry reasons into DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retry semantics.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1015,6 +1020,7 @@ Updated: 2026-02-09
 - Audit Pass 115 revalidated and remediated `TD-148`, `TD-149`, and `TD-150`; consumer retry backoff now handles explicit zero/negative configuration safely and alert parse paths now fail soft on malformed/non-finite numeric timestamp payloads.
 - Audit Pass 116 revalidated and remediated `TD-151`, `TD-152`, and `TD-153`; consumer retry attempts now enforce a safe minimum, stream decode now fails soft on invalid UTF-8, and epoch-millisecond timestamps now normalize correctly.
 - Audit Pass 117 revalidated and remediated `TD-154`, `TD-155`, and `TD-156`; consumer parse paths now handle whitespace-prefixed JSON, normalize malformed put/call values safely, and reject missing required alert identity fields before watch creation.
+- Audit Pass 118 revalidated and remediated `TD-157`, `TD-158`, and `TD-159`; consumer retry flow now short-circuits deterministic parse failures as non-retriable, propagates terminal retry reasons to DLQ error metadata, and supports backward-compatible bool/tuple process-result contracts.
 
 ## Executive Summary
 
@@ -1182,6 +1188,9 @@ Severity key: High, Medium, Low
 | TD-154 | Medium | Watch Service | Consumer stream decode only parsed JSON strings starting at column 0, so whitespace-prefixed JSON envelopes were left unparsed and downstream field extraction silently degraded. |
 | TD-155 | Medium | Watch Service | Consumer put/call normalization assumed subscriptable string values, allowing malformed non-string payloads to raise parse exceptions and trigger avoidable retries. |
 | TD-156 | Medium | Watch Service | Consumer parse flow lacked explicit required-field validation for alert identity (`id`, `underlying`), allowing missing-field payloads to fail later during watch creation via generic exception handling. |
+| TD-157 | Medium | Watch Service | Consumer retry flow treated parse failures as retriable, causing deterministic malformed-alert payloads to consume retry budget and generate avoidable DLQ churn. |
+| TD-158 | Medium | Watch Service | Consumer DLQ records used a static terminal error string, losing the last retry-failure reason needed for triage and route-level diagnostics. |
+| TD-159 | Medium | Watch Service | Consumer retry loop depended on strict bool process-return semantics, making tuple-based result classification brittle and risking false-positive success checks during retry refactors/tests. |
 
 ## Detailed Findings
 
@@ -2101,6 +2110,24 @@ Recommendation: Validate required alert identity fields during parse and fail ea
 Update 2026-02-09: Remediated in `T-121` by adding required-field checks in `_parse_alert()` with explicit warning metadata.
 Revalidated 2026-02-09 (Pass 117): Resolved. Missing required identity fields now fail early at parse time with clear diagnostics.
 
+**TD-157: Parse failures were retried despite being deterministic/non-retriable.**
+Evidence: `_process_alert()` previously returned `False` for parse failures and `_process_flow_alert_with_retries()` treated all `False` outcomes as retryable, so malformed payloads consumed full retry budgets and were dead-lettered after guaranteed failure.
+Recommendation: Classify parse failures as non-retriable and short-circuit retry loops with immediate ACK to avoid retry/DLQ churn.
+Update 2026-02-09: Remediated in `T-122` by returning explicit non-retriable parse-failure results and acknowledging without retry/DLQ for deterministic parse failures.
+Revalidated 2026-02-09 (Pass 118): Resolved. Parse-failure alerts now stop after one attempt with non-retriable classification.
+
+**TD-158: Terminal retry reason was missing from DLQ metadata.**
+Evidence: `_process_flow_alert_with_retries()` previously dead-lettered with static `processing_failed_after_retries`, dropping the final route/processing reason that operators need for triage.
+Recommendation: Persist the last retry reason into DLQ `error` metadata for exhausted retriable failures.
+Update 2026-02-09: Remediated in `T-122` by tracking retry reasons and emitting `processing_failed_after_retries:<reason>` on DLQ writes.
+Revalidated 2026-02-09 (Pass 118): Resolved. Dead-lettered records now include terminal retry reason context.
+
+**TD-159: Retry loop had brittle bool-only process-result semantics.**
+Evidence: `_process_flow_alert_with_retries()` previously checked `if await _process_alert(...)` directly. Any tuple/object return used for richer classification would evaluate truthy and bypass retries, making progressive refactors and test doubles fragile.
+Recommendation: Normalize process-return contracts explicitly (bool and tuple forms) before retry/dead-letter control flow decisions.
+Update 2026-02-09: Remediated in `T-122` by adding `_normalize_process_result()` and using normalized `(success, retryable, reason)` semantics in retry flow.
+Revalidated 2026-02-09 (Pass 118): Resolved. Retry behavior now remains stable across bool and tuple process-result return forms.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2108,7 +2135,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

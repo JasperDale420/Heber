@@ -202,6 +202,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/consumer.py`: alert parsing now validates required identity fields (`id`, `underlying`) before watch creation
 - Added consumer parse-normalization regression tests (`tests/test_watch_consumer_reliability.py`) for whitespace JSON, malformed `put_call`, and missing required fields
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-154`/`TD-155`/`TD-156` remediation in audit pass 117 and `T-121`
+- Fixed `watch/consumer.py`: parse failures are now classified as non-retriable and ACKed without retry/DLQ churn
+- Fixed `watch/consumer.py`: dead-lettered retry-exhaustion errors now include the terminal retry reason (`processing_failed_after_retries:<reason>`)
+- Fixed `watch/consumer.py`: retry loop now normalizes bool/tuple process-result contracts to preserve backward-compatible retry semantics
+- Added consumer retry-classification/telemetry regression tests (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-157`/`TD-158`/`TD-159` remediation in audit pass 118 and `T-122`
 - Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
 - Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
 - Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring

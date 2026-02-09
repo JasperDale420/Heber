@@ -129,6 +129,7 @@ Updated: 2026-02-09
 - `T-119` complete (`TD-148`, `TD-149`, `TD-150`): consumer backoff now preserves explicit zero values, clamps negative retry delays, and fail-soft parses malformed/non-finite alert numeric and timestamp payload fields.
 - `T-120` complete (`TD-151`, `TD-152`, `TD-153`): consumer now enforces a minimum retry-attempt count, decodes malformed UTF-8 stream bytes with fail-soft replacement, and normalizes epoch-millisecond numeric timestamps.
 - `T-121` complete (`TD-154`, `TD-155`, `TD-156`): consumer now parses whitespace-prefixed JSON envelopes, normalizes malformed put/call payload values safely, and validates required alert identity fields during parse.
+- `T-122` complete (`TD-157`, `TD-158`, `TD-159`): consumer retry flow now classifies parse failures as non-retriable, emits terminal retry reasons in DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retries.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -233,6 +234,7 @@ Updated: 2026-02-09
 - Audit Pass 115 revalidated `TD-148`, `TD-149`, and `TD-150` as resolved via `T-119`.
 - Audit Pass 116 revalidated `TD-151`, `TD-152`, and `TD-153` as resolved via `T-120`.
 - Audit Pass 117 revalidated `TD-154`, `TD-155`, and `TD-156` as resolved via `T-121`.
+- Audit Pass 118 revalidated `TD-157`, `TD-158`, and `TD-159` as resolved via `T-122`.
 
 ## Prioritization Approach
 
