@@ -58,6 +58,39 @@ async def test_process_flow_alert_retries_then_dead_letters() -> None:
     assert redis_client.added[0][0] == "heber:watch:dlq"
 
 
+def test_retry_backoff_preserves_explicit_zero_value() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        retry_backoff_seconds=0.0,
+    )
+    assert consumer.retry_backoff_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_process_flow_alert_negative_backoff_is_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(
+        redis_client,
+        _NoopManager(),
+        max_process_retries=2,
+        retry_backoff_seconds=-1.0,
+    )
+    consumer._process_alert = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    observed_delays: list[float] = []
+
+    async def _capture_sleep(delay: float) -> None:
+        observed_delays.append(delay)
+
+    monkeypatch.setattr("heber.watch.consumer.asyncio.sleep", _capture_sleep)
+
+    ackable = await consumer._process_flow_alert_with_retries("9-0", {b"data": b"{}"})
+
+    assert ackable is True
+    assert observed_delays == [0.0]
+
+
 @pytest.mark.asyncio
 async def test_handle_message_keeps_pending_when_dlq_write_fails() -> None:
     redis_client = _RedisDlqFailure()
@@ -114,6 +147,23 @@ def test_map_alert_fields_preserves_zero_price_values() -> None:
     assert mapped["contract_px"] == 0.0
 
 
+def test_map_alert_fields_coerces_invalid_or_non_finite_numbers_to_zero() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    mapped = consumer._map_alert_fields(
+        {
+            "strike": "nan",
+            "spot_px": "inf",
+            "contract_px": "bad",
+        }
+    )
+
+    assert mapped["strike"] == 0.0
+    assert mapped["spot_px"] == 0.0
+    assert mapped["contract_px"] == 0.0
+
+
 def test_parse_timestamp_normalizes_naive_iso_to_utc() -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(redis_client, _NoopManager())
@@ -131,6 +181,18 @@ def test_parse_timestamp_invalid_string_falls_back_to_now_utc() -> None:
     before = datetime.now(UTC)
 
     ts = consumer._parse_timestamp({"ts_event": "not-a-date"})
+
+    after = datetime.now(UTC)
+    assert ts.tzinfo is UTC
+    assert before <= ts <= after
+
+
+def test_parse_timestamp_non_finite_numeric_falls_back_to_now_utc() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    before = datetime.now(UTC)
+
+    ts = consumer._parse_timestamp({"timestamp": float("nan")})
 
     after = datetime.now(UTC)
     assert ts.tzinfo is UTC

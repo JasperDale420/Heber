@@ -87,7 +87,10 @@ class AlertWatchConsumer:
         self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
         self.max_process_retries = max_process_retries or settings.redis_process_max_retries
-        self.retry_backoff_seconds = retry_backoff_seconds or settings.redis_retry_backoff_seconds
+        configured_backoff = (
+            settings.redis_retry_backoff_seconds if retry_backoff_seconds is None else retry_backoff_seconds
+        )
+        self.retry_backoff_seconds = max(0.0, configured_backoff)
         self._running = False
 
         # Feature extractor for meta-labeling
@@ -184,7 +187,7 @@ class AlertWatchConsumer:
             if await self._process_alert(msg_id_text, data):
                 return True
             if attempt < self.max_process_retries:
-                await asyncio.sleep(self.retry_backoff_seconds * attempt)
+                await asyncio.sleep(max(0.0, self.retry_backoff_seconds * attempt))
 
         return await self._dead_letter_message(
             msg_id=msg_id_text,
@@ -385,6 +388,15 @@ class AlertWatchConsumer:
         contract_px = parsed.get("contract_px")
         if contract_px is None:
             contract_px = parsed.get("price", 0)
+        strike = self._coerce_optional_float(parsed.get("strike", 0))
+        if strike is None:
+            strike = 0.0
+        normalized_spot_px = self._coerce_optional_float(spot_px)
+        if normalized_spot_px is None:
+            normalized_spot_px = 0.0
+        normalized_contract_px = self._coerce_optional_float(contract_px)
+        if normalized_contract_px is None:
+            normalized_contract_px = 0.0
 
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
@@ -392,9 +404,9 @@ class AlertWatchConsumer:
             "underlying": parsed.get("underlying") or parsed.get("ticker") or parsed.get("symbol"),
             "put_call": put_call,
             "expiry": parsed.get("expiry"),
-            "strike": float(parsed.get("strike", 0) or 0),
-            "spot_px": float(spot_px or 0),
-            "contract_px": float(contract_px or 0),
+            "strike": strike,
+            "spot_px": normalized_spot_px,
+            "contract_px": normalized_contract_px,
         }
 
     def _calculate_dte(self, expiry: str | None) -> int:
@@ -419,12 +431,24 @@ class AlertWatchConsumer:
             try:
                 parsed_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             except ValueError:
-                return datetime.now(UTC)
+                numeric = self._coerce_optional_float(ts)
+                if numeric is None:
+                    return datetime.now(UTC)
+                try:
+                    return datetime.fromtimestamp(numeric, tz=UTC)
+                except (OverflowError, OSError, ValueError):
+                    return datetime.now(UTC)
             if parsed_ts.tzinfo is None:
                 return parsed_ts.replace(tzinfo=UTC)
             return parsed_ts.astimezone(UTC)
         if isinstance(ts, int | float):
-            return datetime.fromtimestamp(ts, tz=UTC)
+            numeric = self._coerce_optional_float(ts)
+            if numeric is None:
+                return datetime.now(UTC)
+            try:
+                return datetime.fromtimestamp(numeric, tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return datetime.now(UTC)
         return datetime.now(UTC)
 
     @staticmethod

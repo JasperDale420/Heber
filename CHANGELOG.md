@@ -187,6 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved watch route-failure observability: poller/consumer now emit aggregated per-route failure summaries when all route candidates fail
 - Added timeout-route fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-145`/`TD-146`/`TD-147` remediation in audit pass 114 and `T-118`
+- Fixed `watch/consumer.py`: explicit `retry_backoff_seconds=0.0` is now preserved instead of being overwritten by settings defaults
+- Fixed `watch/consumer.py`: retry delays are now clamped to non-negative values to avoid invalid negative `asyncio.sleep()` delays under bad config
+- Fixed `watch/consumer.py`: alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults instead of raising
+- Added consumer backoff and parse-hardening regression tests (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-148`/`TD-149`/`TD-150` remediation in audit pass 115 and `T-119`
 - Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
 - Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
 - Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface
