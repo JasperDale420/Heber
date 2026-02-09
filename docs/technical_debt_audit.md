@@ -721,8 +721,12 @@ Audit Pass 98 (2026-02-09, files reviewed directly):
 - tests/test_watch_entrypoint_shutdown.py
 - tests/test_watch_writer_entrypoint_shutdown.py
 
+Audit Pass 99 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/manager.py line-by-line re-audit for concurrent watch mutation and key-index consistency edge cases.
+- heber/watch/poller.py line-by-line re-audit for quote cadence, timestamp-normalization, and snapshot persistence edge cases.
 
 ## Remediation Updates
 
@@ -769,6 +773,7 @@ Updated: 2026-02-09
 - `TD-116` and `TD-117` addressed via `T-100`: feature reconstruction now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed contract strikes while continuing to valid contracts with tolerant numeric parsing.
 - `TD-118` and `TD-119` addressed via `T-101`: label writer now stages partition parquet files and only promotes them after all groups are written, cleaning temp files on failure to prevent partial commits and retry-time duplicates.
 - `TD-120` and `TD-121` addressed via `T-102`: watch CLI entrypoint now performs fail-safe shutdown that logs stop errors without masking original runtime failures, preserving root-cause exception semantics and graceful normal-completion exits.
+- `TD-122` and `TD-123` addressed via `T-103`: watch manager delete paths now normalize byte-form watch IDs before key/index removal, and watch persistence now removes non-watching watches from the active index to prevent stale memberships.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -887,6 +892,7 @@ Updated: 2026-02-09
 - Audit Pass 96 revalidated and remediated `TD-116` and `TD-117`; feature deserialization now normalizes naive `alert_time` strings to UTC and Greeks enrichment now skips malformed contract strikes instead of aborting enrichment for the entire option chain.
 - Audit Pass 97 revalidated and remediated `TD-118` and `TD-119`; writer flushes now avoid partial partition commits on write failure and clean staged temp files before re-raising.
 - Audit Pass 98 revalidated and remediated `TD-120` and `TD-121`; watch entrypoint now isolates shutdown-stop failures from runtime exception propagation so original service-run errors are preserved and normal exits remain non-fatal.
+- Audit Pass 99 revalidated and remediated `TD-122` and `TD-123`; watch delete operations now handle byte IDs consistently and active-watch index entries are removed when watches transition out of `WATCHING`.
 
 ## Executive Summary
 
@@ -1019,6 +1025,8 @@ Severity key: High, Medium, Low
 | TD-119 | Medium | Watch Service | Writer failure paths could leave staged temp parquet artifacts, creating cleanup drift and ambiguous recovery state after failed flush attempts. |
 | TD-120 | Medium | Watch Service | Entry-point cleanup errors from `service.stop()` could mask original `service.run()` failures in `finally`, obscuring root-cause runtime exceptions. |
 | TD-121 | Medium | Watch Service | Entry-point stop failures on normal completion were fatal, causing avoidable CLI errors despite successful service run completion. |
+| TD-122 | Medium | Watch Service | `delete_watch()` accepted byte IDs but did not normalize before key deletion, leaving primary watch rows undeleted under byte-response clients. |
+| TD-123 | Medium | Watch Service | `_save_watch()` only added watches to `ACTIVE_WATCHES` and never removed non-watching status transitions, leaving stale active-index memberships. |
 
 ## Detailed Findings
 
@@ -1728,6 +1736,18 @@ Recommendation: Treat cleanup-stop failures as logged operational events on norm
 Update 2026-02-09: Remediated in `T-102` by making stop failures non-fatal during cleanup while preserving explicit runtime failure propagation semantics.
 Revalidated 2026-02-09 (Pass 98): Resolved. Normal completion now exits gracefully even when cleanup emits stop errors.
 
+**TD-122: Watch deletion can miss primary keys when watch IDs are bytes.**
+Evidence: `WatchManager.delete_watch()` accepted `str | bytes` IDs but built delete/index keys directly from the raw argument. Under byte-response Redis clients this generated mismatched keys and could leave the primary `watch:{id}` record undeleted even though delete returned success.
+Recommendation: Normalize `watch_id` at method entry (same pattern as `get_watch()`) before any key/index operations.
+Update 2026-02-09: Remediated in `T-103` by normalizing `watch_id` in `delete_watch()` before watch lookup, key deletion, and index cleanup.
+Revalidated 2026-02-09 (Pass 99): Resolved. Delete now consistently removes watch state for both string and byte ID inputs.
+
+**TD-123: Active watch index is not reconciled on status transitions.**
+Evidence: `WatchManager._save_watch()` added entries to `ACTIVE_WATCHES` when status was `WATCHING` but never removed entries when status changed to `EXPIRED`/`HIT_TP`/`HIT_SL`, leaving stale active IDs in Redis.
+Recommendation: Reconcile the active index in both directions during save: `sadd` for `WATCHING`, `srem` for non-watching statuses.
+Update 2026-02-09: Remediated in `T-103` by removing watch IDs from `ACTIVE_WATCHES` whenever persisted status is not `WATCHING`, with regression coverage.
+Revalidated 2026-02-09 (Pass 99): Resolved. Active-index membership now matches persisted watch status.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1735,7 +1755,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

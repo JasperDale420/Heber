@@ -129,6 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/__main__.py`: stop failures during normal completion are now logged and treated as non-fatal, preserving graceful CLI exit behavior
 - Added watch entrypoint shutdown regression tests (`tests/test_watch_entrypoint_shutdown.py`) for stop-failure masking and normal-completion stop-failure handling
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-120`/`TD-121` remediation in audit pass 98 and `T-102`
+- Fixed `watch/manager.py`: `delete_watch()` now normalizes byte-form watch IDs before key/index deletion so primary watch rows are removed correctly under byte-response Redis clients
+- Fixed `watch/manager.py`: `_save_watch()` now removes non-watching statuses from `ACTIVE_WATCHES`, preventing stale active-index memberships after status transitions
+- Added watch-manager byte-delete and active-index reconciliation regression tests (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-122`/`TD-123` remediation in audit pass 99 and `T-103`
 
 ### Removed
 
@@ -244,6 +248,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 96: watch feature deserialization + Greeks fallback conformance revalidation)
 - Expanded technical debt audit (pass 97: watch writer atomic-flush durability conformance revalidation)
 - Expanded technical debt audit (pass 98: watch entrypoint shutdown error-isolation conformance revalidation)
+- Expanded technical debt audit (pass 99: watch manager byte-ID deletion + active-index consistency conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

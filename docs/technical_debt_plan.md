@@ -110,6 +110,7 @@ Updated: 2026-02-09
 - `T-100` complete (`TD-116`, `TD-117`): feature deserialization now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed option-chain strike rows while safely coercing numeric Greek fields.
 - `T-101` complete (`TD-118`, `TD-119`): writer parquet flushes now stage per-partition outputs as temp files and only promote after full batch success, with cleanup on failures to prevent partial commits and temp-file drift.
 - `T-102` complete (`TD-120`, `TD-121`): watch entrypoint shutdown now uses safe-stop handling so stop failures are logged without masking original runtime exceptions or failing normal-completion exits.
+- `T-103` complete (`TD-122`, `TD-123`): watch manager now normalizes byte-form watch IDs for delete operations and keeps the active-watch index synchronized when watches transition out of `WATCHING`.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -195,6 +196,7 @@ Updated: 2026-02-09
 - Audit Pass 96 revalidated `TD-116` and `TD-117` as resolved via `T-100`.
 - Audit Pass 97 revalidated `TD-118` and `TD-119` as resolved via `T-101`.
 - Audit Pass 98 revalidated `TD-120` and `TD-121` as resolved via `T-102`.
+- Audit Pass 99 revalidated `TD-122` and `TD-123` as resolved via `T-103`.
 
 ## Prioritization Approach
 

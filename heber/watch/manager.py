@@ -348,8 +348,9 @@ class WatchManager:
         """Async wrapper for cleanup_expired."""
         return await asyncio.to_thread(self.cleanup_expired)
 
-    def delete_watch(self, watch_id: str) -> bool:
+    def delete_watch(self, watch_id: str | bytes) -> bool:
         """Delete a watch and its snapshots."""
+        watch_id = self._normalize_redis_id(watch_id)
         watch = self.get_watch(watch_id)
         if not watch:
             return False
@@ -367,9 +368,11 @@ class WatchManager:
         key = WatchKeys.watch_key(watch.watch_id)
         self.redis.set(key, watch.model_dump_json())
 
-        # Add to active set if watching
+        # Keep active index synchronized with status transitions.
         if watch.status == WatchStatus.WATCHING:
             self.redis.sadd(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+        else:
+            self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
 
         # Add to symbol index
         self.redis.sadd(

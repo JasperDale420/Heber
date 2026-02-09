@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from heber.watch.manager import WatchManager
-from heber.watch.models import WatchHorizon, WatchStatus
+from heber.watch.models import WatchHorizon, WatchKeys, WatchStatus
 
 
 class _BytesRedis:
@@ -130,3 +130,26 @@ def test_cleanup_expired_handles_naive_window_end() -> None:
     stored = manager.get_watch(watch.watch_id)
     assert stored is not None
     assert stored.status == WatchStatus.EXPIRED
+
+
+def test_delete_watch_with_byte_id_removes_primary_watch_key() -> None:
+    redis_client = _BytesRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    deleted = manager.delete_watch(watch.watch_id.encode("utf-8"))
+
+    assert deleted is True
+    assert manager.get_watch(watch.watch_id) is None
+    assert manager.get_watches_for_symbol(watch.occ_symbol) == []
+
+
+def test_save_watch_non_watching_removes_active_index_membership() -> None:
+    redis_client = _BytesRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    watch.status = WatchStatus.EXPIRED
+    manager._save_watch(watch)
+
+    assert redis_client.smembers(WatchKeys.ACTIVE_WATCHES) == set()
