@@ -185,7 +185,7 @@ def classify_horizon(dte: int) -> AlertHorizon:
 
 def classify_vix_regime(vix: float | None) -> str:
     """Classify market regime based on VIX level."""
-    if vix is None or np.isnan(vix):
+    if vix is None or not np.isfinite(vix):
         return VixRegime.NORMAL.value
     elif vix < VIX_LOW:
         return VixRegime.LOW.value
@@ -257,7 +257,7 @@ def _compute_beta_neutral_return(
     Returns:
         Beta-neutral return, or None if SPY data missing
     """
-    if spy_return is None or np.isnan(spy_return):
+    if spy_return is None or not np.isfinite(spy_return) or not np.isfinite(underlying_return) or not np.isfinite(beta):
         return None
     return underlying_return - beta * spy_return
 
@@ -534,7 +534,10 @@ def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> 
     vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
     if vix_before.empty:
         return None
-    return float(vix_before.iloc[-1]["close"])
+    vix_value = float(vix_before.iloc[-1]["close"])
+    if not np.isfinite(vix_value):
+        return None
+    return vix_value
 
 
 def _window_delta_for_config(config: BarrierConfig) -> timedelta:

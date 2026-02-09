@@ -137,6 +137,7 @@ Updated: 2026-02-09
 - `T-127` complete (audit residual bundle from Pass 122): watch numeric coercion now rejects boolean payload values across poller/consumer/features paths, IV-rank enrichment now filters non-finite values, and watch manager MFE/MAE updates now preserve prior zero baselines instead of resetting via truthiness fallbacks.
 - `T-128` complete (audit residual bundle from Pass 123): manager completion paths now sanitize non-finite outcome returns before persistence (including expiry cleanup), and consumer entry-price fallback now guarantees a positive finite value when gateway quotes are unavailable.
 - `T-129` complete (audit residual bundle from Pass 124): alert-label entry extraction now treats non-finite/invalid alert spot values as fallback-eligible (using bar-close fallback with finite/positive guards), and SPY-relative return computation now rejects non-finite SPY prices/returns to prevent propagating infinite beta-neutral labels.
+- `T-130` complete (audit residual bundle from Pass 125): VIX regime/enrichment paths now reject non-finite values (`NaN`/`inf`) and beta-neutral return helpers now fail soft on non-finite underlying/SPY/beta inputs so non-finite market-context labels are not persisted.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -249,6 +250,7 @@ Updated: 2026-02-09
 - Audit Pass 123 revalidated and closed boolean-coercion / zero-baseline residuals via `T-127`.
 - Audit Pass 124 revalidated and closed non-finite outcome-return persistence and non-positive entry-fallback residuals via `T-128`.
 - Audit Pass 125 revalidated and closed non-finite alert-label entry/SPY-return residuals via `T-129`.
+- Audit Pass 126 revalidated and closed non-finite VIX/beta-neutral helper residuals via `T-130`.
 
 ## Prioritization Approach
 

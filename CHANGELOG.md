@@ -238,6 +238,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `heber/features/templates/alert_labels.py`: SPY-relative return calculation now rejects non-finite raw/SPY values so infinite beta-neutral returns fail soft instead of propagating into labels
 - Added alert-label regression tests (`tests/test_alert_label_intraday_windows.py`) covering `spot_px=NaN` fallback and non-finite SPY move handling using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 125 closure via `T-129`
+- Fixed `heber/features/templates/alert_labels.py`: VIX enrichment/regime helpers now reject non-finite VIX inputs so invalid `vix_at_alert`/regime values fail soft instead of propagating
+- Fixed `heber/features/templates/alert_labels.py`: beta-neutral helper now rejects non-finite underlying/SPY/beta inputs and returns `None` for invalid market context
+- Added alert-label non-finite market-context regression tests (`tests/test_alert_label_intraday_windows.py`) for VIX and beta-neutral helper guardrails using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 126 closure via `T-130`
 - Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
 - Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
 - Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring
