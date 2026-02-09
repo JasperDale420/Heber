@@ -833,8 +833,14 @@ Audit Pass 121 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 122 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py and heber/watch/consumer.py line-by-line re-audit for cross-route quote timestamp normalization parity when providers return epoch-millisecond `t` fields versus ISO `timestamp` fields under fallback paths.
+- None.
 
 ## Remediation Updates
 
@@ -904,6 +910,7 @@ Updated: 2026-02-09
 - `TD-160`, `TD-161`, and `TD-162` addressed via `T-123`: watch gateway route-failure telemetry now classifies timeout vs transport request failures, includes exception type metadata for exception-driven failures, and adds expected-type metadata for payload-shape failures in both poller and consumer paths.
 - `TD-163`, `TD-164`, and `TD-165` addressed via `T-124`: poller quote batch routing now attempts fallback routes when prefixed responses provide partial/invalid per-symbol coverage, preserves best partial coverage when all routes are incomplete, and consumer entry-price lookup now falls back when requested symbol quote payloads are missing, malformed, or unusable.
 - `TD-166`, `TD-167`, and `TD-168` addressed via `T-125`: poller and consumer now classify route quotes as stale via shared timestamp-age helpers, fall back to fresher legacy routes when prefixed quotes are stale, and preserve freshest stale fallback coverage only when all routes are stale.
+- `T-126` addressed audit residual quote-timestamp parity risk: gateway timestamp coercion now normalizes epoch-millisecond numeric payloads consistently across poller/consumer stale-route fallback paths (`t` and string-encoded epoch values), with regression coverage for helper coercion and fallback-route selection.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1045,6 +1052,7 @@ Updated: 2026-02-09
 - Audit Pass 119 revalidated and remediated `TD-160`, `TD-161`, and `TD-162`; poller/consumer gateway-route failures now share timeout/transport/request taxonomy, carry exception-type metadata, and include expected payload-type metadata for shape mismatches.
 - Audit Pass 120 revalidated and remediated `TD-163`, `TD-164`, and `TD-165`; poller batch quote fetch now falls back on partial/invalid symbol coverage while retaining best-effort partial results, and consumer entry-price fetch now falls back when the requested symbol quote is missing, malformed, or non-usable on a candidate route.
 - Audit Pass 121 revalidated and remediated `TD-166`, `TD-167`, and `TD-168`; poller/consumer route selection now applies shared quote-staleness checks, prefers fresher route data over stale prefixed responses, and keeps freshest stale fallback coverage when no fresh route is available.
+- Audit Pass 122 revalidated and remediated the epoch-millisecond quote timestamp parity residual from Pass 121; gateway timestamp coercion now normalizes millisecond `t` values (numeric and numeric-string payloads), restoring stale-route fallback parity between epoch and ISO quote timestamp formats.
 
 ## Executive Summary
 

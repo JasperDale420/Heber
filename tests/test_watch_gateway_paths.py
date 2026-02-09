@@ -12,6 +12,7 @@ from heber.watch import poller as poller_module
 from heber.watch.consumer import AlertWatchConsumer
 from heber.watch.gateway import (
     classify_gateway_http_error,
+    coerce_utc_timestamp,
     gateway_url_candidates,
 )
 from heber.watch.poller import SnapshotPoller
@@ -115,6 +116,11 @@ def test_classify_gateway_http_error_maps_timeout_and_transport() -> None:
     assert classify_gateway_http_error(httpx.ReadTimeout("timeout")) == "timeout"
     assert classify_gateway_http_error(httpx.ConnectError("connect")) == "transport_error"
     assert classify_gateway_http_error(httpx.HTTPError("error")) == "request_error"
+
+
+def test_coerce_utc_timestamp_normalizes_epoch_milliseconds() -> None:
+    assert coerce_utc_timestamp(1_704_067_200_000) == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+    assert coerce_utc_timestamp("1704067200000") == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -332,6 +338,33 @@ async def test_poller_fetch_quotes_uses_stale_fallback_when_all_routes_stale(
     quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
 
     assert quotes["AAPL260220C00100000"]["bp"] == 1.5
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
+    assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_poller_fallback_handles_epoch_millisecond_quote_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_ms = int((datetime.now(UTC) - timedelta(minutes=15)).timestamp() * 1000)
+    fresh_ms = int(datetime.now(UTC).timestamp() * 1000)
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2, "t": stale_ms}}}},
+        ),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 2.0, "ap": 2.4, "t": fresh_ms}}}},
+        ),
+    }
+    monkeypatch.setattr(poller_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
+    quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
+
+    assert quotes["AAPL260220C00100000"]["bp"] == 2.0
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
 

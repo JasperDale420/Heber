@@ -161,8 +161,9 @@ def coerce_utc_timestamp(value: Any) -> datetime | None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
     if isinstance(value, int | float):
+        epoch = value / 1000.0 if abs(value) >= 100_000_000_000 else value
         try:
-            return datetime.fromtimestamp(value, tz=UTC)
+            return datetime.fromtimestamp(epoch, tz=UTC)
         except (OSError, OverflowError, ValueError):
             return None
     if isinstance(value, str):
@@ -170,7 +171,9 @@ def coerce_utc_timestamp(value: Any) -> datetime | None:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             try:
-                parsed = datetime.fromtimestamp(float(value), tz=UTC)
+                numeric_value = float(value)
+                epoch = numeric_value / 1000.0 if abs(numeric_value) >= 100_000_000_000 else numeric_value
+                parsed = datetime.fromtimestamp(epoch, tz=UTC)
             except (OSError, OverflowError, ValueError):
                 return None
         if parsed.tzinfo is None:

@@ -222,6 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py` and `watch/consumer.py`: when all routes are stale, freshest stale quote coverage is now preserved as controlled fallback
 - Added stale-route fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-166`/`TD-167`/`TD-168` remediation in audit pass 121 and `T-125`
+- Fixed `watch/gateway.py`: timestamp coercion now normalizes epoch-millisecond quote timestamps (numeric and numeric-string forms) so stale-route fallback behavior stays consistent across `t` and ISO `timestamp` payloads
+- Added epoch-millisecond timestamp parity regression tests (`tests/test_watch_gateway_paths.py`) for helper coercion and stale-route fallback selection
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 122 closure via `T-126`
 - Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
 - Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
 - Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring
