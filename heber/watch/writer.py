@@ -107,6 +107,7 @@ class LabelWriter:
         write_df = df.copy()
         write_df["_date"] = pd.to_datetime(write_df["ts_event"]).dt.date
         staged_files: list[tuple[Path, Path, int]] = []
+        promoted_files: list[Path] = []
         current_tmp_file: Path | None = None
 
         try:
@@ -131,6 +132,7 @@ class LabelWriter:
 
             for tmp_file, final_file, rows in staged_files:
                 tmp_file.replace(final_file)
+                promoted_files.append(final_file)
                 logger.debug("Wrote partition", path=str(final_file), rows=rows)
 
         except Exception:
@@ -139,6 +141,9 @@ class LabelWriter:
             for tmp_file, _final_file, _rows in staged_files:
                 if tmp_file.exists():
                     tmp_file.unlink()
+            for committed_file in reversed(promoted_files):
+                if committed_file.exists():
+                    committed_file.unlink()
             raise
 
 

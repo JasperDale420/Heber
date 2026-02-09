@@ -8,9 +8,9 @@ import types
 
 import pytest
 
-try:
-    import feast  # noqa: F401
-except ImportError:
+
+def _build_feast_stub():
+    """Build a lightweight feast stub with real classes for schema/path assertions."""
     feast_module = types.ModuleType("feast")
 
     class Entity:
@@ -76,8 +76,32 @@ except ImportError:
     feast_module.FileSource = FileSource
     feast_module.FeatureView = FeatureView
 
-    sys.modules["feast"] = feast_module
-    sys.modules["feast.types"] = feast_types
+    return feast_module, feast_types
+
+
+@pytest.fixture(autouse=True)
+def _install_feast_stub():
+    """Install fresh feast stub before each test to prevent cross-test pollution."""
+    try:
+        import feast  # noqa: F401
+    except ImportError:
+        feast_module, feast_types = _build_feast_stub()
+        old_feast = sys.modules.get("feast")
+        old_feast_types = sys.modules.get("feast.types")
+        sys.modules["feast"] = feast_module
+        sys.modules["feast.types"] = feast_types
+        yield
+        # Restore original state
+        if old_feast is not None:
+            sys.modules["feast"] = old_feast
+        else:
+            sys.modules.pop("feast", None)
+        if old_feast_types is not None:
+            sys.modules["feast.types"] = old_feast_types
+        else:
+            sys.modules.pop("feast.types", None)
+    else:
+        yield
 
 
 FEATURE_VIEW_CASES = [
@@ -207,6 +231,8 @@ SOURCE_CASES = [
 
 @pytest.mark.parametrize(("module_name", "view_name", "expected_fields"), FEATURE_VIEW_CASES)
 def test_feature_view_schema_matches_expected(module_name: str, view_name: str, expected_fields: list[str]) -> None:
+    # Evict cached module to force re-evaluation with the test feast mock
+    sys.modules.pop(module_name, None)
     module = importlib.import_module(module_name)
     feature_view = getattr(module, view_name)
     field_names = [field.name for field in feature_view.schema]
@@ -219,6 +245,8 @@ def test_feature_view_source_path_matches_gold_layout(
     source_name: str,
     dataset_name: str,
 ) -> None:
+    # Evict cached module to force re-evaluation with the test feast mock
+    sys.modules.pop(module_name, None)
     module = importlib.import_module(module_name)
     source = getattr(module, source_name)
     path = source.path

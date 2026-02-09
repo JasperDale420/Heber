@@ -166,6 +166,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/consumer.py`: entry-price quote fallback now treats malformed JSON on HTTP 200 responses as route-level failures and continues to legacy candidates
 - Added consumer malformed-prefixed-response fallback regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-136` remediation in audit pass 109 and `T-113`
+- Fixed `watch/writer.py`: staged parquet flush now rolls back already-promoted partition files when promotion fails mid-batch, preserving all-or-nothing batch semantics
+- Added writer promotion-failure rollback regression test (`tests/test_watch_writer_file_collisions.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-137` remediation in audit pass 110 and `T-114`
+- Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
+- Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
 - Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface
 - Fixed `bus/backpressure.py`: Prometheus counters/gauges/histograms now use shared get-or-create registration to avoid duplicate timeseries registration collisions
 - Fixed `writer/transformer.py`: partition transform logging/return value now reports total records written across flushes instead of only final-batch count
