@@ -455,46 +455,100 @@ class AlertWatchConsumer:
                     self.gateway_url,
                     "/alpaca/options/quotes",
                 )
+                route_failures: list[dict[str, Any]] = []
                 for route in routes:
-                    response = await client.get(
-                        route,
-                        params={"symbols": occ_symbol},
-                    )
-                    if response.status_code == 200:
-                        try:
-                            decoded = response.json()
-                        except (TypeError, ValueError) as decode_error:
-                            logger.warning(
-                                "Entry price response JSON decode failed",
-                                route=route,
-                                error=str(decode_error),
-                            )
-                            continue
-                        if not isinstance(decoded, dict):
-                            logger.warning(
-                                "Entry price payload shape invalid",
-                                route=route,
-                                payload_type=type(decoded).__name__,
-                            )
-                            continue
-                        data_payload = decoded.get("data", {})
-                        if not isinstance(data_payload, dict):
-                            logger.warning(
-                                "Entry price data payload shape invalid",
-                                route=route,
-                                payload_type=type(data_payload).__name__,
-                            )
-                            continue
-                        quotes_payload = data_payload.get("quotes", {})
-                        if not isinstance(quotes_payload, dict):
-                            logger.warning(
-                                "Entry price quotes payload shape invalid",
-                                route=route,
-                                payload_type=type(quotes_payload).__name__,
-                            )
-                            continue
-                        data = decoded
-                        break
+                    try:
+                        response = await client.get(
+                            route,
+                            params={"symbols": occ_symbol},
+                        )
+                    except httpx.HTTPError as request_error:
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "request_error",
+                                "error": str(request_error),
+                            }
+                        )
+                        logger.warning(
+                            "Entry price route request failed",
+                            route=route,
+                            error=str(request_error),
+                        )
+                        continue
+
+                    if response.status_code != 200:
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "http_status",
+                                "status": response.status_code,
+                            }
+                        )
+                        continue
+
+                    try:
+                        decoded = response.json()
+                    except (TypeError, ValueError) as decode_error:
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "json_decode",
+                                "error": str(decode_error),
+                            }
+                        )
+                        logger.warning(
+                            "Entry price response JSON decode failed",
+                            route=route,
+                            error=str(decode_error),
+                        )
+                        continue
+                    if not isinstance(decoded, dict):
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "payload_shape",
+                                "payload_type": type(decoded).__name__,
+                            }
+                        )
+                        logger.warning(
+                            "Entry price payload shape invalid",
+                            route=route,
+                            payload_type=type(decoded).__name__,
+                        )
+                        continue
+                    data_payload = decoded.get("data", {})
+                    if not isinstance(data_payload, dict):
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "data_payload_shape",
+                                "payload_type": type(data_payload).__name__,
+                            }
+                        )
+                        logger.warning(
+                            "Entry price data payload shape invalid",
+                            route=route,
+                            payload_type=type(data_payload).__name__,
+                        )
+                        continue
+                    quotes_payload = data_payload.get("quotes", {})
+                    if not isinstance(quotes_payload, dict):
+                        route_failures.append(
+                            {
+                                "route": route,
+                                "failure": "quotes_payload_shape",
+                                "payload_type": type(quotes_payload).__name__,
+                            }
+                        )
+                        logger.warning(
+                            "Entry price quotes payload shape invalid",
+                            route=route,
+                            payload_type=type(quotes_payload).__name__,
+                        )
+                        continue
+                    data = decoded
+                    break
 
                 if data is not None:
                     quotes = data.get("data", {}).get("quotes", {})
@@ -515,6 +569,13 @@ class AlertWatchConsumer:
                         if last_price is not None:
                             return last_price
                         return None
+                if route_failures:
+                    logger.warning(
+                        "Entry price fetch failed across routes",
+                        occ_symbol=occ_symbol,
+                        routes=routes,
+                        failures=route_failures,
+                    )
 
                 return None
 

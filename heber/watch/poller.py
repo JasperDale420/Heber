@@ -180,50 +180,102 @@ class SnapshotPoller:
                     "/alpaca/options/quotes",
                 )
                 batch_data: dict | None = None
-                last_status: int | None = None
+                route_failures: list[dict[str, Any]] = []
 
                 try:
                     for route in routes:
-                        response = await client.get(
-                            route,
-                            params={"symbols": symbols_param},
-                        )
-                        last_status = response.status_code
-                        if response.status_code == 200:
-                            try:
-                                decoded = response.json()
-                            except (ValueError, TypeError) as decode_error:
-                                logger.warning(
-                                    "Quote response JSON decode failed",
-                                    route=route,
-                                    error=str(decode_error),
-                                )
-                                continue
-                            if not isinstance(decoded, dict):
-                                logger.warning(
-                                    "Quote response payload shape invalid",
-                                    route=route,
-                                    payload_type=type(decoded).__name__,
-                                )
-                                continue
-                            data_payload = decoded.get("data", {})
-                            if not isinstance(data_payload, dict):
-                                logger.warning(
-                                    "Quote response data payload shape invalid",
-                                    route=route,
-                                    payload_type=type(data_payload).__name__,
-                                )
-                                continue
-                            quotes_payload = data_payload.get("quotes", {})
-                            if not isinstance(quotes_payload, dict):
-                                logger.warning(
-                                    "Quote response quotes payload shape invalid",
-                                    route=route,
-                                    payload_type=type(quotes_payload).__name__,
-                                )
-                                continue
-                            batch_data = decoded
-                            break
+                        try:
+                            response = await client.get(
+                                route,
+                                params={"symbols": symbols_param},
+                            )
+                        except httpx.HTTPError as request_error:
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "request_error",
+                                    "error": str(request_error),
+                                }
+                            )
+                            logger.warning(
+                                "Quote route request failed",
+                                route=route,
+                                error=str(request_error),
+                            )
+                            continue
+
+                        if response.status_code != 200:
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "http_status",
+                                    "status": response.status_code,
+                                }
+                            )
+                            continue
+
+                        try:
+                            decoded = response.json()
+                        except (ValueError, TypeError) as decode_error:
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "json_decode",
+                                    "error": str(decode_error),
+                                }
+                            )
+                            logger.warning(
+                                "Quote response JSON decode failed",
+                                route=route,
+                                error=str(decode_error),
+                            )
+                            continue
+                        if not isinstance(decoded, dict):
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "payload_shape",
+                                    "payload_type": type(decoded).__name__,
+                                }
+                            )
+                            logger.warning(
+                                "Quote response payload shape invalid",
+                                route=route,
+                                payload_type=type(decoded).__name__,
+                            )
+                            continue
+                        data_payload = decoded.get("data", {})
+                        if not isinstance(data_payload, dict):
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "data_payload_shape",
+                                    "payload_type": type(data_payload).__name__,
+                                }
+                            )
+                            logger.warning(
+                                "Quote response data payload shape invalid",
+                                route=route,
+                                payload_type=type(data_payload).__name__,
+                            )
+                            continue
+                        quotes_payload = data_payload.get("quotes", {})
+                        if not isinstance(quotes_payload, dict):
+                            route_failures.append(
+                                {
+                                    "route": route,
+                                    "failure": "quotes_payload_shape",
+                                    "payload_type": type(quotes_payload).__name__,
+                                }
+                            )
+                            logger.warning(
+                                "Quote response quotes payload shape invalid",
+                                route=route,
+                                payload_type=type(quotes_payload).__name__,
+                            )
+                            continue
+                        batch_data = decoded
+                        break
 
                     if batch_data is not None:
                         for symbol, quote in batch_data.get("data", {}).get("quotes", {}).items():
@@ -237,10 +289,10 @@ class SnapshotPoller:
                                 )
                     else:
                         logger.warning(
-                            "Quote fetch failed",
-                            status=last_status,
+                            "Quote fetch failed across routes",
                             batch_size=len(batch),
                             routes=routes,
+                            failures=route_failures,
                         )
 
                 except Exception as e:

@@ -182,6 +182,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py`: snapshots now use quote-provided timestamps (`timestamp`/`ts_event`/`t`) with UTC normalization when available
 - Added payload-shape fallback and quote-timestamp regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_zero_price_handling.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-142`/`TD-143`/`TD-144` remediation in audit pass 113 and `T-117`
+- Fixed `watch/poller.py`: quote route fallback now treats request-layer route failures (timeouts/transport errors) as route-level failures and continues to legacy candidates
+- Fixed `watch/consumer.py`: entry-price route fallback now treats request-layer route failures (timeouts/transport errors) as route-level failures and continues to legacy candidates
+- Improved watch route-failure observability: poller/consumer now emit aggregated per-route failure summaries when all route candidates fail
+- Added timeout-route fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-145`/`TD-146`/`TD-147` remediation in audit pass 114 and `T-118`
 - Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
 - Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
 - Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface

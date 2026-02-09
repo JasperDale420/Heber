@@ -794,8 +794,13 @@ Audit Pass 113 (2026-02-09, files reviewed directly):
 - tests/test_watch_gateway_paths.py
 - tests/test_watch_zero_price_handling.py
 
+Audit Pass 114 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for timeout/backoff behavior and retry observability on repeated route failures.
+- heber/watch/poller.py line-by-line re-audit for retry observability and route-failure telemetry aggregation under sustained gateway degradation.
 
 ## Remediation Updates
 
@@ -857,6 +862,7 @@ Updated: 2026-02-09
 - `TD-138` addressed via `T-115`: manager watch updates now persist normalized snapshot timestamps as `updated_at` instead of wall-clock update time.
 - `TD-139`, `TD-140`, and `TD-141` addressed via `T-116`: checker now evaluates snapshots in chronological order and persists barrier/expiry-derived outcome timestamps and trading-minute metrics through manager completion.
 - `TD-142`, `TD-143`, and `TD-144` addressed via `T-117`: poller/consumer quote fetch now validate decoded payload shape before accepting a route as successful, and poller snapshots now preserve quote-provided timestamps where available.
+- `TD-145`, `TD-146`, and `TD-147` addressed via `T-118`: poller/consumer quote lookups now treat request-layer route failures (timeouts/transport errors) as fallback-eligible per-route failures, and both services now emit aggregated route-failure telemetry when all candidates fail.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -990,6 +996,7 @@ Updated: 2026-02-09
 - Audit Pass 111 revalidated and remediated `TD-138`; manager watch updates now preserve source snapshot timestamps in persisted watch metadata.
 - Audit Pass 112 revalidated and remediated `TD-139`, `TD-140`, and `TD-141`; checker outcome evaluation now respects chronological snapshot ordering and records barrier/expiry timing metadata from source events rather than processing time.
 - Audit Pass 113 revalidated and remediated `TD-142`, `TD-143`, and `TD-144`; poller/consumer route fallbacks now recover from malformed 200-payload shapes and poller snapshot timestamps now align with source quote timing.
+- Audit Pass 114 revalidated and remediated `TD-145`, `TD-146`, and `TD-147`; poller/consumer route fallbacks now continue after route-level timeout/transport errors and emit route-failure summaries for repeated lookup failures.
 
 ## Executive Summary
 
@@ -1145,6 +1152,9 @@ Severity key: High, Medium, Low
 | TD-142 | Medium | Watch Service | Poller accepted malformed 200-response payload shapes as successful routes, which could abort batch parsing and skip legacy fallback candidates. |
 | TD-143 | Medium | Watch Service | Consumer entry-price lookup accepted malformed 200-response payload shapes as successful routes, causing lookup failures without trying legacy routes. |
 | TD-144 | Medium | Watch Service | Poller snapshot timestamps always used local processing time instead of quote-provided event timestamps, causing source-time drift in downstream watch metadata. |
+| TD-145 | Medium | Watch Service | Poller route fallback aborted on request-layer route exceptions (for example timeout), preventing healthy legacy route candidates from being attempted in the same batch. |
+| TD-146 | Medium | Watch Service | Consumer entry-price route fallback aborted on request-layer route exceptions (for example timeout), causing false entry-price misses despite available fallback routes. |
+| TD-147 | Medium | Watch Service | Poller/consumer route lookup failures lacked aggregated per-route failure telemetry, reducing observability during repeated gateway route degradation. |
 
 ## Detailed Findings
 
@@ -1992,6 +2002,24 @@ Recommendation: Parse quote timestamp fields (`timestamp`/`ts_event`/`t`) with U
 Update 2026-02-09: Remediated in `T-117` by adding quote timestamp coercion/parsing helpers and using parsed quote timestamps in snapshot creation, with regression coverage.
 Revalidated 2026-02-09 (Pass 113): Resolved. Snapshot timestamps now preserve source quote timing when available.
 
+**TD-145: Poller route fallback aborted on request-layer route failures.**
+Evidence: `SnapshotPoller._fetch_quotes()` previously wrapped the entire route loop in a single `try` block. A timeout/transport exception on the prefixed route raised out of the loop and skipped legacy route candidates within the same batch.
+Recommendation: Handle `httpx.HTTPError` at per-route granularity, classify route failure reason, and continue to fallback candidates.
+Update 2026-02-09: Remediated in `T-118` by catching route-level `httpx.HTTPError` failures inside the loop and continuing route fallback evaluation.
+Revalidated 2026-02-09 (Pass 114): Resolved. Poller now recovers from timeout/transport failures on earlier route candidates and can still return quotes from later fallback routes.
+
+**TD-146: Consumer route fallback aborted on request-layer route failures.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously exited through the outer exception handler when a route request raised timeout/transport exceptions, preventing evaluation of subsequent route candidates.
+Recommendation: Treat request-layer route failures as recoverable per-route failures and continue through the route candidate list.
+Update 2026-02-09: Remediated in `T-118` by catching route-level `httpx.HTTPError` failures and continuing fallback evaluation for entry-price lookups.
+Revalidated 2026-02-09 (Pass 114): Resolved. Consumer now uses fallback routes when the first route fails at request time.
+
+**TD-147: Route-level quote lookup failures lacked aggregated telemetry.**
+Evidence: Poller/consumer logs previously emitted isolated warnings/errors but did not consistently summarize per-route failure reasons when all route candidates failed, making repeated degradation patterns difficult to diagnose.
+Recommendation: Aggregate route failure metadata (`route`, `failure`, optional `status/error`) and log a summary event when all candidates fail.
+Update 2026-02-09: Remediated in `T-118` by collecting per-route failure details in both poller and consumer paths and emitting a consolidated warning when route lookup exhaustion occurs.
+Revalidated 2026-02-09 (Pass 114): Resolved. Route-failure summaries now surface candidate-by-candidate failure context in a single terminal warning.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1999,7 +2027,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

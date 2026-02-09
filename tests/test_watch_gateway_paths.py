@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from heber.watch import consumer as consumer_module
@@ -30,7 +31,7 @@ class _InvalidJsonResponse(_StubResponse):
 
 
 class _StubAsyncClient:
-    responses: dict[str, _StubResponse] = {}
+    responses: dict[str, _StubResponse | Exception] = {}
     calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
@@ -44,7 +45,10 @@ class _StubAsyncClient:
 
     async def get(self, url: str, params: dict[str, Any] | None = None) -> _StubResponse:
         self.calls.append((url, params))
-        return self.responses[url]
+        response = self.responses[url]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def test_gateway_url_candidates_prefix_first_and_deduped() -> None:
@@ -171,6 +175,28 @@ async def test_poller_fetch_quotes_falls_back_when_prefixed_payload_shape_invali
 
 
 @pytest.mark.asyncio
+async def test_poller_fetch_quotes_falls_back_when_prefixed_route_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": httpx.ReadTimeout("timeout"),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2}}}},
+        ),
+    }
+    monkeypatch.setattr(poller_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
+    quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
+
+    assert "AAPL260220C00100000" in quotes
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
+    assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
 async def test_consumer_entry_price_falls_back_to_legacy_route(monkeypatch: pytest.MonkeyPatch) -> None:
     _StubAsyncClient.calls = []
     _StubAsyncClient.responses = {
@@ -250,6 +276,42 @@ async def test_consumer_entry_price_falls_back_when_prefixed_payload_shape_inval
             200,
             {"data": {"quotes": []}},
         ),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {
+                "data": {
+                    "quotes": {
+                        "AAPL260220C00100000": {
+                            "bp": 1.0,
+                            "ap": 1.2,
+                        }
+                    }
+                }
+            },
+        ),
+    }
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+
+    assert price == 1.1
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
+    assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_falls_back_when_prefixed_route_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": httpx.ReadTimeout("timeout"),
         "http://gateway/alpaca/options/quotes": _StubResponse(
             200,
             {
