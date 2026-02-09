@@ -117,6 +117,25 @@ def test_update_watch_price_handles_zero_entry_price() -> None:
     assert updated.snapshot_count == 1
 
 
+def test_update_watch_price_uses_snapshot_timestamp() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    snapshot_time = datetime(2026, 2, 9, 14, 30, tzinfo=UTC)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=1.5,
+        timestamp=snapshot_time,
+    )
+
+    assert updated is not None
+    assert updated.updated_at == snapshot_time
+
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.updated_at == snapshot_time
+
+
 def test_cleanup_expired_handles_naive_window_end() -> None:
     manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
     watch = _create_watch(manager)

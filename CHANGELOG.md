@@ -169,6 +169,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/writer.py`: staged parquet flush now rolls back already-promoted partition files when promotion fails mid-batch, preserving all-or-nothing batch semantics
 - Added writer promotion-failure rollback regression test (`tests/test_watch_writer_file_collisions.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-137` remediation in audit pass 110 and `T-114`
+- Fixed `watch/manager.py`: watch-price updates now persist the provided snapshot timestamp (UTC-normalized) in `updated_at` instead of using processing-time wall clock values
+- Added manager snapshot-timestamp persistence regression test (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-138` remediation in audit pass 111 and `T-115`
 - Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
 - Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
 - Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface

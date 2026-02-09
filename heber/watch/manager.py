@@ -233,12 +233,14 @@ class WatchManager:
             mae = min(watch.mae or float("inf"), current_return)
 
         # Update watch
+        normalized_timestamp = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+
         watch.current_price = current_price
         watch.current_return = current_return
         watch.mfe = mfe
         watch.mae = mae
         watch.snapshot_count += 1
-        watch.updated_at = datetime.now(UTC)
+        watch.updated_at = normalized_timestamp.astimezone(UTC)
 
         self._save_watch(watch)
 

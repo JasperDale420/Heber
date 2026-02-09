@@ -778,8 +778,12 @@ Audit Pass 110 (2026-02-09, files reviewed directly):
 - tests/test_watch_writer_file_collisions.py
 - tests/test_watch_writer_entrypoint_shutdown.py
 
+Audit Pass 111 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/manager.py line-by-line re-audit for failure recovery semantics around status transitions and index cleanup.
+- heber/watch/checker.py line-by-line re-audit for outcome timestamp consistency and fallback semantics.
 
 ## Remediation Updates
 
@@ -838,6 +842,7 @@ Updated: 2026-02-09
 - `TD-135` addressed via `T-112`: poller quote-fetch fallback now continues to legacy routes when a 200 response contains malformed JSON.
 - `TD-136` addressed via `T-113`: consumer entry-price fallback now continues to legacy routes when a 200 response contains malformed JSON.
 - `TD-137` addressed via `T-114`: writer parquet flush now rolls back already-promoted partition files when promotion fails mid-batch.
+- `TD-138` addressed via `T-115`: manager watch updates now persist normalized snapshot timestamps as `updated_at` instead of wall-clock update time.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -968,6 +973,7 @@ Updated: 2026-02-09
 - Audit Pass 108 revalidated and remediated `TD-135`; poller quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
 - Audit Pass 109 revalidated and remediated `TD-136`; consumer entry-price quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
 - Audit Pass 110 revalidated and remediated `TD-137`; writer parquet flush now removes already-promoted outputs when later partition promotion fails in the same batch.
+- Audit Pass 111 revalidated and remediated `TD-138`; manager watch updates now preserve source snapshot timestamps in persisted watch metadata.
 
 ## Executive Summary
 
@@ -1116,6 +1122,7 @@ Severity key: High, Medium, Low
 | TD-135 | Medium | Watch Service | Poller quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable batches to fail without trying legacy routes. |
 | TD-136 | Medium | Watch Service | Consumer entry-price quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable lookups to fail without trying legacy routes. |
 | TD-137 | Medium | Watch Service | Writer parquet flush could partially commit partitions when a promotion (`Path.replace`) failed mid-batch, leaving mixed committed/uncommitted state despite staged writes. |
+| TD-138 | Medium | Watch Service | Manager watch-price updates ignored provided snapshot timestamps and always used processing-time `updated_at`, causing metadata drift under delayed/replayed quote ingestion. |
 
 ## Detailed Findings
 
@@ -1921,6 +1928,12 @@ Recommendation: Track promoted files during the promotion phase and remove them 
 Update 2026-02-09: Remediated in `T-114` by tracking promoted outputs and rolling them back in exception cleanup alongside staged temp cleanup.
 Revalidated 2026-02-09 (Pass 110): Resolved. Promotion failures now leave no committed partition artifacts from the failed batch.
 
+**TD-138: Manager update metadata used processing time instead of snapshot time.**
+Evidence: `WatchManager.update_watch_price()` accepted a `timestamp` argument but previously set `watch.updated_at = datetime.now(UTC)`. Delayed/replayed quote updates therefore overwrote metadata with processing time rather than source snapshot time.
+Recommendation: Normalize and persist the provided snapshot timestamp as `updated_at` (naive -> UTC, aware -> UTC).
+Update 2026-02-09: Remediated in `T-115` by applying UTC normalization to the provided timestamp and storing it in `updated_at`, with regression coverage.
+Revalidated 2026-02-09 (Pass 111): Resolved. Watch metadata now preserves source snapshot timing semantics.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1928,7 +1941,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

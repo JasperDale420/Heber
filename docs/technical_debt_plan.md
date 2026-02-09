@@ -122,6 +122,7 @@ Updated: 2026-02-09
 - `T-112` complete (`TD-135`): poller quote fetch now treats invalid JSON bodies on successful HTTP status as route-level failures and falls back to legacy candidates.
 - `T-113` complete (`TD-136`): consumer entry-price lookup now treats invalid JSON bodies on successful HTTP status as route-level failures and falls back to legacy candidates.
 - `T-114` complete (`TD-137`): writer parquet flush now rolls back already-promoted partition files when promotion fails mid-batch, preserving all-or-nothing commit semantics.
+- `T-115` complete (`TD-138`): manager watch price updates now persist the provided snapshot timestamp (UTC-normalized) as `updated_at` instead of using wall-clock processing time.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -219,6 +220,7 @@ Updated: 2026-02-09
 - Audit Pass 108 revalidated `TD-135` as resolved via `T-112`.
 - Audit Pass 109 revalidated `TD-136` as resolved via `T-113`.
 - Audit Pass 110 revalidated `TD-137` as resolved via `T-114`.
+- Audit Pass 111 revalidated `TD-138` as resolved via `T-115`.
 
 ## Prioritization Approach
 
