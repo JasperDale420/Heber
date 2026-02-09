@@ -121,6 +121,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/features.py`: Greeks enrichment now skips malformed option-chain `strike_price` rows and continues extracting from valid contracts with tolerant numeric coercion
 - Added feature deserialization timezone + malformed-strike Greeks regression tests (`tests/test_watch_feature_timezones.py`, `tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-116`/`TD-117` remediation in audit pass 96 and `T-100`
+- Fixed `watch/writer.py`: parquet flushes now stage partition files and promote only after all partition writes succeed, preventing partial-commit duplicates when a later partition write fails
+- Fixed `watch/writer.py`: flush failure paths now clean staged temp files before re-raising write errors
+- Added writer atomic-flush regression test (`tests/test_watch_writer_file_collisions.py`) covering partial-failure rollback and temp-file cleanup
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-118`/`TD-119` remediation in audit pass 97 and `T-101`
 
 ### Removed
 
@@ -234,6 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 94: watch poller payload-normalization + future-timestamp cadence conformance revalidation)
 - Expanded technical debt audit (pass 95: watch consumer timestamp/entry-price parsing conformance revalidation)
 - Expanded technical debt audit (pass 96: watch feature deserialization + Greeks fallback conformance revalidation)
+- Expanded technical debt audit (pass 97: watch writer atomic-flush durability conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

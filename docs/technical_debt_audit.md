@@ -710,8 +710,14 @@ Audit Pass 96 (2026-02-09, files reviewed directly):
 - tests/test_watch_feature_greeks_zero_values.py
 - tests/test_watch_feature_persistence.py
 
+Audit Pass 97 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_entrypoint_shutdown.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/writer.py line-by-line re-audit for flush durability and lifecycle shutdown edge cases.
+- heber/watch/__main__.py line-by-line re-audit for signal-driven shutdown race and cancellation edge cases.
 
 ## Remediation Updates
 
@@ -756,6 +762,7 @@ Updated: 2026-02-09
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
 - `TD-114` and `TD-115` addressed via `T-99`: watch consumer now normalizes quote payload numeric fields before midpoint/last-price entry calculations and parses alert timestamps as UTC-aware values with fail-soft fallback for invalid ISO strings.
 - `TD-116` and `TD-117` addressed via `T-100`: feature reconstruction now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed contract strikes while continuing to valid contracts with tolerant numeric parsing.
+- `TD-118` and `TD-119` addressed via `T-101`: label writer now stages partition parquet files and only promotes them after all groups are written, cleaning temp files on failure to prevent partial commits and retry-time duplicates.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -872,6 +879,7 @@ Updated: 2026-02-09
 - Audit Pass 94 revalidated and remediated `TD-112` and `TD-113`; poller now normalizes numeric quote payload fields before midpoint math and treats future-skewed last-polled timestamps as immediately due to avoid watch starvation.
 - Audit Pass 95 revalidated and remediated `TD-114` and `TD-115`; consumer now tolerates malformed quote payload numerics when deriving entry prices and normalizes parsed alert timestamps to UTC-aware values with invalid-string fallback.
 - Audit Pass 96 revalidated and remediated `TD-116` and `TD-117`; feature deserialization now normalizes naive `alert_time` strings to UTC and Greeks enrichment now skips malformed contract strikes instead of aborting enrichment for the entire option chain.
+- Audit Pass 97 revalidated and remediated `TD-118` and `TD-119`; writer flushes now avoid partial partition commits on write failure and clean staged temp files before re-raising.
 
 ## Executive Summary
 
@@ -1000,6 +1008,8 @@ Severity key: High, Medium, Low
 | TD-115 | Medium | Watch Service | Consumer timestamp parsing returned naive datetimes for timezone-less ISO strings and raised on invalid strings, causing avoidable parse failures and inconsistent timezone semantics. |
 | TD-116 | Medium | Watch Features | `AlertFeatures.from_dict()` reconstructed timezone-less `alert_time` strings as naive datetimes, reintroducing mixed timezone semantics when reading legacy-serialized feature rows. |
 | TD-117 | Medium | Watch Features | Greeks enrichment aborted on malformed contract `strike_price` values, preventing extraction from later valid contracts in the same option-chain response. |
+| TD-118 | Medium | Watch Service | Writer flushes could partially commit one partition before a later partition write failed, causing duplicate-label risk on retry with retained buffer rows. |
+| TD-119 | Medium | Watch Service | Writer failure paths could leave staged temp parquet artifacts, creating cleanup drift and ambiguous recovery state after failed flush attempts. |
 
 ## Detailed Findings
 
@@ -1685,6 +1695,18 @@ Recommendation: Use tolerant numeric coercion for strike parsing, skip malformed
 Update 2026-02-09: Remediated in `T-100` by adding `_coerce_optional_float()` to features extraction, skipping malformed strike rows, and safely coercing extracted Greek fields.
 Revalidated 2026-02-09 (Pass 96): Resolved. Greeks enrichment now remains resilient to malformed contract rows and still enriches from valid contracts.
 
+**TD-118: Writer flush can partially commit multi-partition batches.**
+Evidence: `LabelWriter._write_to_parquet()` previously wrote each partition group directly to final files in-loop. If a later partition write failed, earlier partitions from the same flush were already committed while the in-memory buffer remained, causing duplicate-label risk on retry.
+Recommendation: Stage partition outputs to temp files first and promote to final files only after all group writes succeed.
+Update 2026-02-09: Remediated in `T-101` by staging each partition write to a hidden temp file and promoting staged files only after all groups complete successfully.
+Revalidated 2026-02-09 (Pass 97): Resolved. Failed multi-partition flushes no longer partially commit final parquet files.
+
+**TD-119: Writer failure paths can leak staged temp files.**
+Evidence: Before staged-write hardening, failure handling did not clean partially staged artifacts, allowing temp-file drift after flush errors.
+Recommendation: Ensure staged temp files are deleted on any write failure before re-raising.
+Update 2026-02-09: Remediated in `T-101` by explicit cleanup of current and previously staged temp files in exception paths, with regression coverage.
+Revalidated 2026-02-09 (Pass 97): Resolved. Flush failures now clean staged temp artifacts and preserve retry safety.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1692,7 +1714,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

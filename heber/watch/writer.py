@@ -101,25 +101,45 @@ class LabelWriter:
 
     def _write_to_parquet(self, df: pd.DataFrame) -> None:
         """Write directly to Parquet files."""
-        # Partition by date
-        df["_date"] = pd.to_datetime(df["ts_event"]).dt.date
+        # Partition by date.
+        # Stage writes to temp files first so a mid-flush failure does not
+        # partially commit some partitions and duplicate rows on retry.
+        write_df = df.copy()
+        write_df["_date"] = pd.to_datetime(write_df["ts_event"]).dt.date
+        staged_files: list[tuple[Path, Path, int]] = []
+        current_tmp_file: Path | None = None
 
-        for dt, group in df.groupby("_date"):
-            partition_path = (
-                self.output_path
-                / f"dataset={self.dataset}"
-                / f"project={self.project}"
-                / f"version={self.version}"
-                / f"dt={dt}"
-            )
-            partition_path.mkdir(parents=True, exist_ok=True)
+        try:
+            for dt, group in write_df.groupby("_date"):
+                partition_path = (
+                    self.output_path
+                    / f"dataset={self.dataset}"
+                    / f"project={self.project}"
+                    / f"version={self.version}"
+                    / f"dt={dt}"
+                )
+                partition_path.mkdir(parents=True, exist_ok=True)
 
-            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-            # Include a unique suffix so multiple flushes within the same timestamp cannot overwrite files.
-            file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
+                ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+                # Include a unique suffix so multiple flushes within the same timestamp cannot overwrite files.
+                final_file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
+                current_tmp_file = partition_path / f".{final_file_path.name}.tmp"
 
-            group.drop(columns=["_date"]).to_parquet(file_path, compression="snappy")
-            logger.debug("Wrote partition", path=str(file_path), rows=len(group))
+                group.drop(columns=["_date"]).to_parquet(current_tmp_file, compression="snappy")
+                staged_files.append((current_tmp_file, final_file_path, len(group)))
+                current_tmp_file = None
+
+            for tmp_file, final_file, rows in staged_files:
+                tmp_file.replace(final_file)
+                logger.debug("Wrote partition", path=str(final_file), rows=rows)
+
+        except Exception:
+            if current_tmp_file is not None and current_tmp_file.exists():
+                current_tmp_file.unlink()
+            for tmp_file, _final_file, _rows in staged_files:
+                if tmp_file.exists():
+                    tmp_file.unlink()
+            raise
 
 
 class WatchService:
