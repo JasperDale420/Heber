@@ -104,6 +104,7 @@ Updated: 2026-02-07
 - `T-94` complete (`TD-108`): watch outcome model now enforces `WatchHorizon` enum values for `horizon`, preventing arbitrary/invalid horizon strings from entering label output paths.
 - `T-95` complete (`TD-109`): writer service entrypoint now always executes `service.stop()` in `finally`, ensuring cleanup/flush on normal completion in addition to error paths.
 - `T-96` complete (`TD-110`): checker now normalizes naive `alert_time`/`window_end` values to UTC before comparison and duration math, preventing aware/naive datetime crashes in outcome resolution.
+- `T-97` complete (`TD-111`): gateway URL candidate builder now avoids double `/api/v1` prefixing when base URLs already include the API prefix, while preserving prefix-first legacy fallback behavior.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -183,6 +184,7 @@ Updated: 2026-02-07
 - Audit Pass 90 revalidated `TD-108` as resolved via `T-94`.
 - Audit Pass 91 revalidated `TD-109` as resolved via `T-95`.
 - Audit Pass 92 revalidated `TD-110` as resolved via `T-96`.
+- Audit Pass 93 revalidated `TD-111` as resolved via `T-97`.
 
 ## Prioritization Approach
 

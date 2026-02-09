@@ -107,6 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/checker.py`: watch outcome evaluation now normalizes naive `alert_time`/`window_end` timestamps to UTC-aware values before comparisons and window-duration calculations
 - Added checker naive-timestamp regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-110` remediation in audit pass 92 and `T-96`
+- Fixed `watch/gateway.py`: gateway URL candidate generation now avoids duplicate `/api/v1` prefixing when the configured base URL already includes API prefix segments
+- Added gateway duplicate-prefix regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-111` remediation in audit pass 93 and `T-97`
 
 ### Removed
 

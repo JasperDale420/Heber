@@ -686,8 +686,14 @@ Audit Pass 92 (2026-02-09, files reviewed directly):
 - tests/test_meta_label_alignment.py
 - tests/test_watch_writer_file_collisions.py
 
+Audit Pass 93 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/gateway.py line-by-line re-audit for prefix fallback behavior and malformed base-url edge cases.
+- heber/watch/poller.py line-by-line re-audit for quote payload normalization and horizon polling cadence edge cases.
 
 ## Remediation Updates
 
@@ -842,6 +848,7 @@ Updated: 2026-02-09
 - Audit Pass 90 revalidated and remediated `TD-108`; watch outcomes now enforce horizon enum validation (`intraday`/`swing`/`leap`) to prevent invalid horizon labels from entering storage/training paths.
 - Audit Pass 91 revalidated and remediated `TD-109`; writer entrypoint now guarantees `WatchService.stop()` on normal completion so buffered outcomes and component shutdown cleanup are not skipped.
 - Audit Pass 92 revalidated and remediated `TD-110`; checker now normalizes naive watch timestamps before comparisons/duration math, preventing mixed naive/aware datetime failures during expiry and outcome creation.
+- Audit Pass 93 revalidated and remediated `TD-111`; gateway URL candidate construction now avoids duplicate `/api/v1` prefixing when base URLs already include the API prefix.
 
 ## Executive Summary
 
@@ -963,6 +970,7 @@ Severity key: High, Medium, Low
 | TD-108 | Medium | Watch Models | `WatchOutcome.horizon` accepted arbitrary strings, allowing invalid horizon labels to enter outcome rows and downstream datasets. |
 | TD-109 | Medium | Watch Service | Writer CLI entrypoint did not stop service on normal completion, so buffered-label flush and component cleanup were only guaranteed on exceptional exits. |
 | TD-110 | Medium | Watch Service | Checker compared aware `now` with potentially naive `alert_time`/`window_end`, causing `TypeError` in expiry checks and outcome duration calculations. |
+| TD-111 | Medium | Watch Service | Gateway URL candidate generation could duplicate `/api/v1` when the configured base URL already included the prefix, causing malformed requests and missed fallback behavior. |
 
 ## Detailed Findings
 
@@ -1606,6 +1614,12 @@ Recommendation: Normalize watch `alert_time`/`window_end` to UTC-aware datetimes
 Update 2026-02-09: Remediated in `T-96` by normalizing `alert_time` and `window_end` inside checker flow and adding a targeted naive-timestamp regression test.
 Revalidated 2026-02-09 (Pass 92): Resolved. Checker now handles naive/aware watch timestamps safely during expiry/outcome evaluation.
 
+**TD-111: Gateway helper can double-prefix `/api/v1` routes.**
+Evidence: `gateway_url_candidates()` previously prefixed routes regardless of whether `gateway_url` already ended with `/api/v1`. For base URLs like `http://gateway/api/v1`, generated candidates included malformed paths such as `.../api/v1/api/v1/...`.
+Recommendation: Detect prefix-in-base cases and avoid duplicate prefix concatenation while preserving prefix-first then legacy fallback ordering.
+Update 2026-02-09: Remediated in `T-97` by normalizing prefix handling for base URLs that already include the API prefix and adding regression coverage for duplicate-prefix prevention.
+Revalidated 2026-02-09 (Pass 93): Resolved. Gateway candidate generation now returns valid prefixed and legacy fallback routes without duplicate prefix segments.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1613,7 +1627,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
