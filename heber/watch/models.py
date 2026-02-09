@@ -108,7 +108,7 @@ class WatchOutcome(BaseModel):
     occ_symbol: str
     underlying: str
     put_call: str
-    horizon: str
+    horizon: WatchHorizon
 
     # Outcome
     status: WatchStatus
