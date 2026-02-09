@@ -212,6 +212,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py` and `watch/consumer.py`: payload-shape route-failure records now include explicit `expected_type` metadata
 - Added gateway failure-taxonomy regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-160`/`TD-161`/`TD-162` remediation in audit pass 119 and `T-123`
+- Fixed `watch/poller.py`: route processing now treats partial/invalid per-symbol quote coverage as fallback-eligible degradation instead of terminal success
+- Fixed `watch/poller.py`: when all routes are partial, poller now preserves best-effort partial quote coverage instead of dropping all quotes for the batch
+- Fixed `watch/consumer.py`: entry-price lookup now continues fallback routing when requested symbol quotes are missing, malformed, or non-usable on a route
+- Added partial-coverage and symbol-level fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-163`/`TD-164`/`TD-165` remediation in audit pass 120 and `T-124`
 - Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
 - Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
 - Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring

@@ -15,6 +15,7 @@ from heber.watch.gateway import (
     gateway_url_candidates,
     route_failure_for_exception,
     route_failure_for_http_status,
+    route_failure_for_partial_quotes,
     route_failure_for_payload_shape,
 )
 from heber.watch.manager import WatchManager
@@ -184,7 +185,9 @@ class SnapshotPoller:
                     self.gateway_url,
                     "/alpaca/options/quotes",
                 )
-                batch_data: dict | None = None
+                batch_quotes: dict[str, dict] | None = None
+                best_partial_quotes: dict[str, dict] = {}
+                best_partial_failure: dict[str, Any] | None = None
                 route_failures: list[dict[str, Any]] = []
 
                 try:
@@ -249,19 +252,54 @@ class SnapshotPoller:
                                 payload_type=type(quotes_payload).__name__,
                             )
                             continue
-                        batch_data = decoded
-                        break
 
-                    if batch_data is not None:
-                        for symbol, quote in batch_data.get("data", {}).get("quotes", {}).items():
-                            if isinstance(quote, dict):
-                                quotes[symbol] = quote
-                            else:
-                                logger.warning(
-                                    "Quote payload item shape invalid",
-                                    symbol=symbol,
-                                    payload_type=type(quote).__name__,
-                                )
+                        route_valid_quotes: dict[str, dict] = {}
+                        invalid_symbols: list[str] = []
+                        for symbol in batch:
+                            quote_payload = quotes_payload.get(symbol)
+                            if quote_payload is None:
+                                continue
+                            if not isinstance(quote_payload, dict):
+                                invalid_symbols.append(symbol)
+                                continue
+                            route_valid_quotes[symbol] = quote_payload
+
+                        if len(route_valid_quotes) == len(batch) and not invalid_symbols:
+                            batch_quotes = route_valid_quotes
+                            break
+
+                        partial_failure = route_failure_for_partial_quotes(
+                            route=route,
+                            requested_symbols=batch,
+                            available_symbols=list(route_valid_quotes.keys()),
+                            invalid_symbols=invalid_symbols,
+                        )
+                        route_failures.append(partial_failure)
+                        if len(route_valid_quotes) > len(best_partial_quotes):
+                            best_partial_quotes = route_valid_quotes
+                            best_partial_failure = partial_failure
+                        logger.warning(
+                            "Quote response partial coverage",
+                            route=route,
+                            requested_count=partial_failure["requested_count"],
+                            available_count=partial_failure["available_count"],
+                            invalid_count=partial_failure["invalid_count"],
+                            missing_count=partial_failure["missing_count"],
+                        )
+                        continue
+
+                    if batch_quotes is not None:
+                        quotes.update(batch_quotes)
+                    elif best_partial_quotes:
+                        quotes.update(best_partial_quotes)
+                        logger.warning(
+                            "Quote fetch using partial coverage",
+                            batch_size=len(batch),
+                            returned_quotes=len(best_partial_quotes),
+                            routes=routes,
+                            best_partial_failure=best_partial_failure,
+                            failures=route_failures,
+                        )
                     else:
                         logger.warning(
                             "Quote fetch failed across routes",

@@ -97,3 +97,47 @@ def route_failure_for_payload_shape(route: str, failure: str, payload: Any) -> d
         "expected_type": "dict",
         "payload_type": type(payload).__name__,
     }
+
+
+def route_failure_for_symbol_missing(route: str, symbol: str) -> dict[str, Any]:
+    """Build a standardized route-failure payload for missing quote symbols."""
+    return {
+        "route": route,
+        "failure": "quote_symbol_missing",
+        "symbol": symbol,
+    }
+
+
+def route_failure_for_symbol_shape(route: str, symbol: str, payload: Any) -> dict[str, Any]:
+    """Build a standardized route-failure payload for invalid per-symbol quote items."""
+    return {
+        "route": route,
+        "failure": "quote_symbol_shape",
+        "symbol": symbol,
+        "expected_type": "dict",
+        "payload_type": type(payload).__name__,
+    }
+
+
+def route_failure_for_partial_quotes(
+    route: str,
+    requested_symbols: list[str],
+    available_symbols: list[str],
+    invalid_symbols: list[str],
+) -> dict[str, Any]:
+    """Build standardized payload for partial quote coverage across a batch."""
+    available_set = set(available_symbols)
+    invalid_set = set(invalid_symbols)
+    missing_symbols = [
+        symbol for symbol in requested_symbols if symbol not in available_set and symbol not in invalid_set
+    ]
+    return {
+        "route": route,
+        "failure": "quote_coverage_partial",
+        "requested_count": len(requested_symbols),
+        "available_count": len(available_symbols),
+        "invalid_count": len(invalid_symbols),
+        "missing_count": len(missing_symbols),
+        "missing_symbols": missing_symbols[:5],
+        "invalid_symbols": invalid_symbols[:5],
+    }

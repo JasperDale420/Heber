@@ -28,6 +28,8 @@ from heber.watch.gateway import (
     route_failure_for_exception,
     route_failure_for_http_status,
     route_failure_for_payload_shape,
+    route_failure_for_symbol_missing,
+    route_failure_for_symbol_shape,
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
@@ -536,7 +538,6 @@ class AlertWatchConsumer:
         """
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                data: dict | None = None
                 routes = gateway_url_candidates(
                     self.gateway_url,
                     "/alpaca/options/quotes",
@@ -601,28 +602,38 @@ class AlertWatchConsumer:
                             payload_type=type(quotes_payload).__name__,
                         )
                         continue
-                    data = decoded
-                    break
 
-                if data is not None:
-                    quotes = data.get("data", {}).get("quotes", {})
-                    quote = quotes.get(occ_symbol)
-                    if isinstance(quote, dict):
-                        bid = self._coerce_optional_float(quote.get("bp"))
-                        if bid is None:
-                            bid = self._coerce_optional_float(quote.get("bid_price"))
+                    quote_payload = quotes_payload.get(occ_symbol)
+                    if quote_payload is None:
+                        route_failures.append(route_failure_for_symbol_missing(route, occ_symbol))
+                        continue
+                    if not isinstance(quote_payload, dict):
+                        route_failures.append(route_failure_for_symbol_shape(route, occ_symbol, quote_payload))
+                        continue
 
-                        ask = self._coerce_optional_float(quote.get("ap"))
-                        if ask is None:
-                            ask = self._coerce_optional_float(quote.get("ask_price"))
+                    bid = self._coerce_optional_float(quote_payload.get("bp"))
+                    if bid is None:
+                        bid = self._coerce_optional_float(quote_payload.get("bid_price"))
 
-                        if bid is not None and ask is not None:
-                            return (bid + ask) / 2
+                    ask = self._coerce_optional_float(quote_payload.get("ap"))
+                    if ask is None:
+                        ask = self._coerce_optional_float(quote_payload.get("ask_price"))
 
-                        last_price = self._coerce_optional_float(quote.get("last_price"))
-                        if last_price is not None:
-                            return last_price
-                        return None
+                    if bid is not None and ask is not None:
+                        return (bid + ask) / 2
+
+                    last_price = self._coerce_optional_float(quote_payload.get("last_price"))
+                    if last_price is not None:
+                        return last_price
+
+                    route_failures.append(
+                        {
+                            "route": route,
+                            "failure": "quote_price_unusable",
+                            "symbol": occ_symbol,
+                        }
+                    )
+                    continue
                 if route_failures:
                     logger.warning(
                         "Entry price fetch failed across routes",
