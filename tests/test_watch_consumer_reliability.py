@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -36,6 +37,15 @@ class _RedisDlqFailure(_RedisWithDlq):
 class _NoopManager:
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         return None
+
+
+class _CaptureManager:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def create_watch_async(self, **kwargs):  # noqa: ANN003
+        self.calls.append(kwargs)
+        return SimpleNamespace(watch_id="watch-1")
 
 
 @pytest.mark.asyncio
@@ -354,3 +364,57 @@ async def test_process_alert_parse_failure_is_non_retriable() -> None:
     result = await consumer._process_alert("2-1", {b"data": b"{}"})
 
     assert result == (False, False, "alert_parse_failed")
+
+
+@pytest.mark.asyncio
+async def test_process_alert_uses_contract_price_fallback_when_gateway_price_missing() -> None:
+    redis_client = _RedisWithDlq()
+    manager = _CaptureManager()
+    consumer = AlertWatchConsumer(redis_client, manager)
+    consumer._parse_alert = lambda _data: {  # type: ignore[method-assign]
+        "id": "alert-1",
+        "occ_symbol": "AAPL260220C00100000",
+        "underlying": "AAPL",
+        "put_call": "C",
+        "expiry": "2026-02-20",
+        "strike": 100.0,
+        "spot_px": 200.0,
+        "contract_px": 1.2,
+        "ts_event": datetime.now(UTC),
+        "dte": 5,
+    }
+    consumer._get_entry_price = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    consumer._extract_and_store_features = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await consumer._process_alert("2-2", {b"data": b"{}"})
+
+    assert result == (True, False, "watch_created")
+    assert manager.calls
+    assert manager.calls[0]["entry_price"] == 1.2
+
+
+@pytest.mark.asyncio
+async def test_process_alert_defaults_entry_price_when_fallback_not_positive() -> None:
+    redis_client = _RedisWithDlq()
+    manager = _CaptureManager()
+    consumer = AlertWatchConsumer(redis_client, manager)
+    consumer._parse_alert = lambda _data: {  # type: ignore[method-assign]
+        "id": "alert-1",
+        "occ_symbol": "AAPL260220C00100000",
+        "underlying": "AAPL",
+        "put_call": "C",
+        "expiry": "2026-02-20",
+        "strike": 100.0,
+        "spot_px": 200.0,
+        "contract_px": 0.0,
+        "ts_event": datetime.now(UTC),
+        "dte": 5,
+    }
+    consumer._get_entry_price = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    consumer._extract_and_store_features = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await consumer._process_alert("2-3", {b"data": b"{}"})
+
+    assert result == (True, False, "watch_created")
+    assert manager.calls
+    assert manager.calls[0]["entry_price"] == 1.0

@@ -850,6 +850,12 @@ Audit Pass 123 (2026-02-09, files reviewed directly):
 - tests/test_watch_feature_greeks_zero_values.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 124 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- heber/watch/consumer.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
 - None.
 
@@ -923,6 +929,7 @@ Updated: 2026-02-09
 - `TD-166`, `TD-167`, and `TD-168` addressed via `T-125`: poller and consumer now classify route quotes as stale via shared timestamp-age helpers, fall back to fresher legacy routes when prefixed quotes are stale, and preserve freshest stale fallback coverage only when all routes are stale.
 - `T-126` addressed audit residual quote-timestamp parity risk: gateway timestamp coercion now normalizes epoch-millisecond numeric payloads consistently across poller/consumer stale-route fallback paths (`t` and string-encoded epoch values), with regression coverage for helper coercion and fallback-route selection.
 - `T-127` addressed audit residual reliability gaps: manager return-path metrics now preserve prior `0.0` MFE/MAE baselines (no truthiness resets), poller/consumer/features numeric coercion now rejects boolean payload values, and IV-rank enrichment now filters non-finite values before feature assignment.
+- `T-128` addressed audit residual outcome/entry guardrails: manager `complete_watch()` and expiry cleanup now sanitize non-finite outcome returns before persistence, and consumer watch creation now enforces positive finite fallback entry pricing when gateway lookup fails.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1066,6 +1073,7 @@ Updated: 2026-02-09
 - Audit Pass 121 revalidated and remediated `TD-166`, `TD-167`, and `TD-168`; poller/consumer route selection now applies shared quote-staleness checks, prefers fresher route data over stale prefixed responses, and keeps freshest stale fallback coverage when no fresh route is available.
 - Audit Pass 122 revalidated and remediated the epoch-millisecond quote timestamp parity residual from Pass 121; gateway timestamp coercion now normalizes millisecond `t` values (numeric and numeric-string payloads), restoring stale-route fallback parity between epoch and ISO quote timestamp formats.
 - Audit Pass 123 revalidated and remediated boolean-coercion and falsey-baseline residuals; watch quote/feature numeric coercion now rejects boolean payloads, IV-rank enrichment filters non-finite values, and manager MFE/MAE tracking preserves prior `0.0` baselines during price updates.
+- Audit Pass 124 revalidated and remediated non-finite outcome-return and entry-fallback residuals; manager completion paths now persist only finite returns, and consumer fallback entry pricing now defaults safely when alert `contract_px` is non-positive or invalid.
 
 ## Executive Summary
 

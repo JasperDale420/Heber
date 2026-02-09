@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -288,9 +289,11 @@ class WatchManager:
         else:
             normalized_outcome_time = normalized_outcome_time.astimezone(UTC)
 
+        normalized_outcome_return = self._coerce_finite_outcome_return(outcome_return)
+
         watch.status = status
         watch.outcome_time = normalized_outcome_time
-        watch.outcome_return = outcome_return
+        watch.outcome_return = normalized_outcome_return
         watch.bars_to_hit = bars_to_hit
         watch.updated_at = datetime.now(UTC)
 
@@ -303,7 +306,7 @@ class WatchManager:
             "Completed alert watch",
             watch_id=watch_id,
             status=status.value,
-            outcome_return=outcome_return,
+            outcome_return=normalized_outcome_return,
         )
 
         return watch
@@ -345,7 +348,7 @@ class WatchManager:
         expired = self.get_expired_watches()
 
         for watch in expired:
-            final_return = watch.current_return or 0.0
+            final_return = self._coerce_finite_outcome_return(watch.current_return)
             self.complete_watch(
                 watch.watch_id,
                 WatchStatus.EXPIRED,
@@ -376,6 +379,19 @@ class WatchManager:
         self.redis.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch_id)
 
         return True
+
+    @staticmethod
+    def _coerce_finite_outcome_return(value: float | None) -> float:
+        """Normalize outcome returns to finite values for persistence."""
+        if value is None:
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(numeric):
+            return 0.0
+        return numeric
 
     def _save_watch(self, watch: AlertWatch) -> None:
         """Save watch to Redis."""

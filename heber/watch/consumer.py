@@ -340,7 +340,8 @@ class AlertWatchConsumer:
                     occ_symbol=alert["occ_symbol"],
                 )
                 # Use contract_px from alert if available
-                entry_price = alert.get("contract_px", 1.0)
+                fallback_entry = self._coerce_optional_float(alert.get("contract_px"))
+                entry_price = fallback_entry if fallback_entry is not None and fallback_entry > 0 else 1.0
 
             # Create watch
             watch = await self.manager.create_watch_async(

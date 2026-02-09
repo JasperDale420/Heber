@@ -232,3 +232,37 @@ def test_complete_watch_uses_provided_outcome_time() -> None:
     stored = manager.get_watch(watch.watch_id)
     assert stored is not None
     assert stored.outcome_time == outcome_time
+
+
+def test_complete_watch_non_finite_outcome_return_defaults_to_zero() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.HIT_TP,
+        outcome_return=float("nan"),
+        bars_to_hit=2,
+    )
+
+    assert completed is not None
+    assert completed.outcome_return == 0.0
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.outcome_return == 0.0
+
+
+def test_cleanup_expired_non_finite_current_return_defaults_to_zero() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.current_return = float("nan")
+    watch.window_end = datetime.now(UTC) - timedelta(minutes=1)
+    manager.get_expired_watches = lambda: [watch]  # type: ignore[method-assign]
+
+    expired = manager.cleanup_expired()
+
+    assert expired == 1
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.status == WatchStatus.EXPIRED
+    assert stored.outcome_return == 0.0
