@@ -137,6 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py`: poll cycle now skips `update_watch_price_async()` when neither midpoint nor last price is available, preventing `None` watch-price updates
 - Added poller non-finite-quote and missing-price update regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-124`/`TD-125` remediation in audit pass 100 and `T-104`
+- Fixed `watch/checker.py`: return-path extraction now filters non-finite snapshot returns so malformed `NaN` values do not propagate into MFE/MAE or expired outcome returns
+- Added checker non-finite return regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-126` remediation in audit pass 101 and `T-105`
 
 ### Removed
 
@@ -254,6 +257,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 98: watch entrypoint shutdown error-isolation conformance revalidation)
 - Expanded technical debt audit (pass 99: watch manager byte-ID deletion + active-index consistency conformance revalidation)
 - Expanded technical debt audit (pass 100: watch poller non-finite quote + missing-price update conformance revalidation)
+- Expanded technical debt audit (pass 101: watch checker non-finite return-path conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -83,9 +84,12 @@ class BarrierChecker:
         for snap in snapshots:
             if snap.mid_px is not None and watch.entry_price > 0:
                 ret = (snap.mid_px - watch.entry_price) / watch.entry_price
-                returns.append(ret)
+                if math.isfinite(ret):
+                    returns.append(ret)
             elif snap.return_pct is not None:
-                returns.append(snap.return_pct)
+                ret = float(snap.return_pct)
+                if math.isfinite(ret):
+                    returns.append(ret)
 
         if not returns:
             if now < window_end:
