@@ -329,10 +329,15 @@ class AlertFeatureExtractor:
 
     @staticmethod
     def _coerce_optional_float(value: object) -> float | None:
+        import math
+
         if value is None:
             return None
         try:
-            return float(value)
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                return None
+            return numeric
         except (TypeError, ValueError):
             return None
 
@@ -556,14 +561,7 @@ class AlertFeatureExtractor:
             # do not silently skip invalid days and shift to older bars.
             closes: list[float | None] = []
             for bar in bars:
-                close_raw = bar.get("c")
-                if close_raw is None:
-                    closes.append(None)
-                    continue
-                try:
-                    closes.append(float(close_raw))
-                except (TypeError, ValueError):
-                    closes.append(None)
+                closes.append(self._coerce_optional_float(bar.get("c")))
 
             if len(closes) < 2:
                 return features

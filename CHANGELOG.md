@@ -153,6 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/gateway.py`: base gateway URLs now strip query/fragment components before candidate route construction, preventing malformed request URLs
 - Added gateway base-query sanitization regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-131` remediation in audit pass 105 and `T-109`
+- Fixed `watch/features.py`: numeric feature coercion now rejects non-finite values (`NaN`/`inf`) to prevent invalid Greek/IV feature propagation
+- Fixed `watch/features.py`: market-context close parsing now treats non-finite close values as missing, preventing `NaN` return features
+- Added non-finite feature enrichment regression tests (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-132`/`TD-133` remediation in audit pass 106 and `T-110`
 
 ### Removed
 
@@ -275,6 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 103: watch consumer non-finite quote coercion conformance revalidation)
 - Expanded technical debt audit (pass 104: watch model UTC datetime-normalization conformance revalidation)
 - Expanded technical debt audit (pass 105: watch gateway base-url sanitization conformance revalidation)
+- Expanded technical debt audit (pass 106: watch feature non-finite numeric filtering conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

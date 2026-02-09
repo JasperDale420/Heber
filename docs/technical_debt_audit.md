@@ -752,8 +752,14 @@ Audit Pass 105 (2026-02-09, files reviewed directly):
 - heber/watch/gateway.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 106 (2026-02-09, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_persistence.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/features.py line-by-line re-audit for chain-lookup resilience and persistence-path edge cases.
+- heber/watch/__main__.py line-by-line re-audit for signal/shutdown edge cases and runtime-exception preservation behavior.
 
 ## Remediation Updates
 
@@ -807,6 +813,7 @@ Updated: 2026-02-09
 - `TD-129` addressed via `T-107`: consumer quote coercion now rejects non-finite numeric values so entry-price selection correctly falls back to finite `last_price`.
 - `TD-130` addressed via `T-108`: watch models now normalize naive datetime fields to UTC-aware values during validation to eliminate mixed naive/aware timestamp semantics.
 - `TD-131` addressed via `T-109`: gateway URL candidate helpers now strip query/fragment components from base URLs before building prefixed and legacy route candidates.
+- `TD-132` and `TD-133` addressed via `T-110`: feature numeric coercion now rejects non-finite values and market-context close parsing now treats non-finite closes as missing data.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -932,6 +939,7 @@ Updated: 2026-02-09
 - Audit Pass 103 revalidated and remediated `TD-129`; consumer entry-price parsing now filters non-finite quote values to prevent NaN midpoint propagation.
 - Audit Pass 104 revalidated and remediated `TD-130`; watch model datetime fields now normalize to UTC-aware values at validation time.
 - Audit Pass 105 revalidated and remediated `TD-131`; gateway route candidate generation now strips query/fragment components from base URLs to avoid malformed request URLs.
+- Audit Pass 106 revalidated and remediated `TD-132` and `TD-133`; feature enrichment now filters non-finite numeric inputs so Greeks and return context metrics remain finite.
 
 ## Executive Summary
 
@@ -1074,6 +1082,8 @@ Severity key: High, Medium, Low
 | TD-129 | Medium | Watch Service | Consumer quote coercion accepted non-finite numeric strings (`NaN`/`inf`), causing invalid midpoint entry prices and bypassing valid last-price fallback. |
 | TD-130 | Medium | Watch Service | Watch models accepted naive datetime fields unchanged, allowing mixed naive/aware timestamp semantics to propagate into watch lifecycle logic. |
 | TD-131 | Medium | Watch Service | Gateway URL candidate construction accepted base URLs with query/fragment components, producing malformed downstream request URLs when joining routes. |
+| TD-132 | Medium | Watch Features | Feature numeric coercion accepted non-finite values (`NaN`/`inf`), allowing invalid Greeks/IV values to propagate into model features. |
+| TD-133 | Medium | Watch Features | Market-context close parsing accepted non-finite values, causing `NaN` underlying return features instead of fail-soft missing values. |
 
 ## Detailed Findings
 
@@ -1843,6 +1853,18 @@ Recommendation: Normalize base URLs by stripping query/fragment components befor
 Update 2026-02-09: Remediated in `T-109` by sanitizing base URL components via URL parsing and dropping query/fragment before route joining, with regression coverage.
 Revalidated 2026-02-09 (Pass 105): Resolved. Gateway candidate construction now returns valid request URLs even when configured base values carry query metadata.
 
+**TD-132: Feature coercion path allows non-finite Greek/IV values.**
+Evidence: `AlertFeatureExtractor._coerce_optional_float()` previously returned `float(value)` directly, so payload values like `"NaN"`/`"inf"` were accepted and persisted into feature fields (`delta`, `gamma`, `theta`, `iv`), contaminating downstream model inputs.
+Recommendation: Reject non-finite numeric values in coercion logic and treat them as missing feature values.
+Update 2026-02-09: Remediated in `T-110` by filtering coerced feature numerics with `math.isfinite()`, with regression coverage for non-finite Greeks payloads.
+Revalidated 2026-02-09 (Pass 106): Resolved. Feature coercion now rejects non-finite values across enrichment paths.
+
+**TD-133: Market context return computation can emit NaN from non-finite closes.**
+Evidence: `_enrich_market_context()` previously parsed close values with raw `float(close_raw)` and accepted non-finite values. When current close was `"NaN"`, return features were computed as `NaN` and propagated into training data.
+Recommendation: Route close parsing through finite-safe numeric coercion and treat non-finite closes as missing.
+Update 2026-02-09: Remediated in `T-110` by reusing finite-safe coercion for close-series extraction and preserving fail-soft missing-value semantics.
+Revalidated 2026-02-09 (Pass 106): Resolved. Market-context return features no longer emit non-finite values from malformed close payloads.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1850,7 +1872,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
