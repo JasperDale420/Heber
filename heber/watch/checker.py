@@ -70,7 +70,7 @@ class BarrierChecker:
         Returns:
             WatchOutcome if complete, None if still watching
         """
-        snapshots = self.manager.get_snapshots(watch.watch_id)
+        snapshots = sorted(self.manager.get_snapshots(watch.watch_id), key=lambda snap: snap.timestamp)
 
         if not snapshots:
             return None
@@ -81,32 +81,37 @@ class BarrierChecker:
 
         # Build return path
         returns = []
+        return_timestamps: list[datetime] = []
         for snap in snapshots:
             if snap.mid_px is not None and watch.entry_price > 0:
                 ret = (snap.mid_px - watch.entry_price) / watch.entry_price
                 if math.isfinite(ret):
                     returns.append(ret)
+                    return_timestamps.append(snap.timestamp)
             elif snap.return_pct is not None:
                 ret = float(snap.return_pct)
                 if math.isfinite(ret):
                     returns.append(ret)
+                    return_timestamps.append(snap.timestamp)
 
         if not returns:
             if now < window_end:
                 return None
 
             bars_to_hit = len(snapshots)
+            outcome_time = window_end
             self.manager.complete_watch(
                 watch.watch_id,
                 WatchStatus.EXPIRED,
                 0.0,
                 bars_to_hit,
+                outcome_time=outcome_time,
             )
 
             window_hours = (window_end - alert_time).total_seconds() / 3600
             trading_mins = self.calendar.trading_minutes_until(
                 alert_time,
-                now,
+                outcome_time,
             )
 
             return WatchOutcome(
@@ -117,7 +122,7 @@ class BarrierChecker:
                 put_call=watch.put_call,
                 horizon=watch.horizon,
                 status=WatchStatus.EXPIRED,
-                outcome_time=now,
+                outcome_time=outcome_time,
                 outcome_return=0.0,
                 bars_to_hit=bars_to_hit,
                 mfe=0.0,
@@ -155,10 +160,19 @@ class BarrierChecker:
             return None
 
         # Determine final return
+        barrier_time: datetime | None = None
         if bars_to_hit and bars_to_hit <= len(returns):
             outcome_return = returns[bars_to_hit - 1]
+            barrier_time = return_timestamps[bars_to_hit - 1]
         else:
             outcome_return = returns[-1]
+            if return_timestamps:
+                barrier_time = return_timestamps[-1]
+
+        if status == WatchStatus.EXPIRED:
+            outcome_time = window_end
+        else:
+            outcome_time = barrier_time or now
 
         # Complete the watch
         self.manager.complete_watch(
@@ -166,6 +180,7 @@ class BarrierChecker:
             status,
             outcome_return,
             bars_to_hit,
+            outcome_time=outcome_time,
         )
 
         # Build outcome
@@ -174,7 +189,7 @@ class BarrierChecker:
         # Compute trading time to hit barrier
         trading_mins = self.calendar.trading_minutes_until(
             alert_time,
-            now,
+            outcome_time,
         )
 
         outcome = WatchOutcome(
@@ -185,7 +200,7 @@ class BarrierChecker:
             put_call=watch.put_call,
             horizon=watch.horizon,
             status=status,
-            outcome_time=now,
+            outcome_time=outcome_time,
             outcome_return=outcome_return,
             bars_to_hit=bars_to_hit,
             mfe=mfe,

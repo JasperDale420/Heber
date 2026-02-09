@@ -172,3 +172,23 @@ def test_save_watch_non_watching_removes_active_index_membership() -> None:
     manager._save_watch(watch)
 
     assert redis_client.smembers(WatchKeys.ACTIVE_WATCHES) == set()
+
+
+def test_complete_watch_uses_provided_outcome_time() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    outcome_time = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.HIT_TP,
+        outcome_return=0.25,
+        bars_to_hit=3,
+        outcome_time=outcome_time,
+    )
+
+    assert completed is not None
+    assert completed.outcome_time == outcome_time
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.outcome_time == outcome_time

@@ -261,6 +261,7 @@ class WatchManager:
         status: WatchStatus,
         outcome_return: float,
         bars_to_hit: int | None = None,
+        outcome_time: datetime | None = None,
     ) -> AlertWatch | None:
         """Mark watch as complete with final outcome.
 
@@ -277,8 +278,16 @@ class WatchManager:
         if not watch:
             return None
 
+        normalized_outcome_time = outcome_time
+        if normalized_outcome_time is None:
+            normalized_outcome_time = datetime.now(UTC)
+        elif normalized_outcome_time.tzinfo is None:
+            normalized_outcome_time = normalized_outcome_time.replace(tzinfo=UTC)
+        else:
+            normalized_outcome_time = normalized_outcome_time.astimezone(UTC)
+
         watch.status = status
-        watch.outcome_time = datetime.now(UTC)
+        watch.outcome_time = normalized_outcome_time
         watch.outcome_return = outcome_return
         watch.bars_to_hit = bars_to_hit
         watch.updated_at = datetime.now(UTC)
@@ -340,6 +349,7 @@ class WatchManager:
                 WatchStatus.EXPIRED,
                 final_return,
                 bars_to_hit=watch.snapshot_count,
+                outcome_time=watch.window_end,
             )
 
         logger.info("Cleaned up expired watches", count=len(expired))

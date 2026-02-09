@@ -11,7 +11,7 @@ from heber.watch.poller import SnapshotPoller
 class _CheckerManagerStub:
     def __init__(self, snapshots: list[WatchSnapshot]) -> None:
         self._snapshots = snapshots
-        self.completed: tuple[str, WatchStatus, float, int | None] | None = None
+        self.completed: tuple[str, WatchStatus, float, int | None, datetime | None] | None = None
 
     def get_snapshots(self, _watch_id: str) -> list[WatchSnapshot]:
         return self._snapshots
@@ -22,8 +22,9 @@ class _CheckerManagerStub:
         status: WatchStatus,
         outcome_return: float,
         bars_to_hit: int | None = None,
+        outcome_time: datetime | None = None,
     ) -> None:
-        self.completed = (watch_id, status, outcome_return, bars_to_hit)
+        self.completed = (watch_id, status, outcome_return, bars_to_hit, outcome_time)
 
 
 class _CalendarStub:
@@ -271,3 +272,123 @@ def test_checker_ignores_non_finite_snapshot_returns() -> None:
     assert outcome.outcome_return == 0.0
     assert manager.completed is not None
     assert manager.completed[1] == WatchStatus.EXPIRED
+
+
+def test_checker_sorts_snapshots_by_timestamp_before_barrier_detection() -> None:
+    now = datetime.now(UTC)
+    watch = _build_watch()
+    snapshots = [
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=now + timedelta(minutes=5),
+            mid_px=1.4,  # TP hit, but later in time
+            return_pct=None,
+        ),
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=now - timedelta(minutes=5),
+            mid_px=0.8,  # SL hit first in time
+            return_pct=None,
+        ),
+    ]
+    manager = _CheckerManagerStub(snapshots)
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.HIT_SL
+    assert manager.completed is not None
+    assert manager.completed[1] == WatchStatus.HIT_SL
+
+
+def test_checker_uses_barrier_snapshot_time_for_outcome_metadata() -> None:
+    base = datetime(2026, 2, 9, 14, 0, tzinfo=UTC)
+    watch = AlertWatch(
+        watch_id="watch-hit-time",
+        alert_id="alert-hit-time",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.0,
+        spot_at_alert=200.0,
+        alert_time=base,
+        window_end=base + timedelta(hours=4),
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+    )
+    hit_time = base + timedelta(minutes=20)
+    snapshots = [
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=base + timedelta(minutes=5),
+            mid_px=1.05,
+            return_pct=None,
+        ),
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=hit_time,
+            mid_px=1.30,
+            return_pct=None,
+        ),
+    ]
+    manager = _CheckerManagerStub(snapshots)
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.HIT_TP
+    assert outcome.outcome_time == hit_time
+    assert outcome.trading_minutes_to_hit == 20
+    assert manager.completed is not None
+    assert manager.completed[4] == hit_time
+
+
+def test_checker_uses_window_end_for_expired_outcome_metadata() -> None:
+    now = datetime.now(UTC)
+    alert_time = now - timedelta(hours=6)
+    window_end = now - timedelta(hours=2)
+    watch = AlertWatch(
+        watch_id="watch-expired-time",
+        alert_id="alert-expired-time",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.0,
+        spot_at_alert=200.0,
+        alert_time=alert_time,
+        window_end=window_end,
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+    )
+    snapshots = [
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=alert_time + timedelta(minutes=30),
+            mid_px=1.05,
+            return_pct=None,
+        )
+    ]
+    manager = _CheckerManagerStub(snapshots)
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.EXPIRED
+    assert outcome.outcome_time == window_end
+    assert outcome.trading_minutes_to_hit == 240
+    assert manager.completed is not None
+    assert manager.completed[4] == window_end
