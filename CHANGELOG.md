@@ -113,6 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/poller.py`: snapshot creation now normalizes quote payload numeric fields before midpoint math (handles numeric strings/non-numeric placeholders safely), and due-check logic now treats future-skewed `updated_at` values as immediately due
 - Added poller payload-normalization and future-timestamp due-check regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-112`/`TD-113` remediation in audit pass 94 and `T-98`
+- Fixed `watch/consumer.py`: entry-price quote parsing now tolerates malformed bid/ask numeric payloads and falls back to normalized `last_price` when midpoint inputs are invalid
+- Fixed `watch/consumer.py`: timestamp parsing now normalizes ISO strings to UTC-aware datetimes and falls back to `datetime.now(UTC)` for invalid timestamp strings
+- Added consumer entry-price fallback and timestamp-normalization regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-114`/`TD-115` remediation in audit pass 95 and `T-99`
 
 ### Removed
 
@@ -224,6 +228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 86: watch poller naive-timestamp due-check conformance revalidation)
 - Expanded technical debt audit (pass 87: watch manager naive-window expiry conformance revalidation)
 - Expanded technical debt audit (pass 94: watch poller payload-normalization + future-timestamp cadence conformance revalidation)
+- Expanded technical debt audit (pass 95: watch consumer timestamp/entry-price parsing conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

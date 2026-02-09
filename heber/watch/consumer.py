@@ -415,10 +415,25 @@ class AlertWatchConsumer:
             return datetime.now(UTC)
 
         if isinstance(ts, str):
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            try:
+                parsed_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.now(UTC)
+            if parsed_ts.tzinfo is None:
+                return parsed_ts.replace(tzinfo=UTC)
+            return parsed_ts.astimezone(UTC)
         if isinstance(ts, int | float):
             return datetime.fromtimestamp(ts, tz=UTC)
         return datetime.now(UTC)
+
+    @staticmethod
+    def _coerce_optional_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.
@@ -449,20 +464,20 @@ class AlertWatchConsumer:
                     quotes = data.get("data", {}).get("quotes", {})
                     quote = quotes.get(occ_symbol)
                     if quote:
-                        bid = quote.get("bp")
+                        bid = self._coerce_optional_float(quote.get("bp"))
                         if bid is None:
-                            bid = quote.get("bid_price")
+                            bid = self._coerce_optional_float(quote.get("bid_price"))
 
-                        ask = quote.get("ap")
+                        ask = self._coerce_optional_float(quote.get("ap"))
                         if ask is None:
-                            ask = quote.get("ask_price")
+                            ask = self._coerce_optional_float(quote.get("ask_price"))
 
                         if bid is not None and ask is not None:
-                            return (float(bid) + float(ask)) / 2
+                            return (bid + ask) / 2
 
-                        last_price = quote.get("last_price")
+                        last_price = self._coerce_optional_float(quote.get("last_price"))
                         if last_price is not None:
-                            return float(last_price)
+                            return last_price
                         return None
 
                 return None

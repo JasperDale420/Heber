@@ -698,8 +698,14 @@ Audit Pass 94 (2026-02-09, files reviewed directly):
 - tests/test_watch_zero_price_handling.py
 - tests/test_watch_gateway_paths.py
 
+Audit Pass 95 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for stream payload normalization and retry-accounting edge cases.
+- heber/watch/features.py line-by-line re-audit for enrichment fallback and timestamp normalization edge cases.
 
 ## Remediation Updates
 
@@ -742,6 +748,7 @@ Updated: 2026-02-09
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-114` and `TD-115` addressed via `T-99`: watch consumer now normalizes quote payload numeric fields before midpoint/last-price entry calculations and parses alert timestamps as UTC-aware values with fail-soft fallback for invalid ISO strings.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -856,6 +863,7 @@ Updated: 2026-02-09
 - Audit Pass 92 revalidated and remediated `TD-110`; checker now normalizes naive watch timestamps before comparisons/duration math, preventing mixed naive/aware datetime failures during expiry and outcome creation.
 - Audit Pass 93 revalidated and remediated `TD-111`; gateway URL candidate construction now avoids duplicate `/api/v1` prefixing when base URLs already include the API prefix.
 - Audit Pass 94 revalidated and remediated `TD-112` and `TD-113`; poller now normalizes numeric quote payload fields before midpoint math and treats future-skewed last-polled timestamps as immediately due to avoid watch starvation.
+- Audit Pass 95 revalidated and remediated `TD-114` and `TD-115`; consumer now tolerates malformed quote payload numerics when deriving entry prices and normalizes parsed alert timestamps to UTC-aware values with invalid-string fallback.
 
 ## Executive Summary
 
@@ -980,6 +988,8 @@ Severity key: High, Medium, Low
 | TD-111 | Medium | Watch Service | Gateway URL candidate generation could duplicate `/api/v1` when the configured base URL already included the prefix, causing malformed requests and missed fallback behavior. |
 | TD-112 | Medium | Watch Service | Poller midpoint math assumed numeric quote payload types; string/non-numeric `bp`/`ap` values could raise `TypeError` and abort poll cycles. |
 | TD-113 | Medium | Watch Service | Poller due-check logic treated future-skewed `updated_at` values as not-due, which could stall watch polling indefinitely under clock-skewed timestamps. |
+| TD-114 | Medium | Watch Service | Consumer entry-price parsing assumed numeric `bp`/`ap` fields; malformed string values could short-circuit quote handling and drop valid `last_price` fallback. |
+| TD-115 | Medium | Watch Service | Consumer timestamp parsing returned naive datetimes for timezone-less ISO strings and raised on invalid strings, causing avoidable parse failures and inconsistent timezone semantics. |
 
 ## Detailed Findings
 
@@ -1641,6 +1651,18 @@ Recommendation: Treat future-skewed `last_polled` values as immediately due to r
 Update 2026-02-09: Remediated in `T-98` by short-circuiting future `last_polled` values to `True` (due) and adding regression coverage for future-skewed `updated_at`.
 Revalidated 2026-02-09 (Pass 94): Resolved. Due-check logic now recovers safely from clock-skewed poll timestamps.
 
+**TD-114: Consumer entry-price parsing drops valid fallback when bid/ask are malformed.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously converted `bp`/`ap` directly with `float()`. When either value was malformed (for example `"N/A"`), conversion raised and the entire method returned `None`, even when `last_price` was present and usable.
+Recommendation: Normalize quote numerics with tolerant coercion (`float | None`) and fall back to normalized `last_price` when midpoint inputs are invalid.
+Update 2026-02-09: Remediated in `T-99` by adding consumer-side numeric coercion for `bp`/`ap`/`last_price` and regression coverage for malformed bid/ask with valid `last_price`.
+Revalidated 2026-02-09 (Pass 95): Resolved. Entry-price lookup now remains resilient to malformed quote fields while preserving fallback behavior.
+
+**TD-115: Consumer timestamp parsing is not UTC-normalized and fails hard on invalid strings.**
+Evidence: `AlertWatchConsumer._parse_timestamp()` previously returned naive datetimes for timezone-less ISO strings and raised `ValueError` for invalid strings, causing alert parse failures and mixed naive/aware timestamp semantics.
+Recommendation: Parse ISO strings with fail-soft fallback, normalize parsed datetimes to UTC-aware values, and treat naive parsed timestamps as UTC.
+Update 2026-02-09: Remediated in `T-99` by normalizing parsed ISO timestamps to UTC-aware values and returning `datetime.now(UTC)` for invalid string inputs, with regression coverage.
+Revalidated 2026-02-09 (Pass 95): Resolved. Consumer timestamp parsing is now UTC-consistent and robust to malformed input strings.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1648,7 +1670,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

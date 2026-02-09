@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -111,3 +112,26 @@ def test_map_alert_fields_preserves_zero_price_values() -> None:
 
     assert mapped["spot_px"] == 0.0
     assert mapped["contract_px"] == 0.0
+
+
+def test_parse_timestamp_normalizes_naive_iso_to_utc() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    ts = consumer._parse_timestamp({"ts_event": "2026-02-09T09:30:00"})
+
+    assert ts.tzinfo is UTC
+    assert ts.hour == 9
+    assert ts.minute == 30
+
+
+def test_parse_timestamp_invalid_string_falls_back_to_now_utc() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    before = datetime.now(UTC)
+
+    ts = consumer._parse_timestamp({"ts_event": "not-a-date"})
+
+    after = datetime.now(UTC)
+    assert ts.tzinfo is UTC
+    assert before <= ts <= after
