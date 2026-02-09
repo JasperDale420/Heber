@@ -11,6 +11,7 @@ from heber.features.templates.alert_labels import (
     MARKET_PROXY,
     BarrierConfig,
     _compute_spy_relative_return,
+    _get_entry_data,
     _process_single_alert,
     _window_delta_for_config,
 )
@@ -84,3 +85,42 @@ def test_process_single_alert_sets_intraday_ts_available_in_minutes() -> None:
     )
 
     assert result["ts_available"] == ts_alert + pd.Timedelta(hours=2)
+
+
+def test_get_entry_data_uses_bar_close_when_alert_spot_is_nan() -> None:
+    ts_alert = pd.Timestamp("2026-01-02T14:30:00Z")
+    underlying_bars = pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL", "equity:AAPL"],
+            "bar_start_ts": [ts_alert - pd.Timedelta(minutes=5), ts_alert],
+            "close": [99.0, 100.0],
+            "atr": [1.0, 1.25],
+        }
+    )
+    alert = pd.Series({"spot_px": float("nan")})
+
+    result = _get_entry_data(underlying_bars, ts_alert, alert)
+
+    assert result is not None
+    atr_at_alert, spot_at_alert = result
+    assert atr_at_alert == pytest.approx(1.25)
+    assert spot_at_alert == pytest.approx(100.0)
+
+
+def test_spy_relative_return_returns_none_for_infinite_spy_move() -> None:
+    ts_alert = pd.Timestamp("2026-01-02T14:30:00Z")
+    config = BarrierConfig.intraday()
+    spy_bars = pd.DataFrame(
+        {
+            "instrument_key": [MARKET_PROXY, MARKET_PROXY],
+            "bar_start_ts": [
+                ts_alert,
+                ts_alert + pd.Timedelta(hours=2),
+            ],
+            "close": [100.0, float("inf")],
+        }
+    )
+
+    beta_neutral = _compute_spy_relative_return(spy_bars, ts_alert, config, raw_return=0.10)
+
+    assert beta_neutral is None

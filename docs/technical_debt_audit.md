@@ -930,6 +930,7 @@ Updated: 2026-02-09
 - `T-126` addressed audit residual quote-timestamp parity risk: gateway timestamp coercion now normalizes epoch-millisecond numeric payloads consistently across poller/consumer stale-route fallback paths (`t` and string-encoded epoch values), with regression coverage for helper coercion and fallback-route selection.
 - `T-127` addressed audit residual reliability gaps: manager return-path metrics now preserve prior `0.0` MFE/MAE baselines (no truthiness resets), poller/consumer/features numeric coercion now rejects boolean payload values, and IV-rank enrichment now filters non-finite values before feature assignment.
 - `T-128` addressed audit residual outcome/entry guardrails: manager `complete_watch()` and expiry cleanup now sanitize non-finite outcome returns before persistence, and consumer watch creation now enforces positive finite fallback entry pricing when gateway lookup fails.
+- `T-129` addressed audit residual alert-label guardrails: entry extraction now treats non-finite/invalid `spot_px` as fallback-eligible (bar-close fallback with finite/positive validation), and SPY-relative return computation now rejects non-finite SPY inputs/returns to prevent `inf` beta-neutral labels.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1074,6 +1075,7 @@ Updated: 2026-02-09
 - Audit Pass 122 revalidated and remediated the epoch-millisecond quote timestamp parity residual from Pass 121; gateway timestamp coercion now normalizes millisecond `t` values (numeric and numeric-string payloads), restoring stale-route fallback parity between epoch and ISO quote timestamp formats.
 - Audit Pass 123 revalidated and remediated boolean-coercion and falsey-baseline residuals; watch quote/feature numeric coercion now rejects boolean payloads, IV-rank enrichment filters non-finite values, and manager MFE/MAE tracking preserves prior `0.0` baselines during price updates.
 - Audit Pass 124 revalidated and remediated non-finite outcome-return and entry-fallback residuals; manager completion paths now persist only finite returns, and consumer fallback entry pricing now defaults safely when alert `contract_px` is non-positive or invalid.
+- Audit Pass 125 revalidated and remediated non-finite alert-label residuals; alert-label entry extraction now falls back safely when `spot_px` is non-finite/invalid, and SPY-relative return logic now filters non-finite SPY moves before beta-neutral return computation.
 
 ## Executive Summary
 
@@ -1253,6 +1255,8 @@ Severity key: High, Medium, Low
 | TD-166 | Medium | Watch Service | Poller route selection treated complete stale quote batches as terminal successes, preventing fallback to fresher legacy route data when prefixed and legacy gateways diverged in quote recency. |
 | TD-167 | Medium | Watch Service | Consumer entry-price lookup accepted stale requested-symbol quotes as terminal route success, skipping fallback routes that could provide fresher executable entry prices. |
 | TD-168 | Medium | Watch Service | When all routes returned stale quotes, poller/consumer lacked a consistent freshest-stale fallback policy, risking either stale-route bias or dropped quote coverage under multi-route degradation. |
+| TD-169 | Medium | Labels Pipeline | Alert-label entry extraction used truthiness fallback for `spot_px`, so non-finite values (for example `NaN`) bypassed bar-close fallback and propagated invalid threshold/label calculations. |
+| TD-170 | Medium | Labels Pipeline | SPY-relative beta-neutral label computation accepted non-finite SPY price moves, allowing `inf` returns to propagate into output labels instead of failing soft. |
 
 ## Detailed Findings
 
@@ -2244,6 +2248,18 @@ Recommendation: Preserve freshest stale candidate(s) as explicit fallback only w
 Update 2026-02-09: Remediated in `T-125` by storing freshest stale route candidates and using them as controlled fallback coverage when all routes are stale.
 Revalidated 2026-02-09 (Pass 121): Resolved. Poller/consumer now apply consistent freshest-stale fallback behavior under all-stale route conditions.
 
+**TD-169: Alert-label entry extraction could propagate non-finite spot prices.**
+Evidence: `heber/features/templates/alert_labels.py::_get_entry_data()` previously used `alert.get("spot_px") or bar_close`, so truthy non-finite values like `NaN` bypassed fallback and produced non-finite thresholds/labels downstream.
+Recommendation: Apply explicit numeric coercion and finite/positive guards for `spot_px`, with bar-close fallback only when alert spot is missing/invalid.
+Update 2026-02-09: Remediated in `T-129` by finite-safe `spot_px` coercion, finite/positive validation for ATR and spot values, and fallback to bar close when alert spot is invalid.
+Revalidated 2026-02-09 (Pass 125): Resolved. Alert-label entry extraction now avoids non-finite spot propagation and fails soft when no valid entry values are available.
+
+**TD-170: SPY-relative return computation could emit infinite beta-neutral labels.**
+Evidence: `heber/features/templates/alert_labels.py::_compute_spy_relative_return()` previously allowed non-finite SPY end prices and raw returns through, so SPY-return math could produce `inf` and propagate non-finite beta-neutral labels.
+Recommendation: Reject non-finite raw-return and SPY price inputs before SPY-return calculation and fail soft (`None`) when values are non-finite.
+Update 2026-02-09: Remediated in `T-129` by adding finite checks for `raw_return`, `spy_at_alert`, and `spy_at_end` before beta-neutral computation.
+Revalidated 2026-02-09 (Pass 125): Resolved. SPY-relative labels now fail soft on non-finite market inputs instead of persisting infinite values.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2251,7 +2267,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168, TD-169, TD-170.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
