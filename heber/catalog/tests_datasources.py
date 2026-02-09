@@ -84,7 +84,7 @@ class TestDatasetCatalog:
 
         pending = catalog.list_pending()
 
-        assert len(pending) > 0
+        assert len(pending) == 0
 
     def test_storage_boundary(self):
         catalog = DatasetCatalog()

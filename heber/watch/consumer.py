@@ -461,8 +461,16 @@ class AlertWatchConsumer:
                         params={"symbols": occ_symbol},
                     )
                     if response.status_code == 200:
-                        data = response.json()
-                        break
+                        try:
+                            data = response.json()
+                            break
+                        except (TypeError, ValueError) as decode_error:
+                            logger.warning(
+                                "Entry price response JSON decode failed",
+                                route=route,
+                                error=str(decode_error),
+                            )
+                            continue
 
                 if data is not None:
                     quotes = data.get("data", {}).get("quotes", {})

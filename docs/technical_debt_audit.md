@@ -768,8 +768,13 @@ Audit Pass 108 (2026-02-09, files reviewed directly):
 - tests/test_watch_async_redis.py
 - tests/test_watch_zero_price_handling.py
 
+Audit Pass 109 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for HTTP fallback behavior when 200 responses contain malformed JSON payloads.
+- heber/watch/writer.py line-by-line re-audit for parquet write + shutdown behavior under malformed downstream payloads.
 
 ## Remediation Updates
 
@@ -826,6 +831,7 @@ Updated: 2026-02-09
 - `TD-132` and `TD-133` addressed via `T-110`: feature numeric coercion now rejects non-finite values and market-context close parsing now treats non-finite closes as missing data.
 - `TD-134` addressed via `T-111`: watch entrypoint signal registration is now best-effort so non-main-thread contexts do not fail startup.
 - `TD-135` addressed via `T-112`: poller quote-fetch fallback now continues to legacy routes when a 200 response contains malformed JSON.
+- `TD-136` addressed via `T-113`: consumer entry-price fallback now continues to legacy routes when a 200 response contains malformed JSON.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -954,6 +960,7 @@ Updated: 2026-02-09
 - Audit Pass 106 revalidated and remediated `TD-132` and `TD-133`; feature enrichment now filters non-finite numeric inputs so Greeks and return context metrics remain finite.
 - Audit Pass 107 revalidated and remediated `TD-134`; watch entrypoint now handles unavailable signal hooks as non-fatal startup conditions.
 - Audit Pass 108 revalidated and remediated `TD-135`; poller quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
+- Audit Pass 109 revalidated and remediated `TD-136`; consumer entry-price quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
 
 ## Executive Summary
 
@@ -1100,6 +1107,7 @@ Severity key: High, Medium, Low
 | TD-133 | Medium | Watch Features | Market-context close parsing accepted non-finite values, causing `NaN` underlying return features instead of fail-soft missing values. |
 | TD-134 | Medium | Watch Service | Entrypoint startup failed when signal registration raised (for example non-main-thread execution), preventing service initialization in embedded/test harness contexts. |
 | TD-135 | Medium | Watch Service | Poller quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable batches to fail without trying legacy routes. |
+| TD-136 | Medium | Watch Service | Consumer entry-price quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable lookups to fail without trying legacy routes. |
 
 ## Detailed Findings
 
@@ -1893,6 +1901,12 @@ Recommendation: Treat JSON decode errors as route-level failures and continue to
 Update 2026-02-09: Remediated in `T-112` by catching JSON decode errors per-route, logging warning context, and continuing fallback evaluation.
 Revalidated 2026-02-09 (Pass 108): Resolved. Poller now recovers from malformed 200-response bodies by using valid fallback routes when available.
 
+**TD-136: Consumer fallback path can be skipped when a 200 response has invalid JSON.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously called `response.json()` inside the route loop without route-level decode handling. If the prefixed route returned HTTP 200 with malformed JSON, decode exceptions aborted the lookup and prevented fallback to legacy routes.
+Recommendation: Treat JSON decode errors as route-level failures and continue to the next candidate route.
+Update 2026-02-09: Remediated in `T-113` by catching JSON decode errors per-route, logging warning context, and continuing fallback evaluation.
+Revalidated 2026-02-09 (Pass 109): Resolved. Consumer now recovers from malformed 200-response bodies by using valid fallback routes when available.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1900,7 +1914,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

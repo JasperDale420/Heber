@@ -20,45 +20,59 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
 from heber.bus import EventBus, StreamName
 
 logger = structlog.get_logger(__name__)
 
 
-# Prometheus metrics
-backpressure_events = Counter(
+def _get_or_create(metric_cls, name, *args, **kwargs):
+    """Return an existing metric or create a new one to avoid duplicate registration."""
+    existing = REGISTRY._names_to_collectors.get(name)
+    if existing is not None:
+        return existing
+    return metric_cls(name, *args, **kwargs)
+
+
+# Prometheus metrics (using _get_or_create to avoid collisions with ops.metrics)
+backpressure_events = _get_or_create(
+    Counter,
     "heber_backpressure_events_total",
     "Total backpressure events detected",
     ["stream"],
 )
 
-retry_attempts = Counter(
+retry_attempts = _get_or_create(
+    Counter,
     "heber_retry_attempts_total",
     "Total retry attempts",
     ["stream", "error_type"],
 )
 
-dlq_messages = Counter(
+dlq_messages = _get_or_create(
+    Counter,
     "heber_dlq_messages_total",
     "Total messages sent to DLQ",
     ["stream", "error_type"],
 )
 
-quarantine_writes = Counter(
+quarantine_writes = _get_or_create(
+    Counter,
     "heber_quarantine_writes_total",
     "Total writes to quarantine storage",
     ["provider", "feed"],
 )
 
-consumer_lag_seconds = Gauge(
+consumer_lag_seconds = _get_or_create(
+    Gauge,
     "heber_consumer_lag_seconds",
     "Consumer lag in seconds",
     ["stream", "group"],
 )
 
-retry_backoff_seconds = Histogram(
+retry_backoff_seconds = _get_or_create(
+    Histogram,
     "heber_retry_backoff_seconds",
     "Retry backoff duration",
     ["stream"],

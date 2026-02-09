@@ -91,8 +91,6 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "earnings": {
         "report_date": "ts_event",
         "date": "earnings_date",
-        "quarter": "fiscal_quarter",
-        "year": "fiscal_year",
     },
     "corporate_action": {},  # NormalizedCorporateAction fields match Silver directly
     # ── Phase 3: Screeners ────────────────────────────────────────────
@@ -364,6 +362,7 @@ class BronzeToSilverTransformer:
 
         records: list[dict] = []
         files_processed = 0
+        total_records = 0
 
         # Process all hour directories and files
         for item in dt_dir.rglob("*.jsonl.gz"):
@@ -373,20 +372,22 @@ class BronzeToSilverTransformer:
             # Flush in batches
             if len(records) >= self.batch_size:
                 await self._write_silver_batch(records, feed, dt)
+                total_records += len(records)
                 records = []
 
         # Final flush
         if records:
             await self._write_silver_batch(records, feed, dt)
+            total_records += len(records)
 
         logger.info(
             "Transformed partition",
             feed=feed,
             dt=dt,
             files=files_processed,
-            records=len(records),
+            records=total_records,
         )
-        return len(records)
+        return total_records
 
     def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict]:
         """Read and transform a single Bronze JSONL.gz file."""
