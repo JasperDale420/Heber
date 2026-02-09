@@ -92,6 +92,49 @@ def test_poller_snapshot_sets_return_pct_when_mid_is_zero() -> None:
     assert snapshot.return_pct == -1.0
 
 
+def test_poller_snapshot_normalizes_numeric_string_quotes() -> None:
+    poller = SnapshotPoller(SimpleNamespace())
+    watch = _build_watch()
+
+    snapshot = poller._create_snapshot(
+        watch,
+        {
+            "bp": "0.0",
+            "ap": "0.0",
+            "last_price": "0.0",
+            "underlying_price": "200.5",
+        },
+    )
+
+    assert snapshot.bid_px == 0.0
+    assert snapshot.ask_px == 0.0
+    assert snapshot.mid_px == 0.0
+    assert snapshot.last_px == 0.0
+    assert snapshot.underlying_price == 200.5
+    assert snapshot.return_pct == -1.0
+
+
+def test_poller_snapshot_ignores_non_numeric_bid_ask_and_uses_last() -> None:
+    poller = SnapshotPoller(SimpleNamespace())
+    watch = _build_watch()
+
+    snapshot = poller._create_snapshot(
+        watch,
+        {
+            "bp": "N/A",
+            "ap": "bad",
+            "last_price": "1.25",
+            "underlying_price": "200.0",
+        },
+    )
+
+    assert snapshot.bid_px is None
+    assert snapshot.ask_px is None
+    assert snapshot.mid_px == 1.25
+    assert snapshot.last_px == 1.25
+    assert snapshot.return_pct == 0.25
+
+
 def test_checker_expires_zero_entry_watch_even_without_return_path() -> None:
     now = datetime.now(UTC)
     watch = AlertWatch(

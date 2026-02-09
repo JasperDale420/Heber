@@ -692,8 +692,14 @@ Audit Pass 93 (2026-02-09, files reviewed directly):
 - tests/test_watch_async_redis.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 94 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/poller.py line-by-line re-audit for quote payload normalization and horizon polling cadence edge cases.
+- heber/watch/consumer.py line-by-line re-audit for stream payload normalization and retry-accounting edge cases.
 
 ## Remediation Updates
 
@@ -849,6 +855,7 @@ Updated: 2026-02-09
 - Audit Pass 91 revalidated and remediated `TD-109`; writer entrypoint now guarantees `WatchService.stop()` on normal completion so buffered outcomes and component shutdown cleanup are not skipped.
 - Audit Pass 92 revalidated and remediated `TD-110`; checker now normalizes naive watch timestamps before comparisons/duration math, preventing mixed naive/aware datetime failures during expiry and outcome creation.
 - Audit Pass 93 revalidated and remediated `TD-111`; gateway URL candidate construction now avoids duplicate `/api/v1` prefixing when base URLs already include the API prefix.
+- Audit Pass 94 revalidated and remediated `TD-112` and `TD-113`; poller now normalizes numeric quote payload fields before midpoint math and treats future-skewed last-polled timestamps as immediately due to avoid watch starvation.
 
 ## Executive Summary
 
@@ -971,6 +978,8 @@ Severity key: High, Medium, Low
 | TD-109 | Medium | Watch Service | Writer CLI entrypoint did not stop service on normal completion, so buffered-label flush and component cleanup were only guaranteed on exceptional exits. |
 | TD-110 | Medium | Watch Service | Checker compared aware `now` with potentially naive `alert_time`/`window_end`, causing `TypeError` in expiry checks and outcome duration calculations. |
 | TD-111 | Medium | Watch Service | Gateway URL candidate generation could duplicate `/api/v1` when the configured base URL already included the prefix, causing malformed requests and missed fallback behavior. |
+| TD-112 | Medium | Watch Service | Poller midpoint math assumed numeric quote payload types; string/non-numeric `bp`/`ap` values could raise `TypeError` and abort poll cycles. |
+| TD-113 | Medium | Watch Service | Poller due-check logic treated future-skewed `updated_at` values as not-due, which could stall watch polling indefinitely under clock-skewed timestamps. |
 
 ## Detailed Findings
 
@@ -1620,6 +1629,18 @@ Recommendation: Detect prefix-in-base cases and avoid duplicate prefix concatena
 Update 2026-02-09: Remediated in `T-97` by normalizing prefix handling for base URLs that already include the API prefix and adding regression coverage for duplicate-prefix prevention.
 Revalidated 2026-02-09 (Pass 93): Resolved. Gateway candidate generation now returns valid prefixed and legacy fallback routes without duplicate prefix segments.
 
+**TD-112: Poller quote midpoint math does not normalize payload types.**
+Evidence: `SnapshotPoller._create_snapshot()` previously computed midpoint with raw payload values (`bp`/`ap`) whenever keys were present. Data Gateway payloads can include string numerics (`"0.0"`) or non-numeric placeholders (`"N/A"`), causing `TypeError` during `(bid + ask) / 2` and aborting the poll cycle.
+Recommendation: Normalize all quote numeric inputs (`bp`, `ap`, `last_price`, `underlying_price`) to `float | None` before arithmetic, and fall back to normalized `last_price` when midpoint inputs are invalid.
+Update 2026-02-09: Remediated in `T-98` by adding `_coerce_optional_float()` normalization in `SnapshotPoller` and regression tests covering numeric-string and non-numeric quote payloads.
+Revalidated 2026-02-09 (Pass 94): Resolved. Poller snapshot creation now tolerates string/non-numeric quote payload shapes without poll-cycle crashes.
+
+**TD-113: Future-skewed poll timestamps can starve watch updates.**
+Evidence: `SnapshotPoller._is_watch_due()` previously compared `now - last_polled` against interval with no guard for future timestamps. If `updated_at` was persisted ahead of wall-clock time (clock skew or bad upstream timestamp), the watch stayed non-due until the future point elapsed, effectively stalling polling.
+Recommendation: Treat future-skewed `last_polled` values as immediately due to recover from skew and avoid indefinite watch starvation.
+Update 2026-02-09: Remediated in `T-98` by short-circuiting future `last_polled` values to `True` (due) and adding regression coverage for future-skewed `updated_at`.
+Revalidated 2026-02-09 (Pass 94): Resolved. Due-check logic now recovers safely from clock-skewed poll timestamps.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1627,7 +1648,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

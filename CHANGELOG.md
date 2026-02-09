@@ -110,6 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/gateway.py`: gateway URL candidate generation now avoids duplicate `/api/v1` prefixing when the configured base URL already includes API prefix segments
 - Added gateway duplicate-prefix regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-111` remediation in audit pass 93 and `T-97`
+- Fixed `watch/poller.py`: snapshot creation now normalizes quote payload numeric fields before midpoint math (handles numeric strings/non-numeric placeholders safely), and due-check logic now treats future-skewed `updated_at` values as immediately due
+- Added poller payload-normalization and future-timestamp due-check regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-112`/`TD-113` remediation in audit pass 94 and `T-98`
 
 ### Removed
 
@@ -220,6 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 85: watch consumer decoded-stream payload conformance revalidation)
 - Expanded technical debt audit (pass 86: watch poller naive-timestamp due-check conformance revalidation)
 - Expanded technical debt audit (pass 87: watch manager naive-window expiry conformance revalidation)
+- Expanded technical debt audit (pass 94: watch poller payload-normalization + future-timestamp cadence conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

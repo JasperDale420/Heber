@@ -212,18 +212,21 @@ class SnapshotPoller:
         quote: dict,
     ) -> WatchSnapshot:
         """Create a snapshot from quote data."""
-        bid = quote.get("bp")
+        bid = self._coerce_optional_float(quote.get("bp"))
         if bid is None:
-            bid = quote.get("bid_price")
+            bid = self._coerce_optional_float(quote.get("bid_price"))
 
-        ask = quote.get("ap")
+        ask = self._coerce_optional_float(quote.get("ap"))
         if ask is None:
-            ask = quote.get("ask_price")
+            ask = self._coerce_optional_float(quote.get("ask_price"))
+
+        last_price = self._coerce_optional_float(quote.get("last_price"))
+        underlying_price = self._coerce_optional_float(quote.get("underlying_price"))
 
         if bid is not None and ask is not None:
             mid = (bid + ask) / 2
         else:
-            mid = quote.get("last_price")
+            mid = last_price
 
         return_pct = None
         if mid is not None and watch.entry_price > 0:
@@ -236,10 +239,20 @@ class SnapshotPoller:
             bid_px=bid,
             ask_px=ask,
             mid_px=mid,
-            last_px=quote.get("last_price"),
-            underlying_price=quote.get("underlying_price"),
+            last_px=last_price,
+            underlying_price=underlying_price,
             return_pct=return_pct,
         )
+
+    @staticmethod
+    def _coerce_optional_float(value: Any) -> float | None:
+        """Convert quote payload values to float when possible."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _horizon_interval_seconds(horizon: Any) -> int:
@@ -263,4 +276,7 @@ class SnapshotPoller:
             return True
         normalized_now = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
         normalized_last_polled = last_polled if last_polled.tzinfo is not None else last_polled.replace(tzinfo=UTC)
+        # Clock skew or bad upstream timestamps should not stall polling indefinitely.
+        if normalized_last_polled > normalized_now:
+            return True
         return (normalized_now - normalized_last_polled).total_seconds() >= interval_seconds
