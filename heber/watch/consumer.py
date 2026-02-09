@@ -23,7 +23,12 @@ from heber.features.templates.alert_labels import (
     classify_horizon,
 )
 from heber.watch.features import AlertFeatureExtractor, persist_features_to_gold, store_features
-from heber.watch.gateway import gateway_url_candidates
+from heber.watch.gateway import (
+    gateway_url_candidates,
+    route_failure_for_exception,
+    route_failure_for_http_status,
+    route_failure_for_payload_shape,
+)
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
 
@@ -544,13 +549,7 @@ class AlertWatchConsumer:
                             params={"symbols": occ_symbol},
                         )
                     except httpx.HTTPError as request_error:
-                        route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "request_error",
-                                "error": str(request_error),
-                            }
-                        )
+                        route_failures.append(route_failure_for_exception(route, request_error))
                         logger.warning(
                             "Entry price route request failed",
                             route=route,
@@ -559,25 +558,13 @@ class AlertWatchConsumer:
                         continue
 
                     if response.status_code != 200:
-                        route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "http_status",
-                                "status": response.status_code,
-                            }
-                        )
+                        route_failures.append(route_failure_for_http_status(route, response.status_code))
                         continue
 
                     try:
                         decoded = response.json()
                     except (TypeError, ValueError) as decode_error:
-                        route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "json_decode",
-                                "error": str(decode_error),
-                            }
-                        )
+                        route_failures.append(route_failure_for_exception(route, decode_error, failure="json_decode"))
                         logger.warning(
                             "Entry price response JSON decode failed",
                             route=route,
@@ -585,13 +572,7 @@ class AlertWatchConsumer:
                         )
                         continue
                     if not isinstance(decoded, dict):
-                        route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "payload_shape",
-                                "payload_type": type(decoded).__name__,
-                            }
-                        )
+                        route_failures.append(route_failure_for_payload_shape(route, "payload_shape", decoded))
                         logger.warning(
                             "Entry price payload shape invalid",
                             route=route,
@@ -601,11 +582,7 @@ class AlertWatchConsumer:
                     data_payload = decoded.get("data", {})
                     if not isinstance(data_payload, dict):
                         route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "data_payload_shape",
-                                "payload_type": type(data_payload).__name__,
-                            }
+                            route_failure_for_payload_shape(route, "data_payload_shape", data_payload)
                         )
                         logger.warning(
                             "Entry price data payload shape invalid",
@@ -616,11 +593,7 @@ class AlertWatchConsumer:
                     quotes_payload = data_payload.get("quotes", {})
                     if not isinstance(quotes_payload, dict):
                         route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "quotes_payload_shape",
-                                "payload_type": type(quotes_payload).__name__,
-                            }
+                            route_failure_for_payload_shape(route, "quotes_payload_shape", quotes_payload)
                         )
                         logger.warning(
                             "Entry price quotes payload shape invalid",

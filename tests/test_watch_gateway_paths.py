@@ -9,7 +9,10 @@ import pytest
 from heber.watch import consumer as consumer_module
 from heber.watch import poller as poller_module
 from heber.watch.consumer import AlertWatchConsumer
-from heber.watch.gateway import gateway_url_candidates
+from heber.watch.gateway import (
+    classify_gateway_http_error,
+    gateway_url_candidates,
+)
 from heber.watch.poller import SnapshotPoller
 
 
@@ -107,6 +110,12 @@ def test_gateway_url_candidates_strips_query_from_base_url() -> None:
     ]
 
 
+def test_classify_gateway_http_error_maps_timeout_and_transport() -> None:
+    assert classify_gateway_http_error(httpx.ReadTimeout("timeout")) == "timeout"
+    assert classify_gateway_http_error(httpx.ConnectError("connect")) == "transport_error"
+    assert classify_gateway_http_error(httpx.HTTPError("error")) == "request_error"
+
+
 @pytest.mark.asyncio
 async def test_poller_fetch_quotes_falls_back_to_legacy_route(monkeypatch: pytest.MonkeyPatch) -> None:
     _StubAsyncClient.calls = []
@@ -194,6 +203,34 @@ async def test_poller_fetch_quotes_falls_back_when_prefixed_route_times_out(
     assert "AAPL260220C00100000" in quotes
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_poller_fetch_quotes_emits_standardized_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": httpx.ReadTimeout("timeout"),
+        "http://gateway/alpaca/options/quotes": httpx.ConnectError("connect"),
+    }
+    captured_warnings: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture_warning(event: str, **kwargs: Any) -> None:
+        captured_warnings.append((event, kwargs))
+
+    monkeypatch.setattr(poller_module.httpx, "AsyncClient", _StubAsyncClient)
+    monkeypatch.setattr(poller_module.logger, "warning", _capture_warning)
+
+    poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
+    quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
+
+    assert quotes == {}
+    summary = next(kwargs for event, kwargs in captured_warnings if event == "Quote fetch failed across routes")
+    assert summary["failures"][0]["failure"] == "timeout"
+    assert summary["failures"][0]["error_type"] == "ReadTimeout"
+    assert summary["failures"][1]["failure"] == "transport_error"
+    assert summary["failures"][1]["error_type"] == "ConnectError"
 
 
 @pytest.mark.asyncio
@@ -339,6 +376,74 @@ async def test_consumer_entry_price_falls_back_when_prefixed_route_times_out(
     assert price == 1.1
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_emits_standardized_failure_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": httpx.ReadTimeout("timeout"),
+        "http://gateway/alpaca/options/quotes": httpx.ConnectError("connect"),
+    }
+    captured_warnings: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture_warning(event: str, **kwargs: Any) -> None:
+        captured_warnings.append((event, kwargs))
+
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+    monkeypatch.setattr(consumer_module.logger, "warning", _capture_warning)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+
+    assert price is None
+    summary = next(kwargs for event, kwargs in captured_warnings if event == "Entry price fetch failed across routes")
+    assert summary["failures"][0]["failure"] == "timeout"
+    assert summary["failures"][0]["error_type"] == "ReadTimeout"
+    assert summary["failures"][1]["failure"] == "transport_error"
+    assert summary["failures"][1]["error_type"] == "ConnectError"
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_failure_metadata_includes_expected_payload_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(200, {"data": []}),
+        "http://gateway/alpaca/options/quotes": _StubResponse(200, {"data": {"quotes": []}}),
+    }
+    captured_warnings: list[tuple[str, dict[str, Any]]] = []
+
+    def _capture_warning(event: str, **kwargs: Any) -> None:
+        captured_warnings.append((event, kwargs))
+
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+    monkeypatch.setattr(consumer_module.logger, "warning", _capture_warning)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+
+    assert price is None
+    summary = next(kwargs for event, kwargs in captured_warnings if event == "Entry price fetch failed across routes")
+    assert summary["failures"][0]["failure"] == "data_payload_shape"
+    assert summary["failures"][0]["expected_type"] == "dict"
+    assert summary["failures"][0]["payload_type"] == "list"
+    assert summary["failures"][1]["failure"] == "quotes_payload_shape"
+    assert summary["failures"][1]["expected_type"] == "dict"
+    assert summary["failures"][1]["payload_type"] == "list"
 
 
 @pytest.mark.asyncio

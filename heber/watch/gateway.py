@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+import httpx
 
 DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 
@@ -55,3 +58,42 @@ def gateway_url_candidates(
     if legacy != prefixed:
         candidates.append(legacy)
     return candidates
+
+
+def classify_gateway_http_error(error: Exception) -> str:
+    """Classify gateway request exceptions into stable failure buckets."""
+    if isinstance(error, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(error, httpx.TransportError):
+        return "transport_error"
+    return "request_error"
+
+
+def route_failure_for_exception(route: str, error: Exception, failure: str | None = None) -> dict[str, Any]:
+    """Build a standardized route-failure payload for exceptions."""
+    failure_code = failure or classify_gateway_http_error(error)
+    return {
+        "route": route,
+        "failure": failure_code,
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+
+
+def route_failure_for_http_status(route: str, status_code: int) -> dict[str, Any]:
+    """Build a standardized route-failure payload for non-200 responses."""
+    return {
+        "route": route,
+        "failure": "http_status",
+        "status": status_code,
+    }
+
+
+def route_failure_for_payload_shape(route: str, failure: str, payload: Any) -> dict[str, Any]:
+    """Build a standardized route-failure payload for decoded payload-shape mismatches."""
+    return {
+        "route": route,
+        "failure": failure,
+        "expected_type": "dict",
+        "payload_type": type(payload).__name__,
+    }

@@ -11,7 +11,12 @@ import httpx
 import structlog
 
 from heber.calendar import MarketCalendar
-from heber.watch.gateway import gateway_url_candidates
+from heber.watch.gateway import (
+    gateway_url_candidates,
+    route_failure_for_exception,
+    route_failure_for_http_status,
+    route_failure_for_payload_shape,
+)
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -190,13 +195,7 @@ class SnapshotPoller:
                                 params={"symbols": symbols_param},
                             )
                         except httpx.HTTPError as request_error:
-                            route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "request_error",
-                                    "error": str(request_error),
-                                }
-                            )
+                            route_failures.append(route_failure_for_exception(route, request_error))
                             logger.warning(
                                 "Quote route request failed",
                                 route=route,
@@ -205,24 +204,14 @@ class SnapshotPoller:
                             continue
 
                         if response.status_code != 200:
-                            route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "http_status",
-                                    "status": response.status_code,
-                                }
-                            )
+                            route_failures.append(route_failure_for_http_status(route, response.status_code))
                             continue
 
                         try:
                             decoded = response.json()
                         except (ValueError, TypeError) as decode_error:
                             route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "json_decode",
-                                    "error": str(decode_error),
-                                }
+                                route_failure_for_exception(route, decode_error, failure="json_decode")
                             )
                             logger.warning(
                                 "Quote response JSON decode failed",
@@ -231,13 +220,7 @@ class SnapshotPoller:
                             )
                             continue
                         if not isinstance(decoded, dict):
-                            route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "payload_shape",
-                                    "payload_type": type(decoded).__name__,
-                                }
-                            )
+                            route_failures.append(route_failure_for_payload_shape(route, "payload_shape", decoded))
                             logger.warning(
                                 "Quote response payload shape invalid",
                                 route=route,
@@ -247,11 +230,7 @@ class SnapshotPoller:
                         data_payload = decoded.get("data", {})
                         if not isinstance(data_payload, dict):
                             route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "data_payload_shape",
-                                    "payload_type": type(data_payload).__name__,
-                                }
+                                route_failure_for_payload_shape(route, "data_payload_shape", data_payload)
                             )
                             logger.warning(
                                 "Quote response data payload shape invalid",
@@ -262,11 +241,7 @@ class SnapshotPoller:
                         quotes_payload = data_payload.get("quotes", {})
                         if not isinstance(quotes_payload, dict):
                             route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "quotes_payload_shape",
-                                    "payload_type": type(quotes_payload).__name__,
-                                }
+                                route_failure_for_payload_shape(route, "quotes_payload_shape", quotes_payload)
                             )
                             logger.warning(
                                 "Quote response quotes payload shape invalid",

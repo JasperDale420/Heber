@@ -815,8 +815,14 @@ Audit Pass 118 (2026-02-09, files reviewed directly):
 - heber/watch/consumer.py
 - tests/test_watch_consumer_reliability.py
 
+Audit Pass 119 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/consumer.py line-by-line re-audit for `_get_entry_price()` route-failure reason taxonomy and parity with poller telemetry payloads.
+- heber/watch/poller.py and heber/watch/consumer.py line-by-line re-audit for batch-level retry/load-shedding policy when mixed partial-route failures occur across large symbol sets.
 
 ## Remediation Updates
 
@@ -883,6 +889,7 @@ Updated: 2026-02-09
 - `TD-151`, `TD-152`, and `TD-153` addressed via `T-120`: consumer retry attempt configuration now clamps to a minimum of one attempt, stream payload decoding now tolerates invalid UTF-8 bytes, and numeric timestamp parsing now normalizes epoch-millisecond values.
 - `TD-154`, `TD-155`, and `TD-156` addressed via `T-121`: consumer alert decode now parses whitespace-prefixed JSON envelopes, put/call normalization now handles malformed non-string values safely, and parse flow now validates required alert identity fields before watch creation.
 - `TD-157`, `TD-158`, and `TD-159` addressed via `T-122`: consumer retry flow now classifies non-retriable parse failures, carries terminal retry reasons into DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retry semantics.
+- `TD-160`, `TD-161`, and `TD-162` addressed via `T-123`: watch gateway route-failure telemetry now classifies timeout vs transport request failures, includes exception type metadata for exception-driven failures, and adds expected-type metadata for payload-shape failures in both poller and consumer paths.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1021,6 +1028,7 @@ Updated: 2026-02-09
 - Audit Pass 116 revalidated and remediated `TD-151`, `TD-152`, and `TD-153`; consumer retry attempts now enforce a safe minimum, stream decode now fails soft on invalid UTF-8, and epoch-millisecond timestamps now normalize correctly.
 - Audit Pass 117 revalidated and remediated `TD-154`, `TD-155`, and `TD-156`; consumer parse paths now handle whitespace-prefixed JSON, normalize malformed put/call values safely, and reject missing required alert identity fields before watch creation.
 - Audit Pass 118 revalidated and remediated `TD-157`, `TD-158`, and `TD-159`; consumer retry flow now short-circuits deterministic parse failures as non-retriable, propagates terminal retry reasons to DLQ error metadata, and supports backward-compatible bool/tuple process-result contracts.
+- Audit Pass 119 revalidated and remediated `TD-160`, `TD-161`, and `TD-162`; poller/consumer gateway-route failures now share timeout/transport/request taxonomy, carry exception-type metadata, and include expected payload-type metadata for shape mismatches.
 
 ## Executive Summary
 
@@ -1191,6 +1199,9 @@ Severity key: High, Medium, Low
 | TD-157 | Medium | Watch Service | Consumer retry flow treated parse failures as retriable, causing deterministic malformed-alert payloads to consume retry budget and generate avoidable DLQ churn. |
 | TD-158 | Medium | Watch Service | Consumer DLQ records used a static terminal error string, losing the last retry-failure reason needed for triage and route-level diagnostics. |
 | TD-159 | Medium | Watch Service | Consumer retry loop depended on strict bool process-return semantics, making tuple-based result classification brittle and risking false-positive success checks during retry refactors/tests. |
+| TD-160 | Medium | Watch Service | Poller/consumer route-failure telemetry collapsed all request exceptions into a generic `request_error` bucket, obscuring timeout vs transport failure patterns during gateway degradation. |
+| TD-161 | Medium | Watch Service | Route-failure records for exception paths omitted exception-type metadata, limiting triage speed for request/json decode failures across fallback routes. |
+| TD-162 | Medium | Watch Service | Payload-shape route-failure records omitted explicit expected-type metadata, making malformed payload diagnostics less actionable during fallback triage. |
 
 ## Detailed Findings
 
@@ -2128,6 +2139,24 @@ Recommendation: Normalize process-return contracts explicitly (bool and tuple fo
 Update 2026-02-09: Remediated in `T-122` by adding `_normalize_process_result()` and using normalized `(success, retryable, reason)` semantics in retry flow.
 Revalidated 2026-02-09 (Pass 118): Resolved. Retry behavior now remains stable across bool and tuple process-result return forms.
 
+**TD-160: Route-failure telemetry collapsed timeout/transport into generic request errors.**
+Evidence: Poller and consumer route fallback handlers previously recorded all `httpx.HTTPError` exceptions as `request_error`, so timeout spikes could not be distinguished from transport failures during gateway incidents.
+Recommendation: Standardize exception taxonomy with explicit `timeout`, `transport_error`, and fallback `request_error` buckets in both poller and consumer route-failure metadata.
+Update 2026-02-09: Remediated in `T-123` by adding shared gateway exception classification helpers and wiring both poller and consumer route-failure collection through those helpers.
+Revalidated 2026-02-09 (Pass 119): Resolved. Route-failure summaries now distinguish timeout and transport error classes consistently.
+
+**TD-161: Exception-driven route-failure records lacked exception class metadata.**
+Evidence: Poller/consumer route-failure entries for request/json-decode failures previously stored only stringified error text, which reduced triage quality when multiple failure types shared similar error messages.
+Recommendation: Include `error_type` metadata on exception-driven route-failure records.
+Update 2026-02-09: Remediated in `T-123` by adding shared route-failure builders that attach `error_type` for request and decode exceptions.
+Revalidated 2026-02-09 (Pass 119): Resolved. Aggregated route-failure summaries now preserve exception type alongside message text.
+
+**TD-162: Payload-shape failure records lacked explicit expected-type metadata.**
+Evidence: Payload-shape failures reported only `payload_type`, which required implicit knowledge that dict payloads were expected and slowed operational diagnosis.
+Recommendation: Include explicit `expected_type` metadata for payload-shape route-failure records.
+Update 2026-02-09: Remediated in `T-123` by introducing a shared payload-shape failure builder that records `expected_type=\"dict\"` and observed payload type in poller and consumer flows.
+Revalidated 2026-02-09 (Pass 119): Resolved. Payload-shape route failures now carry explicit expected/actual typing metadata.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2135,7 +2164,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):
