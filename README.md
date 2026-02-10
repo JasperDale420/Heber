@@ -35,7 +35,7 @@ Local ports from `docker-compose.yml`:
 
 ## Architecture (Current)
 
-```
+```text
 Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (Parquet)
                                             v
                                     heber-catalog (Postgres)
@@ -119,7 +119,7 @@ score = await scorer.score(alert)  # 0.0 - 1.0
 **What runs automatically:**
 
 | Component | Automatic? | Notes |
-|-----------|------------|-------|
+| :--- | :--- | :--- |
 | Feature capture | ✅ Yes | Triggers on every alert via `AlertWatchConsumer` |
 | Dataset building | ❌ No | Run manually for training |
 | Model training | ❌ No | Run manually, logs to MLflow |
@@ -161,6 +161,17 @@ heber versions momentum_features
 - `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
 - `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
 
+## Repository Structure
+
+The `heber/` package contains the core logic:
+
+- **Core**: `catalog`, `bus`, `models`, `config`
+- **Lake**: `writer`, `storage` (Iceberg), `versioning` (lakeFS)
+- **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
+- **Intelligence**: `ml` (meta-labeling), `backtest`, `firewall` (zero-leakage), `universe`
+- **Serving**: `sdk`, `hotstore` (ClickHouse), `watch` (real-time)
+- **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
+
 ## Development
 
 ### Prerequisites
@@ -187,7 +198,7 @@ pre-commit run --all-files
 This project uses a comprehensive hygiene stack (largely LLM-generated code with automated enforcement):
 
 | Tool | Purpose |
-|------|---------|
+| :--- | :--- |
 | **ruff** | Python linting + formatting |
 | **mypy** | Static type checking |
 | **bandit** | Security vulnerability scanning |
