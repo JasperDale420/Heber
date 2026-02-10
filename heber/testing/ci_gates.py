@@ -27,6 +27,8 @@ class GateType(str, Enum):
 class TestCategory(str, Enum):
     """Test categories (PRD §45.4)."""
 
+    __test__ = False
+
     UNIT = "unit"
     INTEGRATION = "integration"
     E2E = "e2e"
@@ -162,6 +164,8 @@ class FlakyTestPolicy:
 @dataclass
 class TestRun:
     """Record of a test run."""
+
+    __test__ = False
 
     test_name: str
     category: TestCategory

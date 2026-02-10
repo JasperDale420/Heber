@@ -20,6 +20,8 @@ logger = structlog.get_logger(__name__)
 class TestDataConfig:
     """Configuration for test data generation."""
 
+    __test__ = False
+
     symbols: list[str]
     start_date: datetime
     end_date: datetime
@@ -194,6 +196,8 @@ class SyntheticDataGenerator:
 @dataclass
 class TestFixture:
     """Reusable test fixture with known values."""
+
+    __test__ = False
 
     name: str
     description: str
