@@ -218,10 +218,10 @@ class EventConsumer:
             self._validate_instrument_key(envelope)
 
             # Write to Bronze (always)
-            await self.bronze_writer.write(envelope)
+            self.bronze_writer.write(envelope)
 
             # Write to Silver (normalized)
-            await self.silver_writer.write(envelope)
+            self.silver_writer.write(envelope)
 
             logger.debug(
                 "Processed event",
@@ -410,12 +410,12 @@ class EventConsumer:
     async def _flush_layers(self) -> None:
         """Flush Bronze and Silver independently so one failure doesn't block the other."""
         try:
-            await self.bronze_writer.flush_if_needed()
+            self.bronze_writer.flush_if_needed()
         except Exception as e:
             logger.error("Bronze flush failed", error=str(e), exc_info=True)
 
         try:
-            await self.silver_writer.flush_if_needed()
+            self.silver_writer.flush_if_needed()
         except Exception as e:
             logger.error("Silver flush failed", error=str(e), exc_info=True)
 
@@ -470,8 +470,8 @@ class EventConsumer:
 
     async def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""
-        await self.bronze_writer.flush()
-        await self.silver_writer.flush()
+        self.bronze_writer.flush()
+        self.silver_writer.flush()
         logger.info("Consumer stopped")
 
     async def stop(self):

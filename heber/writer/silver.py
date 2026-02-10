@@ -194,38 +194,38 @@ class SilverWriter:
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"part-{ts}.parquet"
 
-    async def write(self, envelope: EventEnvelope) -> None:
+    def write(self, envelope: EventEnvelope) -> None:
         """Buffer an event for writing."""
         partition_key = self._get_partition_key(envelope)
         row = self._envelope_to_row(envelope)
         self.buffers[partition_key].append(row)
 
-    async def flush_if_needed(self) -> None:
+    def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         flushed = False
-        for partition_key, rows in list(self.buffers.items()):
+        for partition_key, rows in self.buffers.items():
             should_flush = (
                 len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
             )
             if should_flush and rows:
-                await self._flush_partition(partition_key, rows)
+                self._flush_partition(partition_key, rows)
                 self.buffers[partition_key] = []
                 flushed = True
 
         if flushed:
             self.last_flush = now
 
-    async def flush(self) -> None:
+    def flush(self) -> None:
         """Flush all buffers immediately."""
-        for partition_key, rows in list(self.buffers.items()):
+        for partition_key, rows in self.buffers.items():
             if rows:
-                await self._flush_partition(partition_key, rows)
+                self._flush_partition(partition_key, rows)
                 self.buffers[partition_key] = []
 
-    async def _flush_partition(self, partition_key: str, rows: list[dict]) -> None:
+    def _flush_partition(self, partition_key: str, rows: list[dict]) -> None:
         """Write rows to a Parquet file."""
         if not rows:
             return

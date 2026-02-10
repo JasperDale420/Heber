@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -44,8 +44,8 @@ def _build_envelope() -> EventEnvelope:
 @pytest.mark.asyncio
 async def test_consumer_process_records_core_metrics(monkeypatch) -> None:
     consumer = consumer_module.EventConsumer()
-    consumer.bronze_writer.write = AsyncMock()
-    consumer.silver_writer.write = AsyncMock()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
 
     calls: dict[str, list[dict[str, object]]] = {"received": [], "processed": [], "latency": []}
 
@@ -99,8 +99,7 @@ async def test_consumer_iteration_records_batch_size_metric(monkeypatch) -> None
     consumer.redis.xack.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_silver_flush_records_write_metrics(monkeypatch, tmp_path: Path) -> None:
+def test_silver_flush_records_write_metrics(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(silver_module.settings, "data_root", tmp_path)
 
     write_calls: list[dict[str, object]] = []
@@ -109,8 +108,8 @@ async def test_silver_flush_records_write_metrics(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(silver_module, "record_write_error", lambda **kwargs: error_calls.append(kwargs))
 
     writer = silver_module.SilverWriter()
-    await writer.write(_build_envelope())
-    await writer.flush()
+    writer.write(_build_envelope())
+    writer.flush()
 
     assert len(write_calls) == 1
     assert write_calls[0]["layer"] == "silver"
@@ -120,8 +119,7 @@ async def test_silver_flush_records_write_metrics(monkeypatch, tmp_path: Path) -
     assert error_calls == []
 
 
-@pytest.mark.asyncio
-async def test_compactor_records_success_metrics(monkeypatch, tmp_path: Path) -> None:
+def test_compactor_records_success_metrics(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(compactor_module.settings, "data_root", tmp_path)
     partition_path = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-07"
     partition_path.mkdir(parents=True, exist_ok=True)
@@ -134,7 +132,7 @@ async def test_compactor_records_success_metrics(monkeypatch, tmp_path: Path) ->
     monkeypatch.setattr(compactor_module, "record_compaction", lambda **kwargs: compaction_calls.append(kwargs))
 
     compactor = compactor_module.Compactor()
-    merged = await compactor.compact_partition(partition_path)
+    merged = compactor.compact_partition(partition_path)
 
     assert merged == 2
     assert len(compaction_calls) == 1

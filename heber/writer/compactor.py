@@ -62,7 +62,7 @@ class Compactor:
             pass
         return "unknown"
 
-    async def compact_partition(self, partition_path: Path) -> int:
+    def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
         Returns number of files merged.
@@ -167,7 +167,7 @@ class Compactor:
         finally:
             self._release_partition_lock(lock_path)
 
-    async def scan_and_compact(self, layer: str = "silver") -> dict:
+    def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
         layer_path = settings.data_root / layer
 
@@ -183,7 +183,7 @@ class Compactor:
                 parquet_files = list(partition_path.glob("*.parquet"))
                 if parquet_files:
                     partitions_scanned += 1
-                    merged = await self.compact_partition(partition_path)
+                    merged = self.compact_partition(partition_path)
                     files_merged += merged
 
         return {
@@ -200,14 +200,15 @@ class Compactor:
         while self.running:
             try:
                 # Compact Silver layer
-                result = await self.scan_and_compact("silver")
+                result = self.scan_and_compact("silver")
                 logger.info("Compaction cycle complete", **result)
 
                 # Wait for next cycle
                 await asyncio.sleep(interval_minutes * 60)
 
             except asyncio.CancelledError:
-                break
+                logger.info("Compactor cancelled")
+                raise
             except Exception as e:
                 logger.error("Compactor error", error=str(e), exc_info=True)
                 await asyncio.sleep(60)  # Back off on error

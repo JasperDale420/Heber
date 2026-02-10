@@ -17,8 +17,7 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
     pq.write_table(table, path, compression="snappy")
 
 
-@pytest.mark.asyncio
-async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
+def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
     partition.mkdir(parents=True)
 
@@ -31,7 +30,7 @@ async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> No
         _write_parquet(source, [{"event_id": f"evt-{i}"}])
 
     compactor = Compactor()
-    merged = await compactor.compact_partition(partition)
+    merged = compactor.compact_partition(partition)
 
     assert merged == 3
     assert not any(path.exists() for path in source_files)
@@ -44,8 +43,7 @@ async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> No
     assert merged_table.num_rows == 3
 
 
-@pytest.mark.asyncio
-async def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
     partition.mkdir(parents=True)
 
@@ -68,7 +66,7 @@ async def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(compactor_module.pq, "read_table", failing_read_table)
 
     compactor = Compactor()
-    merged = await compactor.compact_partition(partition)
+    merged = compactor.compact_partition(partition)
 
     assert merged == 0
     assert all(path.exists() for path in source_files)
