@@ -172,6 +172,8 @@ class FlowAlertRecord(SilverBase):
     has_multileg: bool | None = None
     has_singleleg: bool | None = None
     all_opening_trades: bool | None = None
+    total_size: int | None = None
+    expiry_count: int | None = None
 
 
 class DarkpoolTradeRecord(SilverBase):

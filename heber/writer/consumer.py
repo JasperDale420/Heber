@@ -77,6 +77,17 @@ class EventConsumer:
                 "aggressor",
                 "tags",
                 "provider",
+                # UW additional fields (P1)
+                "trade_count",
+                "volume_oi_ratio",
+                "total_ask_side_prem",
+                "total_bid_side_prem",
+                "has_floor",
+                "has_multileg",
+                "has_singleleg",
+                "all_opening_trades",
+                "total_size",
+                "expiry_count",
             },
             "market_tide": {
                 "timestamp",

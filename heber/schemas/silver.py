@@ -117,6 +117,8 @@ SILVER_SCHEMAS = {
             ("has_multileg", pa.bool_()),
             ("has_singleleg", pa.bool_()),
             ("all_opening_trades", pa.bool_()),
+            ("total_size", pa.int64()),
+            ("expiry_count", pa.int64()),
         ]
     ),
     "darkpool": pa.schema(
