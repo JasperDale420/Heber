@@ -1,5 +1,6 @@
 """Heber configuration using Pydantic Settings."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -30,7 +31,10 @@ class Settings(BaseSettings):
 
     # Postgres (Catalog)
     postgres_url: str = Field(
-        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog",
+        default_factory=lambda: (
+            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', 'heber_dev_password')}"
+            f"@localhost:5433/heber_catalog"
+        ),
         description="PostgreSQL connection URL for Catalog DB",
     )
 

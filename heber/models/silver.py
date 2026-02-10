@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 # ==============================================================================
 
 _SENTIMENT_DESC = "bullish, bearish, neutral"
+_PUT_CALL_DESC = "P or C"
 
 
 class SilverBase(BaseModel):
@@ -148,7 +149,7 @@ class FlowAlertRecord(SilverBase):
     occ_symbol: str | None = None
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
     premium: float
     volume: float
     open_interest: float | None = None
@@ -211,7 +212,7 @@ class OptionContractRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
     multiplier: int = Field(default=100)
     style: str | None = Field(default=None, description="american or european")
     exchange: str | None = None
@@ -238,7 +239,7 @@ class GreeksRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
 
     # Greeks values
     iv: float = Field(..., description="Implied volatility")
@@ -270,7 +271,7 @@ class ChainSnapshotRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
 
     # Snapshot data
     bid_px: float | None = None

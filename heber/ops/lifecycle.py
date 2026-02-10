@@ -498,11 +498,7 @@ canary_health = Gauge(
 )
 
 
-def evaluate_canary_health(
-    error_rate_threshold: float = 0.01,
-    lag_threshold_seconds: float = 60.0,
-    latency_threshold_ms: float = 500.0,
-) -> bool:
+def evaluate_canary_health() -> bool:
     """Evaluate if canary deployment is healthy.
 
     Based on PRD §12.14.6 metrics:

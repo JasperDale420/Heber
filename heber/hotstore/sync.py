@@ -375,23 +375,23 @@ class HotStoreSync:
             _metrics["sync_failures_total"] += 1
             logger.error("hot_store_buffer_flush_failed", error=str(exc))
 
-    async def sync_quote(self, event: dict[str, Any]) -> None:
+    def sync_quote(self, event: dict[str, Any]) -> None:
         self._buffer_event("quotes", event)
 
-    async def sync_trade(self, event: dict[str, Any]) -> None:
+    def sync_trade(self, event: dict[str, Any]) -> None:
         self._buffer_event("trades", event)
 
-    async def sync_bar(self, event: dict[str, Any]) -> None:
+    def sync_bar(self, event: dict[str, Any]) -> None:
         self._buffer_event("bars", event)
 
-    async def sync_event(self, event: dict[str, Any]) -> None:
+    def sync_event(self, event: dict[str, Any]) -> None:
         feed = str(event.get("feed", "")).lower()
         if "quote" in feed:
-            await self.sync_quote(event)
+            self.sync_quote(event)
         elif "trade" in feed:
-            await self.sync_trade(event)
+            self.sync_trade(event)
         elif "bar" in feed:
-            await self.sync_bar(event)
+            self.sync_bar(event)
         else:
             logger.debug("hot_store_skip", feed=feed, reason="lake-only dataset")
 
