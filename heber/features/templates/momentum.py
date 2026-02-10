@@ -54,7 +54,7 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
         ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
         return pd.DataFrame(
             {
-                "instrument_key": df["instrument_key"],
+                "instrument_key": df.name,
                 "ts_event": df["bar_start_ts"],
                 "ts_available": ts_available,
                 # Price momentum (returns over lookback)
@@ -75,4 +75,4 @@ def compute_momentum_features(bars_df: pd.DataFrame) -> pd.DataFrame:
             }
         )
 
-    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_features)
+    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_features, include_groups=False)
