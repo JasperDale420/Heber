@@ -82,7 +82,7 @@ class AlertFeatures:
     # Timing features
     hour_of_day: int = 0
     minute_of_hour: int = 0
-    day_of_week: int = 0  # 0=Monday
+    day_of_week: int = 0  # Monday is zero
     minutes_since_open: int = 0
     minutes_to_close: int = 0
 
@@ -629,7 +629,7 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
 
 def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
     """Persist one feature row into Gold meta-label feature partitions."""
-    row = {k: v for k, v in features.__dict__.items()}
+    row = dict(features.__dict__)
     features_df = pl.DataFrame([row])
     persist_features_frame_to_gold(
         features_df=features_df,

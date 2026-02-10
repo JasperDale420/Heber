@@ -20,16 +20,20 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# Default path segments
+_PROJECT_WATCH = "project=watch"
+_VERSION_V1 = "version=v1"
+
 # Default paths
 DEFAULT_GOLD_PATH = settings.gold_path
-DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / "project=watch" / "version=v1"
-DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / "project=watch" / "version=v1"
+DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
+DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
 LEGACY_FEATURES_PATHS = [
     DEFAULT_GOLD_PATH / "meta_labels" / "features",
 ]
 LEGACY_OUTCOMES_PATHS = [
     DEFAULT_GOLD_PATH / "labels_alert_barriers",
-    DEFAULT_GOLD_PATH / "labels_alert_barriers" / "dataset=labels_alert_barriers" / "project=watch" / "version=v1",
+    DEFAULT_GOLD_PATH / "labels_alert_barriers" / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1,
 ]
 
 

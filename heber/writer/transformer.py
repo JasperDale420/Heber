@@ -252,7 +252,7 @@ class BronzeToSilverTransformer:
         self.silver_path = silver_path or settings.silver_path
         self.batch_size = batch_size
 
-    async def transform_all(
+    def transform_all(
         self,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -282,13 +282,13 @@ class BronzeToSilverTransformer:
                     continue
 
                 feed = feed_dir.name.split("=")[1]
-                feed_stats = await self._transform_feed(feed_dir, feed, since, until)
+                feed_stats = self._transform_feed(feed_dir, feed, since, until)
                 stats[feed] += feed_stats
 
         logger.info("Transformation complete", stats=dict(stats))
         return dict(stats)
 
-    async def transform(
+    def transform(
         self,
         feed: str,
         dt: str | None = None,
@@ -316,12 +316,12 @@ class BronzeToSilverTransformer:
 
         if dt:
             # Transform specific date
-            return await self._transform_date_partition(feed_dir, feed, dt)
+            return self._transform_date_partition(feed_dir, feed, dt)
         else:
             # Transform entire feed with optional date filtering
-            return await self._transform_feed(feed_dir, feed, since, until)
+            return self._transform_feed(feed_dir, feed, since, until)
 
-    async def _transform_feed(
+    def _transform_feed(
         self,
         feed_dir: Path,
         feed: str,
@@ -345,11 +345,11 @@ class BronzeToSilverTransformer:
                 if until and dt_date > until:
                     continue
 
-            total += await self._transform_date_partition(feed_dir, feed, dt_str)
+            total += self._transform_date_partition(feed_dir, feed, dt_str)
 
         return total
 
-    async def _transform_date_partition(
+    def _transform_date_partition(
         self,
         feed_dir: Path,
         feed: str,
@@ -371,13 +371,13 @@ class BronzeToSilverTransformer:
 
             # Flush in batches
             if len(records) >= self.batch_size:
-                await self._write_silver_batch(records, feed, dt)
+                self._write_silver_batch(records, feed, dt)
                 total_records += len(records)
                 records = []
 
         # Final flush
         if records:
-            await self._write_silver_batch(records, feed, dt)
+            self._write_silver_batch(records, feed, dt)
             total_records += len(records)
 
         logger.info(
@@ -462,32 +462,39 @@ class BronzeToSilverTransformer:
         try:
             if pa.types.is_floating(arrow_type):
                 return float(value) if value != "" else None
-            elif pa.types.is_integer(arrow_type):
+            if pa.types.is_integer(arrow_type):
                 return int(float(value)) if value != "" else None
-            elif pa.types.is_date(arrow_type):
-                if isinstance(value, datetime):
-                    return value.date()
-                if isinstance(value, str):
-                    return datetime.strptime(value[:10], "%Y-%m-%d").date()
-                return value
-            elif pa.types.is_timestamp(arrow_type):
-                if isinstance(value, datetime):
-                    return value
-                if isinstance(value, str):
-                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if isinstance(value, int | float):
-                    return datetime.fromtimestamp(value)
-                return value
-            elif pa.types.is_boolean(arrow_type):
+            if pa.types.is_date(arrow_type):
+                return self._coerce_to_date(value)
+            if pa.types.is_timestamp(arrow_type):
+                return self._coerce_to_timestamp(value)
+            if pa.types.is_boolean(arrow_type):
                 return bool(value)
-            elif pa.types.is_list(arrow_type):
+            if pa.types.is_list(arrow_type):
                 return list(value) if value else []
-            else:
-                return str(value) if value is not None else None
+            return str(value) if value is not None else None
         except Exception:
             return None
 
-    async def _write_silver_batch(
+    @staticmethod
+    def _coerce_to_date(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            return datetime.strptime(value[:10], "%Y-%m-%d").date()
+        return value
+
+    @staticmethod
+    def _coerce_to_timestamp(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, int | float):
+            return datetime.fromtimestamp(value)
+        return value
+
+    def _write_silver_batch(
         self,
         records: list[dict],
         feed: str,
@@ -525,7 +532,7 @@ class BronzeToSilverTransformer:
             raise
 
 
-async def backfill_silver(
+def backfill_silver(
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> dict[str, int]:
@@ -533,7 +540,7 @@ async def backfill_silver(
 
     Usage:
         from heber.writer.transformer import backfill_silver
-        stats = await backfill_silver(since=datetime(2026, 1, 1))
+        stats = backfill_silver(since=datetime(2026, 1, 1))
     """
     transformer = BronzeToSilverTransformer()
-    return await transformer.transform_all(since=since, until=until)
+    return transformer.transform_all(since=since, until=until)

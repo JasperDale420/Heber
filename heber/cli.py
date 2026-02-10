@@ -50,7 +50,6 @@ def _cmd_versions(args: argparse.Namespace) -> int:
 
 def _cmd_backfill(args: argparse.Namespace) -> int:
     """Handle the 'backfill' subcommand."""
-    import asyncio
     from datetime import datetime
 
     from heber.writer.transformer import BronzeToSilverTransformer
@@ -62,11 +61,11 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
 
     if args.feed:
         print(f"Backfilling feed: {args.feed}")
-        count = asyncio.run(transformer.transform(args.feed, since=since, until=until))
+        count = transformer.transform(args.feed, since=since, until=until)
         print(f"Transformed {count} records")
     else:
         print("Backfilling all feeds from Bronze to Silver...")
-        stats = asyncio.run(transformer.transform_all(since=since, until=until))
+        stats = transformer.transform_all(since=since, until=until)
         for feed, count in sorted(stats.items()):
             print(f"  {feed}: {count} records")
     return 0
