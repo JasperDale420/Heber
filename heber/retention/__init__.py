@@ -398,49 +398,71 @@ class ReaperWorker:
                 dt_dirs = [dt_dir for dt_dir in version_dir.glob("dt=*") if dt_dir.is_dir()]
 
                 if dt_dirs:
-                    for dt_dir in dt_dirs:
-                        key = str(dt_dir)
-                        if key in seen:
-                            continue
-                        try:
-                            partition_date = date.fromisoformat(dt_dir.name.replace("dt=", ""))
-                        except ValueError:
-                            continue
-                        file_count, total_bytes = self._summarize_parquet_tree(dt_dir)
-                        partitions.append(
-                            PartitionInfo(
-                                path=dt_dir,
-                                dataset=dataset_name,
-                                layer=DataLayer.GOLD,
-                                partition_date=partition_date,
-                                version=version,
-                                file_count=file_count,
-                                total_bytes=total_bytes,
-                            )
-                        )
-                        seen.add(key)
+                    self._collect_dt_partitions(dt_dirs, dataset_name, version, seen, partitions)
                 else:
-                    key = str(version_dir)
-                    if key in seen:
-                        continue
-                    file_count, total_bytes = self._summarize_parquet_tree(version_dir)
-                    if file_count == 0:
-                        continue
-                    partition_date = self._infer_partition_date(version_dir)
-                    partitions.append(
-                        PartitionInfo(
-                            path=version_dir,
-                            dataset=dataset_name,
-                            layer=DataLayer.GOLD,
-                            partition_date=partition_date,
-                            version=version,
-                            file_count=file_count,
-                            total_bytes=total_bytes,
-                        )
-                    )
-                    seen.add(key)
+                    self._collect_version_partition(version_dir, dataset_name, version, seen, partitions)
 
         return partitions
+
+    def _collect_dt_partitions(
+        self,
+        dt_dirs: list[Path],
+        dataset_name: str,
+        version: str | None,
+        seen: set[str],
+        partitions: list[PartitionInfo],
+    ) -> None:
+        """Collect partitions from date-partitioned subdirectories."""
+        for dt_dir in dt_dirs:
+            key = str(dt_dir)
+            if key in seen:
+                continue
+            try:
+                partition_date = date.fromisoformat(dt_dir.name.replace("dt=", ""))
+            except ValueError:
+                continue
+            file_count, total_bytes = self._summarize_parquet_tree(dt_dir)
+            partitions.append(
+                PartitionInfo(
+                    path=dt_dir,
+                    dataset=dataset_name,
+                    layer=DataLayer.GOLD,
+                    partition_date=partition_date,
+                    version=version,
+                    file_count=file_count,
+                    total_bytes=total_bytes,
+                )
+            )
+            seen.add(key)
+
+    def _collect_version_partition(
+        self,
+        version_dir: Path,
+        dataset_name: str,
+        version: str | None,
+        seen: set[str],
+        partitions: list[PartitionInfo],
+    ) -> None:
+        """Collect a single partition from a version directory without date partitions."""
+        key = str(version_dir)
+        if key in seen:
+            return
+        file_count, total_bytes = self._summarize_parquet_tree(version_dir)
+        if file_count == 0:
+            return
+        partition_date = self._infer_partition_date(version_dir)
+        partitions.append(
+            PartitionInfo(
+                path=version_dir,
+                dataset=dataset_name,
+                layer=DataLayer.GOLD,
+                partition_date=partition_date,
+                version=version,
+                file_count=file_count,
+                total_bytes=total_bytes,
+            )
+        )
+        seen.add(key)
 
     @staticmethod
     def _extract_version(path_name: str) -> str | None:

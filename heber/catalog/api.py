@@ -55,8 +55,11 @@ app = FastAPI(
 )
 
 
+from collections.abc import AsyncGenerator
+
+
 # Dependency for database session
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
 

@@ -219,27 +219,20 @@ class AlertWatchConsumer:
     @staticmethod
     def _normalize_process_result(result: Any) -> tuple[bool, bool, str]:
         """Normalize process results from bool or tuple return conventions."""
-        if isinstance(result, tuple):
-            if len(result) >= 3:
-                success = bool(result[0])
-                retryable = bool(result[1])
-                reason = str(result[2]) if result[2] else ("processed" if success else "processing_failed")
-                return success, retryable, reason
-            if len(result) == 2:
-                success = bool(result[0])
-                retryable = bool(result[1])
-                reason = "processed" if success else "processing_failed"
-                return success, retryable, reason
-            if len(result) == 1:
-                success = bool(result[0])
-                reason = "processed" if success else "processing_failed"
-                return success, not success, reason
+        if not isinstance(result, tuple):
+            success = bool(result)
+            return success, not success, "processed" if success else "processing_failed"
 
-        if isinstance(result, bool):
-            return result, not result, "processed" if result else "processing_failed"
+        success = bool(result[0])
+        default_reason = "processed" if success else "processing_failed"
 
-        success = bool(result)
-        return success, not success, "processed" if success else "processing_failed"
+        if len(result) >= 3:
+            reason = str(result[2]) if result[2] else default_reason
+            return success, bool(result[1]), reason
+        if len(result) == 2:
+            return success, bool(result[1]), default_reason
+
+        return success, not success, default_reason
 
     async def _handle_message(self, msg_id: str, data: dict) -> bool:
         """Handle one stream entry and indicate whether it should be ACKed."""
@@ -260,19 +253,20 @@ class AlertWatchConsumer:
 
         while self._running:
             try:
-                # Read new messages from stream
                 messages = await self._read_messages()
-
                 if messages:
-                    for _stream, entries in messages:
-                        for msg_id, data in entries:
-                            should_ack = await self._handle_message(msg_id, data)
-                            if should_ack:
-                                await self._ack_message(msg_id)
-
+                    await self._dispatch_messages(messages)
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
                 await asyncio.sleep(1)
+
+    async def _dispatch_messages(self, messages: list) -> None:
+        """Dispatch a batch of stream messages."""
+        for _stream, entries in messages:
+            for msg_id, data in entries:
+                should_ack = await self._handle_message(msg_id, data)
+                if should_ack:
+                    await self._ack_message(msg_id)
 
     def stop(self) -> None:
         """Stop the consumer."""
@@ -551,136 +545,179 @@ class AlertWatchConsumer:
                 best_stale_price: float | None = None
                 best_stale_age_seconds: float | None = None
                 route_failures: list[dict[str, Any]] = []
+
                 for route in routes:
-                    try:
-                        response = await client.get(
-                            route,
-                            params={"symbols": occ_symbol},
-                        )
-                    except httpx.HTTPError as request_error:
-                        route_failures.append(route_failure_for_exception(route, request_error))
-                        logger.warning(
-                            "Entry price route request failed",
-                            route=route,
-                            error=str(request_error),
-                        )
-                        continue
-
-                    if response.status_code != 200:
-                        route_failures.append(route_failure_for_http_status(route, response.status_code))
-                        continue
-
-                    try:
-                        decoded = response.json()
-                    except (TypeError, ValueError) as decode_error:
-                        route_failures.append(route_failure_for_exception(route, decode_error, failure="json_decode"))
-                        logger.warning(
-                            "Entry price response JSON decode failed",
-                            route=route,
-                            error=str(decode_error),
-                        )
-                        continue
-                    if not isinstance(decoded, dict):
-                        route_failures.append(route_failure_for_payload_shape(route, "payload_shape", decoded))
-                        logger.warning(
-                            "Entry price payload shape invalid",
-                            route=route,
-                            payload_type=type(decoded).__name__,
-                        )
-                        continue
-                    data_payload = decoded.get("data", {})
-                    if not isinstance(data_payload, dict):
-                        route_failures.append(
-                            route_failure_for_payload_shape(route, "data_payload_shape", data_payload)
-                        )
-                        logger.warning(
-                            "Entry price data payload shape invalid",
-                            route=route,
-                            payload_type=type(data_payload).__name__,
-                        )
-                        continue
-                    quotes_payload = data_payload.get("quotes", {})
-                    if not isinstance(quotes_payload, dict):
-                        route_failures.append(
-                            route_failure_for_payload_shape(route, "quotes_payload_shape", quotes_payload)
-                        )
-                        logger.warning(
-                            "Entry price quotes payload shape invalid",
-                            route=route,
-                            payload_type=type(quotes_payload).__name__,
-                        )
-                        continue
-
-                    quote_payload = quotes_payload.get(occ_symbol)
-                    if quote_payload is None:
-                        route_failures.append(route_failure_for_symbol_missing(route, occ_symbol))
-                        continue
-                    if not isinstance(quote_payload, dict):
-                        route_failures.append(route_failure_for_symbol_shape(route, occ_symbol, quote_payload))
-                        continue
-
-                    bid = self._coerce_optional_float(quote_payload.get("bp"))
-                    if bid is None:
-                        bid = self._coerce_optional_float(quote_payload.get("bid_price"))
-
-                    ask = self._coerce_optional_float(quote_payload.get("ap"))
-                    if ask is None:
-                        ask = self._coerce_optional_float(quote_payload.get("ask_price"))
-
-                    if bid is not None and ask is not None:
-                        computed_price = (bid + ask) / 2
-                    else:
-                        last_price = self._coerce_optional_float(quote_payload.get("last_price"))
-                        if last_price is not None:
-                            computed_price = last_price
-                        else:
-                            route_failures.append(
-                                {
-                                    "route": route,
-                                    "failure": "quote_price_unusable",
-                                    "symbol": occ_symbol,
-                                }
-                            )
-                            continue
-
-                    quote_age = quote_age_seconds(quote_payload, now_utc)
-                    if quote_age is not None and quote_age > DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS:
-                        route_failures.append(
-                            {
-                                "route": route,
-                                "failure": "quote_stale",
-                                "symbol": occ_symbol,
-                                "quote_age_seconds": quote_age,
-                                "max_quote_age_seconds": DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
-                            }
-                        )
-                        if best_stale_age_seconds is None or quote_age < best_stale_age_seconds:
-                            best_stale_price = computed_price
-                            best_stale_age_seconds = quote_age
-                        continue
-
-                    return computed_price
-                if best_stale_price is not None:
-                    logger.warning(
-                        "Entry price using stale quote fallback",
-                        occ_symbol=occ_symbol,
-                        quote_age_seconds=best_stale_age_seconds,
-                        max_quote_age_seconds=DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+                    result = await self._try_route(
+                        client,
+                        route,
+                        occ_symbol,
+                        now_utc,
+                        route_failures,
                     )
-                    return best_stale_price
-                if route_failures:
-                    logger.warning(
-                        "Entry price fetch failed across routes",
-                        occ_symbol=occ_symbol,
-                        routes=routes,
-                        failures=route_failures,
-                    )
+                    if result is None:
+                        continue
+                    price, is_stale, age = result
+                    if not is_stale:
+                        return price
+                    if best_stale_age_seconds is None or age < best_stale_age_seconds:
+                        best_stale_price = price
+                        best_stale_age_seconds = age
 
-                return None
+                return self._resolve_stale_fallback(
+                    occ_symbol,
+                    routes,
+                    route_failures,
+                    best_stale_price,
+                    best_stale_age_seconds,
+                )
 
         except Exception as e:
             logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
             return None
+
+    async def _try_route(
+        self,
+        client: httpx.AsyncClient,
+        route: str,
+        occ_symbol: str,
+        now_utc: datetime,
+        route_failures: list[dict[str, Any]],
+    ) -> tuple[float, bool, float] | None:
+        """Try a single gateway route. Returns (price, is_stale, age_seconds) or None."""
+        try:
+            response = await client.get(route, params={"symbols": occ_symbol})
+        except httpx.HTTPError as request_error:
+            route_failures.append(route_failure_for_exception(route, request_error))
+            logger.warning("Entry price route request failed", route=route, error=str(request_error))
+            return None
+
+        if response.status_code != 200:
+            route_failures.append(route_failure_for_http_status(route, response.status_code))
+            return None
+
+        quote_payload = self._validate_route_response(response, route, occ_symbol, route_failures)
+        if quote_payload is None:
+            return None
+
+        computed_price = self._extract_price_from_quote(quote_payload, route, occ_symbol, route_failures)
+        if computed_price is None:
+            return None
+
+        age = quote_age_seconds(quote_payload, now_utc)
+        if age is not None and age > DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS:
+            route_failures.append(
+                {
+                    "route": route,
+                    "failure": "quote_stale",
+                    "symbol": occ_symbol,
+                    "quote_age_seconds": age,
+                    "max_quote_age_seconds": DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+                }
+            )
+            return computed_price, True, age
+
+        return computed_price, False, 0.0
+
+    def _validate_route_response(
+        self,
+        response: httpx.Response,
+        route: str,
+        occ_symbol: str,
+        route_failures: list[dict[str, Any]],
+    ) -> dict | None:
+        """Validate and drill into gateway response to get the symbol's quote dict."""
+        try:
+            decoded = response.json()
+        except (TypeError, ValueError) as decode_error:
+            route_failures.append(route_failure_for_exception(route, decode_error, failure="json_decode"))
+            logger.warning("Entry price response JSON decode failed", route=route, error=str(decode_error))
+            return None
+
+        for label, payload_part in [
+            ("payload_shape", decoded),
+            ("data_payload_shape", decoded.get("data", {}) if isinstance(decoded, dict) else None),
+        ]:
+            if not isinstance(payload_part, dict):
+                route_failures.append(route_failure_for_payload_shape(route, label, payload_part))
+                logger.warning(
+                    "Entry price payload shape invalid",
+                    route=route,
+                    payload_type=type(payload_part).__name__,
+                )
+                return None
+
+        data_payload = decoded["data"]
+        quotes_payload = data_payload.get("quotes", {})
+        if not isinstance(quotes_payload, dict):
+            route_failures.append(route_failure_for_payload_shape(route, "quotes_payload_shape", quotes_payload))
+            logger.warning(
+                "Entry price quotes payload shape invalid",
+                route=route,
+                payload_type=type(quotes_payload).__name__,
+            )
+            return None
+
+        quote_payload = quotes_payload.get(occ_symbol)
+        if quote_payload is None:
+            route_failures.append(route_failure_for_symbol_missing(route, occ_symbol))
+            return None
+        if not isinstance(quote_payload, dict):
+            route_failures.append(route_failure_for_symbol_shape(route, occ_symbol, quote_payload))
+            return None
+
+        return quote_payload
+
+    def _extract_price_from_quote(
+        self,
+        quote_payload: dict,
+        route: str,
+        occ_symbol: str,
+        route_failures: list[dict[str, Any]],
+    ) -> float | None:
+        """Extract mid or last price from a validated quote payload."""
+        bid = self._coerce_optional_float(quote_payload.get("bp"))
+        if bid is None:
+            bid = self._coerce_optional_float(quote_payload.get("bid_price"))
+
+        ask = self._coerce_optional_float(quote_payload.get("ap"))
+        if ask is None:
+            ask = self._coerce_optional_float(quote_payload.get("ask_price"))
+
+        if bid is not None and ask is not None:
+            return (bid + ask) / 2
+
+        last_price = self._coerce_optional_float(quote_payload.get("last_price"))
+        if last_price is not None:
+            return last_price
+
+        route_failures.append({"route": route, "failure": "quote_price_unusable", "symbol": occ_symbol})
+        return None
+
+    @staticmethod
+    def _resolve_stale_fallback(
+        occ_symbol: str,
+        routes: list[str],
+        route_failures: list[dict[str, Any]],
+        best_stale_price: float | None,
+        best_stale_age_seconds: float | None,
+    ) -> float | None:
+        """Return stale price fallback or None after logging."""
+        if best_stale_price is not None:
+            logger.warning(
+                "Entry price using stale quote fallback",
+                occ_symbol=occ_symbol,
+                quote_age_seconds=best_stale_age_seconds,
+                max_quote_age_seconds=DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+            )
+            return best_stale_price
+        if route_failures:
+            logger.warning(
+                "Entry price fetch failed across routes",
+                occ_symbol=occ_symbol,
+                routes=routes,
+                failures=route_failures,
+            )
+        return None
 
     async def _extract_and_store_features(self, alert: dict, watch_id: str) -> None:
         """Extract features from alert and store for meta-labeling.

@@ -270,7 +270,7 @@ class HotStoreSync:
     def _flush_due_event_buffers(self) -> int:
         now = datetime.now(UTC)
         total_flushed = 0
-        for dataset, records in list(self._event_buffers.items()):
+        for dataset, records in dict(self._event_buffers).items():
             if not records:
                 continue
             started_at = self._event_buffer_started_at.get(dataset, now)
@@ -282,7 +282,7 @@ class HotStoreSync:
     def flush(self) -> int:
         """Flush all buffered event writes."""
         total_flushed = 0
-        for dataset in list(self._event_buffers):
+        for dataset in dict(self._event_buffers):
             total_flushed += self._flush_event_buffer(dataset)
         return total_flushed
 
@@ -405,7 +405,7 @@ class HotStoreSync:
             "bars_lag_seconds": self.client.get_sync_lag_seconds("bars"),
         }
 
-    async def get_metrics(self) -> dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         return self.get_metrics_snapshot()
 
 
@@ -420,7 +420,7 @@ class HotStoreReader:
         self.syncer = syncer or HotStoreSync()
         self.silver_base_path = silver_base_path or self.syncer.config.silver_base_path
 
-    async def query(self, dataset: str, query_type: QueryType, **filters) -> list[dict[str, Any]]:
+    def query(self, dataset: str, query_type: QueryType, **filters) -> list[dict[str, Any]]:
         if query_type == QueryType.BACKTEST_RESEARCH:
             return self._query_silver(dataset, **filters)
 

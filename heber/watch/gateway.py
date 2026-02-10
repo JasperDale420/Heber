@@ -12,6 +12,33 @@ DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
 
 
+def _normalize_gateway_base(raw_base: str) -> str:
+    """Normalize base URL by stripping query/fragment parts."""
+    parsed = urlsplit(raw_base)
+    if parsed.scheme and parsed.netloc:
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", "")).rstrip("/")
+    return raw_base.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+
+
+def _compute_prefixed_route(
+    normalized_route: str,
+    normalized_prefix: str,
+    route_has_prefix: bool,
+    base_has_prefix: bool,
+) -> str:
+    """Compute the API-prefixed route string."""
+    if not normalized_prefix:
+        return normalized_route
+    if route_has_prefix and base_has_prefix:
+        suffix = normalized_route[len(normalized_prefix) :]
+        if suffix.startswith("/"):
+            return suffix
+        return f"/{suffix}" if suffix else ""
+    if route_has_prefix or base_has_prefix:
+        return normalized_route
+    return f"{normalized_prefix}{normalized_route}"
+
+
 def gateway_url_candidates(
     gateway_url: str,
     route: str,
@@ -23,16 +50,11 @@ def gateway_url_candidates(
     paths. This helper standardizes construction while preserving compatibility
     through fallback ordering.
     """
-    raw_base = gateway_url.strip()
-    parsed_base = urlsplit(raw_base)
-    if parsed_base.scheme and parsed_base.netloc:
-        # Base URLs should not carry query/fragment parts when building API routes.
-        base = urlunsplit((parsed_base.scheme, parsed_base.netloc, parsed_base.path, "", "")).rstrip("/")
-    else:
-        base = raw_base.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    base = _normalize_gateway_base(gateway_url.strip())
     normalized_route = route if route.startswith("/") else f"/{route}"
     stripped_prefix = api_prefix.strip().strip("/")
     normalized_prefix = f"/{stripped_prefix}" if stripped_prefix else ""
+
     route_has_prefix = bool(normalized_prefix) and (
         normalized_route == normalized_prefix or normalized_route.startswith(f"{normalized_prefix}/")
     )
@@ -42,16 +64,12 @@ def gateway_url_candidates(
     if base_has_prefix:
         base_without_prefix = base[: -len(normalized_prefix)].rstrip("/")
 
-    if normalized_prefix:
-        if route_has_prefix and base_has_prefix:
-            suffix = normalized_route[len(normalized_prefix) :]
-            prefixed_route = suffix if suffix.startswith("/") else f"/{suffix}" if suffix else ""
-        elif route_has_prefix or base_has_prefix:
-            prefixed_route = normalized_route
-        else:
-            prefixed_route = f"{normalized_prefix}{normalized_route}"
-    else:
-        prefixed_route = normalized_route
+    prefixed_route = _compute_prefixed_route(
+        normalized_route,
+        normalized_prefix,
+        route_has_prefix,
+        base_has_prefix,
+    )
 
     prefixed = f"{base}{prefixed_route}"
     legacy = f"{base_without_prefix}{normalized_route}" if base_has_prefix else f"{base}{normalized_route}"
@@ -152,33 +170,51 @@ def route_failure_for_partial_quotes(
     }
 
 
+def _coerce_numeric_to_utc(value: int | float) -> datetime | None:
+    """Convert a numeric epoch (seconds or milliseconds) to a UTC datetime."""
+    epoch = value / 1000.0 if abs(value) >= 100_000_000_000 else value
+    try:
+        return datetime.fromtimestamp(epoch, tz=UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _coerce_string_to_utc(value: str) -> datetime | None:
+    """Parse an ISO-8601 string or numeric string to a UTC datetime."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return _coerce_numeric_string_to_utc(value)
+    return _ensure_utc(parsed)
+
+
+def _coerce_numeric_string_to_utc(value: str) -> datetime | None:
+    """Attempt to parse a string as a numeric epoch value."""
+    try:
+        numeric_value = float(value)
+        epoch = numeric_value / 1000.0 if abs(numeric_value) >= 100_000_000_000 else numeric_value
+        return datetime.fromtimestamp(epoch, tz=UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def coerce_utc_timestamp(value: Any) -> datetime | None:
     """Convert timestamp payload values into UTC-aware datetimes."""
     if value is None:
         return None
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
+        return _ensure_utc(value)
     if isinstance(value, int | float):
-        epoch = value / 1000.0 if abs(value) >= 100_000_000_000 else value
-        try:
-            return datetime.fromtimestamp(epoch, tz=UTC)
-        except (OSError, OverflowError, ValueError):
-            return None
+        return _coerce_numeric_to_utc(value)
     if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                numeric_value = float(value)
-                epoch = numeric_value / 1000.0 if abs(numeric_value) >= 100_000_000_000 else numeric_value
-                parsed = datetime.fromtimestamp(epoch, tz=UTC)
-            except (OSError, OverflowError, ValueError):
-                return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
+        return _coerce_string_to_utc(value)
     return None
 
 

@@ -152,7 +152,7 @@ def test_hotstore_sync_serializes_lineage_dict() -> None:
 def test_hotstore_sync_metrics_no_await_mismatch() -> None:
     client = _StubHotStoreClient()
     syncer = HotStoreSync(client=client)
-    metrics = asyncio.run(syncer.get_metrics())
+    metrics = syncer.get_metrics()
     assert metrics["quotes_lag_seconds"] == 12.5
     assert metrics["trades_lag_seconds"] == 12.5
     assert metrics["bars_lag_seconds"] == 12.5

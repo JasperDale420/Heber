@@ -61,7 +61,7 @@ async def _run_hotloader(
     silver_base_path: str | None,
     once: bool,
     syncer_factory: Callable[..., HotStoreSync],
-) -> int:
+) -> None:
     syncer = syncer_factory(silver_base_path=silver_base_path)
     syncer.ensure_tables()
 
@@ -69,7 +69,7 @@ async def _run_hotloader(
         for dataset in datasets:
             syncer.sync_from_silver(dataset, silver_path=silver_base_path)
         syncer.flush()
-        return 0
+        return
 
     stop_event: asyncio.Event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -81,7 +81,7 @@ async def _run_hotloader(
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, request_stop)
-        except (NotImplementedError, RuntimeError, ValueError):
+        except (RuntimeError, ValueError):
             # Not all runtimes allow custom signal handlers.
             pass
 
@@ -95,8 +95,6 @@ async def _run_hotloader(
         syncer.stop()
         await sync_task
         logger.info("hotloader_stopped")
-
-    return 0
 
 
 def main(
@@ -112,7 +110,7 @@ def main(
         raise ValueError("At least one dataset must be provided for hotloader sync.")
 
     try:
-        return asyncio.run(
+        asyncio.run(
             _run_hotloader(
                 datasets=datasets,
                 silver_base_path=args.silver_base_path,
@@ -121,7 +119,8 @@ def main(
             )
         )
     except KeyboardInterrupt:
-        return 0
+        pass
+    return 0
 
 
 __all__ = [

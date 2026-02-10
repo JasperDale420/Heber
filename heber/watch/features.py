@@ -401,11 +401,7 @@ class AlertFeatureExtractor:
         return features
 
     async def _enrich_greeks(self, features: AlertFeatures) -> AlertFeatures:
-        """Enrich features with Greeks from Alpaca option chain.
-
-        Fetches option chain for the specific strike/expiry/type and extracts
-        delta, gamma, theta, vega, and IV.
-        """
+        """Enrich features with Greeks from Alpaca option chain."""
         if not self.gateway_url:
             logger.debug("No gateway URL, skipping Greeks enrichment")
             return features
@@ -442,43 +438,21 @@ class AlertFeatureExtractor:
                     )
                     return features
 
-            # Extract contracts from response
             contracts = data.get("data", {}).get("contracts", [])
             if not contracts:
                 logger.debug("No contracts found for Greeks", symbol=features.underlying)
                 return features
 
-            # Find matching contract by strike
-            contract = None
-            for c in contracts:
-                strike_price = self._coerce_optional_float(c.get("strike_price"))
-                if strike_price is None:
-                    continue
-                if abs(strike_price - features.strike) < 0.01:
-                    contract = c
-                    break
-
-            if not contract:
-                for c in contracts:
-                    if self._coerce_optional_float(c.get("strike_price")) is not None:
-                        contract = c
-                        break
+            contract = self._find_matching_contract(contracts, features.strike)
             if not contract:
                 logger.debug("No valid contracts found for Greeks", symbol=features.underlying)
                 return features
 
-            # Extract Greeks
-            delta = contract.get("delta")
-            gamma = contract.get("gamma")
-            theta = contract.get("theta")
-            vega = contract.get("vega")
-            implied_vol = contract.get("implied_volatility")
-
-            features.delta = self._coerce_optional_float(delta)
-            features.gamma = self._coerce_optional_float(gamma)
-            features.theta = self._coerce_optional_float(theta)
-            features.vega = self._coerce_optional_float(vega)
-            features.iv = self._coerce_optional_float(implied_vol)
+            features.delta = self._coerce_optional_float(contract.get("delta"))
+            features.gamma = self._coerce_optional_float(contract.get("gamma"))
+            features.theta = self._coerce_optional_float(contract.get("theta"))
+            features.vega = self._coerce_optional_float(contract.get("vega"))
+            features.iv = self._coerce_optional_float(contract.get("implied_volatility"))
 
             logger.debug(
                 "Enriched Greeks",
@@ -497,29 +471,32 @@ class AlertFeatureExtractor:
 
         return features
 
+    def _find_matching_contract(self, contracts: list[dict], target_strike: float) -> dict | None:
+        """Find the contract matching the target strike, or fall back to the first valid one."""
+        for c in contracts:
+            strike_price = self._coerce_optional_float(c.get("strike_price"))
+            if strike_price is not None and abs(strike_price - target_strike) < 0.01:
+                return c
+
+        for c in contracts:
+            if self._coerce_optional_float(c.get("strike_price")) is not None:
+                return c
+
+        return None
+
     async def _enrich_market_context(self, features: AlertFeatures) -> AlertFeatures:
-        """Enrich features with market context data from Data Gateway.
-
-        Fetches recent bars for underlying from Alpaca via Data Gateway,
-        then computes:
-        - 1d, 5d, 30d returns
-        - 20d realized volatility
-
-        Note: IV rank requires options analytics not yet available.
-        """
+        """Enrich features with market context data from Data Gateway."""
         if not self.gateway_url:
             logger.debug("No gateway URL, skipping market enrichment")
             return features
 
         try:
-            import math
             from datetime import timedelta
 
             import httpx
 
             symbol = features.underlying
             end_date = features.alert_time.date()
-            # Fetch 35 days to ensure we have 30 trading days
             start_date = end_date - timedelta(days=50)
 
             routes = gateway_url_candidates(
@@ -552,53 +529,19 @@ class AlertFeatureExtractor:
                     )
                     return features
 
-            # Extract bars from response
             bars = data.get("data", {}).get("bars", [])
             if not bars or len(bars) < 2:
                 logger.debug("Insufficient bars for enrichment", symbol=symbol, count=len(bars))
                 return features
 
-            # Sort by timestamp descending (most recent first)
             bars = sorted(bars, key=lambda b: b.get("t", ""), reverse=True)
+            closes: list[float | None] = [self._coerce_optional_float(bar.get("c")) for bar in bars]
 
-            # Preserve day alignment (including zero closes) so return horizons
-            # do not silently skip invalid days and shift to older bars.
-            closes: list[float | None] = []
-            for bar in bars:
-                closes.append(self._coerce_optional_float(bar.get("c")))
-
-            if len(closes) < 2:
+            if len(closes) < 2 or closes[0] is None or closes[0] <= 0:
                 return features
 
-            # Compute returns
-            current_close = closes[0]
-            if current_close is None or current_close <= 0:
-                return features
-
-            # 1-day return
-            if len(closes) >= 2 and closes[1] is not None and closes[1] > 0:
-                features.underlying_1d_return = (current_close / closes[1]) - 1.0
-
-            # 5-day return
-            if len(closes) >= 6 and closes[5] is not None and closes[5] > 0:
-                features.underlying_5d_return = (current_close / closes[5]) - 1.0
-
-            # 30-day return
-            if len(closes) >= 31 and closes[30] is not None and closes[30] > 0:
-                features.underlying_30d_return = (current_close / closes[30]) - 1.0
-
-            # 20-day realized volatility (annualized)
-            if len(closes) >= 21:
-                daily_returns = []
-                for i in range(20):
-                    if closes[i] is not None and closes[i + 1] is not None and closes[i] > 0 and closes[i + 1] > 0:
-                        daily_returns.append(math.log(closes[i] / closes[i + 1]))
-
-                if daily_returns:
-                    mean_return = sum(daily_returns) / len(daily_returns)
-                    variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
-                    daily_vol = math.sqrt(variance)
-                    features.realized_vol_20d = daily_vol * math.sqrt(252)  # Annualize
+            self._compute_returns(features, closes)
+            self._compute_realized_vol_20d(features, closes)
 
             logger.debug(
                 "Enriched market context",
@@ -617,6 +560,34 @@ class AlertFeatureExtractor:
             )
 
         return features
+
+    @staticmethod
+    def _compute_returns(features: AlertFeatures, closes: list[float | None]) -> None:
+        """Compute 1d, 5d, 30d returns from close prices."""
+        current_close = closes[0]
+        if len(closes) >= 2 and closes[1] is not None and closes[1] > 0:
+            features.underlying_1d_return = (current_close / closes[1]) - 1.0
+        if len(closes) >= 6 and closes[5] is not None and closes[5] > 0:
+            features.underlying_5d_return = (current_close / closes[5]) - 1.0
+        if len(closes) >= 31 and closes[30] is not None and closes[30] > 0:
+            features.underlying_30d_return = (current_close / closes[30]) - 1.0
+
+    @staticmethod
+    def _compute_realized_vol_20d(features: AlertFeatures, closes: list[float | None]) -> None:
+        """Compute 20-day realized volatility (annualized)."""
+        import math
+
+        if len(closes) < 21:
+            return
+        daily_returns = []
+        for i in range(20):
+            if closes[i] is not None and closes[i + 1] is not None and closes[i] > 0 and closes[i + 1] > 0:
+                daily_returns.append(math.log(closes[i] / closes[i + 1]))
+        if not daily_returns:
+            return
+        mean_return = sum(daily_returns) / len(daily_returns)
+        variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
+        features.realized_vol_20d = math.sqrt(variance) * math.sqrt(252)
 
 
 # Redis key pattern for feature storage

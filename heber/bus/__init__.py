@@ -408,7 +408,12 @@ class RedisEventBus(EventBus):
         """Get pending count using XPENDING."""
         try:
             info = await self._redis.xpending(stream.value, group_name)
-            count = info.get("pending", 0) if isinstance(info, dict) else info[0] if info else 0
+            if isinstance(info, dict):
+                count = info.get("pending", 0)
+            elif info:
+                count = info[0]
+            else:
+                count = 0
             consumer_lag.labels(stream=stream.value, group=group_name).set(count)
             return count
         except Exception:

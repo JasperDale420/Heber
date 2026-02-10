@@ -1,5 +1,7 @@
 """Tests for Feature Templates (PRD §32)."""
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -198,7 +200,7 @@ class TestFlowFeatures:
 
         # Second point should exclude the first event (>24h apart).
         second = features.sort_values("ts_event").iloc[-1]
-        assert second["total_premium_24h"] == 40.0
+        assert math.isclose(second["total_premium_24h"], 40.0, rel_tol=1e-9)
 
     def test_flow_normalizes_string_timestamps_to_utc(self):
         from heber.features.templates.flow import compute_flow_features

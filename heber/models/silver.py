@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field, model_validator
 # Shared Base Columns (PRD §8.7.1)
 # ==============================================================================
 
+_SENTIMENT_DESC = "bullish, bearish, neutral"
+
 
 class SilverBase(BaseModel):
     """Base columns present in EVERY Silver dataset (PRD §8.7.1)."""
@@ -160,7 +162,7 @@ class FlowAlertRecord(SilverBase):
     # UW additional flags (P1)
     is_sweep: bool | None = None
     is_unusual: bool | None = None
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
     trade_count: int | None = None
     volume_oi_ratio: float | None = None
     total_ask_side_prem: float | None = None
@@ -320,7 +322,7 @@ class MarketTideRecord(SilverBase):
     index_data: dict[str, Any] | None = None
 
     # UW sentiment field (P1)
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
 
 
 class SectorTideRecord(SilverBase):
@@ -339,7 +341,7 @@ class SectorTideRecord(SilverBase):
 
     # Volume and sentiment
     net_volume: float | None = None
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
 
 
 # ==============================================================================
@@ -867,7 +869,7 @@ class NewsEventRecord(SilverBase):
 
     # Sentiment analysis
     sentiment_score: float | None = Field(None, description="-1.0 (bearish) to 1.0 (bullish)")
-    sentiment_label: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment_label: str | None = Field(None, description=_SENTIMENT_DESC)
     relevance_score: float | None = Field(None, description="0.0-1.0 relevance to instrument")
 
     # Event classification

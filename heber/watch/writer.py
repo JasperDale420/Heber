@@ -136,15 +136,24 @@ class LabelWriter:
                 logger.debug("Wrote partition", path=str(final_file), rows=rows)
 
         except Exception:
-            if current_tmp_file is not None and current_tmp_file.exists():
-                current_tmp_file.unlink()
-            for tmp_file, _final_file, _rows in staged_files:
-                if tmp_file.exists():
-                    tmp_file.unlink()
-            for committed_file in reversed(promoted_files):
-                if committed_file.exists():
-                    committed_file.unlink()
+            self._cleanup_staged_files(current_tmp_file, staged_files, promoted_files)
             raise
+
+    @staticmethod
+    def _cleanup_staged_files(
+        current_tmp_file: Path | None,
+        staged_files: list[tuple[Path, Path, int]],
+        promoted_files: list[Path],
+    ) -> None:
+        """Remove staged and promoted files on write failure."""
+        if current_tmp_file is not None and current_tmp_file.exists():
+            current_tmp_file.unlink()
+        for tmp_file, _final_file, _rows in staged_files:
+            if tmp_file.exists():
+                tmp_file.unlink()
+        for committed_file in reversed(promoted_files):
+            if committed_file.exists():
+                committed_file.unlink()
 
 
 class WatchService:
