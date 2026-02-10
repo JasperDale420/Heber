@@ -70,7 +70,7 @@ DEFAULT_PROVIDERS: list[DataProvider] = [
     ),
     DataProvider(
         name=PROVIDER_UNUSUAL_WHALES,
-        capabilities=["flow_alerts", "darkpool_trades", "congress", "lobbying"],
+        capabilities=["flow_alerts", "darkpool", "congress", "lobbying"],
         priority=ProviderPriority.PRIMARY,
         streaming=False,
         notes="Alternative data provider",

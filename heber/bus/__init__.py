@@ -37,7 +37,7 @@ class StreamName(str, Enum):
 
     # Intel streams
     INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:intel.flow_alerts"
-    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool_trades"
+    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool"
 
     # System streams
     DLQ = f"{STREAM_NAMESPACE}:dlq"

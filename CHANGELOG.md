@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Canonical Contracts
+
+- Standardized canonical darkpool naming to `darkpool` across provider/stream/slice metadata:
+  - `heber/catalog/datasources.py` provider capability updated from `darkpool_trades` to `darkpool`
+  - `heber/bus/streams.py` stream and consumer-group dataset name updated to `darkpool`
+  - `heber/bus/__init__.py` canonical stream enum key updated to `intel.darkpool`
+  - `heber/ops/slices.py` slice 3 dataset list updated to include `darkpool`
+- Added darkpool contract tests:
+  - `heber/catalog/tests_datasources.py::TestProviderRegistry.test_get_by_capability_uses_canonical_darkpool_name`
+  - `heber/ops/tests_remaining.py::TestStreamRegistry.test_darkpool_stream_uses_canonical_name`
+  - `heber/ops/tests_remaining.py::TestSliceManager.test_slice_3_uses_canonical_darkpool_dataset_name`
+- Updated flow template dependency docs and model schema naming text to `darkpool` while retaining `get_darkpool_trades_schema()` compatibility alias in `heber/models/silver.py`.
+
 #### Documentation
 
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
@@ -30,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed duplicate Dockerfile `writer` stage (same CMD as `consumer`)
 - Suppressed Bandit B608 false positives on ClickHouse queries (table names from internal enums)
 - Updated 3 test files to remove references to deleted writer k8s manifests
+
+#### SonarQube Code Quality — Writer Module Remediation
+
+- Removed unnecessary `async` from `BronzeWriter.write`, `flush_if_needed`, `flush`, `_flush_partition` (S7503, S7493)
+- Removed unnecessary `async` from `SilverWriter.write`, `flush_if_needed`, `flush`, `_flush_partition` (S7503)
+- Removed unnecessary `async` from `Compactor.compact_partition`, `scan_and_compact` (S7503)
+- Re-raised `asyncio.CancelledError` in `Compactor.run()` after cleanup (S7497)
+- Cascaded async removal to `EventConsumer`: `_process_event_once`, `process_event`, `_flush_layers`, `_final_flush`
+- Removed unnecessary `list()` wrappers on `dict.items()` in Bronze and Silver writers (S7504)
+- Updated 4 test files to use sync calls and `MagicMock` instead of `AsyncMock` for writer methods
+- Reduced SonarQube issues to 2 known false positives (S930 in `ml/trainer.py`)
 
 #### Module Audit — Tier 3/4 Fixes
 

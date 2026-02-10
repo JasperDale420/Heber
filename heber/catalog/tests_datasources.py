@@ -38,6 +38,15 @@ class TestProviderRegistry:
         assert len(providers) >= 2
         assert any(p.name == "Alpaca" for p in providers)
 
+    def test_get_by_capability_uses_canonical_darkpool_name(self):
+        registry = ProviderRegistry()
+
+        canonical = registry.get_by_capability("darkpool")
+        legacy = registry.get_by_capability("darkpool_trades")
+
+        assert any(p.name == "Unusual Whales" for p in canonical)
+        assert legacy == []
+
     def test_get_primary(self):
         registry = ProviderRegistry()
 

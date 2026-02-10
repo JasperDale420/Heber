@@ -175,7 +175,7 @@ class FlowAlertRecord(SilverBase):
 
 
 class DarkpoolTradeRecord(SilverBase):
-    """Silver darkpool_trades schema (PRD §8.7.6, Unusual Whales).
+    """Silver darkpool schema (PRD §8.7.6, Unusual Whales).
 
     Primary key: event_id
     """
@@ -946,8 +946,8 @@ def get_bars_schema() -> pa.Schema:
     )
 
 
-def get_darkpool_trades_schema() -> pa.Schema:
-    """PyArrow schema for darkpool_trades Silver dataset."""
+def get_darkpool_schema() -> pa.Schema:
+    """PyArrow schema for darkpool Silver dataset."""
     return pa.schema(
         [
             *SILVER_BASE_SCHEMA,
@@ -960,6 +960,11 @@ def get_darkpool_trades_schema() -> pa.Schema:
             pa.field("conditions", pa.list_(pa.string())),
         ]
     )
+
+
+def get_darkpool_trades_schema() -> pa.Schema:
+    """Compatibility alias for darkpool schema."""
+    return get_darkpool_schema()
 
 
 def get_option_contracts_schema() -> pa.Schema:

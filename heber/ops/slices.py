@@ -67,7 +67,7 @@ DEFAULT_SLICES: list[ImplementationSlice] = [
         number=3,
         name="Alternative Data",
         description="Flow alerts, dark pool, congress trades, lobbying",
-        datasets=["flow_alerts", "darkpool_trades", "congress_trades", "lobbying"],
+        datasets=["flow_alerts", "darkpool", "congress_trades", "lobbying"],
         dependencies=[1],
     ),
     ImplementationSlice(

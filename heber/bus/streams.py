@@ -84,7 +84,7 @@ DEFAULT_STREAMS: list[StreamConfig] = [
     StreamConfig("option_trades", "option_trades", StreamPriority.HIGH, "options-consumer"),
     # Alternative (High)
     StreamConfig("flow_alerts", "flow_alerts", StreamPriority.HIGH, "alt-data-consumer"),
-    StreamConfig("darkpool_trades", "darkpool_trades", StreamPriority.HIGH, "alt-data-consumer"),
+    StreamConfig("darkpool", "darkpool", StreamPriority.HIGH, "alt-data-consumer"),
     StreamConfig("congress_trades", "congress_trades", StreamPriority.NORMAL, "alt-data-consumer"),
     StreamConfig("lobbying", "lobbying", StreamPriority.LOW, "alt-data-consumer"),
     # Fundamentals (Normal)
@@ -113,7 +113,7 @@ DEFAULT_CONSUMER_GROUPS: list[ConsumerGroupConfig] = [
     ),
     ConsumerGroupConfig(
         name="alt-data-consumer",
-        streams=["flow_alerts", "darkpool_trades", "congress_trades", "lobbying"],
+        streams=["flow_alerts", "darkpool", "congress_trades", "lobbying"],
         consumers_per_group=2,
         read_batch_size=100,
     ),
