@@ -932,6 +932,7 @@ Updated: 2026-02-09
 - `T-128` addressed audit residual outcome/entry guardrails: manager `complete_watch()` and expiry cleanup now sanitize non-finite outcome returns before persistence, and consumer watch creation now enforces positive finite fallback entry pricing when gateway lookup fails.
 - `T-129` addressed audit residual alert-label guardrails: entry extraction now treats non-finite/invalid `spot_px` as fallback-eligible (bar-close fallback with finite/positive validation), and SPY-relative return computation now rejects non-finite SPY inputs/returns to prevent `inf` beta-neutral labels.
 - `T-130` addressed audit residual market-context guardrails: VIX regime/enrichment helpers now fail soft on non-finite VIX values and beta-neutral return helpers now reject non-finite underlying/SPY/beta inputs to prevent non-finite label propagation.
+- `T-131` addressed audit residual test-harness guardrails: Feast stubs used in materialization/alignment tests now emulate package semantics (`feast.__path__`, `feast.types`) so feature-view imports are stable under full-suite module-mocking order.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -1078,6 +1079,7 @@ Updated: 2026-02-09
 - Audit Pass 124 revalidated and remediated non-finite outcome-return and entry-fallback residuals; manager completion paths now persist only finite returns, and consumer fallback entry pricing now defaults safely when alert `contract_px` is non-positive or invalid.
 - Audit Pass 125 revalidated and remediated non-finite alert-label residuals; alert-label entry extraction now falls back safely when `spot_px` is non-finite/invalid, and SPY-relative return logic now filters non-finite SPY moves before beta-neutral return computation.
 - Audit Pass 126 revalidated and remediated non-finite VIX/beta-neutral helper residuals; VIX helpers now reject non-finite closes/regime inputs and beta-neutral return helpers now fail soft when underlying/SPY/beta inputs are non-finite.
+- Audit Pass 127 revalidated and remediated Feast stub package-compatibility residuals; test stubs now provide package-compatible `feast`/`feast.types` modules so full-suite feature-view alignment tests no longer fail due to cross-test module mocking order.
 
 ## Executive Summary
 
@@ -1261,6 +1263,7 @@ Severity key: High, Medium, Low
 | TD-170 | Medium | Labels Pipeline | SPY-relative beta-neutral label computation accepted non-finite SPY price moves, allowing `inf` returns to propagate into output labels instead of failing soft. |
 | TD-171 | Medium | Labels Pipeline | VIX enrichment/regime helpers accepted non-finite VIX close values (`NaN`/`inf`), allowing invalid regime or VIX-at-alert values to leak into labels instead of failing soft. |
 | TD-172 | Medium | Labels Pipeline | Beta-neutral return helper accepted non-finite underlying/SPY/beta inputs, allowing `inf` output values to propagate into downstream label features. |
+| TD-173 | Medium | Test Infrastructure | Feast test stubs were non-package modules, causing intermittent `feast.types` import failures in full-suite runs when test-order module mocking replaced `feast` without package semantics. |
 
 ## Detailed Findings
 
@@ -2276,6 +2279,12 @@ Recommendation: Require finite `underlying_return`, `spy_return`, and `beta` bef
 Update 2026-02-09: Remediated in `T-130` by adding finite checks for all beta-neutral inputs.
 Revalidated 2026-02-09 (Pass 126): Resolved. Beta-neutral helper now fails soft (`None`) on non-finite inputs instead of propagating invalid values.
 
+**TD-173: Feast stubs in tests lacked package semantics, causing full-suite import flakiness.**
+Evidence: full-suite `pytest -q` failed in `tests/test_feature_view_alignment.py` with `ModuleNotFoundError: No module named 'feast.types'; 'feast' is not a package` when cross-test mocking replaced `sys.modules["feast"]` with a plain module.
+Recommendation: make test stubs package-compatible by setting `feast.__path__` and registering `feast.types` consistently across Feast-related tests.
+Update 2026-02-10: Remediated in `T-131` by hardening Feast stubs in `tests/test_feature_view_alignment.py` and `tests/test_feast_materialization_behavior.py`, and adding regression coverage for package-style `feast.types` imports.
+Revalidated 2026-02-10 (Pass 127): Resolved. Full suite now passes with deterministic Feast stub import behavior across test-order variation.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -2283,7 +2292,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168, TD-169, TD-170, TD-171, TD-172.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168, TD-169, TD-170, TD-171, TD-172, TD-173.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

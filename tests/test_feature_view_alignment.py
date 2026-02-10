@@ -12,6 +12,8 @@ import pytest
 def _build_feast_stub():
     """Build a lightweight feast stub with real classes for schema/path assertions."""
     feast_module = types.ModuleType("feast")
+    # Mark as package so ``from feast.types import ...`` works reliably.
+    feast_module.__path__ = []  # type: ignore[attr-defined]
 
     class Entity:
         def __init__(self, name: str, description: str | None = None, join_keys: list[str] | None = None):
@@ -75,6 +77,7 @@ def _build_feast_stub():
     feast_module.Field = Field
     feast_module.FileSource = FileSource
     feast_module.FeatureView = FeatureView
+    feast_module.types = feast_types
 
     return feast_module, feast_types
 
@@ -264,3 +267,11 @@ def test_feature_view_source_path_matches_gold_layout(
     assert "version=" in path
     assert "dt=" in path
     assert path.endswith("*.parquet")
+
+
+def test_feast_stub_behaves_like_package_for_types_import() -> None:
+    import feast.types as feast_types  # type: ignore[import-not-found]
+
+    assert hasattr(feast_types, "Float32")
+    assert hasattr(feast_types, "Int64")
+    assert hasattr(feast_types, "String")

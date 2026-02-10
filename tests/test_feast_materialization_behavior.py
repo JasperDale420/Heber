@@ -18,13 +18,22 @@ from heber.feast.materialization import DEFAULT_REPO_PATH, materialize_features,
 
 def _install_fake_feast(monkeypatch, store: MagicMock) -> None:
     feast_module = types.ModuleType("feast")
+    # Mark as package so downstream imports of ``feast.types`` are valid.
+    feast_module.__path__ = []  # type: ignore[attr-defined]
+
+    feast_types = types.ModuleType("feast.types")
+    feast_types.Float32 = type("Float32", (), {})
+    feast_types.Int64 = type("Int64", (), {})
+    feast_types.String = type("String", (), {})
 
     def _feature_store(*, repo_path: str):
         store._repo_path = repo_path
         return store
 
     feast_module.FeatureStore = _feature_store
+    feast_module.types = feast_types
     monkeypatch.setitem(sys.modules, "feast", feast_module)
+    monkeypatch.setitem(sys.modules, "feast.types", feast_types)
 
 
 def test_materialize_uses_settings_default_repo_path(monkeypatch) -> None:
