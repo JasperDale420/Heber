@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Suppressed Bandit B608 false positives on ClickHouse queries (table names from internal enums)
 - Updated 3 test files to remove references to deleted writer k8s manifests
 
+#### Module Audit — Tier 3/4 Fixes
+
+- Fixed `PytestCollectionWarning`s: added `__test__ = False` to `TestDataConfig` and `TestFixture` in `testing/generators.py`, and `TestCategory` and `TestRun` in `testing/ci_gates.py`
+- Fixed pandas `FutureWarning` in `test_edge_cases.py`: replaced `.fillna()` with `.where()` for pandas 2.x compatibility
+- Test suite improvement: **514 passed, 0 failed, 1 warning** (from 433/18/13)
+
 #### Codebase Audit Fixes
 
 - Fixed `cli.py` backfill: `--since`/`--until` args are now passed to `transform()` when `--feed` is specified (previously silently ignored)
