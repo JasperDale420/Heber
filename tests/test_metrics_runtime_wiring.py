@@ -41,8 +41,7 @@ def _build_envelope() -> EventEnvelope:
     )
 
 
-@pytest.mark.asyncio
-async def test_consumer_process_records_core_metrics(monkeypatch) -> None:
+def test_consumer_process_records_core_metrics(monkeypatch) -> None:
     consumer = consumer_module.EventConsumer()
     consumer.bronze_writer.write = MagicMock()
     consumer.silver_writer.write = MagicMock()
@@ -68,7 +67,7 @@ async def test_consumer_process_records_core_metrics(monkeypatch) -> None:
     payload = _build_envelope().model_dump(mode="json")
     event_data = {b"data": json.dumps(payload).encode("utf-8")}
 
-    success, error = await consumer._process_event_once(event_data)
+    success, error = consumer._process_event_once(event_data)
 
     assert success is True
     assert error is None
@@ -84,7 +83,7 @@ async def test_consumer_iteration_records_batch_size_metric(monkeypatch) -> None
     consumer.redis.xreadgroup.return_value = [(b"heber:events", [(b"1-0", {}), (b"2-0", {})])]
     consumer.redis.xack = AsyncMock()
     consumer._process_stream_messages = AsyncMock(return_value=(["1-0", "2-0"], []))
-    consumer._flush_layers = AsyncMock()
+    consumer._flush_layers = MagicMock()
 
     batch_calls: list[dict[str, object]] = []
     monkeypatch.setattr(

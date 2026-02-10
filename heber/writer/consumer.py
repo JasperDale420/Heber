@@ -177,7 +177,7 @@ class EventConsumer:
             )
             return False
 
-    async def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
+    def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
         """Process an event one time and return `(success, error)`."""
         feed = "unknown"
         provider = "unknown"
@@ -242,12 +242,12 @@ class EventConsumer:
             )
             return False, str(e)
 
-    async def process_event(self, event_data: dict) -> bool:
+    def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
 
         Returns True if successful, False otherwise.
         """
-        success, _ = await self._process_event_once(event_data)
+        success, _ = self._process_event_once(event_data)
         return success
 
     async def _process_with_retry(self, event_data: dict) -> tuple[bool, str, int]:
@@ -257,7 +257,7 @@ class EventConsumer:
         last_error = "unknown_error"
 
         for attempt in range(1, max_retries + 1):
-            success, error = await self._process_event_once(event_data)
+            success, error = self._process_event_once(event_data)
             if success:
                 return True, "", attempt
 
@@ -331,7 +331,7 @@ class EventConsumer:
         ack_ids, failed_ids = await self._process_stream_messages(claimed)
 
         # Flush to disk before acking claimed messages.
-        await self._flush_layers()
+        self._flush_layers()
 
         if ack_ids:
             await self.redis.xack(
@@ -405,9 +405,9 @@ class EventConsumer:
                 logger.error("Consumer error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)  # Back off on error
 
-        await self._final_flush()
+        self._final_flush()
 
-    async def _flush_layers(self) -> None:
+    def _flush_layers(self) -> None:
         """Flush Bronze and Silver independently so one failure doesn't block the other."""
         try:
             self.bronze_writer.flush_if_needed()
@@ -434,7 +434,7 @@ class EventConsumer:
             block=1000,
         )
         # Always check for flush even with no messages (handles idle periods)
-        await self._flush_layers()
+        self._flush_layers()
 
         if not messages:
             return
@@ -450,7 +450,7 @@ class EventConsumer:
             failed_ids.extend(stream_failed_ids)
 
         # Flush to disk BEFORE acknowledging
-        await self._flush_layers()
+        self._flush_layers()
 
         # Only ACK after successful flush
         if processed_ids:
@@ -468,7 +468,7 @@ class EventConsumer:
                 failed_ids=failed_ids[:10],
             )
 
-    async def _final_flush(self) -> None:
+    def _final_flush(self) -> None:
         """Perform final flush when consumer stops."""
         self.bronze_writer.flush()
         self.silver_writer.flush()
