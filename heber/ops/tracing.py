@@ -130,7 +130,7 @@ class _NoopTracer:
     def start_as_current_span(self, name: str, **kwargs):
         yield _NoopSpan()
 
-    def start_span(self, name: str, **kwargs):
+    def start_span(self, _name: str, **kwargs):
         return _NoopSpan()
 
 
@@ -138,21 +138,26 @@ class _NoopSpan:
     """No-op span."""
 
     def set_attribute(self, key: str, value: Any) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def set_status(self, status: Any) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def record_exception(self, exception: Exception) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def end(self) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
+        # Intentionally empty: no-op span context exit
         pass
 
 

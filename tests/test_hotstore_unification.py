@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import pytest
+
 from heber.hotstore.sync import HotStoreSync, HotStoreSyncConfig
 from heber.hotstore.tables import (
     BARS_HOT_DDL,
@@ -153,9 +155,9 @@ def test_hotstore_sync_metrics_no_await_mismatch() -> None:
     client = _StubHotStoreClient()
     syncer = HotStoreSync(client=client)
     metrics = syncer.get_metrics()
-    assert metrics["quotes_lag_seconds"] == 12.5
-    assert metrics["trades_lag_seconds"] == 12.5
-    assert metrics["bars_lag_seconds"] == 12.5
+    assert metrics["quotes_lag_seconds"] == pytest.approx(12.5)
+    assert metrics["trades_lag_seconds"] == pytest.approx(12.5)
+    assert metrics["bars_lag_seconds"] == pytest.approx(12.5)
 
 
 def test_hotstore_event_sync_batches_before_insert() -> None:

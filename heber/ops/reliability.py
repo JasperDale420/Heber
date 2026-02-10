@@ -168,12 +168,12 @@ class EventDeduplicator:
 
         return DeduplicationResult(is_duplicate=False, event_id=event_id)
 
-    def _backing_contains(self, event_id: str) -> bool:
+    def _backing_contains(self, _event_id: str) -> bool:
         """Check backing store for event_id."""
         # Override in subclass or use Redis client
         return False
 
-    def _backing_add(self, event_id: str) -> None:
+    def _backing_add(self, _event_id: str) -> None:
         """Add event_id to backing store."""
         # Override in subclass or use Redis client
         pass
