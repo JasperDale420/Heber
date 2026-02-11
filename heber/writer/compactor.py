@@ -127,7 +127,7 @@ class Compactor:
             merged_rows = 0
             try:
                 for source_file in small_files:
-                    table = self._normalize_dict_columns(pq.read_table(source_file))
+                    table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
                     if writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
