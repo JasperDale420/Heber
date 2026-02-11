@@ -39,7 +39,7 @@ def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
 
     compacted_files = list(partition.glob("compacted-*.parquet"))
     assert len(compacted_files) == 1
-    merged_table = pq.read_table(compacted_files[0])
+    merged_table = pq.ParquetFile(compacted_files[0]).read()
     assert merged_table.num_rows == 3
 
 

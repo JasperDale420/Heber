@@ -10,6 +10,7 @@ import signal
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import structlog
 
@@ -62,6 +63,26 @@ class Compactor:
             pass
         return "unknown"
 
+    @staticmethod
+    def _normalize_dict_columns(table: pa.Table) -> pa.Table:
+        """Cast dictionary-encoded string columns to plain strings.
+
+        PyArrow may auto-apply dictionary encoding to low-cardinality string
+        columns.  When merging files written at different times the encoding
+        can differ (plain string vs dictionary<string, int32>), causing
+        ArrowTypeError.  Normalizing to plain strings avoids this.
+        """
+        arrays = []
+        fields = []
+        for i, field in enumerate(table.schema):
+            col = table.column(i)
+            if pa.types.is_dictionary(field.type) and pa.types.is_string(field.type.value_type):
+                col = col.cast(pa.string())
+                field = field.with_type(pa.string())
+            arrays.append(col)
+            fields.append(field)
+        return pa.table(arrays, schema=pa.schema(fields))
+
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -106,7 +127,7 @@ class Compactor:
             merged_rows = 0
             try:
                 for source_file in small_files:
-                    table = pq.read_table(source_file)
+                    table = self._normalize_dict_columns(pq.read_table(source_file))
                     if writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
