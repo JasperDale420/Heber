@@ -301,105 +301,203 @@ class AlertWatchConsumer:
         return False
 
     async def _process_alert(self, msg_id: str, data: dict) -> tuple[bool, bool, str]:
-        """Process a single alert and create a watch.
+        """Process one stream message that may contain one or many alerts."""
+        alerts = self._parse_alerts(data)
+        if not alerts:
+            # Backward-compatible hook for tests/overrides that monkeypatch _parse_alert.
+            parser_override = self.__dict__.get("_parse_alert")
+            if callable(parser_override):
+                parsed = parser_override(data)
+                if parsed:
+                    alerts = [parsed]
+        if not alerts:
+            logger.warning("Could not parse alert", msg_id=msg_id)
+            return False, False, "alert_parse_failed"
 
-        Args:
-            msg_id: Redis message ID
-            data: Alert data from stream
-        """
-        try:
-            # Parse alert data
-            alert = self._parse_alert(data)
+        created_count = 0
+        skipped_missing_occ = 0
+        processing_exceptions = 0
 
-            if not alert:
-                logger.warning("Could not parse alert", msg_id=msg_id)
-                return False, False, "alert_parse_failed"
-
-            # Skip if no OCC symbol
-            if not alert.get("occ_symbol"):
-                logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
-                return True, False, "missing_occ_symbol"
-
-            # Determine horizon based on DTE
-            dte = alert.get("dte", 5)
-            alert_horizon = classify_horizon(dte)
-            watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
-
-            # Get entry price (option quote at alert time)
-            entry_price = await self._get_entry_price(alert["occ_symbol"])
-
-            if not entry_price or entry_price <= 0:
-                logger.warning(
-                    "Could not get entry price",
-                    occ_symbol=alert["occ_symbol"],
+        for batch_index, alert in enumerate(alerts):
+            try:
+                processed = await self._process_parsed_alert(alert)
+                if processed == "watch_created":
+                    created_count += 1
+                elif processed == "missing_occ_symbol":
+                    skipped_missing_occ += 1
+            except Exception as e:
+                processing_exceptions += 1
+                logger.error(
+                    "Failed to process parsed alert",
+                    msg_id=msg_id,
+                    alert_id=alert.get("id"),
+                    batch_index=batch_index,
+                    error=str(e),
                 )
-                # Use contract_px from alert if available
-                fallback_entry = self._coerce_optional_float(alert.get("contract_px"))
-                entry_price = fallback_entry if fallback_entry is not None and fallback_entry > 0 else 1.0
 
-            # Create watch
-            watch = await self.manager.create_watch_async(
-                alert_id=alert["id"],
-                occ_symbol=alert["occ_symbol"],
-                underlying=alert["underlying"],
-                put_call=alert["put_call"],
-                expiry=alert.get("expiry", ""),
-                strike=alert.get("strike", 0.0),
-                entry_price=entry_price,
-                spot_at_alert=alert.get("spot_px", 0.0),
-                alert_time=alert.get("ts_event", datetime.now(UTC)),
-                horizon=watch_horizon,
-                tp_threshold=self.config.tp_pct,
-                sl_threshold=self.config.sl_pct,
-            )
-
-            # Extract and store features for meta-labeling
-            await self._extract_and_store_features(alert, watch.watch_id)
-
-            logger.info(
-                "Created watch from alert",
-                watch_id=watch.watch_id,
-                alert_id=alert["id"],
-                occ_symbol=alert["occ_symbol"],
-                horizon=watch_horizon.value,
-            )
+        if created_count > 0:
             return True, False, "watch_created"
-
-        except Exception as e:
-            logger.error(
-                "Failed to process alert",
-                msg_id=msg_id,
-                error=str(e),
-            )
+        if skipped_missing_occ > 0 and processing_exceptions == 0:
+            return True, False, "missing_occ_symbol"
+        if processing_exceptions > 0:
             return False, True, "processing_exception"
+        return False, False, "alert_parse_failed"
+
+    async def _process_parsed_alert(self, alert: dict[str, Any]) -> str:
+        """Process one parsed alert and create its watch."""
+        # Skip if no OCC symbol
+        if not alert.get("occ_symbol"):
+            logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
+            return "missing_occ_symbol"
+
+        # Determine horizon based on DTE
+        dte = alert.get("dte", 5)
+        alert_horizon = classify_horizon(dte)
+        watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+
+        # Get entry price (option quote at alert time)
+        entry_price = await self._get_entry_price(alert["occ_symbol"])
+
+        if not entry_price or entry_price <= 0:
+            logger.warning(
+                "Could not get entry price",
+                occ_symbol=alert["occ_symbol"],
+            )
+            # Use contract_px from alert if available
+            fallback_entry = self._coerce_optional_float(alert.get("contract_px"))
+            entry_price = fallback_entry if fallback_entry is not None and fallback_entry > 0 else 1.0
+
+        # Create watch
+        watch = await self.manager.create_watch_async(
+            alert_id=alert["id"],
+            occ_symbol=alert["occ_symbol"],
+            underlying=alert["underlying"],
+            put_call=alert["put_call"],
+            expiry=alert.get("expiry", ""),
+            strike=alert.get("strike", 0.0),
+            entry_price=entry_price,
+            spot_at_alert=alert.get("spot_px", 0.0),
+            alert_time=alert.get("ts_event", datetime.now(UTC)),
+            horizon=watch_horizon,
+            tp_threshold=self.config.tp_pct,
+            sl_threshold=self.config.sl_pct,
+        )
+
+        # Extract and store features for meta-labeling
+        await self._extract_and_store_features(alert, watch.watch_id)
+
+        logger.info(
+            "Created watch from alert",
+            watch_id=watch.watch_id,
+            alert_id=alert["id"],
+            occ_symbol=alert["occ_symbol"],
+            horizon=watch_horizon.value,
+        )
+        return "watch_created"
 
     def _parse_alert(self, data: dict) -> dict | None:
-        """Parse alert data from stream message.
+        """Parse one alert from a stream message for compatibility callers."""
+        parsed_alerts = self._parse_alerts(data)
+        if not parsed_alerts:
+            return None
+        return parsed_alerts[0]
 
-        Args:
-            data: Raw message data (may be bytes or nested JSON)
-
-        Returns:
-            Parsed alert dict or None
-        """
+    def _parse_alerts(self, data: dict) -> list[dict[str, Any]]:
+        """Parse alert(s) from stream message supporting single and batched payloads."""
         try:
             parsed = self._decode_stream_data(data)
-            result = self._map_alert_fields(parsed)
-            if not result.get("id") or not result.get("underlying"):
-                logger.warning(
-                    "Alert missing required fields",
-                    has_id=bool(result.get("id")),
-                    has_underlying=bool(result.get("underlying")),
-                    has_occ_symbol=bool(result.get("occ_symbol")),
+            maybe_items = parsed.get("items")
+
+            if maybe_items is None:
+                alert = self._build_alert_record(parsed, batch_index=None)
+                alerts = [alert] if alert else []
+                self._log_parse_summary(
+                    alert_parse_success=len(alerts),
+                    alert_parse_failed=0 if alerts else 1,
+                    batch_items_total=0,
+                    batch_items_failed=0,
                 )
-                return None
-            result["dte"] = self._calculate_dte(result.get("expiry"))
-            result["ts_event"] = self._parse_timestamp(parsed)
-            return result
+                return alerts
+
+            if not isinstance(maybe_items, list):
+                self._log_parse_summary(
+                    alert_parse_success=0,
+                    alert_parse_failed=1,
+                    batch_items_total=0,
+                    batch_items_failed=1,
+                )
+                return []
+
+            parsed_alerts: list[dict[str, Any]] = []
+            batch_items_failed = 0
+            for batch_index, item in enumerate(maybe_items):
+                if not isinstance(item, dict):
+                    batch_items_failed += 1
+                    logger.warning(
+                        "Alert batch item invalid shape",
+                        batch_index=batch_index,
+                        payload_type=type(item).__name__,
+                    )
+                    continue
+                item_payload = {**parsed, **item}
+                nested_payload = item.get("payload")
+                if isinstance(nested_payload, dict):
+                    item_payload = {**item_payload, **nested_payload}
+                alert = self._build_alert_record(item_payload, batch_index=batch_index)
+                if alert is None:
+                    batch_items_failed += 1
+                    continue
+                parsed_alerts.append(alert)
+
+            self._log_parse_summary(
+                alert_parse_success=len(parsed_alerts),
+                alert_parse_failed=batch_items_failed,
+                batch_items_total=len(maybe_items),
+                batch_items_failed=batch_items_failed,
+            )
+            return parsed_alerts
 
         except Exception as e:
             logger.error("Failed to parse alert", error=str(e))
+            self._log_parse_summary(
+                alert_parse_success=0,
+                alert_parse_failed=1,
+                batch_items_total=0,
+                batch_items_failed=0,
+            )
+            return []
+
+    def _build_alert_record(self, parsed: dict[str, Any], batch_index: int | None) -> dict[str, Any] | None:
+        """Build normalized alert record from parsed payload."""
+        result = self._map_alert_fields(parsed)
+        if not result.get("id") or not result.get("underlying"):
+            logger.warning(
+                "Alert missing required fields",
+                has_id=bool(result.get("id")),
+                has_underlying=bool(result.get("underlying")),
+                has_occ_symbol=bool(result.get("occ_symbol")),
+                batch_index=batch_index,
+            )
             return None
+        result["dte"] = self._calculate_dte(result.get("expiry"))
+        result["ts_event"] = self._parse_timestamp(parsed)
+        return result
+
+    @staticmethod
+    def _log_parse_summary(
+        *,
+        alert_parse_success: int,
+        alert_parse_failed: int,
+        batch_items_total: int,
+        batch_items_failed: int,
+    ) -> None:
+        logger.info(
+            "Alert parsing summary",
+            alert_parse_success=alert_parse_success,
+            alert_parse_failed=alert_parse_failed,
+            batch_items_total=batch_items_total,
+            batch_items_failed=batch_items_failed,
+        )
 
     def _decode_stream_data(self, data: dict) -> dict:
         """Decode bytes and parse nested JSON from stream message."""

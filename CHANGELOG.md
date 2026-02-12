@@ -88,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Watch Flow Alert Batch Parsing
+
+- Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.
+- Added per-item batch handling so malformed items are skipped while valid items still create watches.
+- Added structured parse summary logging fields on each message parse:
+  - `alert_parse_success`
+  - `alert_parse_failed`
+  - `batch_items_total`
+  - `batch_items_failed`
+- Added regression tests in `tests/test_consumer_parsing.py` for single payload parsing, batched payload parsing, malformed batch handling, and mixed valid/invalid batch processing.
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
