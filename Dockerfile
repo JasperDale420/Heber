@@ -1,18 +1,20 @@
 # =============================================================================
 # Heber Multi-Stage Dockerfile per PRD §19
 # =============================================================================
-# Base image: python:3.11-slim-bookworm (pinned for dependency compatibility)
+# Base image: python:3.14-slim-bookworm
 # Security: Non-root user, minimal dependencies, no cache layers
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    cmake \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -21,16 +23,18 @@ WORKDIR /build
 RUN pip install --no-cache-dir uv
 
 # Copy only dependency files first (better layer caching)
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY heber/ ./heber/
 
-# Install dependencies to a separate directory
-RUN uv pip install --target=/build/deps -e .
+# Install pinned runtime dependencies from lockfile, then install project package
+RUN uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file requirements.txt \
+    && uv pip install --target=/build/deps -r requirements.txt \
+    && uv pip install --target=/build/deps -e . --no-deps
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal production image
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # Labels per OCI spec
 LABEL org.opencontainers.image.source="https://github.com/jacobmcmillan/heber"

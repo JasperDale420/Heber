@@ -87,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Docker Python 3.14 Builder Compatibility
+
+- Added `cmake` and `ninja-build` to the Docker builder stage so dependency installation succeeds when Python 3.14 requires source builds for some packages (for example `pyarrow`).
+- Switched Docker dependency install to lockfile-driven resolution (`uv export --frozen` + `uv pip install -r requirements.txt`) so container builds use the same pinned package set as CI test runs.
+
 #### CI Security Scan Stabilization
 
 - Sanitized tracked lakeFS credentials in `.env` to placeholder values so Trivy secret scanning no longer flags a committed AWS-style key.
