@@ -28,7 +28,9 @@ from heber.writer.bronze import BronzeWriter
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
     UnmappedFeedError,
+    is_bronze_only_feed,
     is_contracted_feed,
+    resolve_feed_alias,
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
@@ -259,6 +261,16 @@ class EventConsumer:
                     event_id=envelope.event_id,
                 )
                 raise UnmappedFeedError(DLQ_REASON_UNCONTRACTED)
+            if is_bronze_only_feed(envelope.feed):
+                logger.info(
+                    "silver_write_skipped_policy",
+                    event_id=envelope.event_id,
+                    source_feed=envelope.feed,
+                    canonical_feed=resolve_feed_alias(envelope.feed),
+                    reason="bronze_only_feed_policy",
+                )
+                record_event_processed(feed=feed, provider=provider, status="success")
+                return True, None, True
             silver_candidates = self._build_silver_candidates(envelope)
             if not silver_candidates:
                 logger.info(

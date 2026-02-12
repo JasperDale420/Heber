@@ -224,6 +224,66 @@ def test_non_aggregate_bars_missing_required_fields_fails_after_bronze_write() -
     assert sum(len(rows) for rows in consumer.silver_writer.buffers.values()) == 0
 
 
+def test_bronze_only_news_feed_skips_silver_by_policy() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    event = _event_payload(
+        "news",
+        {
+            "article_id": "news-1",
+            "headline": "AAPL posts strong guidance",
+            "published_at": NOW.isoformat(),
+            "symbols": ["AAPL"],
+            "source": "Reuters",
+        },
+        provider="alpaca",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is True
+    assert error is None
+    assert retryable is True
+    consumer.bronze_writer.write.assert_called_once()
+    consumer.silver_writer.write.assert_not_called()
+    assert sum(len(rows) for rows in consumer.silver_writer.buffers.values()) == 0
+
+
+def test_bronze_only_alias_feed_skips_silver_by_policy() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    event = _event_payload(
+        "institutions",
+        {
+            "symbol": "AAPL",
+            "institution_name": "Example Capital",
+            "institution_id": "0000123456",
+            "market_value": "24500000",
+            "report_date": "2025-12-31",
+            "shares": "120000",
+            "percent_portfolio": "2.4",
+        },
+        provider="unusual_whales",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is True
+    assert error is None
+    assert retryable is True
+    consumer.bronze_writer.write.assert_called_once()
+    consumer.silver_writer.write.assert_not_called()
+    assert sum(len(rows) for rows in consumer.silver_writer.buffers.values()) == 0
+
+
 @pytest.mark.asyncio
 async def test_unknown_feed_is_non_retriable_and_still_bronze_first() -> None:
     consumer = EventConsumer()

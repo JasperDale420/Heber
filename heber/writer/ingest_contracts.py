@@ -63,6 +63,15 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
 # Backwards-compatible name used by tests and docs for gateway feed inventory.
 DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
 
+# Feeds to persist in Bronze but skip Silver by default until an active Gold use-case exists.
+BRONZE_ONLY_SILVER_DATASETS: tuple[str, ...] = (
+    "news",
+    "ftd",
+    "congress_trades",
+    "insider_trades",
+    "institution_holdings",
+)
+
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
@@ -365,6 +374,12 @@ def is_contracted_feed(feed: str) -> bool:
     return feed in CONTRACTED_RAW_FEEDS
 
 
+def is_bronze_only_feed(feed: str) -> bool:
+    """Return True when feed should be stored in Bronze but skipped for Silver writes."""
+    canonical = resolve_feed_alias(feed)
+    return canonical in BRONZE_ONLY_SILVER_DATASETS
+
+
 def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Apply feed-specific payload normalization before column mapping."""
     normalized = dict(payload)
@@ -496,6 +511,7 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
 
 
 __all__ = [
+    "BRONZE_ONLY_SILVER_DATASETS",
     "CONTRACTED_RAW_FEEDS",
     "DATA_GATEWAY_FEEDS",
     "DLQ_REASON_UNCONTRACTED",
@@ -505,6 +521,7 @@ __all__ = [
     "LEGACY_MAPPABLE_FEEDS",
     "REQUIRED_FIELDS_BY_FEED",
     "REQUIRED_NON_NULL_FIELDS",
+    "is_bronze_only_feed",
     "is_contracted_feed",
     "UnmappedFeedError",
     "normalize_payload_for_feed",

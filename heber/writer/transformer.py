@@ -23,7 +23,7 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import UnmappedFeedError, resolve_silver_feed
+from heber.writer.ingest_contracts import UnmappedFeedError, is_bronze_only_feed, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.normalizer import MissingRequiredFieldsError, enforce_required_non_null_fields, envelope_to_silver_row
 
@@ -158,6 +158,14 @@ class BronzeToSilverTransformer:
         dt: str,
     ) -> int:
         """Transform a single date partition."""
+        if is_bronze_only_feed(feed):
+            logger.info(
+                "Backfill skipping Silver write for Bronze-only feed",
+                source_feed=feed,
+                dt=dt,
+            )
+            return 0
+
         silver_feed = resolve_silver_feed(feed)
         if silver_feed is None:
             logger.warning("No schema for feed, skipping", feed=feed)
