@@ -88,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### DLQ Timestamp Normalization
+
+- Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
+- Added regression tests in `tests/test_event_envelope_timezones.py` to prevent mixed naive/aware timestamp errors during consumer lag calculations.
+
 #### Docker Python 3.14 Builder Compatibility
 
 - Added `cmake` and `ninja-build` to the Docker builder stage so dependency installation succeeds when Python 3.14 requires source builds for some packages (for example `pyarrow`).

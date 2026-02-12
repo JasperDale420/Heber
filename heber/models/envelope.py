@@ -5,10 +5,10 @@ from Data-Gateway while adding Heber-specific extensions for zero-leakage.
 """
 
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Lineage(BaseModel):
@@ -94,6 +94,16 @@ class EventEnvelope(BaseModel):
         default=None, description="Original provider message (for Bronze fidelity, PRD §6.7)"
     )
     processing_delay_ms: int = Field(default=0, description="Processing delay for ts_effective calculation (PRD §6.4)")
+
+    @field_validator("ts_event", "ts_ingest", "ts_available", mode="after")
+    @classmethod
+    def _normalize_timestamp_timezone(cls, value: datetime | None) -> datetime | None:
+        """Normalize envelope timestamps to timezone-aware UTC datetimes."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     @property
     def ts_effective(self) -> datetime | None:
