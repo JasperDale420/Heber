@@ -44,21 +44,26 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
         if field_name in row:
             continue
 
-        source_name = target_to_source.get(field_name, field_name)
-        value = payload.get(source_name)
-        if value is None and source_name != field_name:
-            value = payload.get(field_name)
+        source_names = list(target_to_source.get(field_name, []))
+        if field_name not in source_names:
+            source_names.append(field_name)
+
+        value = None
+        for source_name in source_names:
+            value = payload.get(source_name)
+            if value is not None:
+                break
 
         row[field_name] = _coerce_value(value, field.type)
 
     return row
 
 
-def _target_to_source_map(feed: str) -> dict[str, str]:
+def _target_to_source_map(feed: str) -> dict[str, list[str]]:
     mapping = FIELD_MAPPINGS.get(feed, {})
-    target_to_source: dict[str, str] = {}
+    target_to_source: dict[str, list[str]] = {}
     for source_name, target_name in mapping.items():
-        target_to_source.setdefault(target_name, source_name)
+        target_to_source.setdefault(target_name, []).append(source_name)
     return target_to_source
 
 

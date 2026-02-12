@@ -81,6 +81,84 @@ def test_bronze_write_persists_even_when_silver_normalization_fails() -> None:
     consumer.silver_writer.write.assert_not_called()
 
 
+def test_rest_bars_aggregate_payload_is_expanded_into_multiple_silver_writes() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    event = _event_payload(
+        "bars",
+        {
+            "symbol": "AAPL",
+            "timeframe": "1Min",
+            "bars": [
+                {
+                    "symbol": "AAPL",
+                    "timestamp": "2026-02-11T14:30:00Z",
+                    "open": "100.0",
+                    "high": "101.0",
+                    "low": "99.5",
+                    "close": "100.8",
+                    "volume": 1000,
+                    "trade_count": 25,
+                    "vwap": "100.4",
+                },
+                {
+                    "symbol": "AAPL",
+                    "timestamp": "2026-02-11T14:31:00Z",
+                    "open": "100.8",
+                    "high": "101.5",
+                    "low": "100.6",
+                    "close": "101.2",
+                    "volume": 850,
+                    "trade_count": 18,
+                    "vwap": "101.0",
+                },
+            ],
+        },
+        provider="alpaca",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is True
+    assert error is None
+    assert retryable is True
+    consumer.bronze_writer.write.assert_called_once()
+    assert consumer.silver_writer.write.call_count == 2
+
+    first_payload = consumer.silver_writer.write.call_args_list[0].args[0].payload
+    second_payload = consumer.silver_writer.write.call_args_list[1].args[0].payload
+    assert first_payload["open"] == "100.0"
+    assert second_payload["close"] == "101.2"
+    assert first_payload["timeframe"] == "1Min"
+
+
+def test_rest_trades_aggregate_empty_list_skips_silver_write() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    event = _event_payload(
+        "trades",
+        {
+            "symbol": "SPY",
+            "trades": [],
+        },
+        provider="alpaca",
+        symbol="SPY",
+        instrument_key="equity:SPY",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is True
+    assert error is None
+    assert retryable is True
+    consumer.bronze_writer.write.assert_called_once()
+    consumer.silver_writer.write.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_unknown_feed_is_non_retriable_and_still_bronze_first() -> None:
     consumer = EventConsumer()

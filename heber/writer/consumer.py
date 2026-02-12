@@ -259,27 +259,59 @@ class EventConsumer:
                     event_id=envelope.event_id,
                 )
                 raise UnmappedFeedError(DLQ_REASON_UNCONTRACTED)
-
-            normalized = normalize_envelope_for_silver(envelope)
-            silver_feed = resolve_silver_feed(normalized.feed)
-            if silver_feed is None:
-                logger.warning(
-                    "silver_schema_unmapped",
-                    source_feed=envelope.feed,
-                    canonical_feed=normalized.feed,
+            silver_candidates = self._build_silver_candidates(envelope)
+            if not silver_candidates:
+                logger.info(
+                    "silver_write_skipped_empty_aggregate",
                     event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    provider=envelope.provider,
                 )
-                raise UnmappedFeedError("unmapped_feed")
+                record_event_processed(feed=feed, provider=provider, status="success")
+                return True, None, True
 
-            normalized = normalized.model_copy(update={"feed": silver_feed})
-            self._validate_instrument_key(normalized)
-            self.silver_writer.write(normalized)
+            aggregate_mode = len(silver_candidates) > 1
+            silver_success_count = 0
+            silver_failure_count = 0
+            last_error: Exception | None = None
+
+            for candidate in silver_candidates:
+                try:
+                    self._write_silver_candidate(envelope, candidate)
+                    silver_success_count += 1
+                except (UnmappedFeedError, ValueError, ValidationError) as exc:
+                    last_error = exc
+                    silver_failure_count += 1
+                    if aggregate_mode:
+                        logger.warning(
+                            "silver_aggregate_item_failed",
+                            source_event_id=envelope.event_id,
+                            item_event_id=candidate.event_id,
+                            feed=candidate.feed,
+                            error=str(exc),
+                        )
+                        continue
+                    raise
+
+            if silver_failure_count > 0:
+                logger.warning(
+                    "silver_aggregate_write_summary",
+                    source_event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    success_count=silver_success_count,
+                    failed_count=silver_failure_count,
+                )
+
+            if silver_success_count == 0:
+                if last_error is not None:
+                    raise last_error
+                raise ValueError("all_aggregate_items_failed")
 
             logger.debug(
                 "Processed event",
-                event_id=normalized.event_id,
-                feed=normalized.feed,
-                instrument_key=normalized.instrument_key,
+                event_id=envelope.event_id,
+                feed=envelope.feed,
+                silver_writes=silver_success_count,
             )
             record_event_processed(feed=feed, provider=provider, status="success")
             return True, None, True
@@ -477,6 +509,125 @@ class EventConsumer:
         raise ValueError(
             f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}"
         )
+
+    def _write_silver_candidate(self, source_envelope: EventEnvelope, candidate: EventEnvelope) -> None:
+        """Normalize and persist one candidate event to Silver."""
+        normalized = normalize_envelope_for_silver(candidate)
+        silver_feed = resolve_silver_feed(normalized.feed)
+        if silver_feed is None:
+            logger.warning(
+                "silver_schema_unmapped",
+                source_feed=source_envelope.feed,
+                canonical_feed=normalized.feed,
+                event_id=source_envelope.event_id,
+            )
+            raise UnmappedFeedError("unmapped_feed")
+
+        normalized = normalized.model_copy(update={"feed": silver_feed})
+        self._validate_instrument_key(normalized)
+        self.silver_writer.write(normalized)
+
+    def _build_silver_candidates(self, envelope: EventEnvelope) -> list[EventEnvelope]:
+        """Build candidate envelopes for Silver writes.
+
+        For REST aggregate payloads (bars/trades list envelopes), explode into one
+        candidate event per item so Silver writes typed rows instead of null-heavy
+        aggregate blobs.
+        """
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        if not isinstance(payload, dict):
+            return [envelope]
+
+        list_key: str | None = None
+        context_keys: tuple[str, ...] = ()
+        if envelope.feed == "bars":
+            list_key = "bars"
+            context_keys = ("symbol", "timeframe")
+        elif envelope.feed == "trades":
+            list_key = "trades"
+            context_keys = ("symbol",)
+
+        if list_key is None:
+            return [envelope]
+
+        raw_items = payload.get(list_key)
+        if not isinstance(raw_items, list):
+            return [envelope]
+        if not raw_items:
+            return []
+
+        candidates: list[EventEnvelope] = []
+        skipped = 0
+        for idx, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                skipped += 1
+                continue
+            item_payload = dict(raw_item)
+            for key in context_keys:
+                value = payload.get(key)
+                if value is not None and key not in item_payload:
+                    item_payload[key] = value
+            if "symbol" not in item_payload and envelope.symbol:
+                item_payload["symbol"] = envelope.symbol
+
+            item_ts_event = self._extract_item_event_timestamp(item_payload) or envelope.ts_event
+            item_envelope = envelope.model_copy(
+                update={
+                    "event_id": f"{envelope.event_id}:{idx}",
+                    "payload": item_payload,
+                    "ts_event": item_ts_event,
+                }
+            )
+            candidates.append(item_envelope)
+
+        if len(candidates) != len(raw_items):
+            logger.warning(
+                "silver_aggregate_payload_non_dict_items",
+                event_id=envelope.event_id,
+                feed=envelope.feed,
+                total_items=len(raw_items),
+                emitted=len(candidates),
+                skipped=skipped,
+            )
+        else:
+            logger.info(
+                "silver_aggregate_payload_expanded",
+                event_id=envelope.event_id,
+                feed=envelope.feed,
+                item_count=len(candidates),
+            )
+
+        return candidates
+
+    @staticmethod
+    def _extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
+        """Parse item-level event timestamp from common provider keys."""
+        raw = payload.get("timestamp") or payload.get("t") or payload.get("ts_event")
+        if raw is None:
+            return None
+        if isinstance(raw, datetime):
+            if raw.tzinfo is None:
+                return raw.replace(tzinfo=UTC)
+            return raw.astimezone(UTC)
+        if isinstance(raw, int | float):
+            epoch = float(raw)
+            if epoch > 10_000_000_000:
+                epoch /= 1000
+            return datetime.fromtimestamp(epoch, tz=UTC)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                return None
+            if text.isdigit():
+                return EventConsumer._extract_item_event_timestamp({"timestamp": int(text)})
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        return None
 
     async def run(self):
         """Main consumer loop."""

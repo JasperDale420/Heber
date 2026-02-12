@@ -88,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Silver Normalization For Aggregate REST Payloads
+
+- Updated `heber/writer/consumer.py` to defensively expand aggregate REST payload envelopes for `bars` and `trades` into item-level Silver writes, while preserving Bronze-first durability.
+- Added skip behavior for empty aggregate lists so `trades=[]` / `bars=[]` no longer produce null-heavy Silver rows.
+- Added per-item aggregate failure logging and summary counts in consumer logs (`silver_aggregate_item_failed`, `silver_aggregate_write_summary`) for faster root-cause analysis.
+- Added regression tests in `tests/test_bronze_first_ingestion.py` for:
+  - multi-item `bars[]` fan-out to multiple Silver writes,
+  - empty `trades[]` skip behavior.
+- Improved field alias handling in `heber/writer/normalizer.py` so one target column can resolve from multiple source keys (instead of first-match only), preventing silent drops when payload variants differ.
+- Added `bars.timestamp -> bar_start_ts` mapping in `heber/writer/ingest_contracts.py` and regression coverage in `tests/test_bars_timestamp_mapping.py`.
+
 #### Metadata Stack Shutdown + Health Contracts
 
 - Added compose contract regression tests in `tests/test_compose_metadata_contract.py` to lock critical metadata infra guarantees:

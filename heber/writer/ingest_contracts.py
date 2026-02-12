@@ -104,6 +104,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     # Core Market Data
     "bars": {
         "t": "bar_start_ts",
+        "timestamp": "bar_start_ts",
         "o": "open",
         "h": "high",
         "l": "low",
