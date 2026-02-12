@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import DATA_GATEWAY_FEEDS, resolve_feed_alias
+from heber.writer.ingest_contracts import CONTRACTED_RAW_FEEDS, resolve_feed_alias
 
 
 def _data_gateway_root() -> Path:
@@ -61,6 +61,43 @@ def _extract_uw_poller_feeds(uw_poller_path: Path) -> set[str]:
     return feeds
 
 
+def _extract_backfill_feeds(backfill_path: Path) -> set[str]:
+    source = backfill_path.read_text(encoding="utf-8")
+    module = ast.parse(source)
+
+    dispatch_value: ast.Dict | None = None
+    for node in module.body:
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == "BACKFILL_DISPATCH":
+                if isinstance(node.value, ast.Dict):
+                    dispatch_value = node.value
+                    break
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == "BACKFILL_DISPATCH":
+                if isinstance(node.value, ast.Dict):
+                    dispatch_value = node.value
+                    break
+
+    if dispatch_value is None:
+        raise AssertionError("Could not extract BACKFILL_DISPATCH from backfill.py")
+
+    feeds: set[str] = set()
+    for key in dispatch_value.keys:
+        if not isinstance(key, ast.Tuple) or len(key.elts) != 2:
+            continue
+        provider, feed = key.elts
+        if isinstance(provider, ast.Constant) and isinstance(provider.value, str):
+            if provider.value not in {"alpaca", "unusual_whales"}:
+                continue
+        if isinstance(feed, ast.Constant) and isinstance(feed.value, str):
+            feeds.add(feed.value)
+    return feeds
+
+
 def test_all_emitted_data_gateway_feeds_map_to_silver_contract() -> None:
     dg_root = _data_gateway_root()
     if not dg_root.exists():
@@ -68,11 +105,16 @@ def test_all_emitted_data_gateway_feeds_map_to_silver_contract() -> None:
 
     stream_file = dg_root / "gateway" / "core" / "stream.py"
     uw_poller_file = dg_root / "gateway" / "core" / "uw_poller.py"
+    backfill_file = dg_root / "gateway" / "core" / "backfill.py"
 
-    emitted_feeds = _extract_stream_feeds(stream_file) | _extract_uw_poller_feeds(uw_poller_file)
+    emitted_feeds = (
+        _extract_stream_feeds(stream_file)
+        | _extract_uw_poller_feeds(uw_poller_file)
+        | _extract_backfill_feeds(backfill_file)
+    )
 
-    missing_from_contract = sorted(feed for feed in emitted_feeds if feed not in DATA_GATEWAY_FEEDS)
-    assert not missing_from_contract, f"Missing Data Gateway feeds in DATA_GATEWAY_FEEDS: {missing_from_contract}"
+    missing_from_contract = sorted(feed for feed in emitted_feeds if feed not in CONTRACTED_RAW_FEEDS)
+    assert not missing_from_contract, f"Missing Data Gateway feeds in CONTRACTED_RAW_FEEDS: {missing_from_contract}"
 
     unmapped = []
     for feed in sorted(emitted_feeds):

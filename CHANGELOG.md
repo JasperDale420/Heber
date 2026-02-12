@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `heber/writer/normalizer.py`
 - Added dedicated Silver dataset schema for `historic_option_volume` in `heber/schemas/silver.py`.
 
+#### Bronze→Silver Training-Feed Scope
+
+- Added explicit raw feed allowlist for Silver routing in `heber/writer/ingest_contracts.py`:
+  - `CONTRACTED_RAW_FEEDS`
+  - `is_contracted_feed()`
+  - `DLQ_REASON_UNCONTRACTED`
+- Extended Data-Gateway parity test in `tests/test_data_gateway_feed_parity.py` to include:
+  - stream feeds (`stream.py`)
+  - UW poller feeds (`uw_poller.py`)
+  - backfill dispatch feeds (`backfill.py`)
+- Added REST overflow guard test `tests/test_data_gateway_rest_feed_contract.py` that parses Data-Gateway route segments and enforces Bronze+DLQ for non-contracted derived feeds.
+- Expanded feed contract matrix and alias seed coverage for training feeds:
+  - `option_trades`, `crypto_bars`, `crypto_trades`, `ticker_flow`, `darkpool_ticker`, `institutions`, `earnings`
+
 #### Canonical Contracts
 
 - Standardized canonical darkpool naming to `darkpool` across provider/stream/slice metadata:

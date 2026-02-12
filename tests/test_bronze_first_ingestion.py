@@ -95,7 +95,7 @@ async def test_unknown_feed_is_non_retriable_and_still_bronze_first() -> None:
     success, error, attempts = await consumer._process_with_retry({"data": json.dumps(event)})
 
     assert success is False
-    assert error == "unmapped_feed"
+    assert error == "uncontracted_feed"
     assert attempts == 1
     consumer.bronze_writer.write.assert_called_once()
     consumer.silver_writer.write.assert_not_called()

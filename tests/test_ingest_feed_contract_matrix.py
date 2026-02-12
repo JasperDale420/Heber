@@ -88,6 +88,62 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
             ),
         ),
         (
+            "option_trades",
+            "trades",
+            _envelope(
+                feed="option_trades",
+                provider="alpaca",
+                instrument_type="option",
+                instrument_key="option:OCC:AAPL260320C00200000",
+                payload={
+                    "p": "4.2",
+                    "s": "10",
+                    "x": "OPRA",
+                    "i": "opt-trade-1",
+                    "z": "C",
+                },
+            ),
+        ),
+        (
+            "crypto_bars",
+            "bars",
+            _envelope(
+                feed="crypto_bars",
+                provider="alpaca",
+                instrument_type="crypto",
+                instrument_key="crypto:BTC-USD",
+                symbol="BTC-USD",
+                payload={
+                    "t": "2026-02-11T14:30:00Z",
+                    "o": "96000.0",
+                    "h": "96250.0",
+                    "l": "95800.0",
+                    "c": "96100.0",
+                    "v": "225",
+                    "n": "30",
+                    "vw": "96075.0",
+                },
+            ),
+        ),
+        (
+            "crypto_trades",
+            "trades",
+            _envelope(
+                feed="crypto_trades",
+                provider="alpaca",
+                instrument_type="crypto",
+                instrument_key="crypto:BTC-USD",
+                symbol="BTC-USD",
+                payload={
+                    "p": "96110.0",
+                    "s": "2",
+                    "x": "CBSE",
+                    "i": "crypto-trade-1",
+                    "z": "C",
+                },
+            ),
+        ),
+        (
             "news",
             "news",
             _envelope(
@@ -128,6 +184,28 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
             ),
         ),
         (
+            "ticker_flow",
+            "flow_alerts",
+            _envelope(
+                feed="ticker_flow",
+                provider="unusual_whales",
+                instrument_type="option",
+                instrument_key="option:AAPL",
+                payload={
+                    "timestamp": "2026-02-11T14:31:00Z",
+                    "symbol": "AAPL",
+                    "option_chain": "AAPL260320C00200000",
+                    "strike": "200",
+                    "expiry": "2026-03-20",
+                    "put_call": "call",
+                    "premium": "90000",
+                    "volume": "18",
+                    "price": "3.2",
+                    "underlying_price": "198.8",
+                },
+            ),
+        ),
+        (
             "darkpool",
             "darkpool",
             _envelope(
@@ -143,6 +221,26 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                     "tracking_id": "dp-1",
                     "bid": "50.0",
                     "ask": "50.2",
+                },
+            ),
+        ),
+        (
+            "darkpool_ticker",
+            "darkpool",
+            _envelope(
+                feed="darkpool_ticker",
+                provider="unusual_whales",
+                payload={
+                    "timestamp": "2026-02-11T14:32:00Z",
+                    "symbol": "AAPL",
+                    "ticker": "AAPL",
+                    "price": "50.3",
+                    "size": "700",
+                    "notional": "35210",
+                    "market_center": "XNYS",
+                    "tracking_id": "dp-ticker-1",
+                    "bid": "50.2",
+                    "ask": "50.4",
                 },
             ),
         ),
@@ -331,6 +429,40 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                 },
             ),
         ),
+        (
+            "institutions",
+            "institution_holdings",
+            _envelope(
+                feed="institutions",
+                provider="unusual_whales",
+                payload={
+                    "symbol": "AAPL",
+                    "institution_name": "Example Capital",
+                    "institution_id": "0000123456",
+                    "market_value": "24500000",
+                    "report_date": "2025-12-31",
+                    "shares": "120000",
+                    "percent_portfolio": "2.4",
+                },
+            ),
+        ),
+        (
+            "earnings",
+            "earnings",
+            _envelope(
+                feed="earnings",
+                provider="unusual_whales",
+                payload={
+                    "symbol": "AAPL",
+                    "report_date": "2026-02-12",
+                    "time": "amc",
+                    "eps_estimate": "2.10",
+                    "eps_actual": "2.20",
+                    "revenue_estimate": "115000000000",
+                    "revenue_actual": "116000000000",
+                },
+            ),
+        ),
     ]
 
 
@@ -356,7 +488,7 @@ def test_all_data_gateway_feeds_normalize_with_non_null_contract_fields() -> Non
 
 def test_live_and_backfill_paths_produce_equivalent_rows_for_shared_feeds() -> None:
     transformer = BronzeToSilverTransformer()
-    shared_cases = [case for case in _cases() if case[0] in {"bars", "flow_alerts", "short_volume"}]
+    shared_cases = [case for case in _cases() if case[0] in {"bars", "flow_alerts", "short_volume", "ticker_flow"}]
 
     for source_feed, _, envelope in shared_cases:
         live_row = envelope_to_silver_row(normalize_envelope_for_silver(envelope))

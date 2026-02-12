@@ -24,7 +24,12 @@ from heber.ops.metrics import (
     start_metrics_server_from_env,
 )
 from heber.writer.bronze import BronzeWriter
-from heber.writer.ingest_contracts import UnmappedFeedError, resolve_silver_feed
+from heber.writer.ingest_contracts import (
+    DLQ_REASON_UNCONTRACTED,
+    UnmappedFeedError,
+    is_contracted_feed,
+    resolve_silver_feed,
+)
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.silver import SilverWriter
 
@@ -244,6 +249,15 @@ class EventConsumer:
                 feed=envelope.feed,
                 instrument_key=envelope.instrument_key,
             )
+
+            if not is_contracted_feed(envelope.feed):
+                logger.warning(
+                    "silver_feed_uncontracted",
+                    source_feed=envelope.feed,
+                    provider=envelope.provider,
+                    event_id=envelope.event_id,
+                )
+                raise UnmappedFeedError(DLQ_REASON_UNCONTRACTED)
 
             normalized = normalize_envelope_for_silver(envelope)
             silver_feed = resolve_silver_feed(normalized.feed)

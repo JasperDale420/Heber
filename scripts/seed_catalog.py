@@ -103,10 +103,15 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "alpaca", "gateway_feed": "quotes", "silver_dataset_name": "quotes"},
     {"provider": "alpaca", "gateway_feed": "trades", "silver_dataset_name": "trades"},
     {"provider": "alpaca", "gateway_feed": "news", "silver_dataset_name": "news"},
+    {"provider": "alpaca", "gateway_feed": "option_trades", "silver_dataset_name": "trades"},
+    {"provider": "alpaca", "gateway_feed": "crypto_bars", "silver_dataset_name": "bars"},
+    {"provider": "alpaca", "gateway_feed": "crypto_trades", "silver_dataset_name": "trades"},
     # Unusual Whales — Options flow
     {"provider": "unusual_whales", "gateway_feed": "flow_alerts", "silver_dataset_name": "flow_alerts"},
     {"provider": "unusual_whales", "gateway_feed": "flow", "silver_dataset_name": "flow_alerts"},
+    {"provider": "unusual_whales", "gateway_feed": "ticker_flow", "silver_dataset_name": "flow_alerts"},
     {"provider": "unusual_whales", "gateway_feed": "darkpool", "silver_dataset_name": "darkpool"},
+    {"provider": "unusual_whales", "gateway_feed": "darkpool_ticker", "silver_dataset_name": "darkpool"},
     {"provider": "unusual_whales", "gateway_feed": "hottest_chains", "silver_dataset_name": "hottest_chain"},
     # Unusual Whales — Sentiment
     {"provider": "unusual_whales", "gateway_feed": "sector_tide", "silver_dataset_name": "sector_tide"},
@@ -145,6 +150,7 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
         "gateway_feed": "institution_holdings",
         "silver_dataset_name": "institution_holdings",
     },
+    {"provider": "unusual_whales", "gateway_feed": "institutions", "silver_dataset_name": "institution_holdings"},
     {
         "provider": "unusual_whales",
         "gateway_feed": "institution_activity",

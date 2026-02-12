@@ -33,19 +33,16 @@ FEED_ALIASES: dict[str, str] = {
 }
 FEED_ALIAS_MAP = FEED_ALIASES
 
-DATA_GATEWAY_FEEDS: tuple[str, ...] = (
+CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "bars",
     "quotes",
     "trades",
     "news",
     "flow_alerts",
-    "flow",
     "darkpool",
     "market_tide",
     "sector_tide",
     "greek_exposure",
-    "greeks",
-    "gex",
     "iv_rank",
     "oi_change",
     "historic_option_volume",
@@ -54,7 +51,24 @@ DATA_GATEWAY_FEEDS: tuple[str, ...] = (
     "ftds",
     "congress_trades",
     "insider_trades",
+    "option_trades",
+    "crypto_bars",
+    "crypto_trades",
+    "ticker_flow",
+    "darkpool_ticker",
+    "institutions",
     "earnings",
+)
+
+# Backwards-compatible name used by tests and docs for gateway feed inventory.
+DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
+
+DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
+
+LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
+    "flow",
+    "greeks",
+    "gex",
     "stock_fundamentals",
     "option_contract",
     "screener_result",
@@ -319,6 +333,8 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "ftd": {"ftd_date", "quantity"},
     "congress_trades": {"politician_name", "trade_type", "trade_date"},
     "insider_trades": {"insider_name", "trade_type", "trade_date"},
+    "earnings": {"earnings_date"},
+    "institution_holdings": {"institution_name", "value", "quarter_end"},
 }
 REQUIRED_NON_NULL_FIELDS = REQUIRED_FIELDS_BY_FEED
 
@@ -341,6 +357,11 @@ def resolve_silver_feed(feed: str) -> str | None:
 def resolve_feed_alias(feed: str) -> str:
     """Resolve a feed alias without checking schema coverage."""
     return FEED_ALIASES.get(feed, feed)
+
+
+def is_contracted_feed(feed: str) -> bool:
+    """Return True when raw feed is explicitly allowed for Silver routing."""
+    return feed in CONTRACTED_RAW_FEEDS
 
 
 def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -474,12 +495,16 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
 
 
 __all__ = [
+    "CONTRACTED_RAW_FEEDS",
     "DATA_GATEWAY_FEEDS",
+    "DLQ_REASON_UNCONTRACTED",
     "FEED_ALIAS_MAP",
     "FEED_ALIASES",
     "FIELD_MAPPINGS",
+    "LEGACY_MAPPABLE_FEEDS",
     "REQUIRED_FIELDS_BY_FEED",
     "REQUIRED_NON_NULL_FIELDS",
+    "is_contracted_feed",
     "UnmappedFeedError",
     "normalize_payload_for_feed",
     "required_fields_for_feed",
