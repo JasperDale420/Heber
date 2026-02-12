@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -10,7 +11,25 @@ import pyarrow as pa
 
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import FIELD_MAPPINGS, UnmappedFeedError, resolve_silver_feed
+from heber.writer.ingest_contracts import (
+    FIELD_MAPPINGS,
+    REQUIRED_NON_NULL_FIELDS,
+    UnmappedFeedError,
+    resolve_silver_feed,
+)
+
+
+class MissingRequiredFieldsError(ValueError):
+    """Raised when a normalized Silver row is missing required non-null fields."""
+
+    def __init__(self, feed: str, missing_fields: list[str], event_id: str | None = None):
+        self.feed = feed
+        self.missing_fields = missing_fields
+        self.event_id = event_id
+        message = f"missing_required_fields:{feed}:{','.join(missing_fields)}"
+        if event_id:
+            message = f"{message}:event_id={event_id}"
+        super().__init__(message)
 
 
 def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
@@ -57,6 +76,27 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
         row[field_name] = _coerce_value(value, field.type)
 
     return row
+
+
+def enforce_required_non_null_fields(feed: str, row: Mapping[str, Any], event_id: str | None = None) -> None:
+    """Raise when required Silver fields are missing for a feed."""
+    missing = missing_required_non_null_fields(feed, row)
+    if missing:
+        raise MissingRequiredFieldsError(feed=feed, missing_fields=missing, event_id=event_id)
+
+
+def missing_required_non_null_fields(feed: str, row: Mapping[str, Any]) -> list[str]:
+    """Return sorted list of required fields that are null/blank in a row."""
+    required = REQUIRED_NON_NULL_FIELDS.get(feed, set())
+    missing: list[str] = []
+    for field in required:
+        value = row.get(field)
+        if value is None:
+            missing.append(field)
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            missing.append(field)
+    return sorted(missing)
 
 
 def _target_to_source_map(feed: str) -> dict[str, list[str]]:

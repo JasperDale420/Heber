@@ -25,7 +25,7 @@ from heber.ops.metrics import record_write, record_write_error
 from heber.schemas.silver import get_silver_schema
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import envelope_to_silver_row
+from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
 
 logger = structlog.get_logger(__name__)
 
@@ -88,7 +88,9 @@ class SilverWriter:
             return row, normalized
 
         normalized = normalized.model_copy(update={"feed": silver_feed})
-        return envelope_to_silver_row(normalized), normalized
+        row = envelope_to_silver_row(normalized)
+        enforce_required_non_null_fields(feed=silver_feed, row=row, event_id=normalized.event_id)
+        return row, normalized
 
     def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
         """Coerce a value to match the expected Arrow type."""

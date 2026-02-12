@@ -25,7 +25,7 @@ from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
 from heber.writer.ingest_contracts import UnmappedFeedError, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import envelope_to_silver_row
+from heber.writer.normalizer import MissingRequiredFieldsError, enforce_required_non_null_fields, envelope_to_silver_row
 
 logger = structlog.get_logger(__name__)
 
@@ -328,7 +328,17 @@ class BronzeToSilverTransformer:
         try:
             feed_scoped = envelope.model_copy(update={"feed": feed})
             normalized = normalize_envelope_for_silver(feed_scoped)
-            return envelope_to_silver_row(normalized)
+            row = envelope_to_silver_row(normalized)
+            enforce_required_non_null_fields(feed=row["feed"], row=row, event_id=envelope.event_id)
+            return row
+        except MissingRequiredFieldsError as exc:
+            logger.warning(
+                "backfill_row_missing_required_fields",
+                feed=feed,
+                event_id=envelope.event_id,
+                missing_fields=exc.missing_fields,
+            )
+            return None
         except (UnmappedFeedError, ValueError) as exc:
             logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
             return None

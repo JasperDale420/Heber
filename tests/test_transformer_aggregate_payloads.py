@@ -138,3 +138,45 @@ def test_transformer_skips_non_dict_aggregate_items_and_keeps_valid_items(tmp_pa
 
     assert len(rows) == 1
     assert rows[0]["bar_start_ts"] == datetime(2026, 2, 12, 15, 30, tzinfo=UTC)
+
+
+def test_transformer_skips_aggregate_items_missing_required_fields(tmp_path: Path) -> None:
+    transformer = BronzeToSilverTransformer(bronze_path=tmp_path / "bronze", silver_path=tmp_path / "silver")
+    bronze_file = tmp_path / "bars-required-fields.jsonl.gz"
+
+    _write_bronze_file(
+        bronze_file,
+        _base_envelope(
+            feed="bars",
+            payload={
+                "symbol": "AAPL",
+                "timeframe": "1Min",
+                "bars": [
+                    {
+                        "timestamp": "2026-02-12T15:30:00Z",
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.5,
+                        "close": 100.5,
+                        "volume": 1200,
+                        "trade_count": 10,
+                        "vwap": 100.2,
+                    },
+                    {
+                        "timestamp": "2026-02-12T15:31:00Z",
+                        "high": 101.2,
+                        "low": 100.2,
+                        "close": 101.0,
+                        "volume": 950,
+                        "trade_count": 8,
+                        "vwap": 100.8,
+                    },
+                ],
+            },
+        ),
+    )
+
+    rows = transformer._read_bronze_file(bronze_file, "bars")  # noqa: SLF001
+
+    assert len(rows) == 1
+    assert rows[0]["bar_start_ts"] == datetime(2026, 2, 12, 15, 30, tzinfo=UTC)

@@ -159,6 +159,71 @@ def test_rest_trades_aggregate_empty_list_skips_silver_write() -> None:
     consumer.silver_writer.write.assert_not_called()
 
 
+def test_rest_bars_aggregate_mixed_valid_invalid_only_writes_valid_items() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+
+    event = _event_payload(
+        "bars",
+        {
+            "symbol": "AAPL",
+            "timeframe": "1Min",
+            "bars": [
+                {
+                    "timestamp": "2026-02-11T14:30:00Z",
+                    "open": "100.0",
+                    "high": "101.0",
+                    "low": "99.5",
+                    "close": "100.8",
+                    "volume": 1000,
+                },
+                {
+                    "timestamp": "2026-02-11T14:31:00Z",
+                    "high": "101.5",
+                    "low": "100.6",
+                    "close": "101.2",
+                    "volume": 850,
+                },
+            ],
+        },
+        provider="alpaca",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is True
+    assert error is None
+    assert retryable is True
+    consumer.bronze_writer.write.assert_called_once()
+    assert sum(len(rows) for rows in consumer.silver_writer.buffers.values()) == 1
+
+
+def test_non_aggregate_bars_missing_required_fields_fails_after_bronze_write() -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+
+    event = _event_payload(
+        "bars",
+        {
+            "t": NOW.isoformat(),
+            "h": "101",
+            "l": "99",
+            "c": "100.5",
+            "v": "1000",
+        },
+        provider="alpaca",
+    )
+
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})
+
+    assert success is False
+    assert error is not None
+    assert "missing_required_fields" in error
+    assert retryable is False
+    consumer.bronze_writer.write.assert_called_once()
+    assert sum(len(rows) for rows in consumer.silver_writer.buffers.values()) == 0
+
+
 @pytest.mark.asyncio
 async def test_unknown_feed_is_non_retriable_and_still_bronze_first() -> None:
     consumer = EventConsumer()
