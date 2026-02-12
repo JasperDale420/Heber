@@ -23,6 +23,16 @@ logger = structlog.get_logger(__name__)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
 
+class SchemaConflictError(RuntimeError):
+    """Raised when files in a partition contain incompatible column types."""
+
+    def __init__(self, column: str, existing_type: pa.DataType, incoming_type: pa.DataType):
+        super().__init__(f"Schema conflict for column '{column}': {existing_type} vs {incoming_type}")
+        self.column = column
+        self.existing_type = existing_type
+        self.incoming_type = incoming_type
+
+
 class Compactor:
     """Compacts small Parquet files into larger ones."""
 
@@ -83,6 +93,67 @@ class Compactor:
             fields.append(field)
         return pa.table(arrays, schema=pa.schema(fields))
 
+    @staticmethod
+    def _resolve_column_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
+        """Resolve a compatible unified type for one column."""
+        if existing_type.equals(incoming_type):
+            return existing_type
+        if pa.types.is_null(existing_type):
+            return incoming_type
+        if pa.types.is_null(incoming_type):
+            return existing_type
+        if pa.types.is_integer(existing_type) and pa.types.is_integer(incoming_type):
+            return pa.int64()
+        if (
+            (pa.types.is_integer(existing_type) and pa.types.is_floating(incoming_type))
+            or (pa.types.is_floating(existing_type) and pa.types.is_integer(incoming_type))
+            or (pa.types.is_floating(existing_type) and pa.types.is_floating(incoming_type))
+        ):
+            return pa.float64()
+        if pa.types.is_string(existing_type) and pa.types.is_string(incoming_type):
+            return pa.string()
+        return None
+
+    def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
+        """Build unified schema across tables, raising on true type conflicts."""
+        ordered_columns: list[str] = []
+        column_types: dict[str, pa.DataType] = {}
+
+        for table in tables:
+            for field in table.schema:
+                column = field.name
+                incoming_type = field.type
+                existing_type = column_types.get(column)
+                if existing_type is None:
+                    ordered_columns.append(column)
+                    column_types[column] = incoming_type
+                    continue
+
+                resolved_type = self._resolve_column_type(existing_type, incoming_type)
+                if resolved_type is None:
+                    raise SchemaConflictError(
+                        column=column,
+                        existing_type=existing_type,
+                        incoming_type=incoming_type,
+                    )
+                column_types[column] = resolved_type
+
+        return pa.schema([pa.field(column, column_types[column]) for column in ordered_columns])
+
+    @staticmethod
+    def _align_table_to_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+        """Project/cast one table to the unified schema, filling missing cols with nulls."""
+        arrays: list[pa.Array | pa.ChunkedArray] = []
+        for field in schema:
+            if field.name in table.schema.names:
+                column = table.column(field.name)
+                if not column.type.equals(field.type):
+                    column = column.cast(field.type)
+            else:
+                column = pa.nulls(table.num_rows, type=field.type)
+            arrays.append(column)
+        return pa.table(arrays, schema=schema)
+
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -123,15 +194,39 @@ class Compactor:
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
             temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
+            source_tables: list[pa.Table] = []
+            for source_file in small_files:
+                source_table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
+                source_tables.append(source_table)
+
+            try:
+                unified_schema = self._build_unified_schema(source_tables)
+            except SchemaConflictError as conflict:
+                record_compaction(
+                    dataset=dataset,
+                    status="error",
+                    files_merged=0,
+                    bytes_reclaimed=0,
+                    duration=(datetime.now(UTC) - started_at).total_seconds(),
+                )
+                logger.error(
+                    "Compaction skipped due schema conflict",
+                    partition=str(partition_path),
+                    column=conflict.column,
+                    existing_type=str(conflict.existing_type),
+                    incoming_type=str(conflict.incoming_type),
+                )
+                return 0
+
             writer = None
             merged_rows = 0
             try:
-                for source_file in small_files:
-                    table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
+                for source_table in source_tables:
+                    table = self._align_table_to_schema(source_table, unified_schema)
                     if writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
-                            table.schema,
+                            unified_schema,
                             compression="snappy",
                         )
                     writer.write_table(table, row_group_size=250_000)

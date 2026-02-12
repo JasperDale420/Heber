@@ -122,6 +122,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated watcher flow to propagate fatal enrichment auth failures for restart behavior while still handling non-fatal enrichment errors.
 - Added regression tests in `tests/test_watch_feature_enrichment_resilience.py` for retry success, retry exhaustion logging, auth fail-fast thresholding, and request throttling.
 
+#### Silver Compactor Schema Evolution
+
+- Updated `heber/writer/compactor.py` to build a unified schema per partition before writing merged output.
+- Added table-to-schema alignment during compaction so missing columns in older files are filled with nulls.
+- Added explicit schema conflict detection for incompatible column types; conflicting partitions are skipped with detailed error logs and without deleting source files.
+- Added regression tests in `tests/test_compactor_schema_union.py` for:
+  - mixed old/new schema compaction with null fill,
+  - optional column value preservation across merged files,
+  - incompatible type conflict skip behavior.
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
