@@ -159,6 +159,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/configuration.md` (dataflow health settings table)
   - `docs/operations/runbook.md` (manual/scheduled JSON proof commands)
 
+#### Dataflow Verification Validation Notes
+
+- Validation completed for this slice:
+  - `pytest -q` passes (571 tests).
+  - `ruff check .` passes.
+  - `mypy .` currently reports existing repo-wide typing/import-stub issues outside this feature slice.
+
 #### Watch Flow Alert Batch Parsing
 
 - Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.
