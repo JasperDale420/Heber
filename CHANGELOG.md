@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Gateway Feed Alias Compatibility
 
+- Fixed `flow_alerts` ingestion producing invalid `equity:` instrument keys by adding defensive fallback logic in `heber/writer/key_normalization.py`.
 - Added defensive ingest aliases in `heber/writer/ingest_contracts.py` so legacy/rest feed names still resolve to canonical Silver datasets:
   - `flow` -> `flow_alerts`
   - `greeks` -> `greek_exposure`
