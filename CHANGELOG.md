@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Gateway Feed Alias Compatibility
 
+- Fixed `flow_alerts` ingestion producing invalid `equity:` instrument keys by adding defensive fallback logic in `heber/writer/key_normalization.py`.
 - Added defensive ingest aliases in `heber/writer/ingest_contracts.py` so legacy/rest feed names still resolve to canonical Silver datasets:
   - `flow` -> `flow_alerts`
   - `greeks` -> `greek_exposure`
@@ -86,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added missing env vars to `.env.example`: `HEBER_CATALOG_URL`, `HEBER_CLICKHOUSE_DATABASE`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
 
 ### Fixed
+
+#### DLQ Timestamp Normalization
+
+- Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
+- Added regression tests in `tests/test_event_envelope_timezones.py` to prevent mixed naive/aware timestamp errors during consumer lag calculations.
 
 #### Docker Python 3.14 Builder Compatibility
 
