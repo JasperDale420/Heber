@@ -132,6 +132,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - optional column value preservation across merged files,
   - incompatible type conflict skip behavior.
 
+#### Stabilization Verification
+
+- Rebuilt `heber-watch` and `heber-compactor` images and recreated both services after the watcher/compactor fixes.
+- Verified startup logs show watcher output path resolved to container storage (`/data/gold/...`) instead of host-only `/Volumes/...`.
+- Verified recent watcher and compactor logs show no recurring permission or schema mismatch failures after rollout.
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
