@@ -25,8 +25,9 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
 ## Core Services
 
 - **heber-consumer** (`heber/writer/consumer.py`)
-  - Redis Streams consumer with Bronze-first flow: parse envelope, set `ts_available`, write Bronze, normalize for Silver, then write Silver or DLQ.
-  - Unknown feed behavior is explicit: Bronze persists, Silver is skipped, DLQ event reason is `unmapped_feed`.
+  - Redis Streams consumer with Bronze-first flow: parse envelope, set `ts_available`, write Bronze, gate by contracted raw feed, normalize for Silver, then write Silver or DLQ.
+  - Uncontracted feed behavior is explicit: Bronze persists, Silver is skipped, DLQ event reason is `uncontracted_feed`.
+  - Contracted-but-unmapped feed behavior is explicit: Bronze persists, Silver is skipped, DLQ event reason is `unmapped_feed`.
 - **heber-compactor** (`heber/writer/compactor.py`)
   - Periodic Parquet compaction for lake partitions.
 - **heber-catalog** (`heber/catalog/api.py`)
@@ -52,7 +53,8 @@ Zero-leakage is enforced via `ts_available` and `read_asof()` semantics.
 Normalization contracts are centralized so live and backfill use identical rules:
 
 - `heber/writer/ingest_contracts.py`
-  - feed aliases (`ftds -> ftd`, `short_interest/short_volume -> short_data`)
+  - contracted raw feed allowlist for Silver routing
+  - feed aliases (`ftds -> ftd`, `short_interest/short_volume -> short_data`, `ticker_flow -> flow_alerts`)
   - payload field mappings and per-feed normalization rules
 - `heber/writer/key_normalization.py`
   - strict deterministic symbol/instrument key synthesis

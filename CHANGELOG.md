@@ -67,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Data Gateway feed coverage matrix and alias routing
   - key synthesis rules and unknown-feed handling semantics
 - Updated `docs/architecture.md` with Bronze→Silver normalization architecture and shared normalizer module references.
+- Updated `docs/data_contract.md` and `docs/architecture.md` for training-feed scope:
+  - added plain-English contract terminology
+  - added contracted raw feed matrix for stream/UW poller/backfill
+  - documented Bronze+DLQ behavior for `uncontracted_feed` and `unmapped_feed`
 
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
 - Added missing documentation links to `README.md`: `labeling_strategy.md`, `schemaaudit.md`

@@ -2,6 +2,14 @@
 
 Canonical event and dataset contract for Heber ingestion and storage.
 
+## Plain-English Terms
+
+- **Feed**: event type label (example: `bars`, `flow_alerts`)
+- **Bronze**: raw, always-write storage
+- **Silver**: strict normalized schema used for analytics and ML training
+- **Alias**: incoming feed name remapped to canonical Silver dataset name
+- **DLQ**: dead-letter queue for events kept in Bronze but blocked from Silver
+
 ## EventEnvelope (Canonical)
 
 Source: `heber/models/envelope.py`
@@ -49,12 +57,13 @@ Regex validation in `validate_instrument_key()`:
 Ingestion policy:
 
 - Bronze-first: every valid envelope is persisted to Bronze before Silver normalization.
-- Silver-strict: only mapped feeds with a valid canonical key are written to Silver.
-- Unknown feed policy: write Bronze, emit DLQ reason `unmapped_feed`, and skip Silver write.
+- Silver-strict: only contracted raw feeds with a valid canonical key are written to Silver.
+- Uncontracted feed policy: write Bronze, emit DLQ reason `uncontracted_feed`, and skip Silver write.
+- Unmapped feed policy: for contracted feeds that do not map to a Silver schema, write Bronze, emit DLQ reason `unmapped_feed`, and skip Silver write.
 
 ## Data Gateway Feed Coverage
 
-Canonical feed routing for currently emitted Data Gateway feeds:
+Training-feed raw contract (stream + UW poller + backfill):
 
 - `bars -> bars`
 - `quotes -> quotes`
@@ -73,6 +82,13 @@ Canonical feed routing for currently emitted Data Gateway feeds:
 - `ftds -> ftd`
 - `congress_trades -> congress_trades`
 - `insider_trades -> insider_trades`
+- `option_trades -> trades`
+- `crypto_bars -> bars`
+- `crypto_trades -> trades`
+- `ticker_flow -> flow_alerts`
+- `darkpool_ticker -> darkpool`
+- `institutions -> institution_holdings`
+- `earnings -> earnings`
 
 Feed aliases are defined in `heber/writer/ingest_contracts.py`.
 
