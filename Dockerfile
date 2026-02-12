@@ -1,7 +1,7 @@
 # =============================================================================
 # Heber Multi-Stage Dockerfile per PRD §19
 # =============================================================================
-# Base image: python:3.11-slim-bookworm (pinned for dependency compatibility)
+# Base image: python:3.14-slim-bookworm
 # Security: Non-root user, minimal dependencies, no cache layers
 # =============================================================================
 
@@ -13,6 +13,8 @@ FROM python:3.14-slim-bookworm AS builder
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    cmake \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
