@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated catalog seed mappings in `scripts/seed_catalog.py` for the same alias set, ensuring catalog metadata includes legacy-to-canonical mappings.
 - Expanded alias routing tests in `tests/test_feed_alias_routing.py` to enforce alias + catalog-seed parity.
 
+#### Comprehensive Feed Coverage Audit
+
+- Added 7 new `FEED_ALIASES` in `heber/writer/ingest_contracts.py`: `ticker_flow`→`flow_alerts`, `darkpool_ticker`→`darkpool`, `option_trades`→`trades`, `crypto_bars`→`bars`, `crypto_trades`→`trades`, `institutions`→`institution_holdings`, `filings`→`news`
+- Expanded `DATA_GATEWAY_FEEDS` from 14 to 46 entries covering all Silver schemas
+- Added `forex` Silver schema in `heber/schemas/silver.py` with bid/ask/mid/OHLC columns
+- Added `forex` field mapping in `heber/writer/ingest_contracts.py`
+
 #### Bronze→Silver Contract Hardening
 
 - Added contract-first ingestion tests for Data Gateway feed coverage, alias routing, instrument-key synthesis, and Bronze-first behavior:
