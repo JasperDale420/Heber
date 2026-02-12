@@ -10,6 +10,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from heber.models.envelope import EventEnvelope
+from heber.ops import metrics as metrics_module
+from heber.writer import bronze as bronze_module
 from heber.writer import compactor as compactor_module
 from heber.writer import consumer as consumer_module
 from heber.writer import silver as silver_module
@@ -139,3 +141,37 @@ def test_compactor_records_success_metrics(monkeypatch, tmp_path: Path) -> None:
     assert compaction_calls[0]["dataset"] == "bars"
     assert compaction_calls[0]["status"] == "success"
     assert compaction_calls[0]["files_merged"] == 2
+
+
+def test_bronze_flush_records_write_metrics(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(bronze_module.settings, "data_root", tmp_path)
+
+    write_calls: list[dict[str, object]] = []
+    error_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(bronze_module, "record_write", lambda **kwargs: write_calls.append(kwargs))
+    monkeypatch.setattr(bronze_module, "record_write_error", lambda **kwargs: error_calls.append(kwargs))
+
+    writer = bronze_module.BronzeWriter()
+    writer.write(_build_envelope())
+    writer.flush()
+
+    assert len(write_calls) == 1
+    assert write_calls[0]["layer"] == "bronze"
+    assert write_calls[0]["dataset"] == "bars"
+    assert write_calls[0]["rows"] == 1
+    assert write_calls[0]["bytes_written"] > 0
+    assert error_calls == []
+
+
+def test_record_write_updates_last_write_timestamp_metric() -> None:
+    dataset = "slice1_writer_last_write_test"
+    metrics_module.record_write(
+        layer="silver",
+        dataset=dataset,
+        rows=1,
+        bytes_written=128,
+        duration_seconds=0.01,
+    )
+
+    observed = metrics_module.writer_last_write_unixtime.labels(layer="silver", dataset=dataset)._value.get()
+    assert observed > 0

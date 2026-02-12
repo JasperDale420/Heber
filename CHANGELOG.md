@@ -88,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Dataflow Metrics Foundation (Writer + Watch Startup)
+
+- Added `heber_writer_last_write_unixtime{layer,dataset}` in `heber/ops/metrics.py` and wired it to `record_write()` so every successful write updates a freshness timestamp.
+- Instrumented Bronze flush writes in `heber/writer/bronze.py` with:
+  - `record_write(layer="bronze", ...)` on success
+  - `record_write_error(layer="bronze", ...)` on failure
+- Started metrics server in watch entrypoint `heber/watch/__main__.py` using `start_metrics_server_from_env(default_port=9090)` so watch-service metrics are available at runtime.
+- Added regression tests:
+  - `tests/test_metrics_runtime_wiring.py` (Bronze write metrics + last-write gauge)
+  - `tests/test_watch_metrics_startup.py` (watch metrics server startup)
+
 #### Watch Flow Alert Batch Parsing
 
 - Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.

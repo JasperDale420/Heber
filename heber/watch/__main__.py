@@ -53,6 +53,7 @@ def run() -> None:
     """Run the watch service."""
     import redis
 
+    from heber.ops.metrics import start_metrics_server_from_env
     from heber.watch.writer import WatchService
 
     redis_url, gateway_url, output_path = _get_defaults()
@@ -94,6 +95,8 @@ Environment variables:
         gateway_url=args.gateway,
         output_path=args.output,
     )
+
+    start_metrics_server_from_env(default_port=9090)
 
     r = redis.from_url(args.redis)
     output_path = _ensure_writable_output_path(args.output)

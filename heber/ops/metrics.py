@@ -6,6 +6,8 @@ and anti-leakage latency monitoring.
 Naming convention: heber_<service>_<metric_name>{<labels>}
 """
 
+import time
+
 import structlog
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, start_http_server
 
@@ -111,6 +113,13 @@ writer_errors_total = _get_or_create(
     "heber_writer_errors_total",
     "Write failures by type",
     ["layer", "error_type"],
+)
+
+writer_last_write_unixtime = _get_or_create(
+    Gauge,
+    "heber_writer_last_write_unixtime",
+    "Unix timestamp of most recent successful write",
+    ["layer", "dataset"],
 )
 
 
@@ -289,6 +298,7 @@ def record_write(
     writer_bytes_written_total.labels(layer=layer, dataset=dataset).inc(bytes_written)
     writer_files_written_total.labels(layer=layer, dataset=dataset).inc()
     writer_flush_duration_seconds.labels(layer=layer).observe(duration_seconds)
+    writer_last_write_unixtime.labels(layer=layer, dataset=dataset).set(time.time())
 
 
 def record_write_error(layer: str, error_type: str) -> None:

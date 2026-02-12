@@ -7,6 +7,7 @@ Path: bronze/provider={}/feed={}/dt={}/hour={}/
 
 import gzip
 import json
+import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.metrics import record_write, record_write_error
 
 logger = structlog.get_logger(__name__)
 
@@ -79,12 +81,24 @@ class BronzeWriter:
     def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
         """Write events to a partition file."""
         file_path = self._get_file_path(partition_key)
+        started = time.perf_counter()
+        dataset = self._dataset_from_partition(partition_key)
 
         try:
             # Write as gzipped JSONL
             with gzip.open(file_path, "wt", encoding="utf-8") as f:
                 for event in events:
                     f.write(json.dumps(event, default=str) + "\n")
+
+            duration_seconds = max(0.0, time.perf_counter() - started)
+            bytes_written = file_path.stat().st_size if file_path.exists() else 0
+            record_write(
+                layer="bronze",
+                dataset=dataset,
+                rows=len(events),
+                bytes_written=bytes_written,
+                duration_seconds=duration_seconds,
+            )
 
             logger.info(
                 "Flushed Bronze partition",
@@ -93,6 +107,7 @@ class BronzeWriter:
                 file=str(file_path),
             )
         except Exception as e:
+            record_write_error(layer="bronze", error_type=type(e).__name__)
             logger.error(
                 "Failed to flush Bronze partition",
                 partition=partition_key,
@@ -100,3 +115,11 @@ class BronzeWriter:
                 exc_info=True,
             )
             raise
+
+    @staticmethod
+    def _dataset_from_partition(partition_key: str) -> str:
+        """Extract dataset/feed label from bronze partition key."""
+        for token in partition_key.split("/"):
+            if token.startswith("feed="):
+                return token.split("=", 1)[1]
+        return "unknown"
