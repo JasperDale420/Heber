@@ -1,6 +1,7 @@
 """Heber CLI - Command line interface for Heber Data Lakehouse."""
 
 import argparse
+import json
 import sys
 
 from heber import __version__
@@ -71,11 +72,41 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_health_dataflow(args: argparse.Namespace) -> int:
+    """Handle the 'health-dataflow' subcommand."""
+    from heber.ops import dataflow_health
+
+    try:
+        if args.loop:
+            dataflow_health.run_dataflow_health_loop(
+                window_seconds=args.window_seconds,
+                mode=args.mode,
+                interval_seconds=args.interval_seconds,
+                consumer_metrics_url=args.consumer_metrics_url,
+                watch_metrics_url=args.watch_metrics_url,
+                report_dir=args.report_dir,
+            )
+            return 0
+
+        report = dataflow_health.run_dataflow_health_once(
+            window_seconds=args.window_seconds,
+            mode=args.mode,
+            consumer_metrics_url=args.consumer_metrics_url,
+            watch_metrics_url=args.watch_metrics_url,
+            report_dir=args.report_dir,
+        )
+        print(json.dumps(report))
+        return 0
+    except KeyboardInterrupt:
+        return 0
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
     "versions": _cmd_versions,
     "backfill": _cmd_backfill,
+    "health-dataflow": _cmd_health_dataflow,
 }
 
 
@@ -111,6 +142,15 @@ def main() -> int:
     backfill_parser.add_argument("--feed", help="Specific feed to backfill")
     backfill_parser.add_argument("--since", help="Start date (YYYY-MM-DD)")
     backfill_parser.add_argument("--until", help="End date (YYYY-MM-DD)")
+
+    health_dataflow_parser = subparsers.add_parser("health-dataflow", help="Verify Gateway->Ingest->Storage flow")
+    health_dataflow_parser.add_argument("--window-seconds", type=int, default=900)
+    health_dataflow_parser.add_argument("--consumer-metrics-url", default=None)
+    health_dataflow_parser.add_argument("--watch-metrics-url", default=None)
+    health_dataflow_parser.add_argument("--report-dir", default=None)
+    health_dataflow_parser.add_argument("--loop", action="store_true")
+    health_dataflow_parser.add_argument("--interval-seconds", type=int, default=300)
+    health_dataflow_parser.add_argument("--mode", choices=["manual", "scheduled"], default="manual")
 
     args = parser.parse_args()
 

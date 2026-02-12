@@ -119,6 +119,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_consumer_parsing.py`
   - `tests/test_watch_poller_metrics.py`
 
+#### Dataflow Health JSON Command
+
+- Added end-to-end dataflow verification engine in `heber/ops/dataflow_health.py` with JSON report output and status levels (`ok`, `warn`, `fail`).
+- Added new CLI command `heber health-dataflow` in `heber/cli.py` with support for:
+  - `--window-seconds`
+  - `--consumer-metrics-url`
+  - `--watch-metrics-url`
+  - `--report-dir`
+  - `--loop`
+  - `--interval-seconds`
+  - `--mode manual|scheduled`
+- Added health settings to `heber/config.py`:
+  - `HEBER_HEALTH_CONSUMER_METRICS_URL`
+  - `HEBER_HEALTH_WATCH_METRICS_URL`
+  - `HEBER_HEALTH_FRESHNESS_SECONDS`
+  - `HEBER_HEALTH_REPORT_DIR`
+  - `HEBER_HEALTH_INTERVAL_SECONDS`
+- Added regression tests:
+  - `tests/test_dataflow_health.py`
+  - `tests/test_cli_health_dataflow.py`
+
 #### Watch Flow Alert Batch Parsing
 
 - Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.

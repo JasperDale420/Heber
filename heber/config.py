@@ -185,6 +185,28 @@ class Settings(BaseSettings):
     # Metrics
     metrics_port: int | None = Field(default=None, description="Prometheus metrics port")
 
+    # Dataflow health verification
+    health_consumer_metrics_url: str = Field(
+        default="http://localhost:9090/metrics",
+        description="Metrics endpoint for heber-consumer dataflow health checks",
+    )
+    health_watch_metrics_url: str = Field(
+        default="http://localhost:9091/metrics",
+        description="Metrics endpoint for heber-watch dataflow health checks",
+    )
+    health_freshness_seconds: int = Field(
+        default=900,
+        description="Maximum allowed freshness window (seconds) for dataflow checks",
+    )
+    health_report_dir: Path = Field(
+        default=Path("/data/ops/dataflow-health"),
+        description="Directory for persisted dataflow health JSON reports",
+    )
+    health_interval_seconds: int = Field(
+        default=300,
+        description="Scheduled interval (seconds) for recurring dataflow checks",
+    )
+
     # Ops
     service_name: str = Field(
         default="heber",
