@@ -10,9 +10,10 @@ from heber.watch.features import AlertFeatureExtractor, AlertFeatures, Enrichmen
 
 
 class _Response:
-    def __init__(self, status_code: int, payload: dict):
+    def __init__(self, status_code: int, payload: dict, headers: dict | None = None):
         self.status_code = status_code
         self._payload = payload
+        self.headers = headers or {}
 
     def json(self) -> dict:
         return self._payload
@@ -31,7 +32,12 @@ class _SequencedClient:
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
         return False
 
-    async def get(self, url: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+    async def get(
+        self,
+        url: str,
+        params: dict | None = None,  # noqa: ARG002
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> _Response:
         idx = min(type(self).calls, len(type(self).responses) - 1)
         response = type(self).responses[idx]
         type(self).calls += 1
@@ -51,12 +57,40 @@ class _ThrottleClient:
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
         return False
 
-    async def get(self, url: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+    async def get(
+        self,
+        url: str,
+        params: dict | None = None,  # noqa: ARG002
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> _Response:
         _ThrottleClient.active_calls += 1
         _ThrottleClient.max_active_calls = max(_ThrottleClient.max_active_calls, _ThrottleClient.active_calls)
         await asyncio.sleep(0.05)
         _ThrottleClient.active_calls -= 1
         return _Response(200, {"data": {"iv_rank": 42.0}})
+
+
+class _RouteClient:
+    responses: dict[str, _Response] = {}
+    calls: list[str] = []
+
+    def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        pass
+
+    async def __aenter__(self) -> _RouteClient:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+        return False
+
+    async def get(
+        self,
+        url: str,
+        params: dict | None = None,  # noqa: ARG002
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> _Response:
+        type(self).calls.append(url)
+        return type(self).responses[url]
 
 
 def _base_features(symbol: str = "AAPL") -> AlertFeatures:
@@ -201,3 +235,33 @@ async def test_request_throttle_limits_concurrency(monkeypatch: pytest.MonkeyPat
     await asyncio.gather(_run("AAPL"), _run("MSFT"))
 
     assert _ThrottleClient.max_active_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_request_json_stops_legacy_fallback_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    _RouteClient.calls = []
+    _RouteClient.responses = {
+        "http://gateway/api/v1/uw/options/AAPL/iv-rank": _Response(429, {"error": "rate limited"}),
+        "http://gateway/uw/options/AAPL/iv-rank": _Response(200, {"data": {"iv_rank": 88.0}}),
+    }
+    monkeypatch.setattr("httpx.AsyncClient", _RouteClient)
+
+    extractor = AlertFeatureExtractor(
+        gateway_url="http://gateway",
+        request_max_attempts=1,
+        retry_base_delay_seconds=0.0,
+        retry_jitter_seconds=0.0,
+    )
+
+    payload = await extractor._request_json_with_retry(
+        endpoint="uw_iv_rank",
+        routes=[
+            "http://gateway/api/v1/uw/options/AAPL/iv-rank",
+            "http://gateway/uw/options/AAPL/iv-rank",
+        ],
+        symbol="AAPL",
+        alert_id="a1",
+    )
+
+    assert payload is None
+    assert _RouteClient.calls == ["http://gateway/api/v1/uw/options/AAPL/iv-rank"]

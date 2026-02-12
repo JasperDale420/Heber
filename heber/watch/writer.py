@@ -166,6 +166,7 @@ class WatchService:
         self,
         redis_client: Any,
         gateway_url: str = DEFAULT_GATEWAY_URL,
+        gateway_api_key: str | None = None,
         output_path: Path | None = None,
     ):
         """Initialize the watch service.
@@ -173,16 +174,33 @@ class WatchService:
         Args:
             redis_client: Redis client
             gateway_url: Data Gateway URL
+            gateway_api_key: Data Gateway API key for authenticated requests
             output_path: Path for Gold output
         """
+        from heber.config import settings
         from heber.watch.consumer import AlertWatchConsumer
         from heber.watch.manager import WatchManager
         from heber.watch.poller import SnapshotPoller
 
+        resolved_gateway_api_key = gateway_api_key
+        if resolved_gateway_api_key is None:
+            resolved_gateway_api_key = settings.watch_gateway_api_key
+
         self.redis = redis_client
         self.manager = WatchManager(redis_client)
-        self.consumer = AlertWatchConsumer(redis_client, self.manager, gateway_url=gateway_url)
-        self.poller = SnapshotPoller(self.manager, gateway_url=gateway_url)
+        self.consumer = AlertWatchConsumer(
+            redis_client,
+            self.manager,
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
+        self.poller = SnapshotPoller(
+            self.manager,
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
         self.checker = BarrierChecker(self.manager)
         self.writer = LabelWriter(output_path=output_path)
         self._running = False
@@ -238,6 +256,7 @@ class WatchService:
 def run_watch_service(
     redis_url: str = "redis://localhost:6379",
     gateway_url: str = DEFAULT_GATEWAY_URL,
+    gateway_api_key: str | None = None,
     output_path: str | None = None,
 ) -> None:
     """CLI entry point for watch service.
@@ -245,6 +264,7 @@ def run_watch_service(
     Args:
         redis_url: Redis connection URL
         gateway_url: Data Gateway URL
+        gateway_api_key: Data Gateway API key for authenticated requests
         output_path: Path for Gold output
     """
     import asyncio
@@ -254,7 +274,7 @@ def run_watch_service(
     r = redis.from_url(redis_url)
     path = Path(output_path) if output_path else None
 
-    service = WatchService(r, gateway_url=gateway_url, output_path=path)
+    service = WatchService(r, gateway_url=gateway_url, gateway_api_key=gateway_api_key, output_path=path)
     run_error: BaseException | None = None
     run_error_tb = None
 

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Watch Gateway Fallback Hardening
+
+- Stopped legacy unprefixed route fallback for non-route HTTP statuses in watch polling paths (notably `429`), preventing duplicate failing calls to Data-Gateway.
+- Updated watch feature enrichment retry logic to honor `Retry-After` headers as the minimum backoff when upstream throttles.
+- Added shared fallback policy helper so only true route-miss statuses (`404`) trigger legacy path retries.
+
+### Changed
+
+#### Watch Runtime Defaults
+
+- Added `watch_gateway_legacy_fallback_enabled` setting and wired it through watch poller/consumer/feature enrichment URL candidate generation.
+- Set `HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false` in compose for environments where Data-Gateway serves only `/api/v1/...` routes.
+
 ### Added
 
 #### Gateway Feed Alias Compatibility

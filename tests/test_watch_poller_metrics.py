@@ -23,7 +23,12 @@ class _StubClient:
     def __init__(self, responses: dict[str, _Response]):
         self._responses = responses
 
-    async def get(self, url: str, params: dict[str, Any] | None = None) -> _Response:  # noqa: ARG002
+    async def get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,  # noqa: ARG002
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> _Response:
         return self._responses[url]
 
 

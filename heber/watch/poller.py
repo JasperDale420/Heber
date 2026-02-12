@@ -12,16 +12,19 @@ import httpx
 import structlog
 
 from heber.calendar import MarketCalendar
+from heber.config import settings
 from heber.ops.metrics import record_watch_gateway_request, record_watch_poll_cycle
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     extract_quote_timestamp,
+    gateway_auth_headers,
     gateway_url_candidates,
     quote_age_seconds,
     route_failure_for_exception,
     route_failure_for_http_status,
     route_failure_for_partial_quotes,
     route_failure_for_payload_shape,
+    should_try_legacy_fallback_for_status,
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
@@ -49,6 +52,8 @@ class SnapshotPoller:
         self,
         watch_manager: WatchManager,
         gateway_url: str = DEFAULT_GATEWAY_URL,
+        gateway_api_key: str | None = None,
+        legacy_route_fallback_enabled: bool | None = None,
         batch_size: int = 100,
         calendar: MarketCalendar | None = None,
     ):
@@ -62,6 +67,10 @@ class SnapshotPoller:
         """
         self.manager = watch_manager
         self.gateway_url = gateway_url
+        self.gateway_headers = gateway_auth_headers(gateway_api_key)
+        if legacy_route_fallback_enabled is None:
+            legacy_route_fallback_enabled = settings.watch_gateway_legacy_fallback_enabled
+        self.legacy_route_fallback_enabled = bool(legacy_route_fallback_enabled)
         self.batch_size = batch_size
         self.calendar = calendar or MarketCalendar()
         self._running = False
@@ -209,7 +218,11 @@ class SnapshotPoller:
     ) -> dict[str, dict]:
         """Fetch quotes for a single batch of symbols, trying multiple routes."""
         symbols_param = ",".join(batch)
-        routes = gateway_url_candidates(self.gateway_url, "/alpaca/options/quotes")
+        routes = gateway_url_candidates(
+            self.gateway_url,
+            "/alpaca/options/quotes",
+            include_legacy_fallback=self.legacy_route_fallback_enabled,
+        )
         now_utc = datetime.now(UTC)
         route_failures: list[dict[str, Any]] = []
         batch_quotes: dict[str, dict] | None = None
@@ -230,6 +243,8 @@ class SnapshotPoller:
                     route_failures,
                 )
                 if result is None:
+                    if not self._should_continue_route_fallback(route_failures):
+                        break
                     continue
 
                 valid_quotes, stale_quotes, stale_ages, partial_failure = result
@@ -277,6 +292,19 @@ class SnapshotPoller:
             logger.error("Quote fetch error", error=str(e), batch_size=len(batch), routes=routes)
             return {}
 
+    @staticmethod
+    def _should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
+        """Return True when it is useful to continue trying legacy route fallbacks."""
+        if not route_failures:
+            return True
+        latest = route_failures[-1]
+        if latest.get("failure") != "http_status":
+            return True
+        status = latest.get("status")
+        if not isinstance(status, int):
+            return True
+        return should_try_legacy_fallback_for_status(status)
+
     async def _try_route_for_batch(
         self,
         client: httpx.AsyncClient,
@@ -289,7 +317,11 @@ class SnapshotPoller:
         """Try fetching from one route; return (valid, stale, stale_ages, partial_failure) or None."""
         started = time.perf_counter()
         try:
-            response = await client.get(route, params={"symbols": symbols_param})
+            response = await client.get(
+                route,
+                params={"symbols": symbols_param},
+                headers=self.gateway_headers or None,
+            )
         except httpx.HTTPError as request_error:
             route_failures.append(route_failure_for_exception(route, request_error))
             logger.warning("Quote route request failed", route=route, error=str(request_error))

@@ -12,6 +12,16 @@ DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
 
 
+def gateway_auth_headers(gateway_api_key: str | None) -> dict[str, str]:
+    """Build HTTP headers for Data Gateway auth when a key is configured."""
+    if gateway_api_key is None:
+        return {}
+    normalized_key = gateway_api_key.strip()
+    if not normalized_key:
+        return {}
+    return {"X-Gateway-Key": normalized_key}
+
+
 def _normalize_gateway_base(raw_base: str) -> str:
     """Normalize base URL by stripping query/fragment parts."""
     parsed = urlsplit(raw_base)
@@ -43,6 +53,7 @@ def gateway_url_candidates(
     gateway_url: str,
     route: str,
     api_prefix: str = DEFAULT_GATEWAY_API_PREFIX,
+    include_legacy_fallback: bool = True,
 ) -> list[str]:
     """Return gateway endpoint candidates with API-prefix-first ordering.
 
@@ -75,6 +86,8 @@ def gateway_url_candidates(
     legacy = f"{base_without_prefix}{normalized_route}" if base_has_prefix else f"{base}{normalized_route}"
 
     candidates = [prefixed]
+    if not include_legacy_fallback:
+        return candidates
     if legacy != prefixed:
         candidates.append(legacy)
     return candidates
@@ -107,6 +120,15 @@ def route_failure_for_http_status(route: str, status_code: int) -> dict[str, Any
         "failure": "http_status",
         "status": status_code,
     }
+
+
+def should_try_legacy_fallback_for_status(status_code: int) -> bool:
+    """Return True when trying legacy route fallback can plausibly help.
+
+    Legacy fallback is for route-shape compatibility, so it should only
+    run when the prefixed route is not found.
+    """
+    return status_code == 404
 
 
 def route_failure_for_payload_shape(route: str, failure: str, payload: Any) -> dict[str, Any]:

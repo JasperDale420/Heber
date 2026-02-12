@@ -11,6 +11,7 @@ import json
 import random
 import time
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -26,7 +27,11 @@ from heber.ops.metrics import (
     record_watch_gateway_request,
     record_watch_gateway_success,
 )
-from heber.watch.gateway import gateway_url_candidates
+from heber.watch.gateway import (
+    gateway_auth_headers,
+    gateway_url_candidates,
+    should_try_legacy_fallback_for_status,
+)
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -214,6 +219,8 @@ class AlertFeatureExtractor:
         self,
         redis: Redis | None = None,
         gateway_url: str | None = None,
+        gateway_api_key: str | None = None,
+        legacy_route_fallback_enabled: bool | None = None,
         request_max_attempts: int = 3,
         retry_base_delay_seconds: float = 0.25,
         retry_jitter_seconds: float = 0.1,
@@ -227,6 +234,7 @@ class AlertFeatureExtractor:
         Args:
             redis: Redis client for caching/lookups.
             gateway_url: Data Gateway URL for market data enrichment.
+            legacy_route_fallback_enabled: Whether to try legacy unprefixed route fallback.
             request_max_attempts: Number of attempts per route for retryable statuses.
             retry_base_delay_seconds: Base backoff delay between retries.
             retry_jitter_seconds: Random jitter added to backoff delays.
@@ -237,6 +245,10 @@ class AlertFeatureExtractor:
         """
         self.redis = redis
         self.gateway_url = gateway_url
+        self.gateway_headers = gateway_auth_headers(gateway_api_key)
+        if legacy_route_fallback_enabled is None:
+            legacy_route_fallback_enabled = settings.watch_gateway_legacy_fallback_enabled
+        self.legacy_route_fallback_enabled = bool(legacy_route_fallback_enabled)
         self.request_max_attempts = max(1, int(request_max_attempts))
         self.retry_base_delay_seconds = max(0.0, float(retry_base_delay_seconds))
         self.retry_jitter_seconds = max(0.0, float(retry_jitter_seconds))
@@ -413,10 +425,27 @@ class AlertFeatureExtractor:
         self._auth_failure_timestamps.append(now)
         return len(self._auth_failure_timestamps)
 
-    async def _sleep_before_retry(self, attempt: int) -> None:
+    @staticmethod
+    def _retry_after_seconds(headers: object) -> float | None:
+        if not isinstance(headers, Mapping):
+            return None
+        raw = headers.get("Retry-After")
+        if raw is None:
+            return None
+        try:
+            retry_after = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if retry_after < 0:
+            return None
+        return retry_after
+
+    async def _sleep_before_retry(self, attempt: int, minimum_delay: float | None = None) -> None:
         delay = self.retry_base_delay_seconds * attempt
         if self.retry_jitter_seconds > 0:
             delay += random.uniform(0.0, self.retry_jitter_seconds)
+        if minimum_delay is not None:
+            delay = max(delay, minimum_delay)
         if delay > 0:
             await asyncio.sleep(delay)
 
@@ -443,7 +472,11 @@ class AlertFeatureExtractor:
                     started = time.perf_counter()
                     try:
                         async with self._request_semaphore:
-                            response = await client.get(route, params=params)
+                            response = await client.get(
+                                route,
+                                params=params,
+                                headers=self.gateway_headers or None,
+                            )
                     except httpx.HTTPError as exc:
                         duration_ms = int((time.perf_counter() - started) * 1000)
                         retryable = attempt < self.request_max_attempts
@@ -559,6 +592,7 @@ class AlertFeatureExtractor:
                         break
 
                     retryable = self._is_retryable_status(status_code)
+                    retry_after_hint = self._retry_after_seconds(getattr(response, "headers", {}))
                     logger.warning(
                         "Feature enrichment request failed",
                         endpoint=endpoint,
@@ -578,8 +612,10 @@ class AlertFeatureExtractor:
                         duration_seconds=duration_ms / 1000.0,
                     )
                     if retryable and attempt < self.request_max_attempts:
-                        await self._sleep_before_retry(attempt)
+                        await self._sleep_before_retry(attempt, minimum_delay=retry_after_hint)
                         continue
+                    if not should_try_legacy_fallback_for_status(status_code):
+                        return None
                     break
 
         return None
@@ -598,6 +634,7 @@ class AlertFeatureExtractor:
             routes = gateway_url_candidates(
                 self.gateway_url,
                 f"/uw/options/{features.underlying}/iv-rank",
+                include_legacy_fallback=self.legacy_route_fallback_enabled,
             )
             data = await self._request_json_with_retry(
                 endpoint="uw_iv_rank",
@@ -641,6 +678,7 @@ class AlertFeatureExtractor:
             routes = gateway_url_candidates(
                 self.gateway_url,
                 f"/alpaca/options/chain/{features.underlying}",
+                include_legacy_fallback=self.legacy_route_fallback_enabled,
             )
             params = {
                 "expiration_date": features.expiry.isoformat(),
@@ -722,6 +760,7 @@ class AlertFeatureExtractor:
             routes = gateway_url_candidates(
                 self.gateway_url,
                 "/alpaca/stocks/bars",
+                include_legacy_fallback=self.legacy_route_fallback_enabled,
             )
             params = {
                 "symbol": symbol,

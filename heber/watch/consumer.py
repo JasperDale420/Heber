@@ -37,6 +37,7 @@ from heber.watch.features import (
 )
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+    gateway_auth_headers,
     gateway_url_candidates,
     quote_age_seconds,
     route_failure_for_exception,
@@ -44,6 +45,7 @@ from heber.watch.gateway import (
     route_failure_for_payload_shape,
     route_failure_for_symbol_missing,
     route_failure_for_symbol_shape,
+    should_try_legacy_fallback_for_status,
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon
@@ -81,6 +83,8 @@ class AlertWatchConsumer:
         watch_manager: WatchManager,
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
+        gateway_api_key: str | None = None,
+        legacy_route_fallback_enabled: bool | None = None,
         async_redis: redis.asyncio.Redis | None = None,
         stream_name: str | None = None,
         dlq_stream_name: str | None = None,
@@ -105,6 +109,10 @@ class AlertWatchConsumer:
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.gateway_headers = gateway_auth_headers(gateway_api_key)
+        if legacy_route_fallback_enabled is None:
+            legacy_route_fallback_enabled = settings.watch_gateway_legacy_fallback_enabled
+        self.legacy_route_fallback_enabled = bool(legacy_route_fallback_enabled)
         self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
         configured_retries = settings.redis_process_max_retries if max_process_retries is None else max_process_retries
@@ -119,6 +127,8 @@ class AlertWatchConsumer:
         self.feature_extractor = AlertFeatureExtractor(
             redis=async_redis,
             gateway_url=gateway_url,
+            gateway_api_key=gateway_api_key,
+            legacy_route_fallback_enabled=self.legacy_route_fallback_enabled,
         )
 
     def setup_consumer_group(self) -> None:
@@ -693,6 +703,7 @@ class AlertWatchConsumer:
                 routes = gateway_url_candidates(
                     self.gateway_url,
                     "/alpaca/options/quotes",
+                    include_legacy_fallback=self.legacy_route_fallback_enabled,
                 )
                 now_utc = datetime.now(UTC)
                 best_stale_price: float | None = None
@@ -708,6 +719,8 @@ class AlertWatchConsumer:
                         route_failures,
                     )
                     if result is None:
+                        if not self._should_continue_route_fallback(route_failures):
+                            break
                         continue
                     price, is_stale, age = result
                     if not is_stale:
@@ -728,6 +741,19 @@ class AlertWatchConsumer:
             logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
             return None
 
+    @staticmethod
+    def _should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
+        """Return True when it is useful to try legacy route fallback URLs."""
+        if not route_failures:
+            return True
+        latest = route_failures[-1]
+        if latest.get("failure") != "http_status":
+            return True
+        status = latest.get("status")
+        if not isinstance(status, int):
+            return True
+        return should_try_legacy_fallback_for_status(status)
+
     async def _try_route(
         self,
         client: httpx.AsyncClient,
@@ -739,7 +765,11 @@ class AlertWatchConsumer:
         """Try a single gateway route. Returns (price, is_stale, age_seconds) or None."""
         started = time.perf_counter()
         try:
-            response = await client.get(route, params={"symbols": occ_symbol})
+            response = await client.get(
+                route,
+                params={"symbols": occ_symbol},
+                headers=self.gateway_headers or None,
+            )
         except httpx.HTTPError as request_error:
             route_failures.append(route_failure_for_exception(route, request_error))
             logger.warning("Entry price route request failed", route=route, error=str(request_error))

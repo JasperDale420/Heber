@@ -178,6 +178,22 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         validation_alias=AliasChoices("HEBER_WATCH_GATEWAY_URL", "DATA_GATEWAY_URL"),
     )
+    watch_gateway_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "HEBER_WATCH_GATEWAY_API_KEY",
+            "DATA_GATEWAY_API_KEY",
+            "GATEWAY_API_KEY",
+        ),
+    )
+    watch_gateway_legacy_fallback_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED",
+            "WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED",
+        ),
+        description="Enable legacy unprefixed gateway route fallback after /api/v1 routes",
+    )
 
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
