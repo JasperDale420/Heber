@@ -42,7 +42,7 @@ class BronzeWriter:
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return base / f"events-{ts}.jsonl.gz"
 
-    async def write(self, envelope: EventEnvelope) -> None:
+    def write(self, envelope: EventEnvelope) -> None:
         """Buffer an event for writing."""
         partition_key = self._get_partition_key(envelope)
 
@@ -51,32 +51,32 @@ class BronzeWriter:
         self.buffers[partition_key].append(event_dict)
         self.buffer_counts[partition_key] += 1
 
-    async def flush_if_needed(self) -> None:
+    def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
         flushed = False
-        for partition_key, events in list(self.buffers.items()):
+        for partition_key, events in self.buffers.items():
             should_flush = (
                 len(events) >= settings.bronze_max_batch_size or elapsed >= settings.bronze_flush_interval_seconds
             )
             if should_flush and events:
-                await self._flush_partition(partition_key, events)
+                self._flush_partition(partition_key, events)
                 self.buffers[partition_key] = []
                 flushed = True
 
         if flushed:
             self.last_flush = now
 
-    async def flush(self) -> None:
+    def flush(self) -> None:
         """Flush all buffers immediately."""
-        for partition_key, events in list(self.buffers.items()):
+        for partition_key, events in self.buffers.items():
             if events:
-                await self._flush_partition(partition_key, events)
+                self._flush_partition(partition_key, events)
                 self.buffers[partition_key] = []
 
-    async def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
+    def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
         """Write events to a partition file."""
         file_path = self._get_file_path(partition_key)
 

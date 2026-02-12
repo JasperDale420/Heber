@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -229,16 +230,20 @@ class WatchManager:
         mae = watch.mae
         if watch.entry_price > 0:
             current_return = (current_price - watch.entry_price) / watch.entry_price
-            mfe = max(watch.mfe or -float("inf"), current_return)
-            mae = min(watch.mae or float("inf"), current_return)
+            prior_mfe = watch.mfe if watch.mfe is not None else -float("inf")
+            prior_mae = watch.mae if watch.mae is not None else float("inf")
+            mfe = max(prior_mfe, current_return)
+            mae = min(prior_mae, current_return)
 
         # Update watch
+        normalized_timestamp = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+
         watch.current_price = current_price
         watch.current_return = current_return
         watch.mfe = mfe
         watch.mae = mae
         watch.snapshot_count += 1
-        watch.updated_at = datetime.now(UTC)
+        watch.updated_at = normalized_timestamp.astimezone(UTC)
 
         self._save_watch(watch)
 
@@ -259,6 +264,7 @@ class WatchManager:
         status: WatchStatus,
         outcome_return: float,
         bars_to_hit: int | None = None,
+        outcome_time: datetime | None = None,
     ) -> AlertWatch | None:
         """Mark watch as complete with final outcome.
 
@@ -275,9 +281,19 @@ class WatchManager:
         if not watch:
             return None
 
+        normalized_outcome_time = outcome_time
+        if normalized_outcome_time is None:
+            normalized_outcome_time = datetime.now(UTC)
+        elif normalized_outcome_time.tzinfo is None:
+            normalized_outcome_time = normalized_outcome_time.replace(tzinfo=UTC)
+        else:
+            normalized_outcome_time = normalized_outcome_time.astimezone(UTC)
+
+        normalized_outcome_return = self._coerce_finite_outcome_return(outcome_return)
+
         watch.status = status
-        watch.outcome_time = datetime.now(UTC)
-        watch.outcome_return = outcome_return
+        watch.outcome_time = normalized_outcome_time
+        watch.outcome_return = normalized_outcome_return
         watch.bars_to_hit = bars_to_hit
         watch.updated_at = datetime.now(UTC)
 
@@ -290,7 +306,7 @@ class WatchManager:
             "Completed alert watch",
             watch_id=watch_id,
             status=status.value,
-            outcome_return=outcome_return,
+            outcome_return=normalized_outcome_return,
         )
 
         return watch
@@ -332,12 +348,13 @@ class WatchManager:
         expired = self.get_expired_watches()
 
         for watch in expired:
-            final_return = watch.current_return or 0.0
+            final_return = self._coerce_finite_outcome_return(watch.current_return)
             self.complete_watch(
                 watch.watch_id,
                 WatchStatus.EXPIRED,
                 final_return,
                 bars_to_hit=watch.snapshot_count,
+                outcome_time=watch.window_end,
             )
 
         logger.info("Cleaned up expired watches", count=len(expired))
@@ -348,8 +365,9 @@ class WatchManager:
         """Async wrapper for cleanup_expired."""
         return await asyncio.to_thread(self.cleanup_expired)
 
-    def delete_watch(self, watch_id: str) -> bool:
+    def delete_watch(self, watch_id: str | bytes) -> bool:
         """Delete a watch and its snapshots."""
+        watch_id = self._normalize_redis_id(watch_id)
         watch = self.get_watch(watch_id)
         if not watch:
             return False
@@ -362,14 +380,29 @@ class WatchManager:
 
         return True
 
+    @staticmethod
+    def _coerce_finite_outcome_return(value: float | None) -> float:
+        """Normalize outcome returns to finite values for persistence."""
+        if value is None:
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(numeric):
+            return 0.0
+        return numeric
+
     def _save_watch(self, watch: AlertWatch) -> None:
         """Save watch to Redis."""
         key = WatchKeys.watch_key(watch.watch_id)
         self.redis.set(key, watch.model_dump_json())
 
-        # Add to active set if watching
+        # Keep active index synchronized with status transitions.
         if watch.status == WatchStatus.WATCHING:
             self.redis.sadd(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+        else:
+            self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
 
         # Add to symbol index
         self.redis.sadd(

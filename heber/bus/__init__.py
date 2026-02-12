@@ -10,7 +10,6 @@ Provides:
 
 import asyncio
 import json
-import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -38,7 +37,7 @@ class StreamName(str, Enum):
 
     # Intel streams
     INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:intel.flow_alerts"
-    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool_trades"
+    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool"
 
     # System streams
     DLQ = f"{STREAM_NAMESPACE}:dlq"
@@ -409,7 +408,12 @@ class RedisEventBus(EventBus):
         """Get pending count using XPENDING."""
         try:
             info = await self._redis.xpending(stream.value, group_name)
-            count = info.get("pending", 0) if isinstance(info, dict) else info[0] if info else 0
+            if isinstance(info, dict):
+                count = info.get("pending", 0)
+            elif info:
+                count = info[0]
+            else:
+                count = 0
             consumer_lag.labels(stream=stream.value, group=group_name).set(count)
             return count
         except Exception:
@@ -521,11 +525,17 @@ def create_event_bus(bus_type: str = "redis", **kwargs) -> EventBus:
         **kwargs: Bus-specific configuration
     """
     if bus_type == "redis":
+        from urllib.parse import urlparse
+
+        from heber.config import get_settings
+
+        settings = get_settings()
+        parsed = urlparse(settings.redis_url)
         return RedisEventBus(
-            host=kwargs.get("host", os.environ.get("REDIS_HOST", "localhost")),
-            port=kwargs.get("port", int(os.environ.get("REDIS_PORT", "6379"))),
-            db=kwargs.get("db", int(os.environ.get("REDIS_DB", "0"))),
-            password=kwargs.get("password", os.environ.get("REDIS_PASSWORD")),
+            host=kwargs.get("host", parsed.hostname or "localhost"),
+            port=kwargs.get("port", parsed.port or 6379),
+            db=kwargs.get("db", int((parsed.path or "/0").lstrip("/") or "0")),
+            password=kwargs.get("password", parsed.password),
         )
     elif bus_type == "memory":
         return InMemoryEventBus()

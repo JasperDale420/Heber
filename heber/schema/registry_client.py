@@ -9,7 +9,6 @@ Phase 4 of OSS Migration Roadmap.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -64,11 +63,14 @@ class SchemaRegistryConfig:
 
     @classmethod
     def from_env(cls) -> SchemaRegistryConfig:
-        """Load from environment."""
+        """Load from Heber settings."""
+        from heber.config import get_settings
+
+        settings = get_settings()
         return cls(
-            url=os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081"),
-            username=os.getenv("SCHEMA_REGISTRY_USER"),
-            password=os.getenv("SCHEMA_REGISTRY_PASSWORD"),
+            url=settings.schema_registry_url,
+            username=settings.schema_registry_user,
+            password=settings.schema_registry_password,
         )
 
 

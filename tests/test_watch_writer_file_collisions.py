@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from heber.watch import writer as writer_module
 from heber.watch.models import WatchOutcome, WatchStatus
 from heber.watch.writer import LabelWriter
 
 
-def _sample_outcome(alert_id: str) -> WatchOutcome:
-    now = datetime(2026, 2, 7, 14, 0, tzinfo=UTC)
+def _sample_outcome(alert_id: str, alert_time: datetime | None = None) -> WatchOutcome:
+    now = alert_time or datetime(2026, 2, 7, 14, 0, tzinfo=UTC)
     return WatchOutcome(
         watch_id=f"w-{alert_id}",
         alert_id=alert_id,
@@ -57,3 +59,63 @@ def test_label_writer_flushes_do_not_overwrite_same_second_partition_files(tmp_p
     assert len(files) >= 2
     total_rows = sum(len(pd.read_parquet(file_path)) for file_path in files)
     assert total_rows == 2
+
+
+def test_label_writer_flush_is_atomic_across_partitions_on_failure(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    writer = LabelWriter(output_path=tmp_path)
+    first_time = datetime(2026, 2, 7, 14, 0, tzinfo=UTC)
+    second_time = first_time + timedelta(days=1)
+    outcomes = [
+        _sample_outcome("a1", alert_time=first_time),
+        _sample_outcome("a2", alert_time=second_time),
+    ]
+
+    original_to_parquet = pd.DataFrame.to_parquet
+    call_count = {"value": 0}
+
+    def _flaky_to_parquet(self, path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        call_count["value"] += 1
+        if call_count["value"] == 2:
+            raise OSError("simulated write failure")
+        return original_to_parquet(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _flaky_to_parquet)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        writer.write_outcomes(outcomes)
+
+    assert len(writer._buffer) == 2
+    committed = list((tmp_path / "dataset=labels_alert_barriers").rglob("*.parquet"))
+    temp_files = list((tmp_path / "dataset=labels_alert_barriers").rglob("*.tmp"))
+    assert committed == []
+    assert temp_files == []
+
+
+def test_label_writer_promote_failure_rolls_back_committed_partitions(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    writer = LabelWriter(output_path=tmp_path)
+    first_time = datetime(2026, 2, 7, 14, 0, tzinfo=UTC)
+    second_time = first_time + timedelta(days=1)
+    outcomes = [
+        _sample_outcome("a1", alert_time=first_time),
+        _sample_outcome("a2", alert_time=second_time),
+    ]
+
+    original_replace = Path.replace
+    replace_calls = {"value": 0}
+
+    def _flaky_replace(self, target):  # noqa: ANN001, ANN002
+        replace_calls["value"] += 1
+        if replace_calls["value"] == 2:
+            raise OSError("simulated promote failure")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _flaky_replace)
+
+    with pytest.raises(OSError, match="simulated promote failure"):
+        writer.write_outcomes(outcomes)
+
+    assert len(writer._buffer) == 2
+    committed = list((tmp_path / "dataset=labels_alert_barriers").rglob("*.parquet"))
+    temp_files = list((tmp_path / "dataset=labels_alert_barriers").rglob("*.tmp"))
+    assert committed == []
+    assert temp_files == []

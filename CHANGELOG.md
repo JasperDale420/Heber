@@ -9,7 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Gateway Feed Alias Compatibility
+
+- Added defensive ingest aliases in `heber/writer/ingest_contracts.py` so legacy/rest feed names still resolve to canonical Silver datasets:
+  - `flow` -> `flow_alerts`
+  - `greeks` -> `greek_exposure`
+  - `gex` -> `greek_exposure`
+- Expanded Data-Gateway feed coverage list with legacy alias names so contract checks route them through canonical schemas.
+- Updated catalog seed mappings in `scripts/seed_catalog.py` for the same alias set, ensuring catalog metadata includes legacy-to-canonical mappings.
+- Expanded alias routing tests in `tests/test_feed_alias_routing.py` to enforce alias + catalog-seed parity.
+
+#### Comprehensive Feed Coverage Audit
+
+- Added 7 new `FEED_ALIASES` in `heber/writer/ingest_contracts.py`: `ticker_flow`→`flow_alerts`, `darkpool_ticker`→`darkpool`, `option_trades`→`trades`, `crypto_bars`→`bars`, `crypto_trades`→`trades`, `institutions`→`institution_holdings`, `filings`→`news`
+- Expanded `DATA_GATEWAY_FEEDS` from 14 to 46 entries covering all Silver schemas
+- Added `forex` Silver schema in `heber/schemas/silver.py` with bid/ask/mid/OHLC columns
+- Added `forex` field mapping in `heber/writer/ingest_contracts.py`
+
+#### Bronze→Silver Contract Hardening
+
+- Added contract-first ingestion tests for Data Gateway feed coverage, alias routing, instrument-key synthesis, and Bronze-first behavior:
+  - `tests/test_ingest_feed_contract_matrix.py`
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_feed_alias_routing.py`
+  - `tests/test_instrument_key_synthesis.py`
+  - `tests/test_data_gateway_feed_parity.py` (extracts emitted feeds from Data Gateway source and enforces Heber mapping coverage)
+- Added shared ingest contract and normalization modules used by both live consumer and backfill transformer:
+  - `heber/writer/ingest_contracts.py`
+  - `heber/writer/key_normalization.py`
+  - `heber/writer/normalizer.py`
+- Added dedicated Silver dataset schema for `historic_option_volume` in `heber/schemas/silver.py`.
+
+#### Bronze→Silver Training-Feed Scope
+
+- Added explicit raw feed allowlist for Silver routing in `heber/writer/ingest_contracts.py`:
+  - `CONTRACTED_RAW_FEEDS`
+  - `is_contracted_feed()`
+  - `DLQ_REASON_UNCONTRACTED`
+- Extended Data-Gateway parity test in `tests/test_data_gateway_feed_parity.py` to include:
+  - stream feeds (`stream.py`)
+  - UW poller feeds (`uw_poller.py`)
+  - backfill dispatch feeds (`backfill.py`)
+- Added REST overflow guard test `tests/test_data_gateway_rest_feed_contract.py` that parses Data-Gateway route segments and enforces Bronze+DLQ for non-contracted derived feeds.
+- Expanded feed contract matrix and alias seed coverage for training feeds:
+  - `option_trades`, `crypto_bars`, `crypto_trades`, `ticker_flow`, `darkpool_ticker`, `institutions`, `earnings`
+
+#### Canonical Contracts
+
+- Standardized canonical darkpool naming to `darkpool` across provider/stream/slice metadata:
+  - `heber/catalog/datasources.py` provider capability updated from `darkpool_trades` to `darkpool`
+  - `heber/bus/streams.py` stream and consumer-group dataset name updated to `darkpool`
+  - `heber/bus/__init__.py` canonical stream enum key updated to `intel.darkpool`
+  - `heber/ops/slices.py` slice 3 dataset list updated to include `darkpool`
+- Added darkpool contract tests:
+  - `heber/catalog/tests_datasources.py::TestProviderRegistry.test_get_by_capability_uses_canonical_darkpool_name`
+  - `heber/ops/tests_remaining.py::TestStreamRegistry.test_darkpool_stream_uses_canonical_name`
+  - `heber/ops/tests_remaining.py::TestSliceManager.test_slice_3_uses_canonical_darkpool_dataset_name`
+- Updated flow template dependency docs and model schema naming text to `darkpool` while retaining `get_darkpool_trades_schema()` compatibility alias in `heber/models/silver.py`.
+
 #### Documentation
+
+- Updated `docs/data_contract.md` with:
+  - Bronze-first / Silver-strict ingest policy
+  - Data Gateway feed coverage matrix and alias routing
+  - key synthesis rules and unknown-feed handling semantics
+- Updated `docs/architecture.md` with Bronze→Silver normalization architecture and shared normalizer module references.
+- Updated `docs/data_contract.md` and `docs/architecture.md` for training-feed scope:
+  - added plain-English contract terminology
+  - added contracted raw feed matrix for stream/UW poller/backfill
+  - documented Bronze+DLQ behavior for `uncontracted_feed` and `unmapped_feed`
 
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
 - Added missing documentation links to `README.md`: `labeling_strategy.md`, `schemaaudit.md`
@@ -18,6 +86,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added missing env vars to `.env.example`: `HEBER_CATALOG_URL`, `HEBER_CLICKHOUSE_DATABASE`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
 
 ### Fixed
+
+#### CI Security Scan Stabilization
+
+- Sanitized tracked lakeFS credentials in `.env` to placeholder values so Trivy secret scanning no longer flags a committed AWS-style key.
+- Added explicit `duckdb>=1.1.0` dependency and regenerated `uv.lock` to remove vulnerable `duckdb==1.0.0` (CVE-2024-41672) from CI scan results.
+- Added `.trivyignore` entry for `CVE-2026-0994` (transitive `protobuf` via `soda-core-duckdb`) to keep CI scanning deterministic until upstream dependencies support a non-vulnerable graph with `duckdb>=1.1.0`.
+
+#### CI Ruff Config Portability
+
+- Added repo-local Ruff base config at `ruff-base.toml` and updated `pyproject.toml` to extend the local file.
+- This fixes PR CI pre-commit failures where GitHub Actions cannot resolve `../ruff-base.toml`.
+- Added explicit `joblib` dependency in `pyproject.toml` for `heber/ml/trainer.py` save/load paths.
+- This fixes CI unit test failure `ModuleNotFoundError: No module named 'joblib'` in `test_meta_feature_order_contract.py`.
+
+#### Bronze→Silver Runtime Hardening
+
+- Refactored `heber/writer/consumer.py` to Bronze-first processing order:
+  - parse envelope
+  - assign `ts_available` when missing
+  - write Bronze immediately
+  - normalize feed/key/payload for Silver
+  - write Silver only for mapped feeds, otherwise DLQ with `unmapped_feed`
+- Added explicit observability events for ingestion outcomes:
+  - `bronze_write_success`
+  - `silver_normalization_failed`
+  - `silver_schema_unmapped`
+- Added shared Silver row normalization engine (`heber/writer/normalizer.py`) and wired both live writer and backfill transformer to it.
+- Updated backfill transformer to route feed aliases consistently and skip unmapped feeds explicitly.
+- Updated consumer reliability/metrics tests for the new Bronze-first contract:
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_writer_consumer_reliability.py`
+  - `tests/test_metrics_runtime_wiring.py`
+- Fixed mypy plugin config path in `pyproject.toml` from `numpy.typing.mypy` to `numpy.typing.mypy_plugin` so type-checking can run in local/dev environments.
+- Added `features/__init__.py` so mypy resolves `features.feature_views` consistently without duplicate module-path errors.
 
 #### Repo Hygiene Remediation
 
@@ -30,6 +132,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed duplicate Dockerfile `writer` stage (same CMD as `consumer`)
 - Suppressed Bandit B608 false positives on ClickHouse queries (table names from internal enums)
 - Updated 3 test files to remove references to deleted writer k8s manifests
+
+#### SonarQube Code Quality — Writer Module Remediation
+
+- Removed unnecessary `async` from `BronzeWriter.write`, `flush_if_needed`, `flush`, `_flush_partition` (S7503, S7493)
+- Removed unnecessary `async` from `SilverWriter.write`, `flush_if_needed`, `flush`, `_flush_partition` (S7503)
+- Removed unnecessary `async` from `Compactor.compact_partition`, `scan_and_compact` (S7503)
+- Re-raised `asyncio.CancelledError` in `Compactor.run()` after cleanup (S7497)
+- Cascaded async removal to `EventConsumer`: `_process_event_once`, `process_event`, `_flush_layers`, `_final_flush`
+- Removed unnecessary `list()` wrappers on `dict.items()` in Bronze and Silver writers (S7504)
+- Updated 4 test files to use sync calls and `MagicMock` instead of `AsyncMock` for writer methods
+- Reduced SonarQube issues to 2 known false positives (S930 in `ml/trainer.py`)
+
+#### Module Audit — Tier 3/4 Fixes
+
+- Fixed `PytestCollectionWarning`s: added `__test__ = False` to `TestDataConfig` and `TestFixture` in `testing/generators.py`, and `TestCategory` and `TestRun` in `testing/ci_gates.py`
+- Fixed pandas `FutureWarning` in `test_edge_cases.py`: replaced `.fillna()` with `.where()` for pandas 2.x compatibility
+- Test suite improvement: **514 passed, 0 failed, 1 warning** (from 433/18/13)
 
 #### Codebase Audit Fixes
 
@@ -98,6 +217,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `watch/features.py`: market-context close-series handling now preserves day alignment for zero/invalid closes so return horizons do not silently skip prior sessions
 - Added market-context zero-close alignment regression test (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
 - Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-107` remediation in audit pass 89 and `T-93`
+- Fixed `watch/models.py`: `WatchOutcome.horizon` now enforces `WatchHorizon` enum values instead of accepting arbitrary strings
+- Added watch-outcome invalid-horizon regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-108` remediation in audit pass 90 and `T-94`
+- Fixed `watch/writer.py`: `run_watch_service()` now executes `service.stop()` in a `finally` block so normal completion still performs shutdown cleanup/flush
+- Added writer normal-completion shutdown regression test (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-109` remediation in audit pass 91 and `T-95`
+- Fixed `watch/checker.py`: watch outcome evaluation now normalizes naive `alert_time`/`window_end` timestamps to UTC-aware values before comparisons and window-duration calculations
+- Added checker naive-timestamp regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-110` remediation in audit pass 92 and `T-96`
+- Fixed `watch/gateway.py`: gateway URL candidate generation now avoids duplicate `/api/v1` prefixing when the configured base URL already includes API prefix segments
+- Added gateway duplicate-prefix regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-111` remediation in audit pass 93 and `T-97`
+- Fixed `watch/poller.py`: snapshot creation now normalizes quote payload numeric fields before midpoint math (handles numeric strings/non-numeric placeholders safely), and due-check logic now treats future-skewed `updated_at` values as immediately due
+- Added poller payload-normalization and future-timestamp due-check regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-112`/`TD-113` remediation in audit pass 94 and `T-98`
+- Fixed `watch/consumer.py`: entry-price quote parsing now tolerates malformed bid/ask numeric payloads and falls back to normalized `last_price` when midpoint inputs are invalid
+- Fixed `watch/consumer.py`: timestamp parsing now normalizes ISO strings to UTC-aware datetimes and falls back to `datetime.now(UTC)` for invalid timestamp strings
+- Added consumer entry-price fallback and timestamp-normalization regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-114`/`TD-115` remediation in audit pass 95 and `T-99`
+- Fixed `watch/features.py`: `AlertFeatures.from_dict()` now normalizes naive serialized `alert_time` values to UTC-aware datetimes during reconstruction
+- Fixed `watch/features.py`: Greeks enrichment now skips malformed option-chain `strike_price` rows and continues extracting from valid contracts with tolerant numeric coercion
+- Added feature deserialization timezone + malformed-strike Greeks regression tests (`tests/test_watch_feature_timezones.py`, `tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-116`/`TD-117` remediation in audit pass 96 and `T-100`
+- Fixed `watch/writer.py`: parquet flushes now stage partition files and promote only after all partition writes succeed, preventing partial-commit duplicates when a later partition write fails
+- Fixed `watch/writer.py`: flush failure paths now clean staged temp files before re-raising write errors
+- Added writer atomic-flush regression test (`tests/test_watch_writer_file_collisions.py`) covering partial-failure rollback and temp-file cleanup
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-118`/`TD-119` remediation in audit pass 97 and `T-101`
+- Fixed `watch/__main__.py`: shutdown cleanup now isolates `service.stop()` failures so they do not mask original `service.run()` runtime errors
+- Fixed `watch/__main__.py`: stop failures during normal completion are now logged and treated as non-fatal, preserving graceful CLI exit behavior
+- Added watch entrypoint shutdown regression tests (`tests/test_watch_entrypoint_shutdown.py`) for stop-failure masking and normal-completion stop-failure handling
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-120`/`TD-121` remediation in audit pass 98 and `T-102`
+- Fixed `watch/manager.py`: `delete_watch()` now normalizes byte-form watch IDs before key/index deletion so primary watch rows are removed correctly under byte-response Redis clients
+- Fixed `watch/manager.py`: `_save_watch()` now removes non-watching statuses from `ACTIVE_WATCHES`, preventing stale active-index memberships after status transitions
+- Added watch-manager byte-delete and active-index reconciliation regression tests (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-122`/`TD-123` remediation in audit pass 99 and `T-103`
+- Fixed `watch/poller.py`: numeric quote coercion now rejects non-finite values (`NaN`/`inf`) so invalid payload numerics are treated as missing rather than propagating into snapshots/watch updates
+- Fixed `watch/poller.py`: poll cycle now skips `update_watch_price_async()` when neither midpoint nor last price is available, preventing `None` watch-price updates
+- Added poller non-finite-quote and missing-price update regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_async_redis.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-124`/`TD-125` remediation in audit pass 100 and `T-104`
+- Fixed `watch/checker.py`: return-path extraction now filters non-finite snapshot returns so malformed `NaN` values do not propagate into MFE/MAE or expired outcome returns
+- Added checker non-finite return regression test (`tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-126` remediation in audit pass 101 and `T-105`
+- Fixed `watch/writer.py`: `run_watch_service()` now preserves primary `service.run()` failures even when `service.stop()` cleanup fails
+- Fixed `watch/writer.py`: stop failures during normal completion are now logged and treated as non-fatal
+- Added writer entrypoint stop-failure regression tests (`tests/test_watch_writer_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-127`/`TD-128` remediation in audit pass 102 and `T-106`
+- Fixed `watch/consumer.py`: quote numeric coercion now rejects non-finite values (`NaN`/`inf`) so entry-price midpoint logic falls back to finite `last_price` values
+- Added consumer non-finite quote regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-129` remediation in audit pass 103 and `T-107`
+- Fixed `watch/models.py`: watch datetime fields now normalize to UTC-aware values at validation time (naive inputs treated as UTC), removing mixed naive/aware timestamp drift
+- Added watch-model naive-datetime normalization regression test (`tests/test_watch_models_config.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-130` remediation in audit pass 104 and `T-108`
+- Fixed `watch/gateway.py`: base gateway URLs now strip query/fragment components before candidate route construction, preventing malformed request URLs
+- Added gateway base-query sanitization regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-131` remediation in audit pass 105 and `T-109`
+- Fixed `watch/features.py`: numeric feature coercion now rejects non-finite values (`NaN`/`inf`) to prevent invalid Greek/IV feature propagation
+- Fixed `watch/features.py`: market-context close parsing now treats non-finite close values as missing, preventing `NaN` return features
+- Added non-finite feature enrichment regression tests (`tests/test_watch_feature_greeks_zero_values.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-132`/`TD-133` remediation in audit pass 106 and `T-110`
+- Fixed `watch/__main__.py`: signal-hook registration is now best-effort, so non-main-thread contexts no longer fail startup with `ValueError`
+- Added watch entrypoint signal-registration failure regression test (`tests/test_watch_entrypoint_shutdown.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-134` remediation in audit pass 107 and `T-111`
+- Fixed `watch/poller.py`: quote-fetch route fallback now treats malformed JSON on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Added malformed-prefixed-response fallback regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-135` remediation in audit pass 108 and `T-112`
+- Fixed `watch/consumer.py`: entry-price quote fallback now treats malformed JSON on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Added consumer malformed-prefixed-response fallback regression test (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-136` remediation in audit pass 109 and `T-113`
+- Fixed `watch/writer.py`: staged parquet flush now rolls back already-promoted partition files when promotion fails mid-batch, preserving all-or-nothing batch semantics
+- Added writer promotion-failure rollback regression test (`tests/test_watch_writer_file_collisions.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-137` remediation in audit pass 110 and `T-114`
+- Fixed `watch/manager.py`: watch-price updates now persist the provided snapshot timestamp (UTC-normalized) in `updated_at` instead of using processing-time wall clock values
+- Added manager snapshot-timestamp persistence regression test (`tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-138` remediation in audit pass 111 and `T-115`
+- Fixed `watch/checker.py`: snapshots are now evaluated in chronological timestamp order so TP/SL-first outcomes remain correct under out-of-order ingestion
+- Fixed `watch/checker.py`: outcome timing metadata now uses barrier-hit snapshot time or window-end time (not checker processing time) for `outcome_time` and `trading_minutes_to_hit`
+- Fixed `watch/manager.py`: `complete_watch()` now accepts explicit `outcome_time` and persists it (UTC-normalized), enabling checker-derived timing semantics
+- Added checker ordering/timing and manager completion-time regression tests (`tests/test_watch_zero_price_handling.py`, `tests/test_watch_manager_redis_bytes.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-139`/`TD-140`/`TD-141` remediation in audit pass 112 and `T-116`
+- Fixed `watch/poller.py`: quote-fetch route fallback now treats malformed JSON payload shapes on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Fixed `watch/consumer.py`: entry-price route fallback now treats malformed JSON payload shapes on HTTP 200 responses as route-level failures and continues to legacy candidates
+- Fixed `watch/poller.py`: snapshots now use quote-provided timestamps (`timestamp`/`ts_event`/`t`) with UTC normalization when available
+- Added payload-shape fallback and quote-timestamp regression tests (`tests/test_watch_gateway_paths.py`, `tests/test_watch_zero_price_handling.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-142`/`TD-143`/`TD-144` remediation in audit pass 113 and `T-117`
+- Fixed `watch/poller.py`: quote route fallback now treats request-layer route failures (timeouts/transport errors) as route-level failures and continues to legacy candidates
+- Fixed `watch/consumer.py`: entry-price route fallback now treats request-layer route failures (timeouts/transport errors) as route-level failures and continues to legacy candidates
+- Improved watch route-failure observability: poller/consumer now emit aggregated per-route failure summaries when all route candidates fail
+- Added timeout-route fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-145`/`TD-146`/`TD-147` remediation in audit pass 114 and `T-118`
+- Fixed `watch/consumer.py`: explicit `retry_backoff_seconds=0.0` is now preserved instead of being overwritten by settings defaults
+- Fixed `watch/consumer.py`: retry delays are now clamped to non-negative values to avoid invalid negative `asyncio.sleep()` delays under bad config
+- Fixed `watch/consumer.py`: alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults instead of raising
+- Added consumer backoff and parse-hardening regression tests (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-148`/`TD-149`/`TD-150` remediation in audit pass 115 and `T-119`
+- Fixed `watch/consumer.py`: `max_process_retries` now uses explicit-`None` fallback semantics and enforces a minimum of one attempt
+- Fixed `watch/consumer.py`: stream byte-key/value decoding now fails soft (`errors=\"replace\"`) to avoid parse crashes on malformed UTF-8 payloads
+- Fixed `watch/consumer.py`: numeric timestamps now normalize millisecond epoch values before UTC conversion
+- Added consumer retry-count/millisecond-timestamp/invalid-UTF8 regression tests (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-151`/`TD-152`/`TD-153` remediation in audit pass 116 and `T-120`
+- Fixed `watch/consumer.py`: stream payload decoder now parses JSON envelopes with leading whitespace before flattening
+- Fixed `watch/consumer.py`: put/call normalization now handles malformed non-string values with a safe default (`C`)
+- Fixed `watch/consumer.py`: alert parsing now validates required identity fields (`id`, `underlying`) before watch creation
+- Added consumer parse-normalization regression tests (`tests/test_watch_consumer_reliability.py`) for whitespace JSON, malformed `put_call`, and missing required fields
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-154`/`TD-155`/`TD-156` remediation in audit pass 117 and `T-121`
+- Fixed `watch/consumer.py`: parse failures are now classified as non-retriable and ACKed without retry/DLQ churn
+- Fixed `watch/consumer.py`: dead-lettered retry-exhaustion errors now include the terminal retry reason (`processing_failed_after_retries:<reason>`)
+- Fixed `watch/consumer.py`: retry loop now normalizes bool/tuple process-result contracts to preserve backward-compatible retry semantics
+- Added consumer retry-classification/telemetry regression tests (`tests/test_watch_consumer_reliability.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-157`/`TD-158`/`TD-159` remediation in audit pass 118 and `T-122`
+- Fixed `watch/poller.py` and `watch/consumer.py`: gateway route-failure exception taxonomy now distinguishes `timeout` vs `transport_error` vs `request_error` using shared helpers
+- Fixed `watch/poller.py` and `watch/consumer.py`: route-failure exception records now include `error_type` metadata for request/json decode failures
+- Fixed `watch/poller.py` and `watch/consumer.py`: payload-shape route-failure records now include explicit `expected_type` metadata
+- Added gateway failure-taxonomy regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-160`/`TD-161`/`TD-162` remediation in audit pass 119 and `T-123`
+- Fixed `watch/poller.py`: route processing now treats partial/invalid per-symbol quote coverage as fallback-eligible degradation instead of terminal success
+- Fixed `watch/poller.py`: when all routes are partial, poller now preserves best-effort partial quote coverage instead of dropping all quotes for the batch
+- Fixed `watch/consumer.py`: entry-price lookup now continues fallback routing when requested symbol quotes are missing, malformed, or non-usable on a route
+- Added partial-coverage and symbol-level fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-163`/`TD-164`/`TD-165` remediation in audit pass 120 and `T-124`
+- Fixed `watch/poller.py` and `watch/consumer.py`: shared quote timestamp-age helpers now classify stale route quotes and enable stale-aware fallback decisions
+- Fixed `watch/poller.py`: complete but stale prefixed route batches now fall back to fresher legacy routes when available
+- Fixed `watch/poller.py` and `watch/consumer.py`: when all routes are stale, freshest stale quote coverage is now preserved as controlled fallback
+- Added stale-route fallback regression tests (`tests/test_watch_gateway_paths.py`) using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record `TD-166`/`TD-167`/`TD-168` remediation in audit pass 121 and `T-125`
+- Fixed `watch/gateway.py`: timestamp coercion now normalizes epoch-millisecond quote timestamps (numeric and numeric-string forms) so stale-route fallback behavior stays consistent across `t` and ISO `timestamp` payloads
+- Added epoch-millisecond timestamp parity regression tests (`tests/test_watch_gateway_paths.py`) for helper coercion and stale-route fallback selection
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 122 closure via `T-126`
+- Fixed `watch/manager.py`: MFE/MAE update baselines now preserve prior `0.0` values instead of resetting through truthiness fallbacks during price updates
+- Fixed `watch/poller.py`, `watch/consumer.py`, and `watch/features.py`: numeric coercion now rejects boolean payload values so quote prices, timestamps, Greeks, and market-context features are not polluted by `True`/`False` inputs
+- Fixed `watch/features.py`: IV-rank enrichment now ignores non-finite payload values (`NaN`/`inf`) instead of persisting invalid metrics
+- Added reliability regression tests (`tests/test_watch_manager_redis_bytes.py`, `tests/test_watch_zero_price_handling.py`, `tests/test_watch_gateway_paths.py`, `tests/test_watch_feature_greeks_zero_values.py`, `tests/test_watch_consumer_reliability.py`) covering zero-baseline MFE/MAE behavior, boolean quote handling, and non-finite IV-rank filtering
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 123 closure via `T-127`
+- Fixed `watch/manager.py`: watch completion and expiry cleanup now sanitize non-finite outcome returns before persistence to prevent `NaN` outcomes in stored watch records
+- Fixed `watch/consumer.py`: entry-price fallback now requires a positive finite contract fallback and defaults to `1.0` when alert `contract_px` is invalid or non-positive
+- Added manager/consumer regression tests (`tests/test_watch_manager_redis_bytes.py`, `tests/test_watch_consumer_reliability.py`) covering non-finite outcome return sanitization and fallback entry-price defaults
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 124 closure via `T-128`
+- Fixed `heber/features/templates/alert_labels.py`: entry extraction now treats non-finite/invalid `spot_px` values as fallback-eligible and enforces finite/positive ATR+spot guards before threshold computation
+- Fixed `heber/features/templates/alert_labels.py`: SPY-relative return calculation now rejects non-finite raw/SPY values so infinite beta-neutral returns fail soft instead of propagating into labels
+- Added alert-label regression tests (`tests/test_alert_label_intraday_windows.py`) covering `spot_px=NaN` fallback and non-finite SPY move handling using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 125 closure via `T-129`
+- Fixed `heber/features/templates/alert_labels.py`: VIX enrichment/regime helpers now reject non-finite VIX inputs so invalid `vix_at_alert`/regime values fail soft instead of propagating
+- Fixed `heber/features/templates/alert_labels.py`: beta-neutral helper now rejects non-finite underlying/SPY/beta inputs and returns `None` for invalid market context
+- Added alert-label non-finite market-context regression tests (`tests/test_alert_label_intraday_windows.py`) for VIX and beta-neutral helper guardrails using TDD red/green flow
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 126 closure via `T-130`
+- Fixed Feast test stubs (`tests/test_feature_view_alignment.py`, `tests/test_feast_materialization_behavior.py`) to emulate package semantics (`feast.__path__`, `feast.types`) so `from feast.types import ...` imports remain stable in full-suite runs
+- Added Feast stub package-compatibility regression test (`tests/test_feature_view_alignment.py`) to guard against cross-test module-mocking import failures
+- Updated technical debt docs (`docs/technical_debt_audit.md`, `docs/technical_debt_plan.md`) to record audit pass 127 closure via `T-131`
+- Added `heber/config.py` LLM provider settings for OpenAI-compatible clients: `HEBER_LLM_PROVIDER`, `HEBER_LLM_MODEL`, `HEBER_LLM_BASE_URL`, `HEBER_LLM_API_KEY`, and `HEBER_LLM_QWEN_REGION`
+- Added Qwen 2.5 endpoint resolution support via `settings.llm_effective_base_url` (intl/us/cn DashScope compatible endpoints)
+- Added LLM provider/key alias regression tests (`tests/test_llm_provider_settings.py`) covering OpenAI and Qwen env-var wiring
+- Updated API key setup docs in `README.md`, `docs/configuration.md`, and `.env.example` with explicit OpenAI/Qwen key locations
+- Stabilized `heber/gold/tests.py` environment-based config test by clearing cached settings around env mutation
+- Stabilized Feast feature-view alignment tests (`tests/test_feature_view_alignment.py`) by isolating per-test Feast stubs and evicting cached modules before imports
+- Expanded `heber/models/__init__.py` exports to include phase- and version-scoped silver record models for a consistent import surface
+- Fixed `bus/backpressure.py`: Prometheus counters/gauges/histograms now use shared get-or-create registration to avoid duplicate timeseries registration collisions
+- Fixed `writer/transformer.py`: partition transform logging/return value now reports total records written across flushes instead of only final-batch count
+- Updated `writer/transformer.py` earnings field mapping to avoid populating unsupported fiscal-period keys during Bronze-to-Silver conversion
+- Updated firewall/catalog test expectations for current runtime semantics (`heber/firewall/tests.py`, `heber/catalog/tests_datasources.py`)
 
 ### Removed
 
@@ -106,6 +383,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Pydantic Settings Migration** — Migrated all `os.getenv`/`os.environ` calls to centralized `pydantic-settings.BaseSettings` class (`heber/config.py`)
+  - Updated 14 files: `schema/registry_client.py`, `storage/iceberg_catalog.py`, `versioning/__init__.py`, `ops/logging.py`, `ops/health.py`, `ops/tracing.py`, `bus/__init__.py`, `watch/__main__.py`, `retention/__init__.py`, `catalog/api.py`, `backfill/__main__.py`, `writer/hotstore.py`, `ops/lifecycle.py`, `ops/metrics.py`
+  - Removed all unused `import os` statements from migrated files
+  - External service configs (Iceberg, LakeFS, Schema Registry) use `AliasChoices` for backward-compatible env var names
+  - Redis event bus now parses connection details from `settings.redis_url` instead of individual `REDIS_HOST`/`REDIS_PORT`/`REDIS_DB` env vars
 - Updated `writer/transformer.py`: `transform()` now accepts `since`/`until` parameters for date-range filtering
 - Updated `test_hotstore_facade_alignment.py` to assert aliases stay removed
 
@@ -203,6 +485,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded technical debt audit (pass 85: watch consumer decoded-stream payload conformance revalidation)
 - Expanded technical debt audit (pass 86: watch poller naive-timestamp due-check conformance revalidation)
 - Expanded technical debt audit (pass 87: watch manager naive-window expiry conformance revalidation)
+- Expanded technical debt audit (pass 94: watch poller payload-normalization + future-timestamp cadence conformance revalidation)
+- Expanded technical debt audit (pass 95: watch consumer timestamp/entry-price parsing conformance revalidation)
+- Expanded technical debt audit (pass 96: watch feature deserialization + Greeks fallback conformance revalidation)
+- Expanded technical debt audit (pass 97: watch writer atomic-flush durability conformance revalidation)
+- Expanded technical debt audit (pass 98: watch entrypoint shutdown error-isolation conformance revalidation)
+- Expanded technical debt audit (pass 99: watch manager byte-ID deletion + active-index consistency conformance revalidation)
+- Expanded technical debt audit (pass 100: watch poller non-finite quote + missing-price update conformance revalidation)
+- Expanded technical debt audit (pass 101: watch checker non-finite return-path conformance revalidation)
+- Expanded technical debt audit (pass 102: watch writer entrypoint stop-failure isolation conformance revalidation)
+- Expanded technical debt audit (pass 103: watch consumer non-finite quote coercion conformance revalidation)
+- Expanded technical debt audit (pass 104: watch model UTC datetime-normalization conformance revalidation)
+- Expanded technical debt audit (pass 105: watch gateway base-url sanitization conformance revalidation)
+- Expanded technical debt audit (pass 106: watch feature non-finite numeric filtering conformance revalidation)
+- Expanded technical debt audit (pass 107: watch entrypoint signal-registration resilience conformance revalidation)
 - Added high-severity remediation plan (`docs/technical_debt_plan.md`)
 
 #### Alert Watch Service (`heber/watch/`)

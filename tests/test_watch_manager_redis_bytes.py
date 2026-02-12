@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from heber.watch.manager import WatchManager
-from heber.watch.models import WatchHorizon, WatchStatus
+from heber.watch.models import WatchHorizon, WatchKeys, WatchStatus
 
 
 class _BytesRedis:
@@ -117,6 +119,63 @@ def test_update_watch_price_handles_zero_entry_price() -> None:
     assert updated.snapshot_count == 1
 
 
+def test_update_watch_price_uses_snapshot_timestamp() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    snapshot_time = datetime(2026, 2, 9, 14, 30, tzinfo=UTC)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=1.5,
+        timestamp=snapshot_time,
+    )
+
+    assert updated is not None
+    assert updated.updated_at == snapshot_time
+
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.updated_at == snapshot_time
+
+
+def test_update_watch_price_preserves_zero_mfe_baseline() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.mfe = 0.0
+    watch.mae = 0.0
+    manager._save_watch(watch)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=0.9,
+        timestamp=datetime.now(UTC),
+    )
+
+    assert updated is not None
+    assert updated.current_return == pytest.approx((0.9 - watch.entry_price) / watch.entry_price)
+    assert updated.mfe == 0.0
+    assert updated.mae == pytest.approx((0.9 - watch.entry_price) / watch.entry_price)
+
+
+def test_update_watch_price_preserves_zero_mae_baseline() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.mfe = 0.0
+    watch.mae = 0.0
+    manager._save_watch(watch)
+
+    updated = manager.update_watch_price(
+        watch.watch_id,
+        current_price=1.65,
+        timestamp=datetime.now(UTC),
+    )
+
+    assert updated is not None
+    assert updated.current_return == pytest.approx(0.1)
+    assert updated.mfe == pytest.approx(0.1)
+    assert updated.mae == 0.0
+
+
 def test_cleanup_expired_handles_naive_window_end() -> None:
     manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
     watch = _create_watch(manager)
@@ -130,3 +189,80 @@ def test_cleanup_expired_handles_naive_window_end() -> None:
     stored = manager.get_watch(watch.watch_id)
     assert stored is not None
     assert stored.status == WatchStatus.EXPIRED
+
+
+def test_delete_watch_with_byte_id_removes_primary_watch_key() -> None:
+    redis_client = _BytesRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    deleted = manager.delete_watch(watch.watch_id.encode("utf-8"))
+
+    assert deleted is True
+    assert manager.get_watch(watch.watch_id) is None
+    assert manager.get_watches_for_symbol(watch.occ_symbol) == []
+
+
+def test_save_watch_non_watching_removes_active_index_membership() -> None:
+    redis_client = _BytesRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    watch.status = WatchStatus.EXPIRED
+    manager._save_watch(watch)
+
+    assert redis_client.smembers(WatchKeys.ACTIVE_WATCHES) == set()
+
+
+def test_complete_watch_uses_provided_outcome_time() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    outcome_time = datetime(2026, 2, 9, 16, 0, tzinfo=UTC)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.HIT_TP,
+        outcome_return=0.25,
+        bars_to_hit=3,
+        outcome_time=outcome_time,
+    )
+
+    assert completed is not None
+    assert completed.outcome_time == outcome_time
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.outcome_time == outcome_time
+
+
+def test_complete_watch_non_finite_outcome_return_defaults_to_zero() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.HIT_TP,
+        outcome_return=float("nan"),
+        bars_to_hit=2,
+    )
+
+    assert completed is not None
+    assert completed.outcome_return == 0.0
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.outcome_return == 0.0
+
+
+def test_cleanup_expired_non_finite_current_return_defaults_to_zero() -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    watch.current_return = float("nan")
+    watch.window_end = datetime.now(UTC) - timedelta(minutes=1)
+    manager.get_expired_watches = lambda: [watch]  # type: ignore[method-assign]
+
+    expired = manager.cleanup_expired()
+
+    assert expired == 1
+    stored = manager.get_watch(watch.watch_id)
+    assert stored is not None
+    assert stored.status == WatchStatus.EXPIRED
+    assert stored.outcome_return == 0.0

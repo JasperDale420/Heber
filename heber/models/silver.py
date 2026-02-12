@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field, model_validator
 # Shared Base Columns (PRD §8.7.1)
 # ==============================================================================
 
+_SENTIMENT_DESC = "bullish, bearish, neutral"
+_PUT_CALL_DESC = "P or C"
+
 
 class SilverBase(BaseModel):
     """Base columns present in EVERY Silver dataset (PRD §8.7.1)."""
@@ -146,7 +149,7 @@ class FlowAlertRecord(SilverBase):
     occ_symbol: str | None = None
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
     premium: float
     volume: float
     open_interest: float | None = None
@@ -160,7 +163,7 @@ class FlowAlertRecord(SilverBase):
     # UW additional flags (P1)
     is_sweep: bool | None = None
     is_unusual: bool | None = None
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
     trade_count: int | None = None
     volume_oi_ratio: float | None = None
     total_ask_side_prem: float | None = None
@@ -169,10 +172,12 @@ class FlowAlertRecord(SilverBase):
     has_multileg: bool | None = None
     has_singleleg: bool | None = None
     all_opening_trades: bool | None = None
+    total_size: int | None = None
+    expiry_count: int | None = None
 
 
 class DarkpoolTradeRecord(SilverBase):
-    """Silver darkpool_trades schema (PRD §8.7.6, Unusual Whales).
+    """Silver darkpool schema (PRD §8.7.6, Unusual Whales).
 
     Primary key: event_id
     """
@@ -209,7 +214,7 @@ class OptionContractRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
     multiplier: int = Field(default=100)
     style: str | None = Field(default=None, description="american or european")
     exchange: str | None = None
@@ -236,7 +241,7 @@ class GreeksRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
 
     # Greeks values
     iv: float = Field(..., description="Implied volatility")
@@ -268,7 +273,7 @@ class ChainSnapshotRecord(SilverBase):
     occ_symbol: str
     expiry: date
     strike: float
-    put_call: str = Field(..., description="P or C")
+    put_call: str = Field(..., description=_PUT_CALL_DESC)
 
     # Snapshot data
     bid_px: float | None = None
@@ -320,7 +325,7 @@ class MarketTideRecord(SilverBase):
     index_data: dict[str, Any] | None = None
 
     # UW sentiment field (P1)
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
 
 
 class SectorTideRecord(SilverBase):
@@ -339,7 +344,7 @@ class SectorTideRecord(SilverBase):
 
     # Volume and sentiment
     net_volume: float | None = None
-    sentiment: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
 
 
 # ==============================================================================
@@ -867,7 +872,7 @@ class NewsEventRecord(SilverBase):
 
     # Sentiment analysis
     sentiment_score: float | None = Field(None, description="-1.0 (bearish) to 1.0 (bullish)")
-    sentiment_label: str | None = Field(None, description="bullish, bearish, neutral")
+    sentiment_label: str | None = Field(None, description=_SENTIMENT_DESC)
     relevance_score: float | None = Field(None, description="0.0-1.0 relevance to instrument")
 
     # Event classification
@@ -943,8 +948,8 @@ def get_bars_schema() -> pa.Schema:
     )
 
 
-def get_darkpool_trades_schema() -> pa.Schema:
-    """PyArrow schema for darkpool_trades Silver dataset."""
+def get_darkpool_schema() -> pa.Schema:
+    """PyArrow schema for darkpool Silver dataset."""
     return pa.schema(
         [
             *SILVER_BASE_SCHEMA,
@@ -957,6 +962,11 @@ def get_darkpool_trades_schema() -> pa.Schema:
             pa.field("conditions", pa.list_(pa.string())),
         ]
     )
+
+
+def get_darkpool_trades_schema() -> pa.Schema:
+    """Compatibility alias for darkpool schema."""
+    return get_darkpool_schema()
 
 
 def get_option_contracts_schema() -> pa.Schema:

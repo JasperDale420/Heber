@@ -20,6 +20,8 @@ logger = structlog.get_logger(__name__)
 class TestDataConfig:
     """Configuration for test data generation."""
 
+    __test__ = False
+
     symbols: list[str]
     start_date: datetime
     end_date: datetime
@@ -195,6 +197,8 @@ class SyntheticDataGenerator:
 class TestFixture:
     """Reusable test fixture with known values."""
 
+    __test__ = False
+
     name: str
     description: str
     data: list[dict[str, Any]]
@@ -209,6 +213,13 @@ class TestFixture:
         }
 
 
+# Fixture timestamp constants (avoid duplicate string literals)
+_TS_10_00 = "2025-01-15T10:00:00Z"
+_TS_10_01 = "2025-01-15T10:01:00Z"
+_TS_10_02 = "2025-01-15T10:02:00Z"
+_TS_10_03 = "2025-01-15T10:03:00Z"
+_TS_10_04 = "2025-01-15T10:04:00Z"
+
 # Pre-built test fixtures
 SIMPLE_BARS_FIXTURE = TestFixture(
     name="simple_bars",
@@ -217,7 +228,7 @@ SIMPLE_BARS_FIXTURE = TestFixture(
         {
             "event_id": "bar-001",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:00:00Z",
+            "ts_event": _TS_10_00,
             "open": 100,
             "high": 102,
             "low": 99,
@@ -227,7 +238,7 @@ SIMPLE_BARS_FIXTURE = TestFixture(
         {
             "event_id": "bar-002",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:01:00Z",
+            "ts_event": _TS_10_01,
             "open": 101,
             "high": 103,
             "low": 100,
@@ -237,7 +248,7 @@ SIMPLE_BARS_FIXTURE = TestFixture(
         {
             "event_id": "bar-003",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:02:00Z",
+            "ts_event": _TS_10_02,
             "open": 102,
             "high": 104,
             "low": 101,
@@ -247,7 +258,7 @@ SIMPLE_BARS_FIXTURE = TestFixture(
         {
             "event_id": "bar-004",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:03:00Z",
+            "ts_event": _TS_10_03,
             "open": 103,
             "high": 105,
             "low": 102,
@@ -257,7 +268,7 @@ SIMPLE_BARS_FIXTURE = TestFixture(
         {
             "event_id": "bar-005",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:04:00Z",
+            "ts_event": _TS_10_04,
             "open": 104,
             "high": 106,
             "low": 103,
@@ -279,30 +290,30 @@ LEAKAGE_TEST_FIXTURE = TestFixture(
         {
             "event_id": "lk-001",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:00:00Z",
-            "ts_available": "2025-01-15T10:01:00Z",
+            "ts_event": _TS_10_00,
+            "ts_available": _TS_10_01,
             "close": 100,
         },
         {
             "event_id": "lk-002",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:01:00Z",
-            "ts_available": "2025-01-15T10:02:00Z",
+            "ts_event": _TS_10_01,
+            "ts_available": _TS_10_02,
             "close": 101,
         },
         {
             "event_id": "lk-003",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:02:00Z",
-            "ts_available": "2025-01-15T10:03:00Z",
+            "ts_event": _TS_10_02,
+            "ts_available": _TS_10_03,
             "close": 102,
         },
         # Future data - should NOT be returned when querying asof 10:01:30
         {
             "event_id": "lk-004",
             "symbol": "AAPL",
-            "ts_event": "2025-01-15T10:03:00Z",
-            "ts_available": "2025-01-15T10:04:00Z",
+            "ts_event": _TS_10_03,
+            "ts_available": _TS_10_04,
             "close": 103,
         },
     ],

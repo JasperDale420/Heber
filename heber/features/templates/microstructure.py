@@ -37,7 +37,7 @@ def compute_microstructure_features(
         ts_available = _derive_ts_available(group)
         return pd.DataFrame(
             {
-                "instrument_key": group["instrument_key"],
+                "instrument_key": group.name,
                 "ts_event": group["ts_event"],
                 "ts_available": ts_available,
                 # Spread metrics
@@ -55,4 +55,4 @@ def compute_microstructure_features(
             }
         )
 
-    return df.groupby("instrument_key", group_keys=False).apply(calc_features)
+    return df.groupby("instrument_key", group_keys=False).apply(calc_features, include_groups=False)

@@ -11,7 +11,6 @@ Provides:
 """
 
 import asyncio
-import os
 import signal
 import threading
 import time
@@ -72,10 +71,18 @@ drain_duration_seconds = Gauge(
 class ShutdownConfig:
     """Shutdown configuration per PRD §12.14.3."""
 
-    timeout_seconds: int = field(
-        default_factory=lambda: int(os.environ.get("HEBER_SHUTDOWN_TIMEOUT_SECONDS", DEFAULT_SHUTDOWN_TIMEOUT))
-    )
+    timeout_seconds: int = field(default=-1)
     drain_poll_interval: float = 0.5  # How often to check if drained
+
+    def __post_init__(self):
+        """Resolve timeout from settings when no explicit value was provided."""
+        if self.timeout_seconds < 0:
+            try:
+                from heber.config import get_settings
+
+                self.timeout_seconds = get_settings().shutdown_timeout_seconds
+            except Exception:
+                self.timeout_seconds = DEFAULT_SHUTDOWN_TIMEOUT
 
 
 @dataclass
@@ -491,11 +498,7 @@ canary_health = Gauge(
 )
 
 
-def evaluate_canary_health(
-    error_rate_threshold: float = 0.01,
-    lag_threshold_seconds: float = 60.0,
-    latency_threshold_ms: float = 500.0,
-) -> bool:
+def evaluate_canary_health() -> bool:
     """Evaluate if canary deployment is healthy.
 
     Based on PRD §12.14.6 metrics:

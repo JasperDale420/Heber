@@ -17,8 +17,7 @@ def _write_parquet(path: Path, rows: list[dict]) -> None:
     pq.write_table(table, path, compression="snappy")
 
 
-@pytest.mark.asyncio
-async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
+def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
     partition.mkdir(parents=True)
 
@@ -31,7 +30,7 @@ async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> No
         _write_parquet(source, [{"event_id": f"evt-{i}"}])
 
     compactor = Compactor()
-    merged = await compactor.compact_partition(partition)
+    merged = compactor.compact_partition(partition)
 
     assert merged == 3
     assert not any(path.exists() for path in source_files)
@@ -40,12 +39,11 @@ async def test_compactor_streams_merge_and_deletes_sources(tmp_path: Path) -> No
 
     compacted_files = list(partition.glob("compacted-*.parquet"))
     assert len(compacted_files) == 1
-    merged_table = pq.read_table(compacted_files[0])
+    merged_table = pq.ParquetFile(compacted_files[0]).read()
     assert merged_table.num_rows == 3
 
 
-@pytest.mark.asyncio
-async def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-05"
     partition.mkdir(parents=True)
 
@@ -56,19 +54,19 @@ async def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch:
     for i, source in enumerate(source_files, start=1):
         _write_parquet(source, [{"event_id": f"evt-{i}"}])
 
-    original_read_table = compactor_module.pq.read_table
+    original_parquet_file = compactor_module.pq.ParquetFile
     call_count = {"value": 0}
 
-    def failing_read_table(path: Path):  # type: ignore[override]
+    def failing_parquet_file(path):  # type: ignore[override]
         call_count["value"] += 1
         if call_count["value"] == 2:
             raise RuntimeError("synthetic read failure")
-        return original_read_table(path)
+        return original_parquet_file(path)
 
-    monkeypatch.setattr(compactor_module.pq, "read_table", failing_read_table)
+    monkeypatch.setattr(compactor_module.pq, "ParquetFile", failing_parquet_file)
 
     compactor = Compactor()
-    merged = await compactor.compact_partition(partition)
+    merged = compactor.compact_partition(partition)
 
     assert merged == 0
     assert all(path.exists() for path in source_files)

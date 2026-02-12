@@ -1,5 +1,6 @@
 """Heber configuration using Pydantic Settings."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -30,7 +31,10 @@ class Settings(BaseSettings):
 
     # Postgres (Catalog)
     postgres_url: str = Field(
-        default="postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog",
+        default_factory=lambda: (
+            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', 'heber_dev_password')}"
+            f"@localhost:5433/heber_catalog"
+        ),
         description="PostgreSQL connection URL for Catalog DB",
     )
 
@@ -88,6 +92,38 @@ class Settings(BaseSettings):
         description="Path to Feast feature repository",
     )
 
+    # LLM (OpenAI-compatible providers)
+    llm_provider: Literal["openai", "qwen"] = Field(
+        default="openai",
+        validation_alias=AliasChoices("HEBER_LLM_PROVIDER", "LLM_PROVIDER"),
+        description="LLM provider selector for OpenAI-compatible clients",
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("HEBER_LLM_MODEL", "LLM_MODEL"),
+        description="Default chat model name",
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_LLM_BASE_URL", "LLM_BASE_URL"),
+        description="Optional override for OpenAI-compatible base URL",
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "HEBER_LLM_API_KEY",
+            "LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "DASHSCOPE_API_KEY",
+        ),
+        description="API key for OpenAI-compatible model providers",
+    )
+    llm_qwen_region: Literal["intl", "us", "cn"] = Field(
+        default="intl",
+        validation_alias=AliasChoices("HEBER_LLM_QWEN_REGION", "LLM_QWEN_REGION"),
+        description="Default Qwen endpoint region (intl/us/cn) when provider=qwen",
+    )
+
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
     bronze_max_batch_size: int = Field(default=10000, description="Max events per Bronze file")
@@ -101,6 +137,142 @@ class Settings(BaseSettings):
     # Environment
     environment: Literal["dev", "staging", "prod"] = Field(default="dev")
 
+    # Gold layer paths (used by feature_views/_paths.py)
+    gold_root: Path | None = Field(default=None, description="Override for gold data root (defaults to data_root/gold)")
+    gold_project: str = Field(default="*", description="Glob pattern for gold project dirs")
+    gold_version: str = Field(default="*", description="Glob pattern for gold version dirs")
+
+    # Soda quality checks
+    soda_checks_dir: Path = Field(
+        default=Path("soda/checks"),
+        validation_alias=AliasChoices("HEBER_SODA_CHECKS_DIR", "SODA_CHECKS_DIR"),
+    )
+
+    # Backfill service
+    backfill_host: str = Field(default="0.0.0.0")
+    backfill_port: int = Field(default=8080)
+    backfill_log_level: str = Field(default="info")
+
+    # Hot store writer
+    hotloader_datasets: str = Field(
+        default="quotes,trades,bars",
+        description="Comma-separated datasets for hot loading",
+    )
+    hotloader_silver_base_path: str | None = Field(default=None, description="Override silver base path for hot loader")
+
+    # Watch consumer
+    watch_redis_url: str = Field(
+        default="redis://localhost:6379",
+        validation_alias=AliasChoices("HEBER_WATCH_REDIS_URL", "HEBER_REDIS_URL"),
+    )
+    watch_gateway_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias=AliasChoices("HEBER_WATCH_GATEWAY_URL", "DATA_GATEWAY_URL"),
+    )
+
+    # Quarantine
+    quarantine_path: str = Field(default="quarantine")
+
+    # Metrics
+    metrics_port: int | None = Field(default=None, description="Prometheus metrics port")
+
+    # Ops
+    service_name: str = Field(
+        default="heber",
+        validation_alias=AliasChoices("HEBER_SERVICE_NAME", "SERVICE_NAME"),
+    )
+    instance_id: str = Field(
+        default="unknown",
+        validation_alias=AliasChoices("HEBER_INSTANCE_ID", "INSTANCE_ID", "HOSTNAME"),
+    )
+    service_version: str = Field(
+        default="0.1.0",
+        validation_alias=AliasChoices("HEBER_SERVICE_VERSION", "SERVICE_VERSION"),
+    )
+    shutdown_timeout_seconds: int = Field(default=30)
+
+    # OpenTelemetry
+    otel_endpoint: str = Field(
+        default="http://localhost:4317",
+        validation_alias=AliasChoices("HEBER_OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
+
+    # OpenMetadata catalog
+    openmetadata_host: str = Field(
+        default="http://localhost:8585",
+        validation_alias=AliasChoices("HEBER_OPENMETADATA_HOST", "OPENMETADATA_HOST"),
+    )
+    openmetadata_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("HEBER_OPENMETADATA_API_KEY", "OPENMETADATA_API_KEY"),
+    )
+
+    # Schema Registry
+    schema_registry_url: str = Field(
+        default="http://localhost:8081",
+        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_URL", "SCHEMA_REGISTRY_URL"),
+    )
+    schema_registry_user: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_USER", "SCHEMA_REGISTRY_USER"),
+    )
+    schema_registry_password: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_PASSWORD", "SCHEMA_REGISTRY_PASSWORD"),
+    )
+
+    # Iceberg catalog
+    iceberg_catalog_type: str = Field(
+        default="sql",
+        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_TYPE", "ICEBERG_CATALOG_TYPE"),
+    )
+    iceberg_catalog_uri: str = Field(
+        default="sqlite:///iceberg_catalog.db",
+        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_URI", "ICEBERG_CATALOG_URI"),
+    )
+    iceberg_warehouse: str = Field(
+        default="s3://heber-lakehouse/warehouse",
+        validation_alias=AliasChoices("HEBER_ICEBERG_WAREHOUSE", "ICEBERG_WAREHOUSE"),
+    )
+    iceberg_s3_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ENDPOINT", "ICEBERG_S3_ENDPOINT"),
+    )
+    iceberg_s3_access_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ACCESS_KEY", "ICEBERG_S3_ACCESS_KEY"),
+    )
+    iceberg_s3_secret_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_ICEBERG_S3_SECRET_KEY", "ICEBERG_S3_SECRET_KEY"),
+    )
+
+    # LakeFS versioning
+    lakefs_endpoint: str = Field(
+        default="http://localhost:8000",
+        validation_alias=AliasChoices("HEBER_LAKEFS_ENDPOINT", "LAKEFS_ENDPOINT"),
+    )
+    lakefs_access_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("HEBER_LAKEFS_ACCESS_KEY", "LAKEFS_ACCESS_KEY"),
+    )
+    lakefs_secret_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("HEBER_LAKEFS_SECRET_KEY", "LAKEFS_SECRET_KEY"),
+    )
+    lakefs_default_repo: str = Field(
+        default="heber-gold",
+        validation_alias=AliasChoices("HEBER_LAKEFS_DEFAULT_REPO", "LAKEFS_DEFAULT_REPO"),
+    )
+    lakefs_storage_namespace_base: str = Field(
+        default="s3://heber-lakehouse",
+        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_BASE", "LAKEFS_STORAGE_NAMESPACE_BASE"),
+    )
+    lakefs_storage_namespace_template: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_TEMPLATE", "LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
+    )
+
     @property
     def bronze_path(self) -> Path:
         return self.data_root / "bronze"
@@ -111,7 +283,25 @@ class Settings(BaseSettings):
 
     @property
     def gold_path(self) -> Path:
+        if self.gold_root:
+            return self.gold_root
         return self.data_root / "gold"
+
+    @property
+    def llm_effective_base_url(self) -> str | None:
+        """Resolve base URL for the configured OpenAI-compatible provider."""
+        if self.llm_base_url:
+            return self.llm_base_url
+
+        if self.llm_provider == "qwen":
+            qwen_endpoints = {
+                "intl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "us": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+                "cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            }
+            return qwen_endpoints[self.llm_qwen_region]
+
+        return None
 
 
 @lru_cache

@@ -28,6 +28,13 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_API_PORT` | `8080` | Catalog API port |
 | `HEBER_CATALOG_URL` | `http://localhost:8085/api/v1` | SDK Catalog API base URL |
 | `HEBER_FEAST_REPO_PATH` | `features` | Feast repository root for materialization/search helpers |
+| `HEBER_LLM_PROVIDER` | `openai` | OpenAI-compatible provider (`openai` or `qwen`) |
+| `HEBER_LLM_MODEL` | `gpt-4o-mini` | Default chat model name |
+| `HEBER_LLM_BASE_URL` | *(unset)* | Optional explicit OpenAI-compatible base URL override |
+| `HEBER_LLM_QWEN_REGION` | `intl` | Qwen endpoint region (`intl`, `us`, `cn`) when provider is `qwen` |
+| `HEBER_LLM_API_KEY` | *(unset)* | Optional generic LLM API key override |
+| `OPENAI_API_KEY` | *(unset)* | OpenAI API key alias |
+| `DASHSCOPE_API_KEY` | *(unset)* | Qwen (DashScope) API key alias |
 | `HEBER_ENVIRONMENT` | `dev` | `dev`, `staging`, or `prod` |
 | `HEBER_METRICS_PORT` | `9090` | Prometheus exporter port for service entrypoints |
 
@@ -48,6 +55,14 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 |---|---|---|
 | `DATA_GATEWAY_URL` | `http://localhost:8000` | Data Gateway URL for option quote polling |
 | `HEBER_GOLD_PATH` | *derived from `HEBER_DATA_ROOT`* | Gold layer output path for watch labels |
+
+## API Keys
+
+Add API keys in `/Users/jacobmcmillan/Empire/Heber/.env` (local) or as environment variables in your deploy system.
+
+- OpenAI: set `OPENAI_API_KEY` (or `HEBER_LLM_API_KEY`) and optionally `HEBER_LLM_PROVIDER=openai`
+- Qwen 2.5: set `DASHSCOPE_API_KEY` (or `HEBER_LLM_API_KEY`) and `HEBER_LLM_PROVIDER=qwen`
+- Optional provider URL override: set `HEBER_LLM_BASE_URL`
 
 ## Logging Levels
 

@@ -7,7 +7,6 @@ Provides:
 - Head-based sampling: 1% prod, 100% dev
 """
 
-import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from functools import wraps
@@ -51,7 +50,9 @@ SAMPLING_RATES = {
 
 def get_sampling_rate() -> float:
     """Get sampling rate based on environment."""
-    env = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "dev")).lower()
+    from heber.config import get_settings
+
+    env = get_settings().environment
     return SAMPLING_RATES.get(env, 0.01)
 
 
@@ -71,11 +72,12 @@ def configure_tracing(
         logger.warning("tracing_disabled", reason="opentelemetry not installed")
         return
 
-    # Get endpoint from env or parameter
-    endpoint = endpoint or os.environ.get(
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "http://localhost:4317",
-    )
+    from heber.config import get_settings
+
+    settings = get_settings()
+
+    # Get endpoint from parameter or settings
+    endpoint = endpoint or settings.otel_endpoint
 
     # Get sampling rate
     rate = sampling_rate if sampling_rate is not None else get_sampling_rate()
@@ -87,8 +89,8 @@ def configure_tracing(
     resource = Resource.create(
         {
             "service.name": service_name,
-            "service.version": os.environ.get("SERVICE_VERSION", "0.1.0"),
-            "deployment.environment": os.environ.get("ENVIRONMENT", "dev"),
+            "service.version": settings.service_version,
+            "deployment.environment": settings.environment,
         }
     )
 
@@ -128,7 +130,7 @@ class _NoopTracer:
     def start_as_current_span(self, name: str, **kwargs):
         yield _NoopSpan()
 
-    def start_span(self, name: str, **kwargs):
+    def start_span(self, _name: str, **kwargs):
         return _NoopSpan()
 
 
@@ -136,21 +138,26 @@ class _NoopSpan:
     """No-op span."""
 
     def set_attribute(self, key: str, value: Any) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def set_status(self, status: Any) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def record_exception(self, exception: Exception) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def end(self) -> None:
+        # Intentionally empty: no-op when OpenTelemetry is unavailable
         pass
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
+        # Intentionally empty: no-op span context exit
         pass
 
 

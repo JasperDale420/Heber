@@ -339,6 +339,31 @@ class HeberClient:
 
         return df
 
+    @staticmethod
+    def _filter_time_range(
+        df: pd.DataFrame,
+        time_range: tuple[datetime | str, datetime | str],
+        time_col: str = "ts_event",
+    ) -> pd.DataFrame:
+        """Apply time range filter to a DataFrame."""
+        start, end = time_range
+        if isinstance(start, str):
+            start = pd.Timestamp(start)
+        if isinstance(end, str):
+            end = pd.Timestamp(end)
+        return df[(df[time_col] >= start) & (df[time_col] <= end)]
+
+    @staticmethod
+    def _filter_asof(
+        df: pd.DataFrame,
+        asof_time: datetime | str,
+        available_col: str = "ts_available",
+    ) -> pd.DataFrame:
+        """Apply point-in-time correctness filter."""
+        if isinstance(asof_time, str):
+            asof_time = pd.Timestamp(asof_time)
+        return df[df[available_col] <= asof_time]
+
     # Gold layer operations
     def read_gold(
         self,
@@ -384,21 +409,12 @@ class HeberClient:
             )
             df = table.to_pandas()
 
-            # Apply time range filter
             if time_range and not df.empty:
-                start, end = time_range
-                if isinstance(start, str):
-                    start = pd.Timestamp(start)
-                if isinstance(end, str):
-                    end = pd.Timestamp(end)
                 time_col = "ts_event" if "ts_event" in df.columns else "ts_label"
-                df = df[(df[time_col] >= start) & (df[time_col] <= end)]
+                df = self._filter_time_range(df, time_range, time_col)
 
-            # Apply point-in-time filter
             if asof_time and "ts_available" in df.columns:
-                if isinstance(asof_time, str):
-                    asof_time = pd.Timestamp(asof_time)
-                df = df[df["ts_available"] <= asof_time]
+                df = self._filter_asof(df, asof_time)
 
             return df
 

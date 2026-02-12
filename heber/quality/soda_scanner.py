@@ -8,7 +8,6 @@ Phase 3 of OSS Migration Roadmap.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -64,8 +63,8 @@ class SodaConfig:
     def from_env(cls) -> SodaConfig:
         """Load configuration from environment."""
         return cls(
-            checks_dir=Path(os.getenv("SODA_CHECKS_DIR", "soda/checks")),
-            silver_path=Path(os.getenv("HEBER_SILVER_PATH", str(settings.silver_path))),
+            checks_dir=settings.soda_checks_dir,
+            silver_path=settings.silver_path,
         )
 
 

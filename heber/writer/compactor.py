@@ -10,6 +10,7 @@ import signal
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import structlog
 
@@ -62,7 +63,27 @@ class Compactor:
             pass
         return "unknown"
 
-    async def compact_partition(self, partition_path: Path) -> int:
+    @staticmethod
+    def _normalize_dict_columns(table: pa.Table) -> pa.Table:
+        """Cast dictionary-encoded string columns to plain strings.
+
+        PyArrow may auto-apply dictionary encoding to low-cardinality string
+        columns.  When merging files written at different times the encoding
+        can differ (plain string vs dictionary<string, int32>), causing
+        ArrowTypeError.  Normalizing to plain strings avoids this.
+        """
+        arrays = []
+        fields = []
+        for i, field in enumerate(table.schema):
+            col = table.column(i)
+            if pa.types.is_dictionary(field.type) and pa.types.is_string(field.type.value_type):
+                col = col.cast(pa.string())
+                field = field.with_type(pa.string())
+            arrays.append(col)
+            fields.append(field)
+        return pa.table(arrays, schema=pa.schema(fields))
+
+    def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
         Returns number of files merged.
@@ -106,7 +127,7 @@ class Compactor:
             merged_rows = 0
             try:
                 for source_file in small_files:
-                    table = pq.read_table(source_file)
+                    table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
                     if writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
@@ -167,7 +188,7 @@ class Compactor:
         finally:
             self._release_partition_lock(lock_path)
 
-    async def scan_and_compact(self, layer: str = "silver") -> dict:
+    def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
         layer_path = settings.data_root / layer
 
@@ -183,7 +204,7 @@ class Compactor:
                 parquet_files = list(partition_path.glob("*.parquet"))
                 if parquet_files:
                     partitions_scanned += 1
-                    merged = await self.compact_partition(partition_path)
+                    merged = self.compact_partition(partition_path)
                     files_merged += merged
 
         return {
@@ -200,14 +221,15 @@ class Compactor:
         while self.running:
             try:
                 # Compact Silver layer
-                result = await self.scan_and_compact("silver")
+                result = self.scan_and_compact("silver")
                 logger.info("Compaction cycle complete", **result)
 
                 # Wait for next cycle
                 await asyncio.sleep(interval_minutes * 60)
 
             except asyncio.CancelledError:
-                break
+                logger.info("Compactor cancelled")
+                raise
             except Exception as e:
                 logger.error("Compactor error", error=str(e), exc_info=True)
                 await asyncio.sleep(60)  # Back off on error

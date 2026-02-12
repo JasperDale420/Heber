@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -69,62 +70,20 @@ class BarrierChecker:
         Returns:
             WatchOutcome if complete, None if still watching
         """
-        snapshots = self.manager.get_snapshots(watch.watch_id)
+        snapshots = sorted(self.manager.get_snapshots(watch.watch_id), key=lambda snap: snap.timestamp)
 
         if not snapshots:
             return None
 
         now = datetime.now(UTC)
+        alert_time = watch.alert_time if watch.alert_time.tzinfo is not None else watch.alert_time.replace(tzinfo=UTC)
+        window_end = watch.window_end if watch.window_end.tzinfo is not None else watch.window_end.replace(tzinfo=UTC)
 
         # Build return path
-        returns = []
-        for snap in snapshots:
-            if snap.mid_px is not None and watch.entry_price > 0:
-                ret = (snap.mid_px - watch.entry_price) / watch.entry_price
-                returns.append(ret)
-            elif snap.return_pct is not None:
-                returns.append(snap.return_pct)
+        returns, return_timestamps = self._build_return_path(snapshots, watch.entry_price)
 
         if not returns:
-            if now < watch.window_end:
-                return None
-
-            bars_to_hit = len(snapshots)
-            self.manager.complete_watch(
-                watch.watch_id,
-                WatchStatus.EXPIRED,
-                0.0,
-                bars_to_hit,
-            )
-
-            window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
-            trading_mins = self.calendar.trading_minutes_until(
-                watch.alert_time,
-                now,
-            )
-
-            return WatchOutcome(
-                watch_id=watch.watch_id,
-                alert_id=watch.alert_id,
-                occ_symbol=watch.occ_symbol,
-                underlying=watch.underlying,
-                put_call=watch.put_call,
-                horizon=watch.horizon,
-                status=WatchStatus.EXPIRED,
-                outcome_time=now,
-                outcome_return=0.0,
-                bars_to_hit=bars_to_hit,
-                mfe=0.0,
-                mae=0.0,
-                mfe_adj=self.slippage.adjust_option_mfe(0.0),
-                mae_adj=self.slippage.adjust_option_mae(0.0),
-                hit_tp_first=0,
-                entry_price=watch.entry_price,
-                spot_at_alert=watch.spot_at_alert,
-                alert_time=watch.alert_time,
-                window_duration_hours=window_hours,
-                trading_minutes_to_hit=trading_mins,
-            )
+            return self._handle_no_returns(watch, snapshots, now, alert_time, window_end)
 
         returns_arr = np.array(returns)
 
@@ -140,7 +99,7 @@ class BarrierChecker:
         )
 
         # Check expiry
-        if status == WatchStatus.WATCHING and now >= watch.window_end:
+        if status == WatchStatus.WATCHING and now >= window_end:
             status = WatchStatus.EXPIRED
             bars_to_hit = len(returns)
 
@@ -148,11 +107,9 @@ class BarrierChecker:
         if status == WatchStatus.WATCHING:
             return None
 
-        # Determine final return
-        if bars_to_hit and bars_to_hit <= len(returns):
-            outcome_return = returns[bars_to_hit - 1]
-        else:
-            outcome_return = returns[-1]
+        # Determine final return and outcome time
+        outcome_return, barrier_time = self._resolve_outcome_return(returns, return_timestamps, bars_to_hit)
+        outcome_time = window_end if status == WatchStatus.EXPIRED else (barrier_time or now)
 
         # Complete the watch
         self.manager.complete_watch(
@@ -160,18 +117,114 @@ class BarrierChecker:
             status,
             outcome_return,
             bars_to_hit,
+            outcome_time=outcome_time,
         )
 
-        # Build outcome
-        window_hours = (watch.window_end - watch.alert_time).total_seconds() / 3600
-
-        # Compute trading time to hit barrier
-        trading_mins = self.calendar.trading_minutes_until(
-            watch.alert_time,
-            now,
+        outcome = self._build_outcome(
+            watch,
+            status,
+            outcome_time,
+            outcome_return,
+            bars_to_hit,
+            mfe,
+            mae,
+            alert_time,
+            window_end,
         )
 
-        outcome = WatchOutcome(
+        logger.info(
+            "Watch outcome determined",
+            watch_id=watch.watch_id,
+            status=status.value,
+            hit_tp_first=outcome.hit_tp_first,
+            trading_minutes=outcome.trading_minutes_to_hit,
+            mfe=mfe,
+            mae=mae,
+        )
+
+        return outcome
+
+    @staticmethod
+    def _build_return_path(
+        snapshots: list,
+        entry_price: float,
+    ) -> tuple[list[float], list[datetime]]:
+        """Compute return series from snapshots."""
+        returns: list[float] = []
+        timestamps: list[datetime] = []
+        for snap in snapshots:
+            if snap.mid_px is not None and entry_price > 0:
+                ret = (snap.mid_px - entry_price) / entry_price
+            elif snap.return_pct is not None:
+                ret = float(snap.return_pct)
+            else:
+                continue
+            if math.isfinite(ret):
+                returns.append(ret)
+                timestamps.append(snap.timestamp)
+        return returns, timestamps
+
+    def _handle_no_returns(
+        self,
+        watch: AlertWatch,
+        snapshots: list,
+        now: datetime,
+        alert_time: datetime,
+        window_end: datetime,
+    ) -> WatchOutcome | None:
+        """Handle the case where no valid returns were computed."""
+        if now < window_end:
+            return None
+
+        bars_to_hit = len(snapshots)
+        self.manager.complete_watch(
+            watch.watch_id,
+            WatchStatus.EXPIRED,
+            0.0,
+            bars_to_hit,
+            outcome_time=window_end,
+        )
+        return self._build_outcome(
+            watch,
+            WatchStatus.EXPIRED,
+            window_end,
+            0.0,
+            bars_to_hit,
+            0.0,
+            0.0,
+            alert_time,
+            window_end,
+        )
+
+    @staticmethod
+    def _resolve_outcome_return(
+        returns: list[float],
+        return_timestamps: list[datetime],
+        bars_to_hit: int | None,
+    ) -> tuple[float, datetime | None]:
+        """Determine final return and barrier hit time."""
+        if bars_to_hit and bars_to_hit <= len(returns):
+            return returns[bars_to_hit - 1], return_timestamps[bars_to_hit - 1]
+        barrier_time = return_timestamps[-1] if return_timestamps else None
+        return returns[-1], barrier_time
+
+    def _build_outcome(
+        self,
+        watch: AlertWatch,
+        status: WatchStatus,
+        outcome_time: datetime,
+        outcome_return: float,
+        bars_to_hit: int | None,
+        mfe: float,
+        mae: float,
+        alert_time: datetime,
+        window_end: datetime,
+    ) -> WatchOutcome:
+        """Construct a WatchOutcome with trading-time metrics."""
+        window_hours = (window_end - alert_time).total_seconds() / 3600
+        trading_mins = self.calendar.trading_minutes_until(alert_time, outcome_time)
+
+        return WatchOutcome(
             watch_id=watch.watch_id,
             alert_id=watch.alert_id,
             occ_symbol=watch.occ_symbol,
@@ -179,7 +232,7 @@ class BarrierChecker:
             put_call=watch.put_call,
             horizon=watch.horizon,
             status=status,
-            outcome_time=now,
+            outcome_time=outcome_time,
             outcome_return=outcome_return,
             bars_to_hit=bars_to_hit,
             mfe=mfe,
@@ -189,22 +242,10 @@ class BarrierChecker:
             hit_tp_first=1 if status == WatchStatus.HIT_TP else 0,
             entry_price=watch.entry_price,
             spot_at_alert=watch.spot_at_alert,
-            alert_time=watch.alert_time,
+            alert_time=alert_time,
             window_duration_hours=window_hours,
             trading_minutes_to_hit=trading_mins,
         )
-
-        logger.info(
-            "Watch outcome determined",
-            watch_id=watch.watch_id,
-            status=status.value,
-            hit_tp_first=outcome.hit_tp_first,
-            trading_minutes=trading_mins,
-            mfe=mfe,
-            mae=mae,
-        )
-
-        return outcome
 
     def _check_barriers(
         self,

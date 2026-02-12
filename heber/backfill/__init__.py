@@ -80,9 +80,9 @@ class BackfillStatus(str, Enum):
 class TsAvailablePolicy(str, Enum):
     """Policy for setting ts_available on backfill data per PRD §13.3."""
 
-    COMMIT = "commit"  # ts_available = ts_commit (default, recommended)
-    EVENT = "event"  # ts_available = ts_event (opt-in, documented)
-    CUSTOM = "custom"  # ts_available = ts_event + delay (opt-in)
+    COMMIT = "commit"  # Default: use commit timestamp for ts_available
+    EVENT = "event"  # Opt-in: use event timestamp for ts_available
+    CUSTOM = "custom"  # Opt-in: use event timestamp plus configured delay
 
 
 @dataclass

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Callable
 from typing import Any
 
@@ -33,21 +32,25 @@ app = create_app()
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from heber.config import get_settings
+
+    settings = get_settings()
+
     parser = argparse.ArgumentParser(description="Run Heber backfill service.")
     parser.add_argument(
         "--host",
-        default=os.getenv("HEBER_BACKFILL_HOST", os.getenv("HEBER_API_HOST", "0.0.0.0")),
+        default=settings.backfill_host,
         help="Bind host",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("HEBER_BACKFILL_PORT", "8080")),
+        default=settings.backfill_port,
         help="Bind port",
     )
     parser.add_argument(
         "--log-level",
-        default=os.getenv("HEBER_BACKFILL_LOG_LEVEL", "info"),
+        default=settings.backfill_log_level,
         help="Uvicorn log level",
     )
     return parser

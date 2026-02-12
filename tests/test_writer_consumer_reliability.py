@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -45,8 +45,8 @@ async def test_recover_pending_messages_claims_and_acks() -> None:
     consumer.redis = redis
 
     consumer._process_stream_messages = AsyncMock(return_value=(["1-0"], []))
-    consumer.bronze_writer.flush_if_needed = AsyncMock()
-    consumer.silver_writer.flush_if_needed = AsyncMock()
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
 
     recovered = await consumer._recover_pending_messages()
 
@@ -103,11 +103,10 @@ async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
     assert failed_ids == ["2-0"]
 
 
-@pytest.mark.asyncio
-async def test_process_event_rejects_invalid_instrument_key() -> None:
+def test_process_event_rejects_invalid_instrument_key() -> None:
     consumer = EventConsumer()
-    consumer.bronze_writer.write = AsyncMock()
-    consumer.silver_writer.write = AsyncMock()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
 
     now = datetime(2026, 2, 7, 16, 0, tzinfo=UTC)
     envelope = {
@@ -123,10 +122,11 @@ async def test_process_event_rejects_invalid_instrument_key() -> None:
         "payload": {},
     }
 
-    success, error = await consumer._process_event_once({"data": json.dumps(envelope)})
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(envelope)})
 
     assert success is False
     assert error is not None
     assert "Invalid instrument_key format" in error
-    consumer.bronze_writer.write.assert_not_awaited()
-    consumer.silver_writer.write.assert_not_awaited()
+    assert retryable is False
+    consumer.bronze_writer.write.assert_called_once()
+    consumer.silver_writer.write.assert_not_called()

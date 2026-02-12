@@ -11,6 +11,10 @@ Centralized storage and retrieval for market + intelligence data across all trad
 # Copy environment template
 cp .env.example .env
 
+# Add any required API keys in .env
+# - OPENAI_API_KEY for OpenAI
+# - DASHSCOPE_API_KEY for Qwen 2.5 (set HEBER_LLM_PROVIDER=qwen)
+
 # Start infrastructure + Heber services
 docker compose up -d
 
@@ -31,7 +35,7 @@ Local ports from `docker-compose.yml`:
 
 ## Architecture (Current)
 
-```
+```text
 Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (Parquet)
                                             v
                                     heber-catalog (Postgres)
@@ -78,6 +82,13 @@ Environment variables:
 - `DATA_GATEWAY_URL` - Data Gateway for option quotes (default: `http://localhost:8000`)
 - `HEBER_GOLD_PATH` - Gold layer output path
 
+LLM provider variables (OpenAI-compatible):
+
+- `HEBER_LLM_PROVIDER` - `openai` (default) or `qwen`
+- `HEBER_LLM_MODEL` - model name (for example `gpt-4o-mini` or `qwen-plus`)
+- `OPENAI_API_KEY` / `DASHSCOPE_API_KEY` - provider key aliases
+- `HEBER_LLM_BASE_URL` - optional explicit provider endpoint override
+
 ### ML Package (`heber/ml/`)
 
 Meta-labeling infrastructure for predicting alert success:
@@ -108,7 +119,7 @@ score = await scorer.score(alert)  # 0.0 - 1.0
 **What runs automatically:**
 
 | Component | Automatic? | Notes |
-|-----------|------------|-------|
+| :--- | :--- | :--- |
 | Feature capture | ✅ Yes | Triggers on every alert via `AlertWatchConsumer` |
 | Dataset building | ❌ No | Run manually for training |
 | Model training | ❌ No | Run manually, logs to MLflow |
@@ -150,6 +161,17 @@ heber versions momentum_features
 - `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
 - `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
 
+## Repository Structure
+
+The `heber/` package contains the core logic:
+
+- **Core**: `catalog`, `bus`, `models`, `config`
+- **Lake**: `writer`, `storage` (Iceberg), `versioning` (lakeFS)
+- **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
+- **Intelligence**: `ml` (meta-labeling), `backtest`, `firewall` (zero-leakage), `universe`
+- **Serving**: `sdk`, `hotstore` (ClickHouse), `watch` (real-time)
+- **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
+
 ## Development
 
 ### Prerequisites
@@ -176,7 +198,7 @@ pre-commit run --all-files
 This project uses a comprehensive hygiene stack (largely LLM-generated code with automated enforcement):
 
 | Tool | Purpose |
-|------|---------|
+| :--- | :--- |
 | **ruff** | Python linting + formatting |
 | **mypy** | Static type checking |
 | **bandit** | Security vulnerability scanning |

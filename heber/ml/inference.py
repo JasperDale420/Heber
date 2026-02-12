@@ -64,7 +64,7 @@ class MetaLabelScorer:
         self._model = model
         self._feature_extractor = None
 
-    async def initialize(self) -> None:
+    def initialize(self) -> None:
         """Load model and feature extractor."""
         if self._model is None and self.config.model_path:
             from heber.ml.trainer import MetaModelTrainer

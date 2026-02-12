@@ -115,6 +115,13 @@ def test_create_reaper_uses_configured_data_root(monkeypatch, tmp_path: Path) ->
     configured_root = tmp_path / "configured-root"
     monkeypatch.setenv("HEBER_DATA_ROOT", str(configured_root))
 
+    from heber.config import get_settings
+
+    get_settings.cache_clear()
+
     scheduler = create_reaper(dry_run=True)
     assert scheduler.worker.storage_root == configured_root
     assert scheduler.worker.archiver.archive_root == configured_root / "archive"
+
+    # Restore settings cache for subsequent tests
+    get_settings.cache_clear()

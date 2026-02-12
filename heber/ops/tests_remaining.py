@@ -66,6 +66,16 @@ class TestStreamRegistry:
         assert report["summary"]["total_streams"] == 15
         assert report["summary"]["total_consumer_groups"] == 6
 
+    def test_darkpool_stream_uses_canonical_name(self):
+        registry = StreamRegistry()
+
+        canonical = registry.get_stream("darkpool")
+        legacy = registry.get_stream("darkpool_trades")
+
+        assert canonical is not None
+        assert canonical.dataset == "darkpool"
+        assert legacy is None
+
 
 class TestSliceManager:
     """Test SliceManager."""
@@ -117,6 +127,14 @@ class TestSliceManager:
         assert "summary" in report
         assert "slices" in report
         assert report["summary"]["total_slices"] == 8
+
+    def test_slice_3_uses_canonical_darkpool_dataset_name(self):
+        manager = SliceManager()
+        slice3 = manager.get_slice(3)
+
+        assert slice3 is not None
+        assert "darkpool" in slice3.datasets
+        assert "darkpool_trades" not in slice3.datasets
 
 
 class TestGapResolutionRegistry:

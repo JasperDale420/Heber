@@ -6,7 +6,7 @@ This plan converts high-severity audit items into ticket-ready tasks with clear 
 
 ## Implementation Status
 
-Updated: 2026-02-07
+Updated: 2026-02-09
 
 - `T-01` complete (`TD-015`): event-bus claimed pending messages are now yielded to consumers.
 - `T-02` complete (`TD-016`): watch outcome writer and dataset builder now use aligned canonical outcome columns.
@@ -101,6 +101,44 @@ Updated: 2026-02-07
 - `T-91` complete (`TD-105`): manager expiry cleanup now normalizes naive `window_end` timestamps to UTC before comparison, preventing cleanup failures from mixed datetime types.
 - `T-92` complete (`TD-106`): consumer alert-field mapping now treats only `None` as missing for `spot_px`/`contract_px`, preserving valid zero-valued prices instead of falling back to alternate fields.
 - `T-93` complete (`TD-107`): market-context enrichment now preserves daily bar alignment when close prices include zero/invalid values, preventing 1-day returns from silently skipping invalid prior sessions.
+- `T-94` complete (`TD-108`): watch outcome model now enforces `WatchHorizon` enum values for `horizon`, preventing arbitrary/invalid horizon strings from entering label output paths.
+- `T-95` complete (`TD-109`): writer service entrypoint now always executes `service.stop()` in `finally`, ensuring cleanup/flush on normal completion in addition to error paths.
+- `T-96` complete (`TD-110`): checker now normalizes naive `alert_time`/`window_end` values to UTC before comparison and duration math, preventing aware/naive datetime crashes in outcome resolution.
+- `T-97` complete (`TD-111`): gateway URL candidate builder now avoids double `/api/v1` prefixing when base URLs already include the API prefix, while preserving prefix-first legacy fallback behavior.
+- `T-98` complete (`TD-112`, `TD-113`): poller now normalizes quote payload numeric fields (`bp`/`ap`/`last_price`/`underlying_price`) before midpoint math and treats future-skewed `updated_at` timestamps as immediately due to avoid poll starvation.
+- `T-99` complete (`TD-114`, `TD-115`): consumer now normalizes quote payload numeric fields for entry-price fallback (`bp`/`ap`/`last_price`) and parses ISO alert timestamps into UTC-aware values with fail-soft fallback for invalid strings.
+- `T-100` complete (`TD-116`, `TD-117`): feature deserialization now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed option-chain strike rows while safely coercing numeric Greek fields.
+- `T-101` complete (`TD-118`, `TD-119`): writer parquet flushes now stage per-partition outputs as temp files and only promote after full batch success, with cleanup on failures to prevent partial commits and temp-file drift.
+- `T-102` complete (`TD-120`, `TD-121`): watch entrypoint shutdown now uses safe-stop handling so stop failures are logged without masking original runtime exceptions or failing normal-completion exits.
+- `T-103` complete (`TD-122`, `TD-123`): watch manager now normalizes byte-form watch IDs for delete operations and keeps the active-watch index synchronized when watches transition out of `WATCHING`.
+- `T-104` complete (`TD-124`, `TD-125`): poller now rejects non-finite quote numerics (`NaN`/`inf`) during coercion and skips watch price updates when no usable price is available.
+- `T-105` complete (`TD-126`): checker now ignores non-finite snapshot returns so `NaN` values do not propagate into barrier calculations or expired watch outcomes.
+- `T-106` complete (`TD-127`, `TD-128`): writer entrypoint shutdown now isolates `service.stop()` failures so stop errors do not mask runtime failures or fail normal completion exits.
+- `T-107` complete (`TD-129`): consumer entry-price parsing now rejects non-finite numeric quote values so `NaN`/`inf` payloads cannot bypass last-price fallback.
+- `T-108` complete (`TD-130`): watch models now normalize naive datetime fields to UTC-aware values at validation time to prevent mixed naive/aware timestamp semantics.
+- `T-109` complete (`TD-131`): gateway URL candidate construction now strips query/fragment components from base URLs before route joining to prevent malformed request URLs.
+- `T-110` complete (`TD-132`, `TD-133`): feature enrichment now rejects non-finite numeric payloads so Greeks and market-context returns do not propagate `NaN`/`inf` values.
+- `T-111` complete (`TD-134`): watch entrypoint now treats signal registration as best-effort, preventing startup failure when running outside the main thread.
+- `T-112` complete (`TD-135`): poller quote fetch now treats invalid JSON bodies on successful HTTP status as route-level failures and falls back to legacy candidates.
+- `T-113` complete (`TD-136`): consumer entry-price lookup now treats invalid JSON bodies on successful HTTP status as route-level failures and falls back to legacy candidates.
+- `T-114` complete (`TD-137`): writer parquet flush now rolls back already-promoted partition files when promotion fails mid-batch, preserving all-or-nothing commit semantics.
+- `T-115` complete (`TD-138`): manager watch price updates now persist the provided snapshot timestamp (UTC-normalized) as `updated_at` instead of using wall-clock processing time.
+- `T-116` complete (`TD-139`, `TD-140`, `TD-141`): checker now evaluates barriers in chronological snapshot order and derives outcome timestamps/trading-minutes from barrier or window-end times; manager completion APIs now persist explicit outcome times for consistent metadata.
+- `T-117` complete (`TD-142`, `TD-143`, `TD-144`): poller/consumer quote fetchers now treat malformed JSON payload shapes as route-level failures with legacy fallback, and poller snapshots now use quote-provided timestamps when available.
+- `T-118` complete (`TD-145`, `TD-146`, `TD-147`): poller/consumer quote lookup now handles route-level timeout/transport failures as fallback-eligible errors and emits aggregated route-failure summaries when all route candidates fail.
+- `T-119` complete (`TD-148`, `TD-149`, `TD-150`): consumer backoff now preserves explicit zero values, clamps negative retry delays, and fail-soft parses malformed/non-finite alert numeric and timestamp payload fields.
+- `T-120` complete (`TD-151`, `TD-152`, `TD-153`): consumer now enforces a minimum retry-attempt count, decodes malformed UTF-8 stream bytes with fail-soft replacement, and normalizes epoch-millisecond numeric timestamps.
+- `T-121` complete (`TD-154`, `TD-155`, `TD-156`): consumer now parses whitespace-prefixed JSON envelopes, normalizes malformed put/call payload values safely, and validates required alert identity fields during parse.
+- `T-122` complete (`TD-157`, `TD-158`, `TD-159`): consumer retry flow now classifies parse failures as non-retriable, emits terminal retry reasons in DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retries.
+- `T-123` complete (`TD-160`, `TD-161`, `TD-162`): poller/consumer gateway route-failure telemetry now shares timeout/transport/request exception taxonomy, includes exception type metadata, and records expected payload type for shape mismatches.
+- `T-124` complete (`TD-163`, `TD-164`, `TD-165`): poller now treats partial/invalid per-symbol quote coverage as fallback-eligible degradation and preserves best partial results when all routes are incomplete, while consumer entry-price lookup now falls back when requested symbol quotes are missing, malformed, or non-usable.
+- `T-125` complete (`TD-166`, `TD-167`, `TD-168`): poller/consumer route selection now applies shared quote-age staleness checks, falls back to fresher route data when prefixed quotes are stale, and preserves freshest stale fallback coverage when all routes are stale.
+- `T-126` complete (audit residual from Pass 121): gateway timestamp coercion now normalizes epoch-millisecond quote timestamps (`t`, including numeric-string values) so stale-route fallback parity matches ISO `timestamp` behavior across poller/consumer paths.
+- `T-127` complete (audit residual bundle from Pass 122): watch numeric coercion now rejects boolean payload values across poller/consumer/features paths, IV-rank enrichment now filters non-finite values, and watch manager MFE/MAE updates now preserve prior zero baselines instead of resetting via truthiness fallbacks.
+- `T-128` complete (audit residual bundle from Pass 123): manager completion paths now sanitize non-finite outcome returns before persistence (including expiry cleanup), and consumer entry-price fallback now guarantees a positive finite value when gateway quotes are unavailable.
+- `T-129` complete (audit residual bundle from Pass 124): alert-label entry extraction now treats non-finite/invalid alert spot values as fallback-eligible (using bar-close fallback with finite/positive guards), and SPY-relative return computation now rejects non-finite SPY prices/returns to prevent propagating infinite beta-neutral labels.
+- `T-130` complete (audit residual bundle from Pass 125): VIX regime/enrichment paths now reject non-finite values (`NaN`/`inf`) and beta-neutral return helpers now fail soft on non-finite underlying/SPY/beta inputs so non-finite market-context labels are not persisted.
+- `T-131` complete (audit residual from Pass 126): Feast test stubs now expose package-compatible `feast`/`feast.types` module structure so full-suite feature-view alignment tests remain deterministic under cross-test module mocking order.
 - Audit Pass 14 revalidated `TD-066`, `TD-075`, and `TD-076` as still open (versioning + k8s runtime conformance).
 - Audit Pass 15 revalidated `TD-059`, `TD-060`, and `TD-065` as still open (backup/security script hardening).
 - Audit Pass 16 revalidated `TD-039`, `TD-061`, `TD-062`, and `TD-063` as still open (tracing optional-dependency safety + script/docs drift).
@@ -177,6 +215,44 @@ Updated: 2026-02-07
 - Audit Pass 87 revalidated `TD-105` as resolved via `T-91`.
 - Audit Pass 88 revalidated `TD-106` as resolved via `T-92`.
 - Audit Pass 89 revalidated `TD-107` as resolved via `T-93`.
+- Audit Pass 90 revalidated `TD-108` as resolved via `T-94`.
+- Audit Pass 91 revalidated `TD-109` as resolved via `T-95`.
+- Audit Pass 92 revalidated `TD-110` as resolved via `T-96`.
+- Audit Pass 93 revalidated `TD-111` as resolved via `T-97`.
+- Audit Pass 94 revalidated `TD-112` and `TD-113` as resolved via `T-98`.
+- Audit Pass 95 revalidated `TD-114` and `TD-115` as resolved via `T-99`.
+- Audit Pass 96 revalidated `TD-116` and `TD-117` as resolved via `T-100`.
+- Audit Pass 97 revalidated `TD-118` and `TD-119` as resolved via `T-101`.
+- Audit Pass 98 revalidated `TD-120` and `TD-121` as resolved via `T-102`.
+- Audit Pass 99 revalidated `TD-122` and `TD-123` as resolved via `T-103`.
+- Audit Pass 100 revalidated `TD-124` and `TD-125` as resolved via `T-104`.
+- Audit Pass 101 revalidated `TD-126` as resolved via `T-105`.
+- Audit Pass 102 revalidated `TD-127` and `TD-128` as resolved via `T-106`.
+- Audit Pass 103 revalidated `TD-129` as resolved via `T-107`.
+- Audit Pass 104 revalidated `TD-130` as resolved via `T-108`.
+- Audit Pass 105 revalidated `TD-131` as resolved via `T-109`.
+- Audit Pass 106 revalidated `TD-132` and `TD-133` as resolved via `T-110`.
+- Audit Pass 107 revalidated `TD-134` as resolved via `T-111`.
+- Audit Pass 108 revalidated `TD-135` as resolved via `T-112`.
+- Audit Pass 109 revalidated `TD-136` as resolved via `T-113`.
+- Audit Pass 110 revalidated `TD-137` as resolved via `T-114`.
+- Audit Pass 111 revalidated `TD-138` as resolved via `T-115`.
+- Audit Pass 112 revalidated `TD-139`, `TD-140`, and `TD-141` as resolved via `T-116`.
+- Audit Pass 113 revalidated `TD-142`, `TD-143`, and `TD-144` as resolved via `T-117`.
+- Audit Pass 114 revalidated `TD-145`, `TD-146`, and `TD-147` as resolved via `T-118`.
+- Audit Pass 115 revalidated `TD-148`, `TD-149`, and `TD-150` as resolved via `T-119`.
+- Audit Pass 116 revalidated `TD-151`, `TD-152`, and `TD-153` as resolved via `T-120`.
+- Audit Pass 117 revalidated `TD-154`, `TD-155`, and `TD-156` as resolved via `T-121`.
+- Audit Pass 118 revalidated `TD-157`, `TD-158`, and `TD-159` as resolved via `T-122`.
+- Audit Pass 119 revalidated `TD-160`, `TD-161`, and `TD-162` as resolved via `T-123`.
+- Audit Pass 120 revalidated `TD-163`, `TD-164`, and `TD-165` as resolved via `T-124`.
+- Audit Pass 121 revalidated `TD-166`, `TD-167`, and `TD-168` as resolved via `T-125`.
+- Audit Pass 122 revalidated and closed the epoch-millisecond quote timestamp parity residual via `T-126`.
+- Audit Pass 123 revalidated and closed boolean-coercion / zero-baseline residuals via `T-127`.
+- Audit Pass 124 revalidated and closed non-finite outcome-return persistence and non-positive entry-fallback residuals via `T-128`.
+- Audit Pass 125 revalidated and closed non-finite alert-label entry/SPY-return residuals via `T-129`.
+- Audit Pass 126 revalidated and closed non-finite VIX/beta-neutral helper residuals via `T-130`.
+- Audit Pass 127 revalidated and closed Feast stub package-compatibility residuals via `T-131`.
 
 ## Prioritization Approach
 

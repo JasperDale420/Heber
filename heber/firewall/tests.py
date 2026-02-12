@@ -44,16 +44,10 @@ def create_test_dataframe(
     return pl.DataFrame(data)
 
 
-def test_asof_read_filters_future_data() -> bool:
+def test_asof_read_filters_future_data() -> None:
     """Test that read_asof correctly filters out future data.
 
     This is a CRITICAL test - if this fails, we have leakage.
-
-    Returns:
-        True if test passes
-
-    Raises:
-        AssertionError: If leakage is detected
     """
     # Create data where some rows have ts_available in the future
     df = create_test_dataframe(n_rows=100, availability_lag_seconds=10)
@@ -74,20 +68,11 @@ def test_asof_read_filters_future_data() -> bool:
     assert len(result) > 0, "read_asof returned no data when it should have"
     assert len(result) <= 51, f"Too many rows returned: {len(result)}"
 
-    logger.info("test_asof_read_filters_future_data PASSED")
-    return True
 
-
-def test_asof_join_no_future_lookups() -> bool:
+def test_asof_join_no_future_lookups() -> None:
     """Test that asof_join never joins future data.
 
     This validates that the right table's availability is respected.
-
-    Returns:
-        True if test passes
-
-    Raises:
-        AssertionError: If leakage is detected
     """
     # Create two tables: trades (left) and quotes (right)
     start = datetime(2026, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -154,20 +139,11 @@ def test_asof_join_no_future_lookups() -> bool:
                 f"trade_time={trade_time}, quote_ts_available={quote_available}"
             )
 
-    logger.info("test_asof_join_no_future_lookups PASSED")
-    return True
 
-
-def test_training_context_requires_asof() -> bool:
+def test_training_context_requires_asof() -> None:
     """Test that training context requires as-of time.
 
     Per PRD §10.11, reading without asof_time in training should error.
-
-    Returns:
-        True if test passes
-
-    Raises:
-        AssertionError: If validation is not enforced
     """
     try:
         validate_asof_read(df_has_ts_available=True, asof_time=None, context="training")
@@ -176,9 +152,6 @@ def test_training_context_requires_asof() -> bool:
     except LeakageError:
         # This is the expected behavior
         pass
-
-    logger.info("test_training_context_requires_asof PASSED")
-    return True
 
 
 def run_all_leakage_tests() -> dict[str, bool]:

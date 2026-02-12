@@ -156,7 +156,7 @@ class TestMissingTimestamps:
         )
 
         # Fill ts_event from ts_available if missing
-        df["ts_event"] = df["ts_event"].fillna(df["ts_available"])
+        df["ts_event"] = df["ts_event"].where(df["ts_event"].notna(), df["ts_available"])
         assert df["ts_event"].iloc[0] == now
 
     def test_both_timestamps_missing_rejected(self):

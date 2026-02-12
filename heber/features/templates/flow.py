@@ -1,7 +1,7 @@
 """Options Flow Feature Templates (PRD §32.3).
 
 Options flow intelligence features from Unusual Whales data.
-Dependencies: Silver flow_alerts, darkpool_trades datasets
+Dependencies: Silver flow_alerts, darkpool datasets
 """
 
 from __future__ import annotations

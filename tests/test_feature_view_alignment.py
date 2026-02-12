@@ -8,10 +8,12 @@ import types
 
 import pytest
 
-try:
-    import feast  # noqa: F401
-except ImportError:
+
+def _build_feast_stub():
+    """Build a lightweight feast stub with real classes for schema/path assertions."""
     feast_module = types.ModuleType("feast")
+    # Mark as package so ``from feast.types import ...`` works reliably.
+    feast_module.__path__ = []  # type: ignore[attr-defined]
 
     class Entity:
         def __init__(self, name: str, description: str | None = None, join_keys: list[str] | None = None):
@@ -75,9 +77,44 @@ except ImportError:
     feast_module.Field = Field
     feast_module.FileSource = FileSource
     feast_module.FeatureView = FeatureView
+    feast_module.types = feast_types
 
+    return feast_module, feast_types
+
+
+@pytest.fixture(autouse=True)
+def _install_feast_stub():
+    """Install fresh feast stub before each test to prevent cross-test pollution.
+
+    The module-level ``try: import feast`` trick fails when another test file
+    (e.g. test_feast_materialization_behavior) injects a MagicMock into
+    sys.modules["feast"]. We unconditionally install the real stub here so
+    that feature-view modules always resolve against concrete classes.
+    """
+    # Save original state
+    saved_feast = sys.modules.get("feast")
+    saved_feast_types = sys.modules.get("feast.types")
+    saved_fv = {k: v for k, v in sys.modules.items() if k.startswith("features.feature_views")}
+
+    feast_module, feast_types = _build_feast_stub()
     sys.modules["feast"] = feast_module
     sys.modules["feast.types"] = feast_types
+    # Evict cached feature-view modules so they re-evaluate against stub
+    for key in [k for k in sys.modules if k.startswith("features.feature_views")]:
+        del sys.modules[key]
+    yield
+    # Restore original state so we don't pollute other test files
+    if saved_feast is not None:
+        sys.modules["feast"] = saved_feast
+    else:
+        sys.modules.pop("feast", None)
+    if saved_feast_types is not None:
+        sys.modules["feast.types"] = saved_feast_types
+    else:
+        sys.modules.pop("feast.types", None)
+    for key in [k for k in sys.modules if k.startswith("features.feature_views")]:
+        del sys.modules[key]
+    sys.modules.update(saved_fv)
 
 
 FEATURE_VIEW_CASES = [
@@ -219,6 +256,8 @@ def test_feature_view_source_path_matches_gold_layout(
     source_name: str,
     dataset_name: str,
 ) -> None:
+    # Evict cached module to force re-evaluation with the test feast mock
+    sys.modules.pop(module_name, None)
     module = importlib.import_module(module_name)
     source = getattr(module, source_name)
     path = source.path
@@ -228,3 +267,11 @@ def test_feature_view_source_path_matches_gold_layout(
     assert "version=" in path
     assert "dt=" in path
     assert path.endswith("*.parquet")
+
+
+def test_feast_stub_behaves_like_package_for_types_import() -> None:
+    import feast.types as feast_types  # type: ignore[import-not-found]
+
+    assert hasattr(feast_types, "Float32")
+    assert hasattr(feast_types, "Int64")
+    assert hasattr(feast_types, "String")

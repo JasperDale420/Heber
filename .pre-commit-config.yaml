@@ -1,11 +1,3 @@
-# =============================================================================
-# Pre-commit Configuration for Heber Data Lakehouse
-# =============================================================================
-# Local hygiene stack: linting, formatting, type checking, and security scanning.
-# Run `pre-commit install` to set up git hooks.
-# Run `pre-commit run --all-files` to check all files manually.
-# =============================================================================
-
 repos:
   # ---------------------------------------------------------------------------
   # Ruff: Fast Python linter + formatter
@@ -20,32 +12,27 @@ repos:
   # ---------------------------------------------------------------------------
   # MyPy: Static type checking
   # ---------------------------------------------------------------------------
-  # NOTE: Commented out because existing codebase has 495+ type errors.
-  # Run manually: mypy heber/ --ignore-missing-imports
-  # TODO: Enable when type errors are resolved.
+  # NOTE: Commented out to prevent blocking commits on existing type errors.
+  # Enable per-repo as typing coverage improves.
   # - repo: https://github.com/pre-commit/mirrors-mypy
   #   rev: v1.14.1
   #   hooks:
   #     - id: mypy
-  #       args: [--ignore-missing-imports, --no-strict-optional]
-  #       exclude: ^features/
+  #       args: [--ignore-missing-imports]
   #       additional_dependencies:
   #         - pydantic>=2.0
-  #         - types-redis
+  #         - types-requests
 
   # ---------------------------------------------------------------------------
   # Bandit: Security vulnerability scanner
   # ---------------------------------------------------------------------------
-  # NOTE: Commented out because existing codebase has known security warnings.
-  # Run manually: bandit -r heber/ -c pyproject.toml
-  # TODO: Enable when security issues are addressed.
+  # NOTE: Commented out to prevent blocking commits on existing warnings.
   # - repo: https://github.com/PyCQA/bandit
   #   rev: 1.8.3
   #   hooks:
   #     - id: bandit
-  #       args: [-r, heber/, -c, pyproject.toml, --severity-level, medium]
-  #       pass_filenames: false
-  #       exclude: tests/
+  #       args: [-c, pyproject.toml, -r, .]
+  #       additional_dependencies: ["bandit[toml]"]
 
   # ---------------------------------------------------------------------------
   # Detect-secrets: Prevent accidental secret commits

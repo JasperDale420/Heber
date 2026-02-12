@@ -82,7 +82,7 @@ class AlertFeatures:
     # Timing features
     hour_of_day: int = 0
     minute_of_hour: int = 0
-    day_of_week: int = 0  # 0=Monday
+    day_of_week: int = 0  # Monday is zero
     minutes_since_open: int = 0
     minutes_to_close: int = 0
 
@@ -108,12 +108,18 @@ class AlertFeatures:
     @classmethod
     def from_dict(cls, data: dict) -> AlertFeatures:
         """Reconstruct from dictionary."""
+        parsed_data = dict(data)
         # Convert date/time strings back
-        if isinstance(data.get("alert_time"), str):
-            data["alert_time"] = datetime.fromisoformat(data["alert_time"])
-        if isinstance(data.get("expiry"), str):
-            data["expiry"] = date.fromisoformat(data["expiry"])
-        return cls(**data)
+        if isinstance(parsed_data.get("alert_time"), str):
+            alert_time = datetime.fromisoformat(parsed_data["alert_time"])
+            if alert_time.tzinfo is None:
+                alert_time = alert_time.replace(tzinfo=UTC)
+            else:
+                alert_time = alert_time.astimezone(UTC)
+            parsed_data["alert_time"] = alert_time
+        if isinstance(parsed_data.get("expiry"), str):
+            parsed_data["expiry"] = date.fromisoformat(parsed_data["expiry"])
+        return cls(**parsed_data)
 
     def to_feature_array(self, feature_names: list[str] | None = None) -> list[float]:
         """Convert to numeric array for model input.
@@ -321,6 +327,22 @@ class AlertFeatureExtractor:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(self.MARKET_TIMEZONE)
 
+    @staticmethod
+    def _coerce_optional_float(value: object) -> float | None:
+        import math
+
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        try:
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                return None
+            return numeric
+        except (TypeError, ValueError):
+            return None
+
     async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
         """Enrich features with IV rank from Unusual Whales.
 
@@ -359,8 +381,10 @@ class AlertFeatureExtractor:
 
             # Extract IV rank from response
             iv_data = data.get("data", {})
-            if iv_data and iv_data.get("iv_rank") is not None:
-                features.iv_rank = float(iv_data["iv_rank"])
+            if iv_data:
+                parsed_iv_rank = self._coerce_optional_float(iv_data.get("iv_rank"))
+                if parsed_iv_rank is not None:
+                    features.iv_rank = parsed_iv_rank
                 logger.debug(
                     "Enriched IV rank",
                     symbol=features.underlying,
@@ -377,11 +401,7 @@ class AlertFeatureExtractor:
         return features
 
     async def _enrich_greeks(self, features: AlertFeatures) -> AlertFeatures:
-        """Enrich features with Greeks from Alpaca option chain.
-
-        Fetches option chain for the specific strike/expiry/type and extracts
-        delta, gamma, theta, vega, and IV.
-        """
+        """Enrich features with Greeks from Alpaca option chain."""
         if not self.gateway_url:
             logger.debug("No gateway URL, skipping Greeks enrichment")
             return features
@@ -418,34 +438,21 @@ class AlertFeatureExtractor:
                     )
                     return features
 
-            # Extract contracts from response
             contracts = data.get("data", {}).get("contracts", [])
             if not contracts:
                 logger.debug("No contracts found for Greeks", symbol=features.underlying)
                 return features
 
-            # Find matching contract by strike
-            contract = None
-            for c in contracts:
-                if abs(float(c.get("strike_price", 0)) - features.strike) < 0.01:
-                    contract = c
-                    break
-
+            contract = self._find_matching_contract(contracts, features.strike)
             if not contract:
-                contract = contracts[0]  # Use first if no exact match
+                logger.debug("No valid contracts found for Greeks", symbol=features.underlying)
+                return features
 
-            # Extract Greeks
-            delta = contract.get("delta")
-            gamma = contract.get("gamma")
-            theta = contract.get("theta")
-            vega = contract.get("vega")
-            implied_vol = contract.get("implied_volatility")
-
-            features.delta = float(delta) if delta is not None else None
-            features.gamma = float(gamma) if gamma is not None else None
-            features.theta = float(theta) if theta is not None else None
-            features.vega = float(vega) if vega is not None else None
-            features.iv = float(implied_vol) if implied_vol is not None else None
+            features.delta = self._coerce_optional_float(contract.get("delta"))
+            features.gamma = self._coerce_optional_float(contract.get("gamma"))
+            features.theta = self._coerce_optional_float(contract.get("theta"))
+            features.vega = self._coerce_optional_float(contract.get("vega"))
+            features.iv = self._coerce_optional_float(contract.get("implied_volatility"))
 
             logger.debug(
                 "Enriched Greeks",
@@ -464,29 +471,32 @@ class AlertFeatureExtractor:
 
         return features
 
+    def _find_matching_contract(self, contracts: list[dict], target_strike: float) -> dict | None:
+        """Find the contract matching the target strike, or fall back to the first valid one."""
+        for c in contracts:
+            strike_price = self._coerce_optional_float(c.get("strike_price"))
+            if strike_price is not None and abs(strike_price - target_strike) < 0.01:
+                return c
+
+        for c in contracts:
+            if self._coerce_optional_float(c.get("strike_price")) is not None:
+                return c
+
+        return None
+
     async def _enrich_market_context(self, features: AlertFeatures) -> AlertFeatures:
-        """Enrich features with market context data from Data Gateway.
-
-        Fetches recent bars for underlying from Alpaca via Data Gateway,
-        then computes:
-        - 1d, 5d, 30d returns
-        - 20d realized volatility
-
-        Note: IV rank requires options analytics not yet available.
-        """
+        """Enrich features with market context data from Data Gateway."""
         if not self.gateway_url:
             logger.debug("No gateway URL, skipping market enrichment")
             return features
 
         try:
-            import math
             from datetime import timedelta
 
             import httpx
 
             symbol = features.underlying
             end_date = features.alert_time.date()
-            # Fetch 35 days to ensure we have 30 trading days
             start_date = end_date - timedelta(days=50)
 
             routes = gateway_url_candidates(
@@ -519,60 +529,19 @@ class AlertFeatureExtractor:
                     )
                     return features
 
-            # Extract bars from response
             bars = data.get("data", {}).get("bars", [])
             if not bars or len(bars) < 2:
                 logger.debug("Insufficient bars for enrichment", symbol=symbol, count=len(bars))
                 return features
 
-            # Sort by timestamp descending (most recent first)
             bars = sorted(bars, key=lambda b: b.get("t", ""), reverse=True)
+            closes: list[float | None] = [self._coerce_optional_float(bar.get("c")) for bar in bars]
 
-            # Preserve day alignment (including zero closes) so return horizons
-            # do not silently skip invalid days and shift to older bars.
-            closes: list[float | None] = []
-            for bar in bars:
-                close_raw = bar.get("c")
-                if close_raw is None:
-                    closes.append(None)
-                    continue
-                try:
-                    closes.append(float(close_raw))
-                except (TypeError, ValueError):
-                    closes.append(None)
-
-            if len(closes) < 2:
+            if len(closes) < 2 or closes[0] is None or closes[0] <= 0:
                 return features
 
-            # Compute returns
-            current_close = closes[0]
-            if current_close is None or current_close <= 0:
-                return features
-
-            # 1-day return
-            if len(closes) >= 2 and closes[1] is not None and closes[1] > 0:
-                features.underlying_1d_return = (current_close / closes[1]) - 1.0
-
-            # 5-day return
-            if len(closes) >= 6 and closes[5] is not None and closes[5] > 0:
-                features.underlying_5d_return = (current_close / closes[5]) - 1.0
-
-            # 30-day return
-            if len(closes) >= 31 and closes[30] is not None and closes[30] > 0:
-                features.underlying_30d_return = (current_close / closes[30]) - 1.0
-
-            # 20-day realized volatility (annualized)
-            if len(closes) >= 21:
-                daily_returns = []
-                for i in range(20):
-                    if closes[i] is not None and closes[i + 1] is not None and closes[i] > 0 and closes[i + 1] > 0:
-                        daily_returns.append(math.log(closes[i] / closes[i + 1]))
-
-                if daily_returns:
-                    mean_return = sum(daily_returns) / len(daily_returns)
-                    variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
-                    daily_vol = math.sqrt(variance)
-                    features.realized_vol_20d = daily_vol * math.sqrt(252)  # Annualize
+            self._compute_returns(features, closes)
+            self._compute_realized_vol_20d(features, closes)
 
             logger.debug(
                 "Enriched market context",
@@ -591,6 +560,34 @@ class AlertFeatureExtractor:
             )
 
         return features
+
+    @staticmethod
+    def _compute_returns(features: AlertFeatures, closes: list[float | None]) -> None:
+        """Compute 1d, 5d, 30d returns from close prices."""
+        current_close = closes[0]
+        if len(closes) >= 2 and closes[1] is not None and closes[1] > 0:
+            features.underlying_1d_return = (current_close / closes[1]) - 1.0
+        if len(closes) >= 6 and closes[5] is not None and closes[5] > 0:
+            features.underlying_5d_return = (current_close / closes[5]) - 1.0
+        if len(closes) >= 31 and closes[30] is not None and closes[30] > 0:
+            features.underlying_30d_return = (current_close / closes[30]) - 1.0
+
+    @staticmethod
+    def _compute_realized_vol_20d(features: AlertFeatures, closes: list[float | None]) -> None:
+        """Compute 20-day realized volatility (annualized)."""
+        import math
+
+        if len(closes) < 21:
+            return
+        daily_returns = []
+        for i in range(20):
+            if closes[i] is not None and closes[i + 1] is not None and closes[i] > 0 and closes[i + 1] > 0:
+                daily_returns.append(math.log(closes[i] / closes[i + 1]))
+        if not daily_returns:
+            return
+        mean_return = sum(daily_returns) / len(daily_returns)
+        variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
+        features.realized_vol_20d = math.sqrt(variance) * math.sqrt(252)
 
 
 # Redis key pattern for feature storage
@@ -632,7 +629,7 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
 
 def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
     """Persist one feature row into Gold meta-label feature partitions."""
-    row = {k: v for k, v in features.__dict__.items()}
+    row = dict(features.__dict__)
     features_df = pl.DataFrame([row])
     persist_features_frame_to_gold(
         features_df=features_df,

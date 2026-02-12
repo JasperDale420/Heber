@@ -2,6 +2,14 @@
 
 Canonical event and dataset contract for Heber ingestion and storage.
 
+## Plain-English Terms
+
+- **Feed**: event type label (example: `bars`, `flow_alerts`)
+- **Bronze**: raw, always-write storage
+- **Silver**: strict normalized schema used for analytics and ML training
+- **Alias**: incoming feed name remapped to canonical Silver dataset name
+- **DLQ**: dead-letter queue for events kept in Bronze but blocked from Silver
+
 ## EventEnvelope (Canonical)
 
 Source: `heber/models/envelope.py`
@@ -46,6 +54,44 @@ Regex validation in `validate_instrument_key()`:
 - Gold (SDK writer): Parquet partitioned by `dataset={name}/project={name}/version={version}/dt={date}`
 - Gold (label writer): Parquet partitioned by `dataset={name}/type=label/version={version}`
 
+Ingestion policy:
+
+- Bronze-first: every valid envelope is persisted to Bronze before Silver normalization.
+- Silver-strict: only contracted raw feeds with a valid canonical key are written to Silver.
+- Uncontracted feed policy: write Bronze, emit DLQ reason `uncontracted_feed`, and skip Silver write.
+- Unmapped feed policy: for contracted feeds that do not map to a Silver schema, write Bronze, emit DLQ reason `unmapped_feed`, and skip Silver write.
+
+## Data Gateway Feed Coverage
+
+Training-feed raw contract (stream + UW poller + backfill):
+
+- `bars -> bars`
+- `quotes -> quotes`
+- `trades -> trades`
+- `news -> news`
+- `flow_alerts -> flow_alerts`
+- `darkpool -> darkpool`
+- `market_tide -> market_tide`
+- `sector_tide -> sector_tide`
+- `greek_exposure -> greek_exposure`
+- `iv_rank -> iv_rank`
+- `oi_change -> oi_change`
+- `historic_option_volume -> historic_option_volume`
+- `short_interest -> short_data`
+- `short_volume -> short_data`
+- `ftds -> ftd`
+- `congress_trades -> congress_trades`
+- `insider_trades -> insider_trades`
+- `option_trades -> trades`
+- `crypto_bars -> bars`
+- `crypto_trades -> trades`
+- `ticker_flow -> flow_alerts`
+- `darkpool_ticker -> darkpool`
+- `institutions -> institution_holdings`
+- `earnings -> earnings`
+
+Feed aliases are defined in `heber/writer/ingest_contracts.py`.
+
 ## Silver Schemas (Parquet Writer)
 
 Source: `heber/schemas/silver.py`
@@ -77,7 +123,19 @@ Feed-specific fields:
 - `spot_px`, `contract_px`
 - `alert_type`, `side`, `aggressor`
 
-Unknown feeds are stored using `DEFAULT_SCHEMA` with a `payload_json` field.
+### historic_option_volume
+
+- `hov_date`, `expiry`, `volume`, `open_interest`, `call_volume`, `put_volume`, `premium`
+
+### Key Synthesis Rules
+
+Key normalization and synthesis for Silver path is implemented in `heber/writer/key_normalization.py`:
+
+- `flow_alerts`: derive OCC key from `option_chain` when present, otherwise synthesize from `symbol/expiry/put_call/strike`.
+- `market_tide`: normalize to ETF proxy key `equity:SPY`.
+- `sector_tide`: normalize sector names to ETF proxies (`XLK`, `XLF`, `XLY`, `XLC`, `XLV`, `XLI`, `XLP`, `XLE`, `XLB`, `XLRE`, `XLU`), fallback `SPY`.
+- `congress_trades` and `insider_trades`: derive symbol from `ticker` when `symbol` is missing.
+- `news`: derive symbol from `symbols[0]` when `symbol` is missing.
 
 ## Gold Datasets
 

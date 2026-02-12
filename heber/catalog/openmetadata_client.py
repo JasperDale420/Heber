@@ -8,7 +8,6 @@ Phase 5 of OSS Migration Roadmap.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -68,9 +67,12 @@ class OpenMetadataConfig:
     @classmethod
     def from_env(cls) -> OpenMetadataConfig:
         """Load from environment."""
+        from heber.config import get_settings
+
+        s = get_settings()
         return cls(
-            host=os.getenv("OPENMETADATA_HOST", "http://localhost:8585"),
-            api_key=os.getenv("OPENMETADATA_API_KEY", ""),
+            host=s.openmetadata_host,
+            api_key=s.openmetadata_api_key,
         )
 
 

@@ -668,12 +668,200 @@ Audit Pass 89 (2026-02-08, files reviewed directly):
 - tests/test_watch_feature_timezones.py
 - tests/test_watch_feature_persistence.py
 
+Audit Pass 90 (2026-02-09, files reviewed directly):
+- heber/watch/models.py
+- tests/test_watch_models_config.py
+- tests/test_meta_label_alignment.py
+- tests/test_watch_writer_file_collisions.py
+
+Audit Pass 91 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_entrypoint_shutdown.py
+- tests/test_watch_writer_file_collisions.py
+
+Audit Pass 92 (2026-02-09, files reviewed directly):
+- heber/watch/checker.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_meta_label_alignment.py
+- tests/test_watch_writer_file_collisions.py
+
+Audit Pass 93 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 94 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 95 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+
+Audit Pass 96 (2026-02-09, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_persistence.py
+
+Audit Pass 97 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_entrypoint_shutdown.py
+
+Audit Pass 98 (2026-02-09, files reviewed directly):
+- heber/watch/__main__.py
+- tests/test_watch_entrypoint_shutdown.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+
+Audit Pass 99 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+
+Audit Pass 100 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_async_redis.py
+
+Audit Pass 101 (2026-02-09, files reviewed directly):
+- heber/watch/checker.py
+- tests/test_watch_zero_price_handling.py
+
+Audit Pass 102 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+- tests/test_watch_writer_file_collisions.py
+
+Audit Pass 103 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 104 (2026-02-09, files reviewed directly):
+- heber/watch/models.py
+- tests/test_watch_models_config.py
+
+Audit Pass 105 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 106 (2026-02-09, files reviewed directly):
+- heber/watch/features.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_feature_timezones.py
+- tests/test_watch_feature_persistence.py
+
+Audit Pass 107 (2026-02-09, files reviewed directly):
+- heber/watch/__main__.py
+- tests/test_watch_entrypoint_shutdown.py
+
+Audit Pass 108 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_async_redis.py
+- tests/test_watch_zero_price_handling.py
+
+Audit Pass 109 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 110 (2026-02-09, files reviewed directly):
+- heber/watch/writer.py
+- tests/test_watch_writer_file_collisions.py
+- tests/test_watch_writer_entrypoint_shutdown.py
+
+Audit Pass 111 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- tests/test_watch_manager_redis_bytes.py
+
+Audit Pass 112 (2026-02-09, files reviewed directly):
+- heber/watch/checker.py
+- heber/watch/manager.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_manager_redis_bytes.py
+
+Audit Pass 113 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_zero_price_handling.py
+
+Audit Pass 114 (2026-02-09, files reviewed directly):
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 115 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 116 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 117 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 118 (2026-02-09, files reviewed directly):
+- heber/watch/consumer.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 119 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 120 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 121 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 122 (2026-02-09, files reviewed directly):
+- heber/watch/gateway.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- tests/test_watch_gateway_paths.py
+
+Audit Pass 123 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- heber/watch/poller.py
+- heber/watch/consumer.py
+- heber/watch/features.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_zero_price_handling.py
+- tests/test_watch_gateway_paths.py
+- tests/test_watch_feature_greeks_zero_values.py
+- tests/test_watch_consumer_reliability.py
+
+Audit Pass 124 (2026-02-09, files reviewed directly):
+- heber/watch/manager.py
+- heber/watch/consumer.py
+- tests/test_watch_manager_redis_bytes.py
+- tests/test_watch_consumer_reliability.py
+
 Not yet audited in this run (recommend a future pass):
-- heber/watch/models.py line-by-line re-audit for serialization defaults and timestamp compatibility edge cases.
+- None.
 
 ## Remediation Updates
 
-Updated: 2026-02-08
+Updated: 2026-02-09
 
 - `TD-015` addressed via `T-01`: Redis pending claims are consumed instead of dropped.
 - `TD-016` addressed via `T-02`: meta-label writer and dataset builder columns are aligned.
@@ -712,6 +900,39 @@ Updated: 2026-02-08
 - `TD-069` addressed via `T-42`: `MarketCalendar(include_extended=True)` is now explicitly rejected with a clear `NotImplementedError`, removing misleading no-op behavior.
 - `TD-070` addressed via `T-43`: Hot Store DDL now includes `quality_flags` and `lineage` base columns, and sync insert paths/tests were updated to keep writes compatible.
 - `TD-072` addressed via `T-44`: additional schema registry tests now assert required contract names and lookup behavior instead of a brittle fixed total count.
+- `TD-114` and `TD-115` addressed via `T-99`: watch consumer now normalizes quote payload numeric fields before midpoint/last-price entry calculations and parses alert timestamps as UTC-aware values with fail-soft fallback for invalid ISO strings.
+- `TD-116` and `TD-117` addressed via `T-100`: feature reconstruction now normalizes naive serialized `alert_time` values to UTC-aware datetimes, and Greeks enrichment now skips malformed contract strikes while continuing to valid contracts with tolerant numeric parsing.
+- `TD-118` and `TD-119` addressed via `T-101`: label writer now stages partition parquet files and only promotes them after all groups are written, cleaning temp files on failure to prevent partial commits and retry-time duplicates.
+- `TD-120` and `TD-121` addressed via `T-102`: watch CLI entrypoint now performs fail-safe shutdown that logs stop errors without masking original runtime failures, preserving root-cause exception semantics and graceful normal-completion exits.
+- `TD-122` and `TD-123` addressed via `T-103`: watch manager delete paths now normalize byte-form watch IDs before key/index removal, and watch persistence now removes non-watching watches from the active index to prevent stale memberships.
+- `TD-124` and `TD-125` addressed via `T-104`: poller now treats non-finite quote numerics as missing and avoids watch-price updates when a quote payload has no usable price.
+- `TD-126` addressed via `T-105`: checker now filters non-finite snapshot return values before barrier evaluation and fallback expiry outcome generation.
+- `TD-127` and `TD-128` addressed via `T-106`: writer entrypoint now preserves primary runtime failures when stop cleanup fails and treats stop failures on normal completion as non-fatal.
+- `TD-129` addressed via `T-107`: consumer quote coercion now rejects non-finite numeric values so entry-price selection correctly falls back to finite `last_price`.
+- `TD-130` addressed via `T-108`: watch models now normalize naive datetime fields to UTC-aware values during validation to eliminate mixed naive/aware timestamp semantics.
+- `TD-131` addressed via `T-109`: gateway URL candidate helpers now strip query/fragment components from base URLs before building prefixed and legacy route candidates.
+- `TD-132` and `TD-133` addressed via `T-110`: feature numeric coercion now rejects non-finite values and market-context close parsing now treats non-finite closes as missing data.
+- `TD-134` addressed via `T-111`: watch entrypoint signal registration is now best-effort so non-main-thread contexts do not fail startup.
+- `TD-135` addressed via `T-112`: poller quote-fetch fallback now continues to legacy routes when a 200 response contains malformed JSON.
+- `TD-136` addressed via `T-113`: consumer entry-price fallback now continues to legacy routes when a 200 response contains malformed JSON.
+- `TD-137` addressed via `T-114`: writer parquet flush now rolls back already-promoted partition files when promotion fails mid-batch.
+- `TD-138` addressed via `T-115`: manager watch updates now persist normalized snapshot timestamps as `updated_at` instead of wall-clock update time.
+- `TD-139`, `TD-140`, and `TD-141` addressed via `T-116`: checker now evaluates snapshots in chronological order and persists barrier/expiry-derived outcome timestamps and trading-minute metrics through manager completion.
+- `TD-142`, `TD-143`, and `TD-144` addressed via `T-117`: poller/consumer quote fetch now validate decoded payload shape before accepting a route as successful, and poller snapshots now preserve quote-provided timestamps where available.
+- `TD-145`, `TD-146`, and `TD-147` addressed via `T-118`: poller/consumer quote lookups now treat request-layer route failures (timeouts/transport errors) as fallback-eligible per-route failures, and both services now emit aggregated route-failure telemetry when all candidates fail.
+- `TD-148`, `TD-149`, and `TD-150` addressed via `T-119`: consumer retry backoff now preserves explicit zero configuration and clamps invalid negative delays, while alert numeric/timestamp parsing now rejects malformed or non-finite values with fail-soft defaults.
+- `TD-151`, `TD-152`, and `TD-153` addressed via `T-120`: consumer retry attempt configuration now clamps to a minimum of one attempt, stream payload decoding now tolerates invalid UTF-8 bytes, and numeric timestamp parsing now normalizes epoch-millisecond values.
+- `TD-154`, `TD-155`, and `TD-156` addressed via `T-121`: consumer alert decode now parses whitespace-prefixed JSON envelopes, put/call normalization now handles malformed non-string values safely, and parse flow now validates required alert identity fields before watch creation.
+- `TD-157`, `TD-158`, and `TD-159` addressed via `T-122`: consumer retry flow now classifies non-retriable parse failures, carries terminal retry reasons into DLQ error metadata, and normalizes bool/tuple process-result contracts for backward-compatible retry semantics.
+- `TD-160`, `TD-161`, and `TD-162` addressed via `T-123`: watch gateway route-failure telemetry now classifies timeout vs transport request failures, includes exception type metadata for exception-driven failures, and adds expected-type metadata for payload-shape failures in both poller and consumer paths.
+- `TD-163`, `TD-164`, and `TD-165` addressed via `T-124`: poller quote batch routing now attempts fallback routes when prefixed responses provide partial/invalid per-symbol coverage, preserves best partial coverage when all routes are incomplete, and consumer entry-price lookup now falls back when requested symbol quote payloads are missing, malformed, or unusable.
+- `TD-166`, `TD-167`, and `TD-168` addressed via `T-125`: poller and consumer now classify route quotes as stale via shared timestamp-age helpers, fall back to fresher legacy routes when prefixed quotes are stale, and preserve freshest stale fallback coverage only when all routes are stale.
+- `T-126` addressed audit residual quote-timestamp parity risk: gateway timestamp coercion now normalizes epoch-millisecond numeric payloads consistently across poller/consumer stale-route fallback paths (`t` and string-encoded epoch values), with regression coverage for helper coercion and fallback-route selection.
+- `T-127` addressed audit residual reliability gaps: manager return-path metrics now preserve prior `0.0` MFE/MAE baselines (no truthiness resets), poller/consumer/features numeric coercion now rejects boolean payload values, and IV-rank enrichment now filters non-finite values before feature assignment.
+- `T-128` addressed audit residual outcome/entry guardrails: manager `complete_watch()` and expiry cleanup now sanitize non-finite outcome returns before persistence, and consumer watch creation now enforces positive finite fallback entry pricing when gateway lookup fails.
+- `T-129` addressed audit residual alert-label guardrails: entry extraction now treats non-finite/invalid `spot_px` as fallback-eligible (bar-close fallback with finite/positive validation), and SPY-relative return computation now rejects non-finite SPY inputs/returns to prevent `inf` beta-neutral labels.
+- `T-130` addressed audit residual market-context guardrails: VIX regime/enrichment helpers now fail soft on non-finite VIX values and beta-neutral return helpers now reject non-finite underlying/SPY/beta inputs to prevent non-finite label propagation.
+- `T-131` addressed audit residual test-harness guardrails: Feast stubs used in materialization/alignment tests now emulate package semantics (`feast.__path__`, `feast.types`) so feature-view imports are stable under full-suite module-mocking order.
 - `TD-067` addressed via `T-45`: lakeFS versioning operations now emit consistent success/error/duration metrics for `create_tag`, `list_tags`, `merge`, and `diff`, including repository/branch resolution failure paths with regression tests.
 - `TD-079` addressed via `T-46`: Terraform environment modules now take region from `var.aws_region`, backend blocks are partial (`backend "s3" {}`), and per-environment `backend.hcl` files remove hardcoded region keys while preserving state bucket/key/lock defaults.
 - `TD-080` and `TD-082` addressed via `T-47`: backfill writes now persist raw records into Bronze partitions, update catalog dataset/coverage metadata on successful chunk writes, and fail fast when `pyarrow` is unavailable instead of silently dropping writes.
@@ -821,6 +1042,44 @@ Updated: 2026-02-08
 - Audit Pass 87 revalidated and remediated `TD-105`; expiry cleanup now handles naive `window_end` timestamps without aware/naive comparison failures.
 - Audit Pass 88 revalidated and remediated `TD-106`; consumer alert-field mapping now preserves valid zero-valued `spot_px`/`contract_px` values instead of overwriting them via truthiness fallback.
 - Audit Pass 89 revalidated and remediated `TD-107`; market-context returns no longer skip zero/invalid close days and silently shift return baselines to older sessions.
+- Audit Pass 90 revalidated and remediated `TD-108`; watch outcomes now enforce horizon enum validation (`intraday`/`swing`/`leap`) to prevent invalid horizon labels from entering storage/training paths.
+- Audit Pass 91 revalidated and remediated `TD-109`; writer entrypoint now guarantees `WatchService.stop()` on normal completion so buffered outcomes and component shutdown cleanup are not skipped.
+- Audit Pass 92 revalidated and remediated `TD-110`; checker now normalizes naive watch timestamps before comparisons/duration math, preventing mixed naive/aware datetime failures during expiry and outcome creation.
+- Audit Pass 93 revalidated and remediated `TD-111`; gateway URL candidate construction now avoids duplicate `/api/v1` prefixing when base URLs already include the API prefix.
+- Audit Pass 94 revalidated and remediated `TD-112` and `TD-113`; poller now normalizes numeric quote payload fields before midpoint math and treats future-skewed last-polled timestamps as immediately due to avoid watch starvation.
+- Audit Pass 95 revalidated and remediated `TD-114` and `TD-115`; consumer now tolerates malformed quote payload numerics when deriving entry prices and normalizes parsed alert timestamps to UTC-aware values with invalid-string fallback.
+- Audit Pass 96 revalidated and remediated `TD-116` and `TD-117`; feature deserialization now normalizes naive `alert_time` strings to UTC and Greeks enrichment now skips malformed contract strikes instead of aborting enrichment for the entire option chain.
+- Audit Pass 97 revalidated and remediated `TD-118` and `TD-119`; writer flushes now avoid partial partition commits on write failure and clean staged temp files before re-raising.
+- Audit Pass 98 revalidated and remediated `TD-120` and `TD-121`; watch entrypoint now isolates shutdown-stop failures from runtime exception propagation so original service-run errors are preserved and normal exits remain non-fatal.
+- Audit Pass 99 revalidated and remediated `TD-122` and `TD-123`; watch delete operations now handle byte IDs consistently and active-watch index entries are removed when watches transition out of `WATCHING`.
+- Audit Pass 100 revalidated and remediated `TD-124` and `TD-125`; poller now filters non-finite quote values and skips state updates for quote payloads without any usable option price.
+- Audit Pass 101 revalidated and remediated `TD-126`; checker now ignores non-finite snapshot returns so NaN payload artifacts cannot corrupt MFE/MAE, barrier checks, or expired outcomes.
+- Audit Pass 102 revalidated and remediated `TD-127` and `TD-128`; writer entrypoint now isolates stop failures from run-error propagation and normal-exit behavior.
+- Audit Pass 103 revalidated and remediated `TD-129`; consumer entry-price parsing now filters non-finite quote values to prevent NaN midpoint propagation.
+- Audit Pass 104 revalidated and remediated `TD-130`; watch model datetime fields now normalize to UTC-aware values at validation time.
+- Audit Pass 105 revalidated and remediated `TD-131`; gateway route candidate generation now strips query/fragment components from base URLs to avoid malformed request URLs.
+- Audit Pass 106 revalidated and remediated `TD-132` and `TD-133`; feature enrichment now filters non-finite numeric inputs so Greeks and return context metrics remain finite.
+- Audit Pass 107 revalidated and remediated `TD-134`; watch entrypoint now handles unavailable signal hooks as non-fatal startup conditions.
+- Audit Pass 108 revalidated and remediated `TD-135`; poller quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
+- Audit Pass 109 revalidated and remediated `TD-136`; consumer entry-price quote fetch now tolerates malformed 200-response bodies by attempting fallback routes.
+- Audit Pass 110 revalidated and remediated `TD-137`; writer parquet flush now removes already-promoted outputs when later partition promotion fails in the same batch.
+- Audit Pass 111 revalidated and remediated `TD-138`; manager watch updates now preserve source snapshot timestamps in persisted watch metadata.
+- Audit Pass 112 revalidated and remediated `TD-139`, `TD-140`, and `TD-141`; checker outcome evaluation now respects chronological snapshot ordering and records barrier/expiry timing metadata from source events rather than processing time.
+- Audit Pass 113 revalidated and remediated `TD-142`, `TD-143`, and `TD-144`; poller/consumer route fallbacks now recover from malformed 200-payload shapes and poller snapshot timestamps now align with source quote timing.
+- Audit Pass 114 revalidated and remediated `TD-145`, `TD-146`, and `TD-147`; poller/consumer route fallbacks now continue after route-level timeout/transport errors and emit route-failure summaries for repeated lookup failures.
+- Audit Pass 115 revalidated and remediated `TD-148`, `TD-149`, and `TD-150`; consumer retry backoff now handles explicit zero/negative configuration safely and alert parse paths now fail soft on malformed/non-finite numeric timestamp payloads.
+- Audit Pass 116 revalidated and remediated `TD-151`, `TD-152`, and `TD-153`; consumer retry attempts now enforce a safe minimum, stream decode now fails soft on invalid UTF-8, and epoch-millisecond timestamps now normalize correctly.
+- Audit Pass 117 revalidated and remediated `TD-154`, `TD-155`, and `TD-156`; consumer parse paths now handle whitespace-prefixed JSON, normalize malformed put/call values safely, and reject missing required alert identity fields before watch creation.
+- Audit Pass 118 revalidated and remediated `TD-157`, `TD-158`, and `TD-159`; consumer retry flow now short-circuits deterministic parse failures as non-retriable, propagates terminal retry reasons to DLQ error metadata, and supports backward-compatible bool/tuple process-result contracts.
+- Audit Pass 119 revalidated and remediated `TD-160`, `TD-161`, and `TD-162`; poller/consumer gateway-route failures now share timeout/transport/request taxonomy, carry exception-type metadata, and include expected payload-type metadata for shape mismatches.
+- Audit Pass 120 revalidated and remediated `TD-163`, `TD-164`, and `TD-165`; poller batch quote fetch now falls back on partial/invalid symbol coverage while retaining best-effort partial results, and consumer entry-price fetch now falls back when the requested symbol quote is missing, malformed, or non-usable on a candidate route.
+- Audit Pass 121 revalidated and remediated `TD-166`, `TD-167`, and `TD-168`; poller/consumer route selection now applies shared quote-staleness checks, prefers fresher route data over stale prefixed responses, and keeps freshest stale fallback coverage when no fresh route is available.
+- Audit Pass 122 revalidated and remediated the epoch-millisecond quote timestamp parity residual from Pass 121; gateway timestamp coercion now normalizes millisecond `t` values (numeric and numeric-string payloads), restoring stale-route fallback parity between epoch and ISO quote timestamp formats.
+- Audit Pass 123 revalidated and remediated boolean-coercion and falsey-baseline residuals; watch quote/feature numeric coercion now rejects boolean payloads, IV-rank enrichment filters non-finite values, and manager MFE/MAE tracking preserves prior `0.0` baselines during price updates.
+- Audit Pass 124 revalidated and remediated non-finite outcome-return and entry-fallback residuals; manager completion paths now persist only finite returns, and consumer fallback entry pricing now defaults safely when alert `contract_px` is non-positive or invalid.
+- Audit Pass 125 revalidated and remediated non-finite alert-label residuals; alert-label entry extraction now falls back safely when `spot_px` is non-finite/invalid, and SPY-relative return logic now filters non-finite SPY moves before beta-neutral return computation.
+- Audit Pass 126 revalidated and remediated non-finite VIX/beta-neutral helper residuals; VIX helpers now reject non-finite closes/regime inputs and beta-neutral return helpers now fail soft when underlying/SPY/beta inputs are non-finite.
+- Audit Pass 127 revalidated and remediated Feast stub package-compatibility residuals; test stubs now provide package-compatible `feast`/`feast.types` modules so full-suite feature-view alignment tests no longer fail due to cross-test module mocking order.
 
 ## Executive Summary
 
@@ -939,6 +1198,72 @@ Severity key: High, Medium, Low
 | TD-105 | Medium | Watch Service | Expiry cleanup compared aware `now` to potentially naive `window_end`, causing `TypeError` and blocking expired-watch finalization. |
 | TD-106 | Medium | Watch Service | Consumer alert-field mapping used truthiness fallback for `spot_px`/`contract_px`, so valid `0.0` values were replaced by alternate fields (`underlying_price`/`price`). |
 | TD-107 | Medium | Watch Features | Market-context enrichment dropped zero/invalid close values before return calculations, allowing 1-day/5-day/30-day returns to silently use older sessions. |
+| TD-108 | Medium | Watch Models | `WatchOutcome.horizon` accepted arbitrary strings, allowing invalid horizon labels to enter outcome rows and downstream datasets. |
+| TD-109 | Medium | Watch Service | Writer CLI entrypoint did not stop service on normal completion, so buffered-label flush and component cleanup were only guaranteed on exceptional exits. |
+| TD-110 | Medium | Watch Service | Checker compared aware `now` with potentially naive `alert_time`/`window_end`, causing `TypeError` in expiry checks and outcome duration calculations. |
+| TD-111 | Medium | Watch Service | Gateway URL candidate generation could duplicate `/api/v1` when the configured base URL already included the prefix, causing malformed requests and missed fallback behavior. |
+| TD-112 | Medium | Watch Service | Poller midpoint math assumed numeric quote payload types; string/non-numeric `bp`/`ap` values could raise `TypeError` and abort poll cycles. |
+| TD-113 | Medium | Watch Service | Poller due-check logic treated future-skewed `updated_at` values as not-due, which could stall watch polling indefinitely under clock-skewed timestamps. |
+| TD-114 | Medium | Watch Service | Consumer entry-price parsing assumed numeric `bp`/`ap` fields; malformed string values could short-circuit quote handling and drop valid `last_price` fallback. |
+| TD-115 | Medium | Watch Service | Consumer timestamp parsing returned naive datetimes for timezone-less ISO strings and raised on invalid strings, causing avoidable parse failures and inconsistent timezone semantics. |
+| TD-116 | Medium | Watch Features | `AlertFeatures.from_dict()` reconstructed timezone-less `alert_time` strings as naive datetimes, reintroducing mixed timezone semantics when reading legacy-serialized feature rows. |
+| TD-117 | Medium | Watch Features | Greeks enrichment aborted on malformed contract `strike_price` values, preventing extraction from later valid contracts in the same option-chain response. |
+| TD-118 | Medium | Watch Service | Writer flushes could partially commit one partition before a later partition write failed, causing duplicate-label risk on retry with retained buffer rows. |
+| TD-119 | Medium | Watch Service | Writer failure paths could leave staged temp parquet artifacts, creating cleanup drift and ambiguous recovery state after failed flush attempts. |
+| TD-120 | Medium | Watch Service | Entry-point cleanup errors from `service.stop()` could mask original `service.run()` failures in `finally`, obscuring root-cause runtime exceptions. |
+| TD-121 | Medium | Watch Service | Entry-point stop failures on normal completion were fatal, causing avoidable CLI errors despite successful service run completion. |
+| TD-122 | Medium | Watch Service | `delete_watch()` accepted byte IDs but did not normalize before key deletion, leaving primary watch rows undeleted under byte-response clients. |
+| TD-123 | Medium | Watch Service | `_save_watch()` only added watches to `ACTIVE_WATCHES` and never removed non-watching status transitions, leaving stale active-index memberships. |
+| TD-124 | Medium | Watch Service | Poller numeric coercion accepted non-finite floats (`NaN`/`inf`), allowing invalid quote values to propagate into snapshot returns and watch updates. |
+| TD-125 | Medium | Watch Service | Poller attempted watch-price updates even when quote payloads had no usable option price, leading to `None` updates and downstream watch-manager update failures. |
+| TD-126 | Medium | Watch Service | Checker accepted non-finite snapshot returns (`NaN`), allowing invalid values to propagate into barrier/MFE/MAE calculations and expired outcome returns. |
+| TD-127 | Medium | Watch Service | Writer `run_watch_service()` could let `service.stop()` errors in `finally` mask primary runtime failures from `service.run()`. |
+| TD-128 | Medium | Watch Service | Writer `run_watch_service()` treated stop failures on normal completion as fatal, causing avoidable CLI errors after successful runs. |
+| TD-129 | Medium | Watch Service | Consumer quote coercion accepted non-finite numeric strings (`NaN`/`inf`), causing invalid midpoint entry prices and bypassing valid last-price fallback. |
+| TD-130 | Medium | Watch Service | Watch models accepted naive datetime fields unchanged, allowing mixed naive/aware timestamp semantics to propagate into watch lifecycle logic. |
+| TD-131 | Medium | Watch Service | Gateway URL candidate construction accepted base URLs with query/fragment components, producing malformed downstream request URLs when joining routes. |
+| TD-132 | Medium | Watch Features | Feature numeric coercion accepted non-finite values (`NaN`/`inf`), allowing invalid Greeks/IV values to propagate into model features. |
+| TD-133 | Medium | Watch Features | Market-context close parsing accepted non-finite values, causing `NaN` underlying return features instead of fail-soft missing values. |
+| TD-134 | Medium | Watch Service | Entrypoint startup failed when signal registration raised (for example non-main-thread execution), preventing service initialization in embedded/test harness contexts. |
+| TD-135 | Medium | Watch Service | Poller quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable batches to fail without trying legacy routes. |
+| TD-136 | Medium | Watch Service | Consumer entry-price quote fetch aborted fallback when a prefixed route returned 200 with malformed JSON, causing recoverable lookups to fail without trying legacy routes. |
+| TD-137 | Medium | Watch Service | Writer parquet flush could partially commit partitions when a promotion (`Path.replace`) failed mid-batch, leaving mixed committed/uncommitted state despite staged writes. |
+| TD-138 | Medium | Watch Service | Manager watch-price updates ignored provided snapshot timestamps and always used processing-time `updated_at`, causing metadata drift under delayed/replayed quote ingestion. |
+| TD-139 | Medium | Watch Service | Checker barrier evaluation depended on snapshot list order rather than snapshot timestamps, allowing out-of-order ingestion to produce incorrect TP/SL-first outcomes. |
+| TD-140 | Medium | Watch Service | Checker used processing time for outcome metadata (`outcome_time` and `trading_minutes_to_hit`) instead of barrier-hit or expiry-window timestamps, skewing label timing semantics. |
+| TD-141 | Medium | Watch Service | Manager completion API did not accept explicit outcome timestamps, forcing checker-derived timing to be replaced with wall-clock completion time during persistence. |
+| TD-142 | Medium | Watch Service | Poller accepted malformed 200-response payload shapes as successful routes, which could abort batch parsing and skip legacy fallback candidates. |
+| TD-143 | Medium | Watch Service | Consumer entry-price lookup accepted malformed 200-response payload shapes as successful routes, causing lookup failures without trying legacy routes. |
+| TD-144 | Medium | Watch Service | Poller snapshot timestamps always used local processing time instead of quote-provided event timestamps, causing source-time drift in downstream watch metadata. |
+| TD-145 | Medium | Watch Service | Poller route fallback aborted on request-layer route exceptions (for example timeout), preventing healthy legacy route candidates from being attempted in the same batch. |
+| TD-146 | Medium | Watch Service | Consumer entry-price route fallback aborted on request-layer route exceptions (for example timeout), causing false entry-price misses despite available fallback routes. |
+| TD-147 | Medium | Watch Service | Poller/consumer route lookup failures lacked aggregated per-route failure telemetry, reducing observability during repeated gateway route degradation. |
+| TD-148 | Medium | Watch Service | Consumer backoff configuration used truthy fallback semantics, so explicit `retry_backoff_seconds=0.0` was ignored and replaced by default settings. |
+| TD-149 | Medium | Watch Service | Consumer retry loop could pass negative delays to `asyncio.sleep()` when backoff configuration was negative, causing avoidable runtime failures in retry handling. |
+| TD-150 | Medium | Watch Service | Consumer alert numeric/timestamp parsing accepted malformed or non-finite values that could raise parse errors or propagate invalid numeric values into watch creation fields. |
+| TD-151 | Medium | Watch Service | Consumer retry-attempt configuration used truthy fallback semantics, so explicit `max_process_retries=0` was replaced by defaults instead of applying a safe minimum attempt policy. |
+| TD-152 | Medium | Watch Service | Consumer stream decode paths raised on invalid UTF-8 byte keys/values, causing avoidable alert parse failures for malformed payloads. |
+| TD-153 | Medium | Watch Service | Consumer numeric timestamp parsing treated epoch-millisecond values as seconds and fell back to processing time, causing source-time drift under millisecond-precision payloads. |
+| TD-154 | Medium | Watch Service | Consumer stream decode only parsed JSON strings starting at column 0, so whitespace-prefixed JSON envelopes were left unparsed and downstream field extraction silently degraded. |
+| TD-155 | Medium | Watch Service | Consumer put/call normalization assumed subscriptable string values, allowing malformed non-string payloads to raise parse exceptions and trigger avoidable retries. |
+| TD-156 | Medium | Watch Service | Consumer parse flow lacked explicit required-field validation for alert identity (`id`, `underlying`), allowing missing-field payloads to fail later during watch creation via generic exception handling. |
+| TD-157 | Medium | Watch Service | Consumer retry flow treated parse failures as retriable, causing deterministic malformed-alert payloads to consume retry budget and generate avoidable DLQ churn. |
+| TD-158 | Medium | Watch Service | Consumer DLQ records used a static terminal error string, losing the last retry-failure reason needed for triage and route-level diagnostics. |
+| TD-159 | Medium | Watch Service | Consumer retry loop depended on strict bool process-return semantics, making tuple-based result classification brittle and risking false-positive success checks during retry refactors/tests. |
+| TD-160 | Medium | Watch Service | Poller/consumer route-failure telemetry collapsed all request exceptions into a generic `request_error` bucket, obscuring timeout vs transport failure patterns during gateway degradation. |
+| TD-161 | Medium | Watch Service | Route-failure records for exception paths omitted exception-type metadata, limiting triage speed for request/json decode failures across fallback routes. |
+| TD-162 | Medium | Watch Service | Payload-shape route-failure records omitted explicit expected-type metadata, making malformed payload diagnostics less actionable during fallback triage. |
+| TD-163 | Medium | Watch Service | Poller accepted route responses with partial or invalid per-symbol quote coverage as terminal successes, skipping fallback routes and reducing quote update completeness in mixed-route degradation scenarios. |
+| TD-164 | Medium | Watch Service | Poller dropped all quote coverage when no route returned full-symbol batches, instead of preserving best-effort partial coverage for valid symbols. |
+| TD-165 | Medium | Watch Service | Consumer entry-price lookup treated missing, malformed, or non-usable requested symbol quotes as terminal outcomes on the first 200-route response, skipping fallback candidates that could provide valid prices. |
+| TD-166 | Medium | Watch Service | Poller route selection treated complete stale quote batches as terminal successes, preventing fallback to fresher legacy route data when prefixed and legacy gateways diverged in quote recency. |
+| TD-167 | Medium | Watch Service | Consumer entry-price lookup accepted stale requested-symbol quotes as terminal route success, skipping fallback routes that could provide fresher executable entry prices. |
+| TD-168 | Medium | Watch Service | When all routes returned stale quotes, poller/consumer lacked a consistent freshest-stale fallback policy, risking either stale-route bias or dropped quote coverage under multi-route degradation. |
+| TD-169 | Medium | Labels Pipeline | Alert-label entry extraction used truthiness fallback for `spot_px`, so non-finite values (for example `NaN`) bypassed bar-close fallback and propagated invalid threshold/label calculations. |
+| TD-170 | Medium | Labels Pipeline | SPY-relative beta-neutral label computation accepted non-finite SPY price moves, allowing `inf` returns to propagate into output labels instead of failing soft. |
+| TD-171 | Medium | Labels Pipeline | VIX enrichment/regime helpers accepted non-finite VIX close values (`NaN`/`inf`), allowing invalid regime or VIX-at-alert values to leak into labels instead of failing soft. |
+| TD-172 | Medium | Labels Pipeline | Beta-neutral return helper accepted non-finite underlying/SPY/beta inputs, allowing `inf` output values to propagate into downstream label features. |
+| TD-173 | Medium | Test Infrastructure | Feast test stubs were non-package modules, causing intermittent `feast.types` import failures in full-suite runs when test-order module mocking replaced `feast` without package semantics. |
 
 ## Detailed Findings
 
@@ -1564,6 +1889,402 @@ Recommendation: Preserve bar-day alignment (including zero/invalid placeholders)
 Update 2026-02-08: Remediated in `T-93` by preserving close-series alignment (`None` placeholders for invalid values), gating denominator checks per horizon, and adding regression coverage for zero-close prior-day behavior.
 Revalidated 2026-02-08 (Pass 89): Resolved. Market-context returns now avoid shifted-baseline calculations when prior sessions contain invalid close values.
 
+**TD-108: Watch outcome horizon lacks enum validation.**
+Evidence: `WatchOutcome.horizon` was typed as `str`, so any value (for example `\"not_a_real_horizon\"`) passed model validation and could flow into label rows/storage as an invalid horizon category.
+Recommendation: Type `WatchOutcome.horizon` as `WatchHorizon` and add regression coverage that rejects unknown horizon values.
+Update 2026-02-09: Remediated in `T-94` by changing `WatchOutcome.horizon` to `WatchHorizon` and adding a targeted model-validation regression test for invalid horizon strings.
+Revalidated 2026-02-09 (Pass 90): Resolved. Watch outcomes now enforce horizon enum membership during validation.
+
+**TD-109: Writer entrypoint skips cleanup on normal completion.**
+Evidence: `run_watch_service()` previously called `service.stop()` only inside exception handlers. If `service.run()` returned normally, stop/flush cleanup was skipped and buffered outcomes could remain unwritten.
+Recommendation: Move service shutdown into a shared `finally` path so cleanup runs on both normal and exceptional exits.
+Update 2026-02-09: Remediated in `T-95` by executing `service.stop()` in `finally` and adding regression coverage for normal-completion shutdown.
+Revalidated 2026-02-09 (Pass 91): Resolved. Writer entrypoint now guarantees cleanup/flush regardless of exit path.
+
+**TD-110: Checker crashes on naive watch timestamps.**
+Evidence: `BarrierChecker.check_watch()` previously compared aware `now` directly against `watch.window_end` and computed `watch.window_end - watch.alert_time` without normalization. Naive persisted timestamps raised `TypeError` on comparison/arithmetic and aborted outcome resolution.
+Recommendation: Normalize watch `alert_time`/`window_end` to UTC-aware datetimes before comparisons and duration calculations; add regression coverage for naive timestamp inputs.
+Update 2026-02-09: Remediated in `T-96` by normalizing `alert_time` and `window_end` inside checker flow and adding a targeted naive-timestamp regression test.
+Revalidated 2026-02-09 (Pass 92): Resolved. Checker now handles naive/aware watch timestamps safely during expiry/outcome evaluation.
+
+**TD-111: Gateway helper can double-prefix `/api/v1` routes.**
+Evidence: `gateway_url_candidates()` previously prefixed routes regardless of whether `gateway_url` already ended with `/api/v1`. For base URLs like `http://gateway/api/v1`, generated candidates included malformed paths such as `.../api/v1/api/v1/...`.
+Recommendation: Detect prefix-in-base cases and avoid duplicate prefix concatenation while preserving prefix-first then legacy fallback ordering.
+Update 2026-02-09: Remediated in `T-97` by normalizing prefix handling for base URLs that already include the API prefix and adding regression coverage for duplicate-prefix prevention.
+Revalidated 2026-02-09 (Pass 93): Resolved. Gateway candidate generation now returns valid prefixed and legacy fallback routes without duplicate prefix segments.
+
+**TD-112: Poller quote midpoint math does not normalize payload types.**
+Evidence: `SnapshotPoller._create_snapshot()` previously computed midpoint with raw payload values (`bp`/`ap`) whenever keys were present. Data Gateway payloads can include string numerics (`"0.0"`) or non-numeric placeholders (`"N/A"`), causing `TypeError` during `(bid + ask) / 2` and aborting the poll cycle.
+Recommendation: Normalize all quote numeric inputs (`bp`, `ap`, `last_price`, `underlying_price`) to `float | None` before arithmetic, and fall back to normalized `last_price` when midpoint inputs are invalid.
+Update 2026-02-09: Remediated in `T-98` by adding `_coerce_optional_float()` normalization in `SnapshotPoller` and regression tests covering numeric-string and non-numeric quote payloads.
+Revalidated 2026-02-09 (Pass 94): Resolved. Poller snapshot creation now tolerates string/non-numeric quote payload shapes without poll-cycle crashes.
+
+**TD-113: Future-skewed poll timestamps can starve watch updates.**
+Evidence: `SnapshotPoller._is_watch_due()` previously compared `now - last_polled` against interval with no guard for future timestamps. If `updated_at` was persisted ahead of wall-clock time (clock skew or bad upstream timestamp), the watch stayed non-due until the future point elapsed, effectively stalling polling.
+Recommendation: Treat future-skewed `last_polled` values as immediately due to recover from skew and avoid indefinite watch starvation.
+Update 2026-02-09: Remediated in `T-98` by short-circuiting future `last_polled` values to `True` (due) and adding regression coverage for future-skewed `updated_at`.
+Revalidated 2026-02-09 (Pass 94): Resolved. Due-check logic now recovers safely from clock-skewed poll timestamps.
+
+**TD-114: Consumer entry-price parsing drops valid fallback when bid/ask are malformed.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously converted `bp`/`ap` directly with `float()`. When either value was malformed (for example `"N/A"`), conversion raised and the entire method returned `None`, even when `last_price` was present and usable.
+Recommendation: Normalize quote numerics with tolerant coercion (`float | None`) and fall back to normalized `last_price` when midpoint inputs are invalid.
+Update 2026-02-09: Remediated in `T-99` by adding consumer-side numeric coercion for `bp`/`ap`/`last_price` and regression coverage for malformed bid/ask with valid `last_price`.
+Revalidated 2026-02-09 (Pass 95): Resolved. Entry-price lookup now remains resilient to malformed quote fields while preserving fallback behavior.
+
+**TD-115: Consumer timestamp parsing is not UTC-normalized and fails hard on invalid strings.**
+Evidence: `AlertWatchConsumer._parse_timestamp()` previously returned naive datetimes for timezone-less ISO strings and raised `ValueError` for invalid strings, causing alert parse failures and mixed naive/aware timestamp semantics.
+Recommendation: Parse ISO strings with fail-soft fallback, normalize parsed datetimes to UTC-aware values, and treat naive parsed timestamps as UTC.
+Update 2026-02-09: Remediated in `T-99` by normalizing parsed ISO timestamps to UTC-aware values and returning `datetime.now(UTC)` for invalid string inputs, with regression coverage.
+Revalidated 2026-02-09 (Pass 95): Resolved. Consumer timestamp parsing is now UTC-consistent and robust to malformed input strings.
+
+**TD-116: Feature deserialization can reintroduce naive alert timestamps.**
+Evidence: `AlertFeatures.from_dict()` previously used `datetime.fromisoformat()` directly. Legacy serialized feature rows with timezone-less `alert_time` values were reconstructed as naive datetimes and could propagate mixed timezone behavior into downstream training/analysis code.
+Recommendation: Normalize deserialized `alert_time` values to UTC-aware datetimes; treat naive parsed values as UTC.
+Update 2026-02-09: Remediated in `T-100` by normalizing parsed `alert_time` to UTC (naive -> `replace(tzinfo=UTC)`, aware -> `astimezone(UTC)`) and adding regression coverage.
+Revalidated 2026-02-09 (Pass 96): Resolved. Feature deserialization now preserves UTC-aware timestamp semantics for both naive and aware serialized inputs.
+
+**TD-117: Greeks enrichment aborts on malformed contract strikes.**
+Evidence: `_enrich_greeks()` previously did `float(c.get("strike_price", 0))` inside the contract scan loop. A single malformed strike (for example `"bad-strike"`) raised `ValueError`, short-circuited the entire enrichment, and prevented use of later valid contracts in the same response.
+Recommendation: Use tolerant numeric coercion for strike parsing, skip malformed contracts, and continue scanning for valid strike matches; apply tolerant coercion to extracted Greek values as well.
+Update 2026-02-09: Remediated in `T-100` by adding `_coerce_optional_float()` to features extraction, skipping malformed strike rows, and safely coercing extracted Greek fields.
+Revalidated 2026-02-09 (Pass 96): Resolved. Greeks enrichment now remains resilient to malformed contract rows and still enriches from valid contracts.
+
+**TD-118: Writer flush can partially commit multi-partition batches.**
+Evidence: `LabelWriter._write_to_parquet()` previously wrote each partition group directly to final files in-loop. If a later partition write failed, earlier partitions from the same flush were already committed while the in-memory buffer remained, causing duplicate-label risk on retry.
+Recommendation: Stage partition outputs to temp files first and promote to final files only after all group writes succeed.
+Update 2026-02-09: Remediated in `T-101` by staging each partition write to a hidden temp file and promoting staged files only after all groups complete successfully.
+Revalidated 2026-02-09 (Pass 97): Resolved. Failed multi-partition flushes no longer partially commit final parquet files.
+
+**TD-119: Writer failure paths can leak staged temp files.**
+Evidence: Before staged-write hardening, failure handling did not clean partially staged artifacts, allowing temp-file drift after flush errors.
+Recommendation: Ensure staged temp files are deleted on any write failure before re-raising.
+Update 2026-02-09: Remediated in `T-101` by explicit cleanup of current and previously staged temp files in exception paths, with regression coverage.
+Revalidated 2026-02-09 (Pass 97): Resolved. Flush failures now clean staged temp artifacts and preserve retry safety.
+
+**TD-120: Entry-point cleanup can mask primary runtime failures.**
+Evidence: `heber/watch/__main__.py` previously re-raised run errors in `except Exception` but then called `service.stop()` in `finally` without isolation. If `stop()` raised, it replaced the original `service.run()` failure and obscured root-cause diagnostics.
+Recommendation: Capture and preserve the primary run exception, isolate stop failures behind logging, and re-raise the original run error after cleanup attempts.
+Update 2026-02-09: Remediated in `T-102` by capturing run exceptions, introducing safe-stop wrappers for signal/finally cleanup, and re-raising the original run exception with traceback after cleanup.
+Revalidated 2026-02-09 (Pass 98): Resolved. Runtime failures now propagate without being masked by cleanup errors.
+
+**TD-121: Stop failures on normal completion are unnecessarily fatal.**
+Evidence: When `service.run()` completed successfully, any exception from `service.stop()` in `finally` still terminated the CLI with an error.
+Recommendation: Treat cleanup-stop failures as logged operational events on normal completion, not fatal run failures.
+Update 2026-02-09: Remediated in `T-102` by making stop failures non-fatal during cleanup while preserving explicit runtime failure propagation semantics.
+Revalidated 2026-02-09 (Pass 98): Resolved. Normal completion now exits gracefully even when cleanup emits stop errors.
+
+**TD-122: Watch deletion can miss primary keys when watch IDs are bytes.**
+Evidence: `WatchManager.delete_watch()` accepted `str | bytes` IDs but built delete/index keys directly from the raw argument. Under byte-response Redis clients this generated mismatched keys and could leave the primary `watch:{id}` record undeleted even though delete returned success.
+Recommendation: Normalize `watch_id` at method entry (same pattern as `get_watch()`) before any key/index operations.
+Update 2026-02-09: Remediated in `T-103` by normalizing `watch_id` in `delete_watch()` before watch lookup, key deletion, and index cleanup.
+Revalidated 2026-02-09 (Pass 99): Resolved. Delete now consistently removes watch state for both string and byte ID inputs.
+
+**TD-123: Active watch index is not reconciled on status transitions.**
+Evidence: `WatchManager._save_watch()` added entries to `ACTIVE_WATCHES` when status was `WATCHING` but never removed entries when status changed to `EXPIRED`/`HIT_TP`/`HIT_SL`, leaving stale active IDs in Redis.
+Recommendation: Reconcile the active index in both directions during save: `sadd` for `WATCHING`, `srem` for non-watching statuses.
+Update 2026-02-09: Remediated in `T-103` by removing watch IDs from `ACTIVE_WATCHES` whenever persisted status is not `WATCHING`, with regression coverage.
+Revalidated 2026-02-09 (Pass 99): Resolved. Active-index membership now matches persisted watch status.
+
+**TD-124: Poller coercion path accepts non-finite quote numerics.**
+Evidence: `SnapshotPoller._coerce_optional_float()` previously returned `float(value)` directly. Payloads such as `"NaN"` or `"inf"` parsed successfully and propagated into snapshots (`mid_px`, `return_pct`) and watch updates, poisoning downstream comparisons/metrics.
+Recommendation: Treat non-finite numeric values as invalid by rejecting `NaN`/`inf` during coercion.
+Update 2026-02-09: Remediated in `T-104` by filtering coerced numerics with `math.isfinite()` and returning `None` for non-finite quote values.
+Revalidated 2026-02-09 (Pass 100): Resolved. Poller now treats non-finite quote payload values as missing inputs.
+
+**TD-125: Poller can emit invalid watch updates when quotes lack prices.**
+Evidence: `SnapshotPoller.poll_once()` previously always called `update_watch_price_async()` using `mid_px` fallback `last_px`. If both were missing, `None` was passed into watch updates, causing downstream type/math failures in manager update paths.
+Recommendation: Skip watch state updates when no usable price is available; continue processing remaining watches without aborting the cycle.
+Update 2026-02-09: Remediated in `T-104` by short-circuiting update calls when snapshot price is unavailable while retaining snapshot write behavior for observability.
+Revalidated 2026-02-09 (Pass 100): Resolved. Poller no longer pushes `None` prices into watch updates.
+
+**TD-126: Checker can propagate non-finite returns into outcomes.**
+Evidence: `BarrierChecker.check_watch()` previously appended `snap.return_pct` whenever present, including `NaN` payload artifacts. This yielded all-NaN return arrays (`np.nanmax`/`np.nanmin` warnings), and expired outcomes could persist `outcome_return=NaN`.
+Recommendation: Filter snapshot return-path inputs to finite numeric values before barrier/MFE/MAE computation and fallback expiry outcome derivation.
+Update 2026-02-09: Remediated in `T-105` by rejecting non-finite returns in checker return-path construction (`math.isfinite`), with regression coverage for NaN snapshot inputs.
+Revalidated 2026-02-09 (Pass 101): Resolved. Checker outcomes now remain finite and deterministic under malformed historical snapshot data.
+
+**TD-127: Writer cleanup can mask primary runtime failures.**
+Evidence: `run_watch_service()` in `heber/watch/writer.py` previously re-raised run errors but then called `service.stop()` in `finally` without isolation. If stop failed, it replaced the original `service.run()` failure and obscured root-cause diagnostics.
+Recommendation: Capture the primary run exception, isolate stop failures behind logging, and re-raise the original run error after cleanup attempts.
+Update 2026-02-09: Remediated in `T-106` by introducing safe-stop cleanup with preserved run-exception propagation.
+Revalidated 2026-02-09 (Pass 102): Resolved. Runtime failures now propagate without stop-error masking.
+
+**TD-128: Writer stop failures are fatal on normal completion.**
+Evidence: When writer service run completed normally, any exception in `service.stop()` during `finally` caused CLI failure despite successful run completion.
+Recommendation: Treat stop failures as logged cleanup events on normal completion rather than fatal exit conditions.
+Update 2026-02-09: Remediated in `T-106` by logging stop errors and keeping normal completion non-fatal.
+Revalidated 2026-02-09 (Pass 102): Resolved. Writer entrypoint now exits cleanly on successful runs even if cleanup emits stop errors.
+
+**TD-129: Consumer can propagate non-finite quote values into entry prices.**
+Evidence: `AlertWatchConsumer._coerce_optional_float()` previously returned `float(value)` directly. Quote payload values like `"NaN"` and `"inf"` were accepted and midpoint logic in `_get_entry_price()` returned non-finite results, bypassing valid `last_price` fallback.
+Recommendation: Reject non-finite numerics in quote coercion (`math.isfinite`) and treat them as missing values to preserve fallback behavior.
+Update 2026-02-09: Remediated in `T-107` by filtering non-finite coerced values in consumer quote parsing, with regression coverage for non-finite bid/ask payloads.
+Revalidated 2026-02-09 (Pass 103): Resolved. Consumer entry-price extraction now remains finite and deterministic under malformed quote numerics.
+
+**TD-130: Watch models preserve naive datetimes instead of normalizing to UTC.**
+Evidence: `AlertWatch`, `WatchSnapshot`, and `WatchOutcome` previously accepted naive datetime values without normalization. Mixed naive/aware timestamps then required downstream ad-hoc normalization in manager/checker/poller logic and increased risk of comparison errors.
+Recommendation: Normalize model datetime fields to UTC-aware values during validation; treat naive values as UTC and convert aware values to UTC.
+Update 2026-02-09: Remediated in `T-108` by adding model-level datetime validators across watch models and regression coverage for naive datetime normalization.
+Revalidated 2026-02-09 (Pass 104): Resolved. Watch model timestamps now persist as UTC-aware datetimes by default.
+
+**TD-131: Gateway candidate builder can generate malformed URLs from query-bearing base values.**
+Evidence: `gateway_url_candidates()` previously concatenated route paths directly onto raw `gateway_url` strings. If a base URL contained query/fragment components (for example `http://gateway/api/v1?token=abc`), candidates were malformed (`...?.../api/v1/...`) and request routing failed.
+Recommendation: Normalize base URLs by stripping query/fragment components before constructing prefixed/legacy route candidates.
+Update 2026-02-09: Remediated in `T-109` by sanitizing base URL components via URL parsing and dropping query/fragment before route joining, with regression coverage.
+Revalidated 2026-02-09 (Pass 105): Resolved. Gateway candidate construction now returns valid request URLs even when configured base values carry query metadata.
+
+**TD-132: Feature coercion path allows non-finite Greek/IV values.**
+Evidence: `AlertFeatureExtractor._coerce_optional_float()` previously returned `float(value)` directly, so payload values like `"NaN"`/`"inf"` were accepted and persisted into feature fields (`delta`, `gamma`, `theta`, `iv`), contaminating downstream model inputs.
+Recommendation: Reject non-finite numeric values in coercion logic and treat them as missing feature values.
+Update 2026-02-09: Remediated in `T-110` by filtering coerced feature numerics with `math.isfinite()`, with regression coverage for non-finite Greeks payloads.
+Revalidated 2026-02-09 (Pass 106): Resolved. Feature coercion now rejects non-finite values across enrichment paths.
+
+**TD-133: Market context return computation can emit NaN from non-finite closes.**
+Evidence: `_enrich_market_context()` previously parsed close values with raw `float(close_raw)` and accepted non-finite values. When current close was `"NaN"`, return features were computed as `NaN` and propagated into training data.
+Recommendation: Route close parsing through finite-safe numeric coercion and treat non-finite closes as missing.
+Update 2026-02-09: Remediated in `T-110` by reusing finite-safe coercion for close-series extraction and preserving fail-soft missing-value semantics.
+Revalidated 2026-02-09 (Pass 106): Resolved. Market-context return features no longer emit non-finite values from malformed close payloads.
+
+**TD-134: Entrypoint signal registration can fail startup in non-main-thread contexts.**
+Evidence: `heber/watch/__main__.py` previously called `signal.signal(...)` unguarded. In non-main-thread contexts this raises `ValueError` and aborts startup before the service run-loop begins.
+Recommendation: Treat signal-hook registration as best-effort with warning logs on failure, and continue service startup/shutdown flow.
+Update 2026-02-09: Remediated in `T-111` by guarding signal registration with exception handling for unsupported runtime contexts and adding regression coverage.
+Revalidated 2026-02-09 (Pass 107): Resolved. Entrypoint startup now continues when process signal hooks are unavailable.
+
+**TD-135: Poller fallback path can be skipped when a 200 response has invalid JSON.**
+Evidence: `SnapshotPoller._fetch_quotes()` previously called `response.json()` inside the route loop without route-level decode handling. If the prefixed route returned HTTP 200 with malformed JSON, decode exceptions aborted the batch and prevented fallback to legacy routes.
+Recommendation: Treat JSON decode errors as route-level failures and continue to the next candidate route.
+Update 2026-02-09: Remediated in `T-112` by catching JSON decode errors per-route, logging warning context, and continuing fallback evaluation.
+Revalidated 2026-02-09 (Pass 108): Resolved. Poller now recovers from malformed 200-response bodies by using valid fallback routes when available.
+
+**TD-136: Consumer fallback path can be skipped when a 200 response has invalid JSON.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously called `response.json()` inside the route loop without route-level decode handling. If the prefixed route returned HTTP 200 with malformed JSON, decode exceptions aborted the lookup and prevented fallback to legacy routes.
+Recommendation: Treat JSON decode errors as route-level failures and continue to the next candidate route.
+Update 2026-02-09: Remediated in `T-113` by catching JSON decode errors per-route, logging warning context, and continuing fallback evaluation.
+Revalidated 2026-02-09 (Pass 109): Resolved. Consumer now recovers from malformed 200-response bodies by using valid fallback routes when available.
+
+**TD-137: Writer staged flush can still partially commit on promotion failures.**
+Evidence: `LabelWriter._write_to_parquet()` staged temp files and then promoted each with `Path.replace()`, but on a mid-loop promotion exception previously promoted files were left committed while later partitions failed, violating all-or-nothing batch semantics.
+Recommendation: Track promoted files during the promotion phase and remove them on any promotion failure before re-raising.
+Update 2026-02-09: Remediated in `T-114` by tracking promoted outputs and rolling them back in exception cleanup alongside staged temp cleanup.
+Revalidated 2026-02-09 (Pass 110): Resolved. Promotion failures now leave no committed partition artifacts from the failed batch.
+
+**TD-138: Manager update metadata used processing time instead of snapshot time.**
+Evidence: `WatchManager.update_watch_price()` accepted a `timestamp` argument but previously set `watch.updated_at = datetime.now(UTC)`. Delayed/replayed quote updates therefore overwrote metadata with processing time rather than source snapshot time.
+Recommendation: Normalize and persist the provided snapshot timestamp as `updated_at` (naive -> UTC, aware -> UTC).
+Update 2026-02-09: Remediated in `T-115` by applying UTC normalization to the provided timestamp and storing it in `updated_at`, with regression coverage.
+Revalidated 2026-02-09 (Pass 111): Resolved. Watch metadata now preserves source snapshot timing semantics.
+
+**TD-139: Checker barrier order depended on snapshot list insertion order.**
+Evidence: `BarrierChecker.check_watch()` previously processed snapshots exactly as returned from Redis and ran `_check_barriers()` on that unsorted return array. If snapshots arrived out of timestamp order (for example delayed replay), TP/SL-first determination could invert.
+Recommendation: Sort snapshots chronologically before computing return path and barrier crossings.
+Update 2026-02-09: Remediated in `T-116` by sorting snapshots by `timestamp` before return-path construction and barrier evaluation, with regression coverage for out-of-order inputs.
+Revalidated 2026-02-09 (Pass 112): Resolved. Barrier outcomes now reflect chronological market path regardless of ingestion order.
+
+**TD-140: Checker outcome metadata used processing time instead of barrier/expiry time.**
+Evidence: `BarrierChecker.check_watch()` previously set `outcome_time=now` and computed `trading_minutes_to_hit` to `now` for both barrier-hit and expired outcomes. Delayed checker execution inflated timing metrics and mislabeled event availability timing.
+Recommendation: Derive `outcome_time` from barrier-hit snapshot timestamp (TP/SL) or `window_end` (EXPIRED), and compute trading minutes against that derived time.
+Update 2026-02-09: Remediated in `T-116` by tracking return-path timestamps and using barrier/expiry-derived `outcome_time` for both persistence and `trading_minutes_to_hit`.
+Revalidated 2026-02-09 (Pass 112): Resolved. Outcome timing metrics now align with source event timing instead of checker run delay.
+
+**TD-141: Manager completion path could not persist explicit outcome timestamps.**
+Evidence: `WatchManager.complete_watch()` previously always assigned `outcome_time = datetime.now(UTC)`, so checker-derived timing could not be preserved when persisting final watch state.
+Recommendation: Accept optional `outcome_time` input, normalize to UTC, and use it when provided.
+Update 2026-02-09: Remediated in `T-116` by adding an optional `outcome_time` parameter to completion paths and normalizing persisted values.
+Revalidated 2026-02-09 (Pass 112): Resolved. Persisted watch outcomes now retain checker-derived outcome timing semantics.
+
+**TD-142: Poller route fallback skipped malformed 200-response payload shapes.**
+Evidence: `SnapshotPoller._fetch_quotes()` previously treated any JSON-decodable 200 response as successful and immediately processed `data.quotes`. If `quotes` was malformed (for example list instead of dict), parsing raised and aborted the batch without trying legacy route candidates.
+Recommendation: Validate decoded response shape (`dict` -> `data` dict -> `quotes` dict) per route and continue fallback when shape is invalid.
+Update 2026-02-09: Remediated in `T-117` by adding route-level payload-shape validation and fallback continuation, with regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Poller now falls back cleanly when prefixed route payload shape is malformed.
+
+**TD-143: Consumer route fallback skipped malformed 200-response payload shapes.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously accepted any JSON-decodable 200 response and directly accessed `data.quotes`. Invalid payload shapes raised during parsing and exited lookup flow before trying legacy fallback routes.
+Recommendation: Validate decoded response shape at route level and continue to next candidate on shape mismatch.
+Update 2026-02-09: Remediated in `T-117` by adding route-level payload-shape validation with fallback continuation and regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Consumer now recovers from malformed 200 payload shapes via legacy route fallback.
+
+**TD-144: Poller snapshots ignored source quote timestamps.**
+Evidence: `SnapshotPoller._create_snapshot()` previously always used `datetime.now(UTC)` for snapshot timestamps, ignoring quote payload time fields. This introduced source-time drift and weakened timing fidelity for downstream watch state updates.
+Recommendation: Parse quote timestamp fields (`timestamp`/`ts_event`/`t`) with UTC normalization and fall back to processing time only when absent or invalid.
+Update 2026-02-09: Remediated in `T-117` by adding quote timestamp coercion/parsing helpers and using parsed quote timestamps in snapshot creation, with regression coverage.
+Revalidated 2026-02-09 (Pass 113): Resolved. Snapshot timestamps now preserve source quote timing when available.
+
+**TD-145: Poller route fallback aborted on request-layer route failures.**
+Evidence: `SnapshotPoller._fetch_quotes()` previously wrapped the entire route loop in a single `try` block. A timeout/transport exception on the prefixed route raised out of the loop and skipped legacy route candidates within the same batch.
+Recommendation: Handle `httpx.HTTPError` at per-route granularity, classify route failure reason, and continue to fallback candidates.
+Update 2026-02-09: Remediated in `T-118` by catching route-level `httpx.HTTPError` failures inside the loop and continuing route fallback evaluation.
+Revalidated 2026-02-09 (Pass 114): Resolved. Poller now recovers from timeout/transport failures on earlier route candidates and can still return quotes from later fallback routes.
+
+**TD-146: Consumer route fallback aborted on request-layer route failures.**
+Evidence: `AlertWatchConsumer._get_entry_price()` previously exited through the outer exception handler when a route request raised timeout/transport exceptions, preventing evaluation of subsequent route candidates.
+Recommendation: Treat request-layer route failures as recoverable per-route failures and continue through the route candidate list.
+Update 2026-02-09: Remediated in `T-118` by catching route-level `httpx.HTTPError` failures and continuing fallback evaluation for entry-price lookups.
+Revalidated 2026-02-09 (Pass 114): Resolved. Consumer now uses fallback routes when the first route fails at request time.
+
+**TD-147: Route-level quote lookup failures lacked aggregated telemetry.**
+Evidence: Poller/consumer logs previously emitted isolated warnings/errors but did not consistently summarize per-route failure reasons when all route candidates failed, making repeated degradation patterns difficult to diagnose.
+Recommendation: Aggregate route failure metadata (`route`, `failure`, optional `status/error`) and log a summary event when all candidates fail.
+Update 2026-02-09: Remediated in `T-118` by collecting per-route failure details in both poller and consumer paths and emitting a consolidated warning when route lookup exhaustion occurs.
+Revalidated 2026-02-09 (Pass 114): Resolved. Route-failure summaries now surface candidate-by-candidate failure context in a single terminal warning.
+
+**TD-148: Explicit zero retry backoff was ignored by consumer configuration.**
+Evidence: `AlertWatchConsumer.__init__()` previously used `retry_backoff_seconds or settings.redis_retry_backoff_seconds`, which replaced explicit `0.0` with default setting values.
+Recommendation: Use explicit-`None` fallback semantics for retry backoff configuration so `0.0` remains a valid configured value.
+Update 2026-02-09: Remediated in `T-119` by switching to `None`-based fallback selection and preserving explicit `0.0`.
+Revalidated 2026-02-09 (Pass 115): Resolved. Consumer now respects explicit zero backoff settings.
+
+**TD-149: Negative retry backoff could trigger invalid sleep delays.**
+Evidence: `_process_flow_alert_with_retries()` previously slept using `self.retry_backoff_seconds * attempt` without lower-bound clamping. Negative config values could pass negative delays to `asyncio.sleep()`.
+Recommendation: Clamp computed retry delay to non-negative values before sleeping.
+Update 2026-02-09: Remediated in `T-119` by clamping configured backoff and per-attempt delay to `>= 0.0`.
+Revalidated 2026-02-09 (Pass 115): Resolved. Retry processing now avoids invalid negative sleep delays.
+
+**TD-150: Alert parse accepted malformed/non-finite numeric and timestamp values.**
+Evidence: `_map_alert_fields()` previously used direct `float(...)` conversion, which raised on malformed values and allowed non-finite numeric values (`NaN`/`inf`) to pass through. `_parse_timestamp()` also raised for non-finite numeric epoch values.
+Recommendation: Reuse finite numeric coercion for alert fields/timestamps and fall back to safe defaults (`0.0` or `datetime.now(UTC)`) when invalid.
+Update 2026-02-09: Remediated in `T-119` by routing alert numeric/timestamp parsing through finite-safe coercion and fail-soft fallback handling.
+Revalidated 2026-02-09 (Pass 115): Resolved. Consumer parsing now handles malformed/non-finite numeric payloads without raising and avoids invalid numeric propagation.
+
+**TD-151: Retry-attempt configuration ignored explicit low values.**
+Evidence: `AlertWatchConsumer.__init__()` previously used `max_process_retries or settings.redis_process_max_retries`, so explicit `0` reverted to defaults and bypassed intentional minimum-attempt semantics.
+Recommendation: Use explicit-`None` fallback and clamp configured retry attempts to a minimum of one.
+Update 2026-02-09: Remediated in `T-120` by switching to `None`-based fallback and enforcing `max(1, int(configured_retries))`.
+Revalidated 2026-02-09 (Pass 116): Resolved. Consumer retry-attempt configuration now applies a safe minimum and no longer silently reverts to defaults on explicit zero.
+
+**TD-152: Invalid UTF-8 payload bytes could abort consumer parsing.**
+Evidence: `_decode_stream_data()` previously decoded byte keys/values with strict UTF-8 decoding, which raised `UnicodeDecodeError` on malformed payload bytes and aborted alert parsing.
+Recommendation: Decode stream bytes with fail-soft semantics (`errors=\"replace\"`) to preserve processing continuity and observability.
+Update 2026-02-09: Remediated in `T-120` by using replacement-decoding for byte keys and values.
+Revalidated 2026-02-09 (Pass 116): Resolved. Malformed UTF-8 stream payload bytes now fail soft instead of crashing parse flow.
+
+**TD-153: Millisecond-epoch timestamps fell back to processing time.**
+Evidence: `_parse_timestamp()` previously passed numeric payloads directly to `datetime.fromtimestamp(...)` as seconds. Millisecond epoch values overflowed and failed over to `datetime.now(UTC)`, introducing source-time drift.
+Recommendation: Detect numeric epoch units and normalize millisecond values to seconds before timestamp conversion.
+Update 2026-02-09: Remediated in `T-120` by adding numeric timestamp normalization with millisecond detection and safe fallback behavior.
+Revalidated 2026-02-09 (Pass 116): Resolved. Consumer timestamp parsing now normalizes millisecond epoch values correctly.
+
+**TD-154: Whitespace-prefixed JSON envelopes were not decoded.**
+Evidence: `_decode_stream_data()` previously parsed string values only when `val.startswith("{")`, so payloads with leading whitespace remained as raw strings and were not flattened into alert fields.
+Recommendation: Trim leading whitespace before JSON-shape detection and parse both object/array JSON payloads when possible.
+Update 2026-02-09: Remediated in `T-121` by using `val.lstrip().startswith(("{", "["))` before JSON decoding.
+Revalidated 2026-02-09 (Pass 117): Resolved. Whitespace-prefixed JSON envelopes now decode and flatten correctly.
+
+**TD-155: Put/call normalization could raise on malformed non-string values.**
+Evidence: `_map_alert_fields()` previously indexed `put_call_raw[0]` without type normalization, which raised on non-string payload values (for example integers).
+Recommendation: Add explicit put/call normalization with safe defaults for malformed values.
+Update 2026-02-09: Remediated in `T-121` by adding `_normalize_put_call()` and defaulting invalid inputs to `"C"`.
+Revalidated 2026-02-09 (Pass 117): Resolved. Put/call normalization now handles malformed values without raising.
+
+**TD-156: Missing required alert identity fields were not validated early.**
+Evidence: `_parse_alert()` previously returned mapped alert payloads without validating required identity fields (`id`, `underlying`), so missing-field payloads failed later in `_process_alert()` during watch creation with generic exception logs.
+Recommendation: Validate required alert identity fields during parse and fail early with explicit structured warning context.
+Update 2026-02-09: Remediated in `T-121` by adding required-field checks in `_parse_alert()` with explicit warning metadata.
+Revalidated 2026-02-09 (Pass 117): Resolved. Missing required identity fields now fail early at parse time with clear diagnostics.
+
+**TD-157: Parse failures were retried despite being deterministic/non-retriable.**
+Evidence: `_process_alert()` previously returned `False` for parse failures and `_process_flow_alert_with_retries()` treated all `False` outcomes as retryable, so malformed payloads consumed full retry budgets and were dead-lettered after guaranteed failure.
+Recommendation: Classify parse failures as non-retriable and short-circuit retry loops with immediate ACK to avoid retry/DLQ churn.
+Update 2026-02-09: Remediated in `T-122` by returning explicit non-retriable parse-failure results and acknowledging without retry/DLQ for deterministic parse failures.
+Revalidated 2026-02-09 (Pass 118): Resolved. Parse-failure alerts now stop after one attempt with non-retriable classification.
+
+**TD-158: Terminal retry reason was missing from DLQ metadata.**
+Evidence: `_process_flow_alert_with_retries()` previously dead-lettered with static `processing_failed_after_retries`, dropping the final route/processing reason that operators need for triage.
+Recommendation: Persist the last retry reason into DLQ `error` metadata for exhausted retriable failures.
+Update 2026-02-09: Remediated in `T-122` by tracking retry reasons and emitting `processing_failed_after_retries:<reason>` on DLQ writes.
+Revalidated 2026-02-09 (Pass 118): Resolved. Dead-lettered records now include terminal retry reason context.
+
+**TD-159: Retry loop had brittle bool-only process-result semantics.**
+Evidence: `_process_flow_alert_with_retries()` previously checked `if await _process_alert(...)` directly. Any tuple/object return used for richer classification would evaluate truthy and bypass retries, making progressive refactors and test doubles fragile.
+Recommendation: Normalize process-return contracts explicitly (bool and tuple forms) before retry/dead-letter control flow decisions.
+Update 2026-02-09: Remediated in `T-122` by adding `_normalize_process_result()` and using normalized `(success, retryable, reason)` semantics in retry flow.
+Revalidated 2026-02-09 (Pass 118): Resolved. Retry behavior now remains stable across bool and tuple process-result return forms.
+
+**TD-160: Route-failure telemetry collapsed timeout/transport into generic request errors.**
+Evidence: Poller and consumer route fallback handlers previously recorded all `httpx.HTTPError` exceptions as `request_error`, so timeout spikes could not be distinguished from transport failures during gateway incidents.
+Recommendation: Standardize exception taxonomy with explicit `timeout`, `transport_error`, and fallback `request_error` buckets in both poller and consumer route-failure metadata.
+Update 2026-02-09: Remediated in `T-123` by adding shared gateway exception classification helpers and wiring both poller and consumer route-failure collection through those helpers.
+Revalidated 2026-02-09 (Pass 119): Resolved. Route-failure summaries now distinguish timeout and transport error classes consistently.
+
+**TD-161: Exception-driven route-failure records lacked exception class metadata.**
+Evidence: Poller/consumer route-failure entries for request/json-decode failures previously stored only stringified error text, which reduced triage quality when multiple failure types shared similar error messages.
+Recommendation: Include `error_type` metadata on exception-driven route-failure records.
+Update 2026-02-09: Remediated in `T-123` by adding shared route-failure builders that attach `error_type` for request and decode exceptions.
+Revalidated 2026-02-09 (Pass 119): Resolved. Aggregated route-failure summaries now preserve exception type alongside message text.
+
+**TD-162: Payload-shape failure records lacked explicit expected-type metadata.**
+Evidence: Payload-shape failures reported only `payload_type`, which required implicit knowledge that dict payloads were expected and slowed operational diagnosis.
+Recommendation: Include explicit `expected_type` metadata for payload-shape route-failure records.
+Update 2026-02-09: Remediated in `T-123` by introducing a shared payload-shape failure builder that records `expected_type=\"dict\"` and observed payload type in poller and consumer flows.
+Revalidated 2026-02-09 (Pass 119): Resolved. Payload-shape route failures now carry explicit expected/actual typing metadata.
+
+**TD-163: Poller treated partial/invalid per-symbol quote coverage as terminal route success.**
+Evidence: `_fetch_quotes()` previously accepted the first route with valid top-level payload shape even when requested symbols were missing or mapped to non-dict quote items, which prevented fallback to alternate routes with fuller coverage.
+Recommendation: Validate per-symbol quote coverage for requested batch symbols and continue fallback routing when coverage is partial or malformed.
+Update 2026-02-09: Remediated in `T-124` by adding per-symbol coverage validation and partial-coverage failure handling in poller route processing.
+Revalidated 2026-02-09 (Pass 120): Resolved. Poller now attempts fallback routes when quote coverage is partial or invalid for requested symbols.
+
+**TD-164: Poller discarded all quote updates when no route returned complete batch coverage.**
+Evidence: In mixed-route degradation where all routes returned only partial symbol subsets, poller previously emitted a batch failure and returned no quotes for that batch.
+Recommendation: Preserve best-effort partial quote coverage when no complete route is available, while still logging partial-coverage degradation.
+Update 2026-02-09: Remediated in `T-124` by tracking best partial route coverage and applying it when full coverage is unavailable.
+Revalidated 2026-02-09 (Pass 120): Resolved. Poller now retains best partial quote coverage instead of dropping all valid symbols.
+
+**TD-165: Consumer entry-price fallback stopped on missing/malformed/unusable symbol quotes.**
+Evidence: `_get_entry_price()` previously stopped after the first valid-shape 200 response even if the requested symbol quote was missing, non-dict, or had no usable bid/ask/last price, preventing fallback routes from supplying valid entry prices.
+Recommendation: Treat symbol-level missing/malformed/unusable quotes as route failures and continue fallback candidates.
+Update 2026-02-09: Remediated in `T-124` by classifying symbol-level quote issues as route failures and continuing fallback until a usable entry price is found.
+Revalidated 2026-02-09 (Pass 120): Resolved. Consumer now falls back across routes for missing/malformed/unusable requested symbol quote payloads.
+
+**TD-166: Poller considered stale complete batches as terminal route success.**
+Evidence: `_fetch_quotes()` previously accepted complete per-symbol batches from the first successful route without evaluating quote-age recency, so stale prefixed batches could block fresher legacy fallbacks when routes diverged in timestamp freshness.
+Recommendation: Apply shared quote-age checks during route selection and continue fallback for stale symbol coverage.
+Update 2026-02-09: Remediated in `T-125` by introducing shared quote-age helpers and classifying stale per-symbol coverage as fallback-eligible degradation in poller route selection.
+Revalidated 2026-02-09 (Pass 121): Resolved. Poller now prefers fresher route coverage over stale prefixed batches.
+
+**TD-167: Consumer entry-price route selection accepted stale symbol quotes without fallback.**
+Evidence: `_get_entry_price()` previously returned midpoint/last price immediately when symbol payload shape was valid, without checking quote timestamp age, which allowed stale route data to bypass fresher fallback candidates.
+Recommendation: Classify stale symbol quotes as route failures and continue fallback until fresh data is found (or stale fallback is explicitly selected).
+Update 2026-02-09: Remediated in `T-125` by adding symbol-level quote-age checks with stale-route fallback continuation in consumer entry-price lookup.
+Revalidated 2026-02-09 (Pass 121): Resolved. Consumer now falls back to fresher routes when prefixed symbol quotes are stale.
+
+**TD-168: No consistent freshest-stale fallback policy when all routes were stale.**
+Evidence: Poller and consumer previously had no explicit strategy for selecting stale data when every route quote exceeded freshness thresholds, risking dropped coverage or stale-route bias.
+Recommendation: Preserve freshest stale candidate(s) as explicit fallback only when no fresh route data is available.
+Update 2026-02-09: Remediated in `T-125` by storing freshest stale route candidates and using them as controlled fallback coverage when all routes are stale.
+Revalidated 2026-02-09 (Pass 121): Resolved. Poller/consumer now apply consistent freshest-stale fallback behavior under all-stale route conditions.
+
+**TD-169: Alert-label entry extraction could propagate non-finite spot prices.**
+Evidence: `heber/features/templates/alert_labels.py::_get_entry_data()` previously used `alert.get("spot_px") or bar_close`, so truthy non-finite values like `NaN` bypassed fallback and produced non-finite thresholds/labels downstream.
+Recommendation: Apply explicit numeric coercion and finite/positive guards for `spot_px`, with bar-close fallback only when alert spot is missing/invalid.
+Update 2026-02-09: Remediated in `T-129` by finite-safe `spot_px` coercion, finite/positive validation for ATR and spot values, and fallback to bar close when alert spot is invalid.
+Revalidated 2026-02-09 (Pass 125): Resolved. Alert-label entry extraction now avoids non-finite spot propagation and fails soft when no valid entry values are available.
+
+**TD-170: SPY-relative return computation could emit infinite beta-neutral labels.**
+Evidence: `heber/features/templates/alert_labels.py::_compute_spy_relative_return()` previously allowed non-finite SPY end prices and raw returns through, so SPY-return math could produce `inf` and propagate non-finite beta-neutral labels.
+Recommendation: Reject non-finite raw-return and SPY price inputs before SPY-return calculation and fail soft (`None`) when values are non-finite.
+Update 2026-02-09: Remediated in `T-129` by adding finite checks for `raw_return`, `spy_at_alert`, and `spy_at_end` before beta-neutral computation.
+Revalidated 2026-02-09 (Pass 125): Resolved. SPY-relative labels now fail soft on non-finite market inputs instead of persisting infinite values.
+
+**TD-171: VIX enrichment accepted non-finite values.**
+Evidence: `classify_vix_regime()` and `_get_vix_at_alert()` previously used `np.isnan` or raw `float(...)` return paths that allowed `inf` VIX values to be treated as valid (`high`) and persisted into labels.
+Recommendation: Treat any non-finite VIX value as missing and fail soft to `normal` regime / `None` VIX-at-alert.
+Update 2026-02-09: Remediated in `T-130` by finite-checking VIX regime and VIX-at-alert extraction paths.
+Revalidated 2026-02-09 (Pass 126): Resolved. VIX enrichment now excludes non-finite market inputs from persisted labels.
+
+**TD-172: Beta-neutral helper accepted non-finite return inputs.**
+Evidence: `_compute_beta_neutral_return()` previously only guarded `np.isnan(spy_return)`, so `inf` underlying/SPY return inputs (or non-finite beta) produced non-finite output values.
+Recommendation: Require finite `underlying_return`, `spy_return`, and `beta` before computing beta-neutral output.
+Update 2026-02-09: Remediated in `T-130` by adding finite checks for all beta-neutral inputs.
+Revalidated 2026-02-09 (Pass 126): Resolved. Beta-neutral helper now fails soft (`None`) on non-finite inputs instead of propagating invalid values.
+
+**TD-173: Feast stubs in tests lacked package semantics, causing full-suite import flakiness.**
+Evidence: full-suite `pytest -q` failed in `tests/test_feature_view_alignment.py` with `ModuleNotFoundError: No module named 'feast.types'; 'feast' is not a package` when cross-test mocking replaced `sys.modules["feast"]` with a plain module.
+Recommendation: make test stubs package-compatible by setting `feast.__path__` and registering `feast.types` consistently across Feast-related tests.
+Update 2026-02-10: Remediated in `T-131` by hardening Feast stubs in `tests/test_feature_view_alignment.py` and `tests/test_feast_materialization_behavior.py`, and adding regression coverage for package-style `feast.types` imports.
+Revalidated 2026-02-10 (Pass 127): Resolved. Full suite now passes with deterministic Feast stub import behavior across test-order variation.
+
 ## Suggested Remediation Plan
 
 Phase 1 (Stabilize correctness, 1-2 days):
@@ -1571,7 +2292,7 @@ Phase 1 (Stabilize correctness, 1-2 days):
 - Add minimal regression tests for Silver flush and SDK default URL.
 
 Phase 2 (Operational reliability, 2-4 days):
-- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107.
+- Fix TD-006, TD-007, TD-008, TD-009, TD-011, TD-030, TD-035..TD-038, TD-040..TD-043, TD-066, TD-071, TD-075, TD-076, TD-086, TD-087, TD-088, TD-089, TD-090, TD-091, TD-092, TD-093, TD-094, TD-095, TD-096, TD-097, TD-098, TD-099, TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-106, TD-107, TD-108, TD-109, TD-110, TD-111, TD-112, TD-113, TD-114, TD-115, TD-116, TD-117, TD-118, TD-119, TD-120, TD-121, TD-122, TD-123, TD-124, TD-125, TD-126, TD-127, TD-128, TD-129, TD-130, TD-131, TD-132, TD-133, TD-134, TD-135, TD-136, TD-137, TD-138, TD-139, TD-140, TD-141, TD-142, TD-143, TD-144, TD-145, TD-146, TD-147, TD-148, TD-149, TD-150, TD-151, TD-152, TD-153, TD-154, TD-155, TD-156, TD-157, TD-158, TD-159, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165, TD-166, TD-167, TD-168, TD-169, TD-170, TD-171, TD-172, TD-173.
 - Add a DLQ stream and pending-entries recovery policy.
 
 Phase 3 (Performance and maintainability, 3-7 days):

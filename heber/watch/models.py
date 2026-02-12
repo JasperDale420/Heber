@@ -9,7 +9,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _normalize_datetime_utc(value: datetime | None) -> datetime | None:
+    """Normalize datetimes to UTC and treat naive values as UTC."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class WatchStatus(str, Enum):
@@ -79,6 +88,11 @@ class AlertWatch(BaseModel):
 
     model_config = ConfigDict(use_enum_values=True)
 
+    @field_validator("alert_time", "window_end", "outcome_time", "created_at", "updated_at", mode="after")
+    @classmethod
+    def _normalize_datetimes(cls, value: datetime | None) -> datetime | None:
+        return _normalize_datetime_utc(value)
+
 
 class WatchSnapshot(BaseModel):
     """A single price snapshot for a watched contract."""
@@ -99,6 +113,14 @@ class WatchSnapshot(BaseModel):
     # Computed
     return_pct: float | None = None  # (mid - entry) / entry
 
+    @field_validator("timestamp", mode="after")
+    @classmethod
+    def _normalize_timestamp(cls, value: datetime) -> datetime:
+        normalized = _normalize_datetime_utc(value)
+        if normalized is None:
+            raise ValueError("timestamp must not be null")
+        return normalized
+
 
 class WatchOutcome(BaseModel):
     """Final outcome when watch completes."""
@@ -108,7 +130,7 @@ class WatchOutcome(BaseModel):
     occ_symbol: str
     underlying: str
     put_call: str
-    horizon: str
+    horizon: WatchHorizon
 
     # Outcome
     status: WatchStatus
@@ -131,6 +153,14 @@ class WatchOutcome(BaseModel):
     alert_time: datetime
     window_duration_hours: float
     trading_minutes_to_hit: int | None = None  # Market time to barrier
+
+    @field_validator("outcome_time", "alert_time", mode="after")
+    @classmethod
+    def _normalize_datetimes(cls, value: datetime) -> datetime:
+        normalized = _normalize_datetime_utc(value)
+        if normalized is None:
+            raise ValueError("datetime value must not be null")
+        return normalized
 
 
 # Redis key patterns

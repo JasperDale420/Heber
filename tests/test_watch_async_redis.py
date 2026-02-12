@@ -63,6 +63,12 @@ class _AsyncOnlyManager:
         return None
 
 
+class _StrictPriceManager(_AsyncOnlyManager):
+    async def update_watch_price_async(self, _watch_id, _price, _timestamp):  # noqa: ANN001
+        assert _price is not None
+        await super().update_watch_price_async(_watch_id, _price, _timestamp)
+
+
 @pytest.mark.asyncio
 async def test_consumer_read_messages_does_not_block_event_loop() -> None:
     manager = _AsyncOnlyManager()
@@ -248,3 +254,61 @@ async def test_poller_handles_naive_last_polled_timestamps() -> None:
     assert stats["due_watches"] == 1
     assert stats["updated"] == 1
     assert manager.updated == 1
+
+
+@pytest.mark.asyncio
+async def test_poller_treats_future_last_polled_timestamp_as_due() -> None:
+    manager = _AsyncOnlyManager()
+    now = datetime.now(UTC)
+    manager.get_active_watches_async = AsyncMock(  # type: ignore[method-assign]
+        return_value=[
+            SimpleNamespace(
+                watch_id="watch-future-polled",
+                occ_symbol="AAPL260220C00100000",
+                entry_price=1.0,
+                horizon=WatchHorizon.INTRADAY,
+                updated_at=now + timedelta(hours=1),
+            ),
+        ]
+    )
+    poller = SnapshotPoller(manager)
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": 1.0,
+                "ap": 1.2,
+                "last_price": 1.1,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["due_watches"] == 1
+    assert stats["updated"] == 1
+    assert manager.updated == 1
+
+
+@pytest.mark.asyncio
+async def test_poller_skips_update_when_quote_has_no_usable_price() -> None:
+    manager = _StrictPriceManager()
+    poller = SnapshotPoller(manager)
+
+    poller._fetch_quotes = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "AAPL260220C00100000": {
+                "bp": None,
+                "ap": None,
+                "last_price": None,
+                "underlying_price": 200.0,
+            }
+        }
+    )
+
+    stats = await poller.poll_once()
+
+    assert stats["quotes"] == 1
+    assert stats["updated"] == 0
+    assert manager.snapshots == 1
+    assert manager.updated == 0

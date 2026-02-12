@@ -55,6 +55,7 @@ def compute_relative_features(
     merged["_ts_available_source"] = base_available
 
     def calc_features(df: pd.DataFrame) -> pd.DataFrame:
+        key = df.name
         df = df.sort_values("bar_start_ts")
         returns = df["close"].pct_change()
         bench_returns = df["benchmark_close"].pct_change()
@@ -62,7 +63,7 @@ def compute_relative_features(
 
         return pd.DataFrame(
             {
-                "instrument_key": df["instrument_key"],
+                "instrument_key": key,
                 "ts_event": df["bar_start_ts"],
                 "ts_available": ts_available,
                 # Relative strength
@@ -89,4 +90,4 @@ def compute_relative_features(
     if non_benchmark.empty:
         return pd.DataFrame()
 
-    return non_benchmark.groupby("instrument_key", group_keys=False).apply(calc_features)
+    return non_benchmark.groupby("instrument_key", group_keys=False).apply(calc_features, include_groups=False)

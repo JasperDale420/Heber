@@ -28,17 +28,23 @@ class TestLakeFSConfig:
 
     def test_from_env_custom(self):
         """Test loading configuration from environment."""
+        from heber.config import get_settings
+
         env = {
             "LAKEFS_ENDPOINT": "http://lakefs.example.com",
             "LAKEFS_ACCESS_KEY": "test-key",
             "LAKEFS_SECRET_KEY": "test-secret",  # pragma: allowlist secret
             "LAKEFS_DEFAULT_REPO": "custom-repo",
         }
-        with patch.dict("os.environ", env, clear=True):
-            config = LakeFSConfig.from_env()
-            assert config.endpoint == "http://lakefs.example.com"
-            assert config.access_key == "test-key"
-            assert config.default_repo == "custom-repo"
+        get_settings.cache_clear()
+        try:
+            with patch.dict("os.environ", env, clear=True):
+                config = LakeFSConfig.from_env()
+                assert config.endpoint == "http://lakefs.example.com"
+                assert config.access_key == "test-key"
+                assert config.default_repo == "custom-repo"
+        finally:
+            get_settings.cache_clear()
 
 
 class TestGoldCommit:

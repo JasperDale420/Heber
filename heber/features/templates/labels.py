@@ -29,7 +29,7 @@ def compute_return_labels(
     def calc_labels(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
         result = {
-            "instrument_key": df["instrument_key"],
+            "instrument_key": df.name,
             "ts_label": df["bar_start_ts"],
             "ts_event": df["bar_start_ts"],
         }
@@ -44,7 +44,7 @@ def compute_return_labels(
 
         return pd.DataFrame(result)
 
-    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels)
+    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels, include_groups=False)
 
 
 def compute_classification_labels(
@@ -72,7 +72,7 @@ def compute_classification_labels(
 
         return pd.DataFrame(
             {
-                "instrument_key": df["instrument_key"],
+                "instrument_key": df.name,
                 "ts_label": df["bar_start_ts"],
                 "ts_event": df["bar_start_ts"],
                 "ts_available": df["bar_start_ts"] + pd.Timedelta(days=horizon),
@@ -83,4 +83,4 @@ def compute_classification_labels(
             }
         )
 
-    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels)
+    return bars_df.groupby("instrument_key", group_keys=False).apply(calc_labels, include_groups=False)

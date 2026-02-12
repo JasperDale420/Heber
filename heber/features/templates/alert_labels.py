@@ -185,7 +185,7 @@ def classify_horizon(dte: int) -> AlertHorizon:
 
 def classify_vix_regime(vix: float | None) -> str:
     """Classify market regime based on VIX level."""
-    if vix is None or np.isnan(vix):
+    if vix is None or not np.isfinite(vix):
         return VixRegime.NORMAL.value
     elif vix < VIX_LOW:
         return VixRegime.LOW.value
@@ -257,7 +257,7 @@ def _compute_beta_neutral_return(
     Returns:
         Beta-neutral return, or None if SPY data missing
     """
-    if spy_return is None or np.isnan(spy_return):
+    if spy_return is None or not np.isfinite(spy_return) or not np.isfinite(underlying_return) or not np.isfinite(beta):
         return None
     return underlying_return - beta * spy_return
 
@@ -505,8 +505,25 @@ def _get_entry_data(
     bars_at_alert = underlying_bars[underlying_bars["bar_start_ts"] <= ts_alert]
     if bars_at_alert.empty:
         return None
-    atr_at_alert = bars_at_alert.iloc[-1]["atr"]
-    spot_at_alert = alert.get("spot_px") or bars_at_alert.iloc[-1]["close"]
+    atr_at_alert = float(bars_at_alert.iloc[-1]["atr"])
+    if not np.isfinite(atr_at_alert):
+        return None
+
+    bar_close_at_alert = float(bars_at_alert.iloc[-1]["close"])
+    alert_spot = alert.get("spot_px")
+    try:
+        alert_spot_value = float(alert_spot) if alert_spot is not None else None
+    except (TypeError, ValueError):
+        alert_spot_value = None
+
+    if alert_spot_value is None or not np.isfinite(alert_spot_value) or alert_spot_value <= 0:
+        spot_at_alert = bar_close_at_alert
+    else:
+        spot_at_alert = alert_spot_value
+
+    if not np.isfinite(spot_at_alert) or spot_at_alert <= 0:
+        return None
+
     return atr_at_alert, spot_at_alert
 
 
@@ -517,7 +534,10 @@ def _get_vix_at_alert(vix_data: pd.DataFrame | None, ts_alert: pd.Timestamp) -> 
     vix_before = vix_data[vix_data["bar_start_ts"] <= ts_alert]
     if vix_before.empty:
         return None
-    return float(vix_before.iloc[-1]["close"])
+    vix_value = float(vix_before.iloc[-1]["close"])
+    if not np.isfinite(vix_value):
+        return None
+    return vix_value
 
 
 def _window_delta_for_config(config: BarrierConfig) -> timedelta:
@@ -535,14 +555,20 @@ def _compute_spy_relative_return(
     raw_return: float,
 ) -> float | None:
     """Compute SPY-relative beta-neutral return."""
-    if spy_bars is None or len(spy_bars) == 0 or np.isnan(raw_return):
+    if spy_bars is None or len(spy_bars) == 0 or not np.isfinite(raw_return):
         return None
 
     spy_at_alert = _get_price_at_time(spy_bars, MARKET_PROXY, ts_alert)
     end_time = ts_alert + _window_delta_for_config(config)
     spy_at_end = _get_price_at_time(spy_bars, MARKET_PROXY, end_time)
 
-    if not spy_at_alert or not spy_at_end or spy_at_alert <= 0:
+    if (
+        spy_at_alert is None
+        or spy_at_end is None
+        or not np.isfinite(spy_at_alert)
+        or not np.isfinite(spy_at_end)
+        or spy_at_alert <= 0
+    ):
         return None
 
     spy_return = (spy_at_end - spy_at_alert) / spy_at_alert

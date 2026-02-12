@@ -6,6 +6,79 @@ import sys
 from heber import __version__
 
 
+def _cmd_info(args: argparse.Namespace) -> int:
+    """Handle the 'info' subcommand."""
+    print(f"Heber Data Lakehouse v{__version__}")
+    if args.verbose:
+        print("\nComponents:")
+        print("  - Storage: Apache Iceberg")
+        print("  - Versioning: lakeFS")
+        print("  - Schema Registry: Apicurio")
+        print("  - Catalog: OpenMetadata")
+    return 0
+
+
+def _cmd_datasets(args: argparse.Namespace) -> int:
+    """Handle the 'datasets' subcommand."""
+    try:
+        from heber.sdk.client import HeberClient
+
+        client = HeberClient()
+        datasets = client.list_datasets(layer=args.layer)
+        for ds in datasets:
+            print(f"  {ds.get('name', ds)}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_versions(args: argparse.Namespace) -> int:
+    """Handle the 'versions' subcommand."""
+    try:
+        from heber.sdk.client import HeberClient
+
+        client = HeberClient()
+        versions = client.list_gold_versions(args.dataset)
+        for v in versions:
+            print(f"  {v}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_backfill(args: argparse.Namespace) -> int:
+    """Handle the 'backfill' subcommand."""
+    from datetime import datetime
+
+    from heber.writer.transformer import BronzeToSilverTransformer
+
+    since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
+    until = datetime.strptime(args.until, "%Y-%m-%d") if args.until else None
+
+    transformer = BronzeToSilverTransformer()
+
+    if args.feed:
+        print(f"Backfilling feed: {args.feed}")
+        count = transformer.transform(args.feed, since=since, until=until)
+        print(f"Transformed {count} records")
+    else:
+        print("Backfilling all feeds from Bronze to Silver...")
+        stats = transformer.transform_all(since=since, until=until)
+        for feed, count in sorted(stats.items()):
+            print(f"  {feed}: {count} records")
+    return 0
+
+
+_SUBCOMMAND_HANDLERS = {
+    "info": _cmd_info,
+    "datasets": _cmd_datasets,
+    "versions": _cmd_versions,
+    "backfill": _cmd_backfill,
+}
+
+
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -41,67 +114,12 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.command == "info":
-        print(f"Heber Data Lakehouse v{__version__}")
-        if args.verbose:
-            print("\nComponents:")
-            print("  - Storage: Apache Iceberg")
-            print("  - Versioning: lakeFS")
-            print("  - Schema Registry: Apicurio")
-            print("  - Catalog: OpenMetadata")
-        return 0
+    handler = _SUBCOMMAND_HANDLERS.get(args.command)
+    if handler:
+        return handler(args)
 
-    elif args.command == "datasets":
-        try:
-            from heber.sdk.client import HeberClient
-
-            client = HeberClient()
-            datasets = client.list_datasets(layer=args.layer)
-            for ds in datasets:
-                print(f"  {ds.get('name', ds)}")
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-        return 0
-
-    elif args.command == "versions":
-        try:
-            from heber.sdk.client import HeberClient
-
-            client = HeberClient()
-            versions = client.list_gold_versions(args.dataset)
-            for v in versions:
-                print(f"  {v}")
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-        return 0
-
-    elif args.command == "backfill":
-        import asyncio
-        from datetime import datetime
-
-        from heber.writer.transformer import BronzeToSilverTransformer
-
-        since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
-        until = datetime.strptime(args.until, "%Y-%m-%d") if args.until else None
-
-        transformer = BronzeToSilverTransformer()
-
-        if args.feed:
-            print(f"Backfilling feed: {args.feed}")
-            count = asyncio.run(transformer.transform(args.feed, since=since, until=until))
-            print(f"Transformed {count} records")
-        else:
-            print("Backfilling all feeds from Bronze to Silver...")
-            stats = asyncio.run(transformer.transform_all(since=since, until=until))
-            for feed, count in sorted(stats.items()):
-                print(f"  {feed}: {count} records")
-        return 0
-
-    else:
-        parser.print_help()
-        return 0
+    parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":

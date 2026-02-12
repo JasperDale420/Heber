@@ -3,7 +3,6 @@
 See PRD Section 11.7 for API contract.
 """
 
-import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -36,7 +35,7 @@ def _should_auto_create_catalog_tables() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    if os.getenv("HEBER_METRICS_PORT"):
+    if settings.metrics_port:
         start_metrics_server_from_env(default_port=9090)
 
     if _should_auto_create_catalog_tables():
@@ -56,13 +55,16 @@ app = FastAPI(
 )
 
 
+from collections.abc import AsyncGenerator
+
+
 # Dependency for database session
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
 
 
-async def get_service(session: AsyncSession = Depends(get_session)) -> CatalogService:
+def get_service(session: AsyncSession = Depends(get_session)) -> CatalogService:
     return CatalogService(session)
 
 
@@ -525,7 +527,7 @@ RATE_LIMITS = {
 }
 
 
-async def check_rate_limit(api_key: str, endpoint_type: str = "read"):
+def check_rate_limit(api_key: str, endpoint_type: str = "read"):
     """Simple in-memory rate limiter (use Redis in production)."""
     now = time.time()
     window = 60  # 1 minute
@@ -544,7 +546,7 @@ async def check_rate_limit(api_key: str, endpoint_type: str = "read"):
 from fastapi import Header
 
 
-async def verify_api_key(authorization: str | None = Header(None)):
+def verify_api_key(authorization: str | None = Header(None)):
     """Simple API key verification (MVP)."""
     if settings.environment == "dev":
         return "dev-user"

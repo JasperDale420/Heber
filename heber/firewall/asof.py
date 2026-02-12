@@ -16,7 +16,6 @@ def read_asof(
     df: pl.LazyFrame | pl.DataFrame,
     asof_time: datetime,
     filters: dict[str, Any] | None = None,
-    time_col: str = "ts_event",
     available_col: str = "ts_available",
 ) -> pl.LazyFrame:
     """Read data as-of a specific time (PRD §10.3).
@@ -28,7 +27,6 @@ def read_asof(
         df: Source data (LazyFrame or DataFrame)
         asof_time: The point-in-time cutoff - only rows available at this time are returned
         filters: Optional additional filters (column: value dict)
-        time_col: Column to use for time range filtering (default: ts_event)
         available_col: Column containing availability timestamp (default: ts_available)
 
     Returns:
@@ -67,7 +65,6 @@ def asof_join(
     left_on: str,
     right_on: str,
     by: str | list[str],
-    left_time_col: str = "ts_event",
     right_time_col: str = "ts_event",
     right_available_col: str = "ts_available",
     tolerance: str | None = None,
@@ -87,7 +84,6 @@ def asof_join(
         left_on: Left time column for the join
         right_on: Right time column for the join
         by: Column(s) to join on (e.g., instrument_key)
-        left_time_col: Time column in left for filtering
         right_time_col: Time column in right for join
         right_available_col: Availability column in right
         tolerance: Optional max time difference (e.g., "1h", "30m")
