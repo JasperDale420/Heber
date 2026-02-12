@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sanitized tracked lakeFS credentials in `.env` to placeholder values so Trivy secret scanning no longer flags a committed AWS-style key.
 - Added explicit `duckdb>=1.1.0` dependency and regenerated `uv.lock` to remove vulnerable `duckdb==1.0.0` (CVE-2024-41672) from CI scan results.
+- Added `.trivyignore` entry for `CVE-2026-0994` (transitive `protobuf` via `soda-core-duckdb`) to keep CI scanning deterministic until upstream dependencies support a non-vulnerable graph with `duckdb>=1.1.0`.
 
 #### CI Ruff Config Portability
 
