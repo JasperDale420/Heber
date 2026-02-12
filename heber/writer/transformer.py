@@ -167,7 +167,7 @@ class BronzeToSilverTransformer:
         if not dt_dir.exists():
             return 0
 
-        records: list[dict] = []
+        records: list[dict[str, Any]] = []
         files_processed = 0
         total_records = 0
 
@@ -197,9 +197,9 @@ class BronzeToSilverTransformer:
         )
         return total_records
 
-    def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict]:
+    def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict[str, Any]]:
         """Read and transform a single Bronze JSONL.gz file."""
-        records = []
+        records: list[dict[str, Any]] = []
 
         try:
             with gzip.open(file_path, "rt", encoding="utf-8") as f:
@@ -207,9 +207,11 @@ class BronzeToSilverTransformer:
                     try:
                         event_dict = json.loads(line.strip())
                         envelope = EventEnvelope.model_validate(event_dict)
-                        row = self._envelope_to_silver_row(envelope, feed)
-                        if row:
-                            records.append(row)
+                        candidates = self._build_silver_candidates(envelope, feed)
+                        for candidate in candidates:
+                            row = self._envelope_to_silver_row(candidate, feed)
+                            if row:
+                                records.append(row)
                     except Exception as e:
                         logger.debug("Failed to parse line", error=str(e))
                         continue
@@ -218,6 +220,104 @@ class BronzeToSilverTransformer:
             logger.error("Failed to read Bronze file", path=str(file_path), error=str(e))
 
         return records
+
+    def _build_silver_candidates(self, envelope: EventEnvelope, feed: str) -> list[EventEnvelope]:
+        """Build candidate envelopes for Silver writes.
+
+        For aggregate REST payloads (bars/trades arrays), explode into one
+        candidate envelope per item so backfill writes typed rows rather than
+        null-heavy aggregate blobs.
+        """
+        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+        if not isinstance(payload, dict):
+            return [envelope]
+
+        canonical_feed = resolve_silver_feed(feed)
+        list_key: str | None = None
+        context_keys: tuple[str, ...] = ()
+
+        if canonical_feed == "bars":
+            list_key = "bars"
+            context_keys = ("symbol", "timeframe")
+        elif canonical_feed == "trades":
+            list_key = "trades"
+            context_keys = ("symbol",)
+
+        if list_key is None:
+            return [envelope]
+
+        raw_items = payload.get(list_key)
+        if not isinstance(raw_items, list):
+            return [envelope]
+        if not raw_items:
+            return []
+
+        candidates: list[EventEnvelope] = []
+        skipped = 0
+        for idx, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                skipped += 1
+                continue
+
+            item_payload = dict(raw_item)
+            for key in context_keys:
+                value = payload.get(key)
+                if value is not None and key not in item_payload:
+                    item_payload[key] = value
+            if "symbol" not in item_payload and envelope.symbol:
+                item_payload["symbol"] = envelope.symbol
+
+            item_ts_event = self._extract_item_event_timestamp(item_payload) or envelope.ts_event
+            item_envelope = envelope.model_copy(
+                update={
+                    "event_id": f"{envelope.event_id}:{idx}",
+                    "payload": item_payload,
+                    "ts_event": item_ts_event,
+                }
+            )
+            candidates.append(item_envelope)
+
+        if skipped:
+            logger.warning(
+                "backfill_aggregate_payload_non_dict_items",
+                event_id=envelope.event_id,
+                feed=feed,
+                total_items=len(raw_items),
+                emitted=len(candidates),
+                skipped=skipped,
+            )
+
+        return candidates
+
+    @staticmethod
+    def _extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
+        """Parse item-level event timestamp from common provider keys."""
+        raw = payload.get("timestamp") or payload.get("t") or payload.get("ts_event")
+        if raw is None:
+            return None
+        if isinstance(raw, datetime):
+            if raw.tzinfo is None:
+                return raw.replace(tzinfo=UTC)
+            return raw.astimezone(UTC)
+        if isinstance(raw, int | float):
+            epoch = float(raw)
+            if epoch > 10_000_000_000:
+                epoch /= 1000
+            return datetime.fromtimestamp(epoch, tz=UTC)
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                return None
+            if text.isdigit():
+                return BronzeToSilverTransformer._extract_item_event_timestamp({"timestamp": int(text)})
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        return None
 
     def _envelope_to_silver_row(self, envelope: EventEnvelope, feed: str) -> dict[str, Any] | None:
         """Convert EventEnvelope to Silver row format."""
@@ -275,7 +375,7 @@ class BronzeToSilverTransformer:
 
     def _write_silver_batch(
         self,
-        records: list[dict],
+        records: list[dict[str, Any]],
         feed: str,
         dt: str,
     ) -> None:

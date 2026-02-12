@@ -110,11 +110,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Silver Normalization For Aggregate REST Payloads
 
 - Updated `heber/writer/consumer.py` to defensively expand aggregate REST payload envelopes for `bars` and `trades` into item-level Silver writes, while preserving Bronze-first durability.
+- Updated `heber/writer/transformer.py` to apply the same aggregate expansion during Bronze→Silver backfill so `payload.bars[]` and `payload.trades[]` are written as typed item rows instead of null-heavy aggregate rows.
 - Added skip behavior for empty aggregate lists so `trades=[]` / `bars=[]` no longer produce null-heavy Silver rows.
 - Added per-item aggregate failure logging and summary counts in consumer logs (`silver_aggregate_item_failed`, `silver_aggregate_write_summary`) for faster root-cause analysis.
 - Added regression tests in `tests/test_bronze_first_ingestion.py` for:
   - multi-item `bars[]` fan-out to multiple Silver writes,
   - empty `trades[]` skip behavior.
+- Added transformer backfill regression coverage in `tests/test_transformer_aggregate_payloads.py` for bars/trades expansion and mixed valid/invalid aggregate items.
 - Improved field alias handling in `heber/writer/normalizer.py` so one target column can resolve from multiple source keys (instead of first-match only), preventing silent drops when payload variants differ.
 - Added `bars.timestamp -> bar_start_ts` mapping in `heber/writer/ingest_contracts.py` and regression coverage in `tests/test_bars_timestamp_mapping.py`.
 
