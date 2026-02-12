@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 
+- Added `docs/silver_gold_scope.md` with a concrete Silver keep/drop matrix and Gold input plan, including `KEEP_CORE`, `KEEP_CONTEXT`, and `BRONZE_ONLY` feed policy decisions tied to current pipelines.
+- Updated `README.md` documentation index to include `docs/silver_gold_scope.md`.
 - Updated `docs/data_contract.md` with:
   - Bronze-first / Silver-strict ingest policy
   - Data Gateway feed coverage matrix and alias routing

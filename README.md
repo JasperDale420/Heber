@@ -156,6 +156,7 @@ heber health-dataflow --mode manual --window-seconds 900
 - `docs/architecture.md` - system overview, data flow, and layers
 - `docs/catalog_api.md` - Catalog API reference
 - `docs/data_contract.md` - EventEnvelope + feed schema contract
+- `docs/silver_gold_scope.md` - Silver keep/drop matrix + Gold input plan
 - `docs/schema_registry.md` - schema registry usage
 - `docs/iceberg_migration.md` - Iceberg migration status
 - `docs/hot_store.md` - Hot Store usage and sync notes
