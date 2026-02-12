@@ -99,6 +99,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_metrics_runtime_wiring.py` (Bronze write metrics + last-write gauge)
   - `tests/test_watch_metrics_startup.py` (watch metrics server startup)
 
+#### Watch Passive Gateway Evidence Metrics
+
+- Added watch observability metrics in `heber/ops/metrics.py`:
+  - `heber_watch_gateway_requests_total{component,endpoint,outcome,status_code}`
+  - `heber_watch_gateway_request_duration_seconds{component,endpoint,outcome}`
+  - `heber_watch_gateway_last_success_unixtime{component,endpoint}`
+  - `heber_watch_watches_created_total`
+  - `heber_watch_last_watch_created_unixtime`
+  - `heber_watch_poll_cycles_total{status}`
+  - `heber_watch_last_poll_unixtime`
+  - `heber_watch_alert_parse_total{status}`
+- Instrumented watch enrichment/quote paths for passive Data Gateway proof:
+  - `heber/watch/features.py` now records success/failure outcomes, status codes, and latency for enrichment calls.
+  - `heber/watch/poller.py` now records poll cycle status and gateway request outcomes including `partial_coverage` and `stale_fallback`.
+  - `heber/watch/consumer.py` now records alert parse outcomes, watch creation activity, and entry-price gateway request outcomes.
+- Added/extended regression tests:
+  - `tests/test_watch_feature_enrichment_resilience.py`
+  - `tests/test_consumer_parsing.py`
+  - `tests/test_watch_poller_metrics.py`
+
 #### Watch Flow Alert Batch Parsing
 
 - Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.

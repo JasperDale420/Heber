@@ -89,7 +89,19 @@ async def test_enrich_iv_rank_retries_on_429_until_success(monkeypatch: pytest.M
         _Response(429, {"error": "rate limited"}),
         _Response(200, {"data": {"iv_rank": 77.0}}),
     ]
+    gateway_calls: list[dict] = []
+    gateway_success_calls: list[dict] = []
     monkeypatch.setattr("httpx.AsyncClient", _SequencedClient)
+    monkeypatch.setattr(
+        features_module,
+        "record_watch_gateway_request",
+        lambda **kwargs: gateway_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        features_module,
+        "record_watch_gateway_success",
+        lambda **kwargs: gateway_success_calls.append(kwargs),
+    )
 
     extractor = AlertFeatureExtractor(
         gateway_url="http://gateway:8000",
@@ -102,6 +114,9 @@ async def test_enrich_iv_rank_retries_on_429_until_success(monkeypatch: pytest.M
 
     assert enriched.iv_rank == 77.0
     assert _SequencedClient.calls == 2
+    assert any(call["outcome"] == "http_error" and call["status_code"] == 429 for call in gateway_calls)
+    assert any(call["outcome"] == "success" and call["status_code"] == 200 for call in gateway_calls)
+    assert gateway_success_calls
 
 
 @pytest.mark.asyncio
@@ -109,12 +124,18 @@ async def test_enrich_iv_rank_logs_when_429_retries_exhausted(monkeypatch: pytes
     _SequencedClient.calls = 0
     _SequencedClient.responses = [_Response(429, {"error": "rate limited"})]
     warning_calls: list[tuple[str, dict]] = []
+    gateway_calls: list[dict] = []
 
     def _capture_warning(message: str, **kwargs) -> None:  # noqa: ANN003
         warning_calls.append((message, kwargs))
 
     monkeypatch.setattr("httpx.AsyncClient", _SequencedClient)
     monkeypatch.setattr(features_module.logger, "warning", _capture_warning)
+    monkeypatch.setattr(
+        features_module,
+        "record_watch_gateway_request",
+        lambda **kwargs: gateway_calls.append(kwargs),
+    )
 
     extractor = AlertFeatureExtractor(
         gateway_url="http://gateway:8000",
@@ -130,6 +151,9 @@ async def test_enrich_iv_rank_logs_when_429_retries_exhausted(monkeypatch: pytes
     assert failure_logs
     assert all(log[1]["status_code"] == 429 for log in failure_logs)
     assert all(log[1]["retryable"] is True for log in failure_logs)
+    assert gateway_calls
+    assert all(call["outcome"] == "http_error" for call in gateway_calls)
+    assert all(call["status_code"] == 429 for call in gateway_calls)
 
 
 @pytest.mark.asyncio

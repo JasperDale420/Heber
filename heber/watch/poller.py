@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ import httpx
 import structlog
 
 from heber.calendar import MarketCalendar
+from heber.ops.metrics import record_watch_gateway_request, record_watch_poll_cycle
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     extract_quote_timestamp,
@@ -74,11 +76,13 @@ class SnapshotPoller:
         active = await self.manager.get_active_watches_async()
 
         if not active:
+            record_watch_poll_cycle(status="success")
             return {"watches": 0, "quotes": 0, "errors": 0}
 
         now = datetime.now(UTC)
         due_watches = [watch for watch in active if self._is_watch_due(watch, now)]
         if not due_watches:
+            record_watch_poll_cycle(status="success")
             return {"watches": len(active), "due_watches": 0, "quotes": 0, "errors": 0}
 
         # Group by unique symbol
@@ -94,6 +98,14 @@ class SnapshotPoller:
 
         # Fetch quotes in batches
         quotes = await self._fetch_quotes(symbols)
+        if quotes:
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="success",
+                status_code=200,
+                duration_seconds=0.0,
+            )
 
         # Update watches with new prices
         updated = 0
@@ -116,6 +128,7 @@ class SnapshotPoller:
                 )
                 updated += 1
 
+        record_watch_poll_cycle(status="success")
         return {
             "watches": len(active),
             "due_watches": len(due_watches),
@@ -161,6 +174,7 @@ class SnapshotPoller:
 
             except Exception as e:
                 logger.error("Poll cycle failed", error=str(e))
+                record_watch_poll_cycle(status="error")
 
             await asyncio.sleep(min_interval)
 
@@ -273,22 +287,55 @@ class SnapshotPoller:
         route_failures: list[dict[str, Any]],
     ) -> tuple[dict[str, dict], dict[str, dict], list[float], dict[str, Any]] | None:
         """Try fetching from one route; return (valid, stale, stale_ages, partial_failure) or None."""
+        started = time.perf_counter()
         try:
             response = await client.get(route, params={"symbols": symbols_param})
         except httpx.HTTPError as request_error:
             route_failures.append(route_failure_for_exception(route, request_error))
             logger.warning("Quote route request failed", route=route, error=str(request_error))
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="transport_error",
+                status_code=None,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         if response.status_code != 200:
             route_failures.append(route_failure_for_http_status(route, response.status_code))
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="http_error",
+                status_code=response.status_code,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         quotes_payload = self._decode_quotes_payload(response, route, route_failures)
         if quotes_payload is None:
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="http_error",
+                status_code=response.status_code,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
-        return self._validate_route_quotes(route, batch, quotes_payload, now_utc)
+        valid_quotes, stale_quotes, stale_ages, partial_failure = self._validate_route_quotes(
+            route, batch, quotes_payload, now_utc
+        )
+        outcome = "success" if partial_failure is None else "partial_coverage"
+        record_watch_gateway_request(
+            component="poller",
+            endpoint="alpaca_options_quotes",
+            outcome=outcome,
+            status_code=response.status_code,
+            duration_seconds=max(0.0, time.perf_counter() - started),
+        )
+        return valid_quotes, stale_quotes, stale_ages, partial_failure
 
     def _decode_quotes_payload(
         self,
@@ -435,6 +482,13 @@ class SnapshotPoller:
                 routes=routes,
                 best_stale_failure=best_stale_failure,
                 failures=route_failures,
+            )
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="stale_fallback",
+                status_code=None,
+                duration_seconds=0.0,
             )
             return best_stale_quotes
 

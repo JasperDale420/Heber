@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,6 +22,11 @@ from heber.features.templates.alert_labels import (
     AlertHorizon,
     ContractBarrierConfig,
     classify_horizon,
+)
+from heber.ops.metrics import (
+    record_watch_alert_parse,
+    record_watch_gateway_request,
+    record_watch_watch_created,
 )
 from heber.watch.features import (
     AlertFeatureExtractor,
@@ -411,6 +417,7 @@ class AlertWatchConsumer:
             occ_symbol=alert["occ_symbol"],
             horizon=watch_horizon.value,
         )
+        record_watch_watch_created()
         return "watch_created"
 
     def _parse_alert(self, data: dict) -> dict | None:
@@ -509,6 +516,10 @@ class AlertWatchConsumer:
         batch_items_total: int,
         batch_items_failed: int,
     ) -> None:
+        if alert_parse_success > 0:
+            record_watch_alert_parse(status="success", count=alert_parse_success)
+        if alert_parse_failed > 0:
+            record_watch_alert_parse(status="failed", count=alert_parse_failed)
         logger.info(
             "Alert parsing summary",
             alert_parse_success=alert_parse_success,
@@ -700,15 +711,30 @@ class AlertWatchConsumer:
         route_failures: list[dict[str, Any]],
     ) -> tuple[float, bool, float] | None:
         """Try a single gateway route. Returns (price, is_stale, age_seconds) or None."""
+        started = time.perf_counter()
         try:
             response = await client.get(route, params={"symbols": occ_symbol})
         except httpx.HTTPError as request_error:
             route_failures.append(route_failure_for_exception(route, request_error))
             logger.warning("Entry price route request failed", route=route, error=str(request_error))
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="transport_error",
+                status_code=None,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         if response.status_code != 200:
             route_failures.append(route_failure_for_http_status(route, response.status_code))
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="http_error",
+                status_code=response.status_code,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         quote_payload = self._validate_route_response(response, route, occ_symbol, route_failures)
@@ -732,6 +758,13 @@ class AlertWatchConsumer:
             )
             return computed_price, True, age
 
+        record_watch_gateway_request(
+            component="consumer_entry_price",
+            endpoint="alpaca_options_quotes",
+            outcome="success",
+            status_code=200,
+            duration_seconds=max(0.0, time.perf_counter() - started),
+        )
         return computed_price, False, 0.0
 
     def _validate_route_response(
@@ -824,6 +857,13 @@ class AlertWatchConsumer:
                 occ_symbol=occ_symbol,
                 quote_age_seconds=best_stale_age_seconds,
                 max_quote_age_seconds=DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+            )
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="stale_fallback",
+                status_code=None,
+                duration_seconds=0.0,
             )
             return best_stale_price
         if route_failures:

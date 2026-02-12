@@ -96,11 +96,17 @@ def test_parse_alerts_batch_payload_parses_all_valid_items() -> None:
 def test_parse_alerts_batch_keeps_valid_items_and_logs_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     consumer = _consumer()
     info_calls: list[tuple[str, dict]] = []
+    parse_metric_calls: list[dict] = []
 
     def _capture_info(message: str, **kwargs) -> None:  # noqa: ANN003
         info_calls.append((message, kwargs))
 
     monkeypatch.setattr(consumer_module.logger, "info", _capture_info)
+    monkeypatch.setattr(
+        consumer_module,
+        "record_watch_alert_parse",
+        lambda **kwargs: parse_metric_calls.append(kwargs),
+    )
 
     parsed_items = consumer._parse_alerts(
         _stream_data(
@@ -130,16 +136,24 @@ def test_parse_alerts_batch_keeps_valid_items_and_logs_failures(monkeypatch: pyt
     assert parse_summary[1]["batch_items_failed"] == 1
     assert parse_summary[1]["alert_parse_success"] == 1
     assert parse_summary[1]["alert_parse_failed"] == 1
+    assert {"status": "success", "count": 1} in parse_metric_calls
+    assert {"status": "failed", "count": 1} in parse_metric_calls
 
 
 def test_parse_alerts_malformed_payload_is_rejected_with_failure_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     consumer = _consumer()
     info_calls: list[tuple[str, dict]] = []
+    parse_metric_calls: list[dict] = []
 
     def _capture_info(message: str, **kwargs) -> None:  # noqa: ANN003
         info_calls.append((message, kwargs))
 
     monkeypatch.setattr(consumer_module.logger, "info", _capture_info)
+    monkeypatch.setattr(
+        consumer_module,
+        "record_watch_alert_parse",
+        lambda **kwargs: parse_metric_calls.append(kwargs),
+    )
 
     parsed_items = consumer._parse_alerts(
         _stream_data({"feed": "flow_alerts", "payload": {"items": "not-a-list"}}),
@@ -149,6 +163,7 @@ def test_parse_alerts_malformed_payload_is_rejected_with_failure_summary(monkeyp
     parse_summary = next(call for call in info_calls if call[0] == "Alert parsing summary")
     assert parse_summary[1]["alert_parse_success"] == 0
     assert parse_summary[1]["alert_parse_failed"] == 1
+    assert parse_metric_calls == [{"status": "failed", "count": 1}]
 
 
 @pytest.mark.asyncio

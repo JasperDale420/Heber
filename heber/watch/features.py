@@ -22,6 +22,10 @@ import structlog
 
 from heber.config import settings
 from heber.ml.datasets import persist_features_to_gold as persist_features_frame_to_gold
+from heber.ops.metrics import (
+    record_watch_gateway_request,
+    record_watch_gateway_success,
+)
 from heber.watch.gateway import gateway_url_candidates
 
 if TYPE_CHECKING:
@@ -455,6 +459,13 @@ class AlertFeatureExtractor:
                             route=route,
                             error=str(exc),
                         )
+                        record_watch_gateway_request(
+                            component="features",
+                            endpoint=endpoint,
+                            outcome="transport_error",
+                            status_code=None,
+                            duration_seconds=duration_ms / 1000.0,
+                        )
                         if retryable:
                             await self._sleep_before_retry(attempt)
                             continue
@@ -479,6 +490,13 @@ class AlertFeatureExtractor:
                                 route=route,
                                 error=f"json_decode:{decode_error}",
                             )
+                            record_watch_gateway_request(
+                                component="features",
+                                endpoint=endpoint,
+                                outcome="http_error",
+                                status_code=status_code,
+                                duration_seconds=duration_ms / 1000.0,
+                            )
                             break
                         if not isinstance(payload, dict):
                             logger.warning(
@@ -493,8 +511,23 @@ class AlertFeatureExtractor:
                                 route=route,
                                 error=f"payload_type:{type(payload).__name__}",
                             )
+                            record_watch_gateway_request(
+                                component="features",
+                                endpoint=endpoint,
+                                outcome="http_error",
+                                status_code=status_code,
+                                duration_seconds=duration_ms / 1000.0,
+                            )
                             break
                         self._cache_set(cache_key, payload)
+                        record_watch_gateway_request(
+                            component="features",
+                            endpoint=endpoint,
+                            outcome="success",
+                            status_code=status_code,
+                            duration_seconds=duration_ms / 1000.0,
+                        )
+                        record_watch_gateway_success(component="features", endpoint=endpoint)
                         return payload
 
                     if status_code == 401:
@@ -511,6 +544,13 @@ class AlertFeatureExtractor:
                             route=route,
                             error="unauthorized",
                             auth_failures_window=auth_failures,
+                        )
+                        record_watch_gateway_request(
+                            component="features",
+                            endpoint=endpoint,
+                            outcome="http_error",
+                            status_code=status_code,
+                            duration_seconds=duration_ms / 1000.0,
                         )
                         if auth_failures >= self.auth_failure_threshold:
                             raise EnrichmentAuthFailure(
@@ -529,6 +569,13 @@ class AlertFeatureExtractor:
                         retryable=retryable,
                         duration_ms=duration_ms,
                         route=route,
+                    )
+                    record_watch_gateway_request(
+                        component="features",
+                        endpoint=endpoint,
+                        outcome="http_error",
+                        status_code=status_code,
+                        duration_seconds=duration_ms / 1000.0,
                     )
                     if retryable and attempt < self.request_max_attempts:
                         await self._sleep_before_retry(attempt)
