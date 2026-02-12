@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 
+- Updated `docs/data_contract.md` with:
+  - Bronze-first / Silver-strict ingest policy
+  - Data Gateway feed coverage matrix and alias routing
+  - key synthesis rules and unknown-feed handling semantics
+- Updated `docs/architecture.md` with Bronze→Silver normalization architecture and shared normalizer module references.
+
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
 - Added missing documentation links to `README.md`: `labeling_strategy.md`, `schemaaudit.md`
 - Added watch service to `docs/architecture.md` Core Services section

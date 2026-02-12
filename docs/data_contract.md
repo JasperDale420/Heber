@@ -46,6 +46,36 @@ Regex validation in `validate_instrument_key()`:
 - Gold (SDK writer): Parquet partitioned by `dataset={name}/project={name}/version={version}/dt={date}`
 - Gold (label writer): Parquet partitioned by `dataset={name}/type=label/version={version}`
 
+Ingestion policy:
+
+- Bronze-first: every valid envelope is persisted to Bronze before Silver normalization.
+- Silver-strict: only mapped feeds with a valid canonical key are written to Silver.
+- Unknown feed policy: write Bronze, emit DLQ reason `unmapped_feed`, and skip Silver write.
+
+## Data Gateway Feed Coverage
+
+Canonical feed routing for currently emitted Data Gateway feeds:
+
+- `bars -> bars`
+- `quotes -> quotes`
+- `trades -> trades`
+- `news -> news`
+- `flow_alerts -> flow_alerts`
+- `darkpool -> darkpool`
+- `market_tide -> market_tide`
+- `sector_tide -> sector_tide`
+- `greek_exposure -> greek_exposure`
+- `iv_rank -> iv_rank`
+- `oi_change -> oi_change`
+- `historic_option_volume -> historic_option_volume`
+- `short_interest -> short_data`
+- `short_volume -> short_data`
+- `ftds -> ftd`
+- `congress_trades -> congress_trades`
+- `insider_trades -> insider_trades`
+
+Feed aliases are defined in `heber/writer/ingest_contracts.py`.
+
 ## Silver Schemas (Parquet Writer)
 
 Source: `heber/schemas/silver.py`
@@ -77,7 +107,19 @@ Feed-specific fields:
 - `spot_px`, `contract_px`
 - `alert_type`, `side`, `aggressor`
 
-Unknown feeds are stored using `DEFAULT_SCHEMA` with a `payload_json` field.
+### historic_option_volume
+
+- `hov_date`, `expiry`, `volume`, `open_interest`, `call_volume`, `put_volume`, `premium`
+
+### Key Synthesis Rules
+
+Key normalization and synthesis for Silver path is implemented in `heber/writer/key_normalization.py`:
+
+- `flow_alerts`: derive OCC key from `option_chain` when present, otherwise synthesize from `symbol/expiry/put_call/strike`.
+- `market_tide`: normalize to ETF proxy key `equity:SPY`.
+- `sector_tide`: normalize sector names to ETF proxies (`XLK`, `XLF`, `XLY`, `XLC`, `XLV`, `XLI`, `XLP`, `XLE`, `XLB`, `XLRE`, `XLU`), fallback `SPY`.
+- `congress_trades` and `insider_trades`: derive symbol from `ticker` when `symbol` is missing.
+- `news`: derive symbol from `symbols[0]` when `symbol` is missing.
 
 ## Gold Datasets
 

@@ -25,7 +25,8 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
 ## Core Services
 
 - **heber-consumer** (`heber/writer/consumer.py`)
-  - Redis Streams consumer; validates `EventEnvelope`, sets `ts_available`, writes Bronze + Silver.
+  - Redis Streams consumer with Bronze-first flow: parse envelope, set `ts_available`, write Bronze, normalize for Silver, then write Silver or DLQ.
+  - Unknown feed behavior is explicit: Bronze persists, Silver is skipped, DLQ event reason is `unmapped_feed`.
 - **heber-compactor** (`heber/writer/compactor.py`)
   - Periodic Parquet compaction for lake partitions.
 - **heber-catalog** (`heber/catalog/api.py`)
@@ -45,6 +46,20 @@ The canonical event format (see `heber/models/envelope.py`) includes:
 - **Payload**: normalized `payload` + optional `raw` (Bronze fidelity)
 
 Zero-leakage is enforced via `ts_available` and `read_asof()` semantics.
+
+## Bronze->Silver Normalization
+
+Normalization contracts are centralized so live and backfill use identical rules:
+
+- `heber/writer/ingest_contracts.py`
+  - feed aliases (`ftds -> ftd`, `short_interest/short_volume -> short_data`)
+  - payload field mappings and per-feed normalization rules
+- `heber/writer/key_normalization.py`
+  - strict deterministic symbol/instrument key synthesis
+- `heber/writer/normalizer.py`
+  - shared row coercion from normalized envelope to Silver schema
+
+This prevents divergence between `SilverWriter` and `BronzeToSilverTransformer`.
 
 ## Catalog Schema (Postgres)
 
