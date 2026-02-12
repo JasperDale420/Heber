@@ -122,10 +122,11 @@ def test_process_event_rejects_invalid_instrument_key() -> None:
         "payload": {},
     }
 
-    success, error = consumer._process_event_once({"data": json.dumps(envelope)})
+    success, error, retryable = consumer._process_event_once({"data": json.dumps(envelope)})
 
     assert success is False
     assert error is not None
     assert "Invalid instrument_key format" in error
-    consumer.bronze_writer.write.assert_not_called()
+    assert retryable is False
+    consumer.bronze_writer.write.assert_called_once()
     consumer.silver_writer.write.assert_not_called()

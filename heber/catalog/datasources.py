@@ -161,7 +161,7 @@ class DatasetSpec:
         }
 
 
-# Dataset catalog — aligned with all 44 Silver schemas
+# Dataset catalog — aligned with all Silver schemas
 DEFAULT_DATASETS: list[DatasetSpec] = [
     # Core Market Data
     DatasetSpec("bars", "market_data", "OHLCV minute/daily bars", [PROVIDER_ALPACA], True),
@@ -186,6 +186,13 @@ DEFAULT_DATASETS: list[DatasetSpec] = [
     DatasetSpec("iv_term_structure", "analytics", "IV term structure by expiry", [PROVIDER_UNUSUAL_WHALES], True),
     DatasetSpec("volatility_stats", "analytics", "Realized vs implied volatility", [PROVIDER_UNUSUAL_WHALES], True),
     DatasetSpec("oi_change", "analytics", "Open interest changes (call/put)", [PROVIDER_UNUSUAL_WHALES], True),
+    DatasetSpec(
+        "historic_option_volume",
+        "analytics",
+        "Historic option volume/open interest by expiry",
+        [PROVIDER_UNUSUAL_WHALES],
+        True,
+    ),
     DatasetSpec("seasonality", "analytics", "Historical monthly return seasonality", [PROVIDER_UNUSUAL_WHALES], True),
     DatasetSpec("volume_profile", "analytics", "Option volume profile by price", [PROVIDER_UNUSUAL_WHALES], True),
     DatasetSpec("group_flow", "analytics", "Grouped GEX/DEX flow by sector/index", [PROVIDER_UNUSUAL_WHALES], True),

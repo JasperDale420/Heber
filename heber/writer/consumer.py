@@ -11,17 +11,26 @@ from typing import Any
 
 import redis.asyncio as redis
 import structlog
+from pydantic import ValidationError
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import (
     record_batch_processed,
+    record_dlq_event,
     record_event_processed,
     record_event_received,
     record_ingest_latency,
     start_metrics_server_from_env,
 )
 from heber.writer.bronze import BronzeWriter
+from heber.writer.ingest_contracts import (
+    DLQ_REASON_UNCONTRACTED,
+    UnmappedFeedError,
+    is_contracted_feed,
+    resolve_silver_feed,
+)
+from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.silver import SilverWriter
 
 logger = structlog.get_logger(__name__)
@@ -158,6 +167,7 @@ class EventConsumer:
         message_data: dict,
         error: str,
         attempts: int,
+        feed: str = "unknown",
     ) -> bool:
         """Write failed message details to DLQ stream."""
         try:
@@ -178,6 +188,8 @@ class EventConsumer:
                 source_message_id=dlq_event["source_message_id"],
                 dlq_message_id=self._decode_string(dlq_id),
             )
+            error_type = error.split(":", 1)[0] if error else "unknown_error"
+            record_dlq_event(feed=feed, error_type=error_type)
             return True
         except Exception as exc:
             logger.error(
@@ -188,10 +200,11 @@ class EventConsumer:
             )
             return False
 
-    def _process_event_once(self, event_data: dict) -> tuple[bool, str | None]:
-        """Process an event one time and return `(success, error)`."""
+    def _process_event_once(self, event_data: dict) -> tuple[bool, str | None, bool]:
+        """Process an event one time and return `(success, error, retryable)`."""
         feed = "unknown"
         provider = "unknown"
+        bronze_written = False
         try:
             # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
             payload_str = (
@@ -226,39 +239,84 @@ class EventConsumer:
             )
 
             self._validate_payload_schema(envelope)
-            self._validate_instrument_key(envelope)
 
-            # Write to Bronze (always)
+            # Bronze-first policy: persist envelope before Silver normalization/validation.
             self.bronze_writer.write(envelope)
-
-            # Write to Silver (normalized)
-            self.silver_writer.write(envelope)
-
-            logger.debug(
-                "Processed event",
+            bronze_written = True
+            logger.info(
+                "bronze_write_success",
                 event_id=envelope.event_id,
                 feed=envelope.feed,
                 instrument_key=envelope.instrument_key,
             )
-            record_event_processed(feed=feed, provider=provider, status="success")
-            return True, None
 
-        except Exception as e:
+            if not is_contracted_feed(envelope.feed):
+                logger.warning(
+                    "silver_feed_uncontracted",
+                    source_feed=envelope.feed,
+                    provider=envelope.provider,
+                    event_id=envelope.event_id,
+                )
+                raise UnmappedFeedError(DLQ_REASON_UNCONTRACTED)
+
+            normalized = normalize_envelope_for_silver(envelope)
+            silver_feed = resolve_silver_feed(normalized.feed)
+            if silver_feed is None:
+                logger.warning(
+                    "silver_schema_unmapped",
+                    source_feed=envelope.feed,
+                    canonical_feed=normalized.feed,
+                    event_id=envelope.event_id,
+                )
+                raise UnmappedFeedError("unmapped_feed")
+
+            normalized = normalized.model_copy(update={"feed": silver_feed})
+            self._validate_instrument_key(normalized)
+            self.silver_writer.write(normalized)
+
+            logger.debug(
+                "Processed event",
+                event_id=normalized.event_id,
+                feed=normalized.feed,
+                instrument_key=normalized.instrument_key,
+            )
+            record_event_processed(feed=feed, provider=provider, status="success")
+            return True, None, True
+        except UnmappedFeedError as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            return False, str(exc), False
+        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            if bronze_written:
+                logger.warning(
+                    "silver_normalization_failed",
+                    feed=feed,
+                    provider=provider,
+                    error=str(exc),
+                )
+            else:
+                logger.error(
+                    "Failed to parse event",
+                    error=str(exc),
+                    event_data=str(event_data)[:200],
+                )
+            return False, str(exc), False
+        except Exception as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             logger.error(
                 "Failed to process event",
-                error=str(e),
+                error=str(exc),
                 event_data=str(event_data)[:200],
                 exc_info=True,
             )
-            return False, str(e)
+            return False, str(exc), not bronze_written
 
     def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
 
         Returns True if successful, False otherwise.
         """
-        success, _ = self._process_event_once(event_data)
+        success, _, _ = self._process_event_once(event_data)
         return success
 
     async def _process_with_retry(self, event_data: dict) -> tuple[bool, str, int]:
@@ -268,17 +326,40 @@ class EventConsumer:
         last_error = "unknown_error"
 
         for attempt in range(1, max_retries + 1):
-            success, error = self._process_event_once(event_data)
+            success, error, retryable = self._process_event_once(event_data)
             if success:
                 return True, "", attempt
 
             if error:
                 last_error = error
 
+            if not retryable:
+                return False, last_error, attempt
+
             if attempt < max_retries and backoff > 0:
                 await asyncio.sleep(backoff * attempt)
 
         return False, last_error, max_retries
+
+    @staticmethod
+    def _extract_feed_from_message(message_data: dict) -> str:
+        payload_str = (
+            message_data.get(b"data")
+            or message_data.get("data")
+            or message_data.get(b"payload")
+            or message_data.get("payload")
+        )
+        if payload_str is None:
+            return "unknown"
+        if isinstance(payload_str, bytes):
+            payload_str = payload_str.decode("utf-8", errors="replace")
+        if isinstance(payload_str, dict):
+            return str(payload_str.get("feed") or "unknown")
+        try:
+            event_dict = json.loads(payload_str)
+        except Exception:
+            return "unknown"
+        return str(event_dict.get("feed") or "unknown")
 
     async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
         """Process a list of stream messages and return `(acked_ids, failed_ids)`."""
@@ -292,11 +373,13 @@ class EventConsumer:
                 processed_ids.append(message_id_str)
                 continue
 
+            feed = self._extract_feed_from_message(message_data)
             moved_to_dlq = await self._send_to_dlq(
                 message_id=message_id,
                 message_data=message_data,
                 error=error,
                 attempts=attempts,
+                feed=feed,
             )
             if moved_to_dlq:
                 # Ack after durable DLQ write so poison messages don't block group progress.

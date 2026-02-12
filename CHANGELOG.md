@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Gateway Feed Alias Compatibility
+
+- Added defensive ingest aliases in `heber/writer/ingest_contracts.py` so legacy/rest feed names still resolve to canonical Silver datasets:
+  - `flow` -> `flow_alerts`
+  - `greeks` -> `greek_exposure`
+  - `gex` -> `greek_exposure`
+- Expanded Data-Gateway feed coverage list with legacy alias names so contract checks route them through canonical schemas.
+- Updated catalog seed mappings in `scripts/seed_catalog.py` for the same alias set, ensuring catalog metadata includes legacy-to-canonical mappings.
+- Expanded alias routing tests in `tests/test_feed_alias_routing.py` to enforce alias + catalog-seed parity.
+
+#### Comprehensive Feed Coverage Audit
+
+- Added 7 new `FEED_ALIASES` in `heber/writer/ingest_contracts.py`: `ticker_flow`→`flow_alerts`, `darkpool_ticker`→`darkpool`, `option_trades`→`trades`, `crypto_bars`→`bars`, `crypto_trades`→`trades`, `institutions`→`institution_holdings`, `filings`→`news`
+- Expanded `DATA_GATEWAY_FEEDS` from 14 to 46 entries covering all Silver schemas
+- Added `forex` Silver schema in `heber/schemas/silver.py` with bid/ask/mid/OHLC columns
+- Added `forex` field mapping in `heber/writer/ingest_contracts.py`
+
+#### Bronze→Silver Contract Hardening
+
+- Added contract-first ingestion tests for Data Gateway feed coverage, alias routing, instrument-key synthesis, and Bronze-first behavior:
+  - `tests/test_ingest_feed_contract_matrix.py`
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_feed_alias_routing.py`
+  - `tests/test_instrument_key_synthesis.py`
+  - `tests/test_data_gateway_feed_parity.py` (extracts emitted feeds from Data Gateway source and enforces Heber mapping coverage)
+- Added shared ingest contract and normalization modules used by both live consumer and backfill transformer:
+  - `heber/writer/ingest_contracts.py`
+  - `heber/writer/key_normalization.py`
+  - `heber/writer/normalizer.py`
+- Added dedicated Silver dataset schema for `historic_option_volume` in `heber/schemas/silver.py`.
+
+#### Bronze→Silver Training-Feed Scope
+
+- Added explicit raw feed allowlist for Silver routing in `heber/writer/ingest_contracts.py`:
+  - `CONTRACTED_RAW_FEEDS`
+  - `is_contracted_feed()`
+  - `DLQ_REASON_UNCONTRACTED`
+- Extended Data-Gateway parity test in `tests/test_data_gateway_feed_parity.py` to include:
+  - stream feeds (`stream.py`)
+  - UW poller feeds (`uw_poller.py`)
+  - backfill dispatch feeds (`backfill.py`)
+- Added REST overflow guard test `tests/test_data_gateway_rest_feed_contract.py` that parses Data-Gateway route segments and enforces Bronze+DLQ for non-contracted derived feeds.
+- Expanded feed contract matrix and alias seed coverage for training feeds:
+  - `option_trades`, `crypto_bars`, `crypto_trades`, `ticker_flow`, `darkpool_ticker`, `institutions`, `earnings`
+
 #### Canonical Contracts
 
 - Standardized canonical darkpool naming to `darkpool` across provider/stream/slice metadata:
@@ -24,6 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 
+- Updated `docs/data_contract.md` with:
+  - Bronze-first / Silver-strict ingest policy
+  - Data Gateway feed coverage matrix and alias routing
+  - key synthesis rules and unknown-feed handling semantics
+- Updated `docs/architecture.md` with Bronze→Silver normalization architecture and shared normalizer module references.
+- Updated `docs/data_contract.md` and `docs/architecture.md` for training-feed scope:
+  - added plain-English contract terminology
+  - added contracted raw feed matrix for stream/UW poller/backfill
+  - documented Bronze+DLQ behavior for `uncontracted_feed` and `unmapped_feed`
+
 - Added operational runbook (`docs/operations/runbook.md`) covering system overview, startup/shutdown, daily operations, common ops, incident response, data recovery, and configuration reference
 - Added missing documentation links to `README.md`: `labeling_strategy.md`, `schemaaudit.md`
 - Added watch service to `docs/architecture.md` Core Services section
@@ -31,6 +86,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added missing env vars to `.env.example`: `HEBER_CATALOG_URL`, `HEBER_CLICKHOUSE_DATABASE`, `DATA_GATEWAY_URL`, `HEBER_GOLD_PATH`
 
 ### Fixed
+
+#### CI Security Scan Stabilization
+
+- Sanitized tracked lakeFS credentials in `.env` to placeholder values so Trivy secret scanning no longer flags a committed AWS-style key.
+- Added explicit `duckdb>=1.1.0` dependency and regenerated `uv.lock` to remove vulnerable `duckdb==1.0.0` (CVE-2024-41672) from CI scan results.
+- Added `.trivyignore` entry for `CVE-2026-0994` (transitive `protobuf` via `soda-core-duckdb`) to keep CI scanning deterministic until upstream dependencies support a non-vulnerable graph with `duckdb>=1.1.0`.
+
+#### CI Ruff Config Portability
+
+- Added repo-local Ruff base config at `ruff-base.toml` and updated `pyproject.toml` to extend the local file.
+- This fixes PR CI pre-commit failures where GitHub Actions cannot resolve `../ruff-base.toml`.
+- Added explicit `joblib` dependency in `pyproject.toml` for `heber/ml/trainer.py` save/load paths.
+- This fixes CI unit test failure `ModuleNotFoundError: No module named 'joblib'` in `test_meta_feature_order_contract.py`.
+
+#### Bronze→Silver Runtime Hardening
+
+- Refactored `heber/writer/consumer.py` to Bronze-first processing order:
+  - parse envelope
+  - assign `ts_available` when missing
+  - write Bronze immediately
+  - normalize feed/key/payload for Silver
+  - write Silver only for mapped feeds, otherwise DLQ with `unmapped_feed`
+- Added explicit observability events for ingestion outcomes:
+  - `bronze_write_success`
+  - `silver_normalization_failed`
+  - `silver_schema_unmapped`
+- Added shared Silver row normalization engine (`heber/writer/normalizer.py`) and wired both live writer and backfill transformer to it.
+- Updated backfill transformer to route feed aliases consistently and skip unmapped feeds explicitly.
+- Updated consumer reliability/metrics tests for the new Bronze-first contract:
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_writer_consumer_reliability.py`
+  - `tests/test_metrics_runtime_wiring.py`
+- Fixed mypy plugin config path in `pyproject.toml` from `numpy.typing.mypy` to `numpy.typing.mypy_plugin` so type-checking can run in local/dev environments.
+- Added `features/__init__.py` so mypy resolves `features.feature_views` consistently without duplicate module-path errors.
 
 #### Repo Hygiene Remediation
 

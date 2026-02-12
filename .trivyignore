@@ -1,0 +1,3 @@
+# Transitive dependency from soda-core-duckdb resolution path.
+# Remove this ignore once Soda stack supports protobuf>=5 with duckdb>=1.1.
+CVE-2026-0994
