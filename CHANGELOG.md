@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
 - Added regression tests in `tests/test_event_envelope_timezones.py` to prevent mixed naive/aware timestamp errors during consumer lag calculations.
 
+#### Equity Instrument Key Compatibility
+
+- Expanded equity instrument-key validation in `heber/models/envelope.py` to accept dotted/suffixed symbols emitted by gateway data (for example `BRK.B`, `JRI.RT`, `VAL.WS`).
+- Added regression tests in `tests/test_equity_instrument_key_format.py` covering valid extended tickers and malformed-key rejections.
+
 #### Docker Python 3.14 Builder Compatibility
 
 - Added `cmake` and `ninja-build` to the Docker builder stage so dependency installation succeeds when Python 3.14 requires source builds for some packages (for example `pyarrow`).
