@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Bronze→Silver Runtime Hardening
+
+- Refactored `heber/writer/consumer.py` to Bronze-first processing order:
+  - parse envelope
+  - assign `ts_available` when missing
+  - write Bronze immediately
+  - normalize feed/key/payload for Silver
+  - write Silver only for mapped feeds, otherwise DLQ with `unmapped_feed`
+- Added explicit observability events for ingestion outcomes:
+  - `bronze_write_success`
+  - `silver_normalization_failed`
+  - `silver_schema_unmapped`
+- Added shared Silver row normalization engine (`heber/writer/normalizer.py`) and wired both live writer and backfill transformer to it.
+- Updated backfill transformer to route feed aliases consistently and skip unmapped feeds explicitly.
+- Updated consumer reliability/metrics tests for the new Bronze-first contract:
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_writer_consumer_reliability.py`
+  - `tests/test_metrics_runtime_wiring.py`
+
 #### Repo Hygiene Remediation
 
 - Fixed Prometheus metric registry collision: wrapped all 26 metrics in `_get_or_create()` helper to prevent `ValueError: Duplicated timeseries` during test collection (201 tests now pass, was 0)

@@ -23,213 +23,15 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
+from heber.writer.ingest_contracts import UnmappedFeedError, resolve_silver_feed
+from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.normalizer import envelope_to_silver_row
 
 logger = structlog.get_logger(__name__)
 
 
-# Field mappings: payload field -> Silver schema field
-# These handle naming differences between provider payloads and our schema.
-# Feeds with direct name matching use empty dicts to document coverage.
-FIELD_MAPPINGS: dict[str, dict[str, str]] = {
-    # ── Core Market Data ──────────────────────────────────────────────
-    # Bars (Alpaca short-name fields)
-    "bars": {
-        "t": "bar_start_ts",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "v": "volume",
-        "n": "trade_count",
-        "vw": "vwap",
-    },
-    # Quotes (Alpaca short-name fields)
-    "quotes": {
-        "bp": "bid_px",
-        "bs": "bid_sz",
-        "ap": "ask_px",
-        "as": "ask_sz",
-        "bx": "bid_exchange",
-        "ax": "ask_exchange",
-    },
-    # Trades (Alpaca short-name fields)
-    "trades": {
-        "p": "price",
-        "s": "size",
-        "x": "exchange",
-        "i": "trade_id",
-        "z": "tape",
-    },
-    # ── Options Flow ──────────────────────────────────────────────────
-    "flow_alerts": {
-        "price": "contract_px",
-        "underlying_price": "spot_px",
-        "option_chain": "occ_symbol",
-        "symbol": "underlying",
-        "alert_rule": "alert_type",
-        "ticker": "underlying",
-    },
-    "darkpool": {
-        "symbol": "underlying",
-        "exchange": "venue",
-        "tracking_id": "print_id",
-        "ask": "nbbo_ask",
-        "bid": "nbbo_bid",
-    },
-    # ── Sentiment ─────────────────────────────────────────────────────
-    "sector_tide": {},  # NormalizedSectorTide fields match Silver directly
-    "market_tide": {
-        "net_call_premium": "total_call_premium",
-        "net_put_premium": "total_put_premium",
-    },
-    # ── Phase 1: Core Analytics ───────────────────────────────────────
-    "greek_exposure": {},  # NormalizedGreekExposure fields match Silver directly
-    "max_pain": {},  # NormalizedMaxPain fields match Silver directly
-    "net_premium_tick": {},  # NormalizedNetPremiumTick fields match Silver directly
-    "hottest_chain": {},  # NormalizedHottestChain fields match Silver directly
-    # ── Phase 2: Reference Data ───────────────────────────────────────
-    "earnings": {
-        "report_date": "ts_event",
-        "date": "earnings_date",
-    },
-    "corporate_action": {},  # NormalizedCorporateAction fields match Silver directly
-    # ── Phase 3: Screeners ────────────────────────────────────────────
-    "most_active": {},  # NormalizedMostActive fields match Silver directly
-    "mover": {},  # NormalizedMover fields match Silver directly
-    "screener_result": {},  # NormalizedScreenerResult fields match Silver directly
-    # ── Phase 4: Advanced Analytics ───────────────────────────────────
-    "iv_rank": {},  # NormalizedIVRank fields match Silver directly
-    "iv_term_structure": {},  # NormalizedIVTermStructure fields match Silver directly
-    "volatility_stats": {},  # NormalizedVolatilityStats fields match Silver directly
-    "oi_change": {
-        "date": "oi_date",
-    },
-    # ── ETF Feeds ─────────────────────────────────────────────────────
-    "etf_holding": {},  # NormalizedETFHolding fields match Silver directly
-    "etf_flow": {
-        "date": "flow_date",
-    },
-    # ── Short / FTD ───────────────────────────────────────────────────
-    "short_data": {
-        "date": "short_date",
-    },
-    "ftd": {
-        "date": "ftd_date",
-    },
-    # ── Seasonality ───────────────────────────────────────────────────
-    "seasonality": {},  # NormalizedSeasonality fields match Silver directly
-    # ── Reference Data (SCD) ──────────────────────────────────────────
-    "option_contract": {
-        "contract_symbol": "occ_symbol",
-        "expiration": "expiry",
-        "option_type": "put_call",
-    },
-    "news": {
-        "article_id": "news_id",
-        "published_at": "ts_published",
-        "source": "source_name",
-    },
-    "orderbook": {
-        "bids": "bids_json",
-        "asks": "asks_json",
-    },
-    # ── V3: Alternative Data ──────────────────────────────────────────
-    "congress_trades": {
-        "representative": "politician_name",
-        "party": "politician_party",
-        "state": "politician_state",
-        "chamber": "politician_chamber",
-        "transaction_type": "trade_type",
-        "transaction_date": "trade_date",
-        "filing_date": "disclosure_date",
-        "transaction_id": "trade_id",
-    },
-    "insider_trades": {
-        "insider_name": "insider_name",
-        "insider_title": "insider_title",
-        "transaction_type": "trade_type",
-        "transaction_date": "trade_date",
-        "shares_owned": "shares_owned_after",
-        "transaction_id": "filing_id",
-        "is_10b5_1": "insider_relationship",
-    },
-    "insider_flow": {},  # Direct match with Silver schema
-    "institution_holdings": {
-        "institution_name": "institution_name",
-        "institution_id": "institution_cik",
-        "market_value": "value",
-        "percent_portfolio": "portfolio_pct",
-        "change_shares": "change_shares",
-        "change_type": "change_pct",
-        "report_date": "quarter_end",
-    },
-    "institution_activity": {
-        "institution": "institution_name",
-        "cik": "institution_cik",
-    },
-    "politician_trades": {
-        "politician_name": "politician_name",
-        "politician_id": "politician_id",
-        "transaction_type": "trade_type",
-        "transaction_date": "trade_date",
-        "amount_range": "amount_min",
-        "description": "asset_description",
-        "transaction_id": "trade_id",
-    },
-    # ── V4: Market Analytics ──────────────────────────────────────────
-    "analyst_ratings": {
-        "firm": "analyst_firm",
-        "analyst": "analyst_name",
-        "rating_current": "rating",
-        "date": "rating_date",
-        "id": "rating_id",
-    },
-    "stock_fundamentals": {
-        "name": "company_name",
-        "week_52_high": "high_52w",
-        "week_52_low": "low_52w",
-        "date": "snapshot_date",
-    },
-    "economic_events": {
-        "name": "event_name",
-        "type": "event_type",
-        "date": "event_date",
-        "time": "event_time",
-    },
-    "market_indicators": {
-        "name": "indicator_name",
-        "date": "indicator_date",
-        "time": "indicator_time",
-    },
-    # ── V5: Options Deep Data ─────────────────────────────────────────
-    "option_history": {
-        "contract_symbol": "occ_symbol",
-        "date": "history_date",
-    },
-    "option_chain_snapshot": {
-        "timestamp": "snapshot_ts",
-    },
-    "volume_profile": {
-        "contract_symbol": "occ_symbol",
-        "date": "profile_date",
-    },
-    "group_flow": {
-        "flow_group": "group_name",
-        "type": "group_type",
-        "date": "flow_date",
-    },
-    # ── V6: ETF Deep Data ─────────────────────────────────────────────
-    "etf_metadata": {
-        "name": "fund_name",
-        "date": "snapshot_date",
-    },
-    "etf_sector_weights": {
-        "date": "weight_date",
-        "type": "weight_type",
-        "name": "weight_name",
-        "weight": "weight_pct",
-    },
-}
+# Field mappings live in `heber.writer.ingest_contracts` and are consumed via
+# `envelope_to_silver_row` so live and backfill follow the same normalization.
 
 
 class BronzeToSilverTransformer:
@@ -356,6 +158,11 @@ class BronzeToSilverTransformer:
         dt: str,
     ) -> int:
         """Transform a single date partition."""
+        silver_feed = resolve_silver_feed(feed)
+        if silver_feed is None:
+            logger.warning("No schema for feed, skipping", feed=feed)
+            return 0
+
         dt_dir = feed_dir / f"dt={dt}"
         if not dt_dir.exists():
             return 0
@@ -371,18 +178,19 @@ class BronzeToSilverTransformer:
 
             # Flush in batches
             if len(records) >= self.batch_size:
-                self._write_silver_batch(records, feed, dt)
+                self._write_silver_batch(records, silver_feed, dt)
                 total_records += len(records)
                 records = []
 
         # Final flush
         if records:
-            self._write_silver_batch(records, feed, dt)
+            self._write_silver_batch(records, silver_feed, dt)
             total_records += len(records)
 
         logger.info(
             "Transformed partition",
-            feed=feed,
+            source_feed=feed,
+            feed=silver_feed,
             dt=dt,
             files=files_processed,
             records=total_records,
@@ -413,46 +221,17 @@ class BronzeToSilverTransformer:
 
     def _envelope_to_silver_row(self, envelope: EventEnvelope, feed: str) -> dict[str, Any] | None:
         """Convert EventEnvelope to Silver row format."""
-        if feed not in SILVER_SCHEMAS:
+        if resolve_silver_feed(feed) is None:
             logger.debug("No schema for feed, skipping", feed=feed)
             return None
 
-        # Base columns from envelope
-        row = {
-            "event_id": envelope.event_id,
-            "provider": envelope.provider,
-            "feed": envelope.feed,
-            "instrument_type": envelope.instrument_type,
-            "instrument_key": envelope.instrument_key,
-            "symbol": envelope.symbol,
-            "ts_event": envelope.ts_event,
-            "ts_ingest": envelope.ts_ingest,
-            "ts_available": envelope.ts_available or envelope.ts_ingest,
-            "source": envelope.source,
-            "schema_version": envelope.schema_version,
-            "quality_flags": envelope.quality_flags,
-        }
-
-        # Map payload fields using field mappings
-        payload = envelope.payload
-        mappings = FIELD_MAPPINGS.get(feed, {})
-        schema = SILVER_SCHEMAS[feed]
-
-        for field in schema:
-            if field.name in row:
-                continue  # Already set from envelope
-
-            # Try mapped name first, then direct name
-            source_name = next((k for k, v in mappings.items() if v == field.name), field.name)
-            value = payload.get(source_name)
-
-            # Type coercion
-            if value is not None:
-                value = self._coerce_value(value, field.type)
-
-            row[field.name] = value
-
-        return row
+        try:
+            feed_scoped = envelope.model_copy(update={"feed": feed})
+            normalized = normalize_envelope_for_silver(feed_scoped)
+            return envelope_to_silver_row(normalized)
+        except (UnmappedFeedError, ValueError) as exc:
+            logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
+            return None
 
     def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
         """Coerce a value to match the expected Arrow type."""

@@ -9,6 +9,7 @@ Format: Parquet
 Path: silver/feed={}/instrument_type={}/dt={}/[hour={}]/
 """
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +22,10 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
-from heber.schemas.silver import DEFAULT_SCHEMA, SILVER_SCHEMAS
+from heber.schemas.silver import get_silver_schema
+from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
+from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.normalizer import envelope_to_silver_row
 
 logger = structlog.get_logger(__name__)
 
@@ -46,91 +50,45 @@ class SilverWriter:
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
+        feed = resolve_feed_alias(envelope.feed)
         dt = envelope.ts_event.strftime("%Y-%m-%d")
 
         # High-volume feeds use hour partitioning
-        if envelope.feed in ("quotes", "trades"):
+        if feed in ("quotes", "trades"):
             hour = envelope.ts_event.strftime("%H")
-            return f"feed={envelope.feed}/instrument_type={envelope.instrument_type}/dt={dt}/hour={hour}"
+            return f"feed={feed}/instrument_type={envelope.instrument_type}/dt={dt}/hour={hour}"
 
-        return f"feed={envelope.feed}/instrument_type={envelope.instrument_type}/dt={dt}"
+        return f"feed={feed}/instrument_type={envelope.instrument_type}/dt={dt}"
 
     def _get_schema(self, feed: str) -> pa.Schema:
         """Get schema for a feed."""
-        return SILVER_SCHEMAS.get(feed, DEFAULT_SCHEMA)
+        return get_silver_schema(feed)
 
-    def _envelope_to_row(self, envelope: EventEnvelope) -> dict[str, Any]:
-        """Convert envelope to Silver row format."""
-        # Base columns from envelope
-        row = {
-            "event_id": envelope.event_id,
-            "provider": envelope.provider,
-            "feed": envelope.feed,
-            "instrument_type": envelope.instrument_type,
-            "instrument_key": envelope.instrument_key,
-            "symbol": envelope.symbol,
-            "ts_event": envelope.ts_event,
-            "ts_ingest": envelope.ts_ingest,
-            "ts_available": envelope.ts_available,
-            "source": envelope.source,
-            "schema_version": envelope.schema_version,
-            "quality_flags": envelope.quality_flags,
-        }
+    def _envelope_to_row(self, envelope: EventEnvelope) -> tuple[dict[str, Any], EventEnvelope]:
+        """Normalize an envelope and return `(row, normalized_envelope)`."""
+        normalized = normalize_envelope_for_silver(envelope)
+        silver_feed = resolve_silver_feed(normalized.feed)
 
-        # Add payload fields
-        payload = envelope.payload
-        if envelope.feed in SILVER_SCHEMAS:
-            # Field renames: payload field name -> Silver canonical column name.
-            # Only feeds where provider names differ from Silver schema need entries.
-            # Feeds not listed here use direct name matching (payload name == schema column).
-            field_mappings = {
-                "flow_alerts": {
-                    "price": "contract_px",
-                    "underlying_price": "spot_px",
-                    "option_chain": "occ_symbol",
-                    "symbol": "underlying",
-                    "alert_rule": "alert_type",
-                },
-                "darkpool": {
-                    "symbol": "underlying",
-                    "exchange": "venue",
-                    "tracking_id": "print_id",
-                },
-                "quotes": {
-                    "bid_price": "bid_px",
-                    "ask_price": "ask_px",
-                    "bid_size": "bid_sz",
-                    "ask_size": "ask_sz",
-                },
-                "market_tide": {
-                    "net_call_premium": "total_call_premium",
-                    "net_put_premium": "total_put_premium",
-                },
+        if silver_feed is None:
+            row = {
+                "event_id": normalized.event_id,
+                "provider": normalized.provider,
+                "feed": resolve_feed_alias(normalized.feed),
+                "instrument_type": normalized.instrument_type,
+                "instrument_key": normalized.instrument_key,
+                "symbol": normalized.symbol,
+                "ts_event": normalized.ts_event,
+                "ts_ingest": normalized.ts_ingest,
+                "ts_available": normalized.ts_available,
+                "source": normalized.source,
+                "schema_version": normalized.schema_version,
+                "quality_flags": normalized.quality_flags,
             }
-            mappings = field_mappings.get(envelope.feed, {})
+            row["payload_json"] = json.dumps(normalized.payload, default=str)
+            return row, normalized
 
-            # Map payload fields to schema columns with type coercion
-            schema = SILVER_SCHEMAS[envelope.feed]
-            for field in schema:
-                if field.name in row:
-                    continue  # Already set from envelope
-
-                # Try mapped name first, then direct name
-                source_name = next((k for k, v in mappings.items() if v == field.name), field.name)
-                value = payload.get(source_name)
-
-                # Type coercion based on Arrow type
-                if value is not None:
-                    value = self._coerce_value(value, field.type)
-
-                row[field.name] = value
-        else:
-            # Store payload as JSON for unknown feeds
-            import json
-
-            row["payload_json"] = json.dumps(payload, default=str)
-
-        return row
+        normalized = normalized.model_copy(update={"feed": silver_feed})
+        return envelope_to_silver_row(normalized), normalized
 
     def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
         """Coerce a value to match the expected Arrow type."""
@@ -196,8 +154,8 @@ class SilverWriter:
 
     def write(self, envelope: EventEnvelope) -> None:
         """Buffer an event for writing."""
-        partition_key = self._get_partition_key(envelope)
-        row = self._envelope_to_row(envelope)
+        row, normalized = self._envelope_to_row(envelope)
+        partition_key = self._get_partition_key(normalized)
         self.buffers[partition_key].append(row)
 
     def flush_if_needed(self) -> None:

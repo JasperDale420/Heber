@@ -67,10 +67,11 @@ def test_consumer_process_records_core_metrics(monkeypatch) -> None:
     payload = _build_envelope().model_dump(mode="json")
     event_data = {b"data": json.dumps(payload).encode("utf-8")}
 
-    success, error = consumer._process_event_once(event_data)
+    success, error, retryable = consumer._process_event_once(event_data)
 
     assert success is True
     assert error is None
+    assert retryable is True
     assert calls["received"] == [{"feed": "bars", "provider": "alpaca"}]
     assert calls["processed"] == [{"feed": "bars", "provider": "alpaca", "status": "success"}]
     assert len(calls["latency"]) == 1
