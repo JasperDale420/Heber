@@ -19,8 +19,15 @@ from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
-# Database setup
-engine = create_async_engine(settings.postgres_url, echo=settings.environment == "dev")
+# Database setup — echo=True blocks the async event loop with synchronous logging.
+# Use pool_pre_ping to detect stale connections after container restarts.
+engine = create_async_engine(
+    settings.postgres_url,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=5,
+    pool_recycle=300,
+)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
