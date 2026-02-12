@@ -99,6 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `batch_items_failed`
 - Added regression tests in `tests/test_consumer_parsing.py` for single payload parsing, batched payload parsing, malformed batch handling, and mixed valid/invalid batch processing.
 
+#### Watch Gold Path Resolution and Startup Preflight
+
+- Updated `heber/config.py` so Gold root path resolution accepts `HEBER_GOLD_PATH` aliases and consistently feeds `settings.gold_path`.
+- Added startup output path preflight in `heber/watch/__main__.py` to create missing directories and verify write access before service startup.
+- Added regression tests:
+  - `tests/test_config_paths.py`
+  - `tests/test_watch_startup_preflight.py`
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.

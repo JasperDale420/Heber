@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
+from pathlib import Path
 
 import structlog
 
@@ -27,10 +29,28 @@ def _get_defaults() -> tuple[str, str, str]:
     return s.watch_redis_url, s.watch_gateway_url, str(s.gold_path)
 
 
+def _ensure_writable_output_path(output_path: str | None) -> Path | None:
+    """Resolve, create, and validate write access to output path."""
+    if not output_path:
+        return None
+
+    resolved = Path(output_path)
+    resolved.mkdir(parents=True, exist_ok=True)
+
+    probe_file = resolved / f".watch-write-probe-{os.getpid()}"
+    try:
+        with probe_file.open("w", encoding="utf-8") as handle:
+            handle.write("ok")
+    except OSError as exc:
+        raise PermissionError(f"Output path is not writable: {resolved}") from exc
+    finally:
+        probe_file.unlink(missing_ok=True)
+
+    return resolved
+
+
 def run() -> None:
     """Run the watch service."""
-    from pathlib import Path
-
     import redis
 
     from heber.watch.writer import WatchService
@@ -76,7 +96,7 @@ Environment variables:
     )
 
     r = redis.from_url(args.redis)
-    output_path = Path(args.output) if args.output else None
+    output_path = _ensure_writable_output_path(args.output)
 
     service = WatchService(r, gateway_url=args.gateway, output_path=output_path)
     run_error: BaseException | None = None

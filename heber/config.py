@@ -138,7 +138,16 @@ class Settings(BaseSettings):
     environment: Literal["dev", "staging", "prod"] = Field(default="dev")
 
     # Gold layer paths (used by feature_views/_paths.py)
-    gold_root: Path | None = Field(default=None, description="Override for gold data root (defaults to data_root/gold)")
+    gold_root: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "HEBER_GOLD_ROOT",
+            "HEBER_GOLD_PATH",
+            "GOLD_ROOT",
+            "GOLD_PATH",
+        ),
+        description="Override for gold data root (defaults to data_root/gold)",
+    )
     gold_project: str = Field(default="*", description="Glob pattern for gold project dirs")
     gold_version: str = Field(default="*", description="Glob pattern for gold version dirs")
 
