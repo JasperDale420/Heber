@@ -138,7 +138,7 @@ python_version = "3.11"
 strict = true
 warn_unused_configs = true
 warn_redundant_casts = true
-plugins = ["pydantic.mypy", "numpy.typing.mypy"]
+plugins = ["pydantic.mypy", "numpy.typing.mypy_plugin"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

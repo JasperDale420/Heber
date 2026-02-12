@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_bronze_first_ingestion.py`
   - `tests/test_feed_alias_routing.py`
   - `tests/test_instrument_key_synthesis.py`
+  - `tests/test_data_gateway_feed_parity.py` (extracts emitted feeds from Data Gateway source and enforces Heber mapping coverage)
 - Added shared ingest contract and normalization modules used by both live consumer and backfill transformer:
   - `heber/writer/ingest_contracts.py`
   - `heber/writer/key_normalization.py`
@@ -69,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_bronze_first_ingestion.py`
   - `tests/test_writer_consumer_reliability.py`
   - `tests/test_metrics_runtime_wiring.py`
+- Fixed mypy plugin config path in `pyproject.toml` from `numpy.typing.mypy` to `numpy.typing.mypy_plugin` so type-checking can run in local/dev environments.
+- Added `features/__init__.py` so mypy resolves `features.feature_views` consistently without duplicate module-path errors.
 
 #### Repo Hygiene Remediation
 
