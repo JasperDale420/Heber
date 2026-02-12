@@ -481,13 +481,14 @@ def run_dataflow_health_loop(
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    settings = get_settings()
     parser = argparse.ArgumentParser(description="Heber dataflow health check")
-    parser.add_argument("--window-seconds", type=int, default=900)
-    parser.add_argument("--consumer-metrics-url", default=None)
-    parser.add_argument("--watch-metrics-url", default=None)
-    parser.add_argument("--report-dir", default=None)
+    parser.add_argument("--window-seconds", type=int, default=settings.health_freshness_seconds)
+    parser.add_argument("--consumer-metrics-url", default=settings.health_consumer_metrics_url)
+    parser.add_argument("--watch-metrics-url", default=settings.health_watch_metrics_url)
+    parser.add_argument("--report-dir", default=str(settings.health_report_dir))
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--interval-seconds", type=int, default=300)
+    parser.add_argument("--interval-seconds", type=int, default=settings.health_interval_seconds)
     parser.add_argument("--mode", choices=["manual", "scheduled"], default="manual")
     return parser
 

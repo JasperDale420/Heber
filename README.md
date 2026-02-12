@@ -28,6 +28,8 @@ Local ports from `docker-compose.yml`:
 - Postgres: `localhost:5433`
 - Redis: `localhost:6380`
 - ClickHouse: `localhost:8124` (HTTP), `localhost:9002` (native)
+- Consumer metrics: `http://localhost:9090/metrics`
+- Watch metrics: `http://localhost:9091/metrics`
 - lakeFS: `http://localhost:8000`
 - MinIO: `http://localhost:19000` (S3), `http://localhost:19001` (console)
 - Apicurio Registry: `http://localhost:18081`
@@ -62,6 +64,7 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - **heber-consumer**: Redis Streams consumer → Bronze/Silver writers
 - **heber-compactor**: Parquet file compaction (Silver/Gold)
 - **heber-watch**: Real-time flow alert tracking → TP/SL labels for ML
+- **heber-dataflow-health**: Scheduled JSON proof-of-flow checks (Gateway → Ingest → Storage)
 - **Hot Store**: ClickHouse for low-latency reads (sync helpers in `heber/hotstore/`)
 
 ### Watch Service
@@ -145,6 +148,7 @@ client.write_gold("momentum_features", df=features, project="kairos", version="v
 heber info --verbose
 heber datasets --layer silver
 heber versions momentum_features
+heber health-dataflow --mode manual --window-seconds 900
 ```
 
 ## Documentation

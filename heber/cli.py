@@ -143,13 +143,16 @@ def main() -> int:
     backfill_parser.add_argument("--since", help="Start date (YYYY-MM-DD)")
     backfill_parser.add_argument("--until", help="End date (YYYY-MM-DD)")
 
+    from heber.config import get_settings
+
+    s = get_settings()
     health_dataflow_parser = subparsers.add_parser("health-dataflow", help="Verify Gateway->Ingest->Storage flow")
-    health_dataflow_parser.add_argument("--window-seconds", type=int, default=900)
-    health_dataflow_parser.add_argument("--consumer-metrics-url", default=None)
-    health_dataflow_parser.add_argument("--watch-metrics-url", default=None)
-    health_dataflow_parser.add_argument("--report-dir", default=None)
+    health_dataflow_parser.add_argument("--window-seconds", type=int, default=s.health_freshness_seconds)
+    health_dataflow_parser.add_argument("--consumer-metrics-url", default=s.health_consumer_metrics_url)
+    health_dataflow_parser.add_argument("--watch-metrics-url", default=s.health_watch_metrics_url)
+    health_dataflow_parser.add_argument("--report-dir", default=str(s.health_report_dir))
     health_dataflow_parser.add_argument("--loop", action="store_true")
-    health_dataflow_parser.add_argument("--interval-seconds", type=int, default=300)
+    health_dataflow_parser.add_argument("--interval-seconds", type=int, default=s.health_interval_seconds)
     health_dataflow_parser.add_argument("--mode", choices=["manual", "scheduled"], default="manual")
 
     args = parser.parse_args()

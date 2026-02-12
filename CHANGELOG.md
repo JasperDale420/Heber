@@ -140,6 +140,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_dataflow_health.py`
   - `tests/test_cli_health_dataflow.py`
 
+#### Scheduled Dataflow Health Runner and Docs
+
+- Added Docker service `heber-dataflow-health` in `docker-compose.yml` to run scheduled checks every interval using `python -m heber.ops.dataflow_health --loop --mode scheduled`.
+- Exposed metrics endpoints on host for manual verification parity:
+  - `heber-consumer`: `localhost:9090`
+  - `heber-watch`: `localhost:9091`
+- Added health config examples in `.env.example` for metrics URLs, freshness window, report path, and interval.
+- Added static coverage tests:
+  - `tests/test_config_health_settings.py`
+  - `tests/test_dataflow_health_compose_contract.py`
+- Updated operator docs:
+  - `README.md` (new service + metrics ports + CLI usage)
+  - `docs/configuration.md` (dataflow health settings table)
+  - `docs/operations/runbook.md` (manual/scheduled JSON proof commands)
+
 #### Watch Flow Alert Batch Parsing
 
 - Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.

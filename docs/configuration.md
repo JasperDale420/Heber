@@ -56,6 +56,16 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `DATA_GATEWAY_URL` | `http://localhost:8000` | Data Gateway URL for option quote polling |
 | `HEBER_GOLD_PATH` | *derived from `HEBER_DATA_ROOT`* | Gold layer output path for watch labels |
 
+## Dataflow Health Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEBER_HEALTH_CONSUMER_METRICS_URL` | `http://localhost:9090/metrics` | Consumer metrics endpoint used by `health-dataflow` |
+| `HEBER_HEALTH_WATCH_METRICS_URL` | `http://localhost:9091/metrics` | Watch metrics endpoint used by `health-dataflow` |
+| `HEBER_HEALTH_FRESHNESS_SECONDS` | `900` | Freshness window for feed checks |
+| `HEBER_HEALTH_REPORT_DIR` | `/data/ops/dataflow-health` | JSON report output directory |
+| `HEBER_HEALTH_INTERVAL_SECONDS` | `300` | Scheduled run interval |
+
 ## API Keys
 
 Add API keys in `/Users/jacobmcmillan/Empire/Heber/.env` (local) or as environment variables in your deploy system.
