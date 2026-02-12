@@ -87,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### CI Ruff Config Portability
+
+- Added repo-local Ruff base config at `ruff-base.toml` and updated `pyproject.toml` to extend the local file.
+- This fixes PR CI pre-commit failures where GitHub Actions cannot resolve `../ruff-base.toml`.
+
 #### Bronze→Silver Runtime Hardening
 
 - Refactored `heber/writer/consumer.py` to Bronze-first processing order:

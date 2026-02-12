@@ -89,7 +89,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.ruff]
-extend = "../ruff-base.toml"
+extend = "ruff-base.toml"
 line-length = 120
 target-version = "py311"
 
