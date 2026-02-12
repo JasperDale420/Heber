@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -72,4 +74,78 @@ def test_compactor_failure_keeps_source_files(tmp_path: Path, monkeypatch: pytes
     assert all(path.exists() for path in source_files)
     assert list(partition.glob("compacted-*.parquet")) == []
     assert list(partition.glob(".compacted-*.tmp")) == []
+    assert not (partition / ".compaction.lock").exists()
+
+
+def test_compactor_ignores_hidden_sidecar_parquet_files(tmp_path: Path) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-06"
+    partition.mkdir(parents=True)
+
+    source_files = [
+        partition / "part-1.parquet",
+        partition / "part-2.parquet",
+    ]
+    for i, source in enumerate(source_files, start=1):
+        _write_parquet(source, [{"event_id": f"evt-{i}"}])
+
+    hidden_sidecar = partition / "._part-2.parquet"
+    hidden_sidecar.write_text("not a parquet payload", encoding="utf-8")
+
+    compactor = Compactor()
+    merged = compactor.compact_partition(partition)
+
+    assert merged == 2
+    assert not any(path.exists() for path in source_files)
+    assert hidden_sidecar.exists()
+    assert list(partition.glob(".compacted-*.tmp")) == []
+    assert not (partition / ".compaction.lock").exists()
+
+
+def test_compactor_recovers_from_stale_self_lock(tmp_path: Path) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-07"
+    partition.mkdir(parents=True)
+
+    source_files = [
+        partition / "part-1.parquet",
+        partition / "part-2.parquet",
+    ]
+    for i, source in enumerate(source_files, start=1):
+        _write_parquet(source, [{"event_id": f"evt-{i}"}])
+
+    (partition / ".compaction.lock").write_text(
+        f"pid={os.getpid()} ts={datetime.now(UTC).isoformat()}\n",
+        encoding="utf-8",
+    )
+
+    compactor = Compactor()
+    merged = compactor.compact_partition(partition)
+
+    assert merged == 2
+    assert not (partition / ".compaction.lock").exists()
+
+
+def test_compactor_skips_unstatable_files_without_crashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-08"
+    partition.mkdir(parents=True)
+
+    healthy = partition / "part-1.parquet"
+    unhealthy = partition / "part-2.parquet"
+    _write_parquet(healthy, [{"event_id": "evt-1"}])
+    _write_parquet(unhealthy, [{"event_id": "evt-2"}])
+
+    original_stat = Path.stat
+
+    def flaky_stat(path: Path, *args, **kwargs):  # noqa: ANN002,ANN003
+        if path == unhealthy:
+            raise PermissionError("Operation not permitted")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(compactor_module.Path, "stat", flaky_stat)
+
+    compactor = Compactor()
+    merged = compactor.compact_partition(partition)
+
+    assert merged == 0
+    assert healthy.exists()
+    assert unhealthy.name in {path.name for path in partition.glob("*.parquet")}
     assert not (partition / ".compaction.lock").exists()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from heber.ops import dataflow_health as dataflow_health_module
 
@@ -137,3 +139,47 @@ def test_dataflow_health_report_write_failure_is_warn_only(monkeypatch) -> None:
     )
 
     assert report["overall_status"] == "ok"
+
+
+def test_latest_file_mtime_ignores_hidden_files(tmp_path) -> None:
+    root = tmp_path / "feed=bars"
+    root.mkdir(parents=True)
+    visible = root / "part-1.parquet"
+    hidden = root / ".compaction.lock"
+    visible.write_text("visible", encoding="utf-8")
+    hidden.write_text("hidden", encoding="utf-8")
+    os.utime(visible, (1_000_000, 1_000_000))
+    os.utime(hidden, (2_000_000, 2_000_000))
+
+    latest = dataflow_health_module._latest_file_mtime(root)
+
+    assert latest == visible.stat().st_mtime
+
+
+def test_latest_file_mtime_handles_file_disappearing_during_scan(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "feed=bars"
+    root.mkdir(parents=True)
+    stable = root / "part-stable.parquet"
+    volatile = root / "part-volatile.parquet"
+    stable.write_text("stable", encoding="utf-8")
+    os.utime(stable, (1_000_000, 1_000_000))
+
+    original_rglob = Path.rglob
+    original_is_file = Path.is_file
+
+    def fake_rglob(path: Path, pattern: str):  # noqa: ANN202
+        if path == root and pattern == "*":
+            return iter([stable, volatile])
+        return original_rglob(path, pattern)
+
+    def fake_is_file(path: Path) -> bool:
+        if path == volatile:
+            return True
+        return original_is_file(path)
+
+    monkeypatch.setattr(dataflow_health_module.Path, "rglob", fake_rglob)
+    monkeypatch.setattr(dataflow_health_module.Path, "is_file", fake_is_file)
+
+    latest = dataflow_health_module._latest_file_mtime(root)
+
+    assert latest == stable.stat().st_mtime

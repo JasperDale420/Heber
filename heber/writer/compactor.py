@@ -48,6 +48,24 @@ class Compactor:
                 lock_file.write(f"pid={os.getpid()} ts={datetime.now(UTC).isoformat()}\n")
             return lock_path
         except FileExistsError:
+            existing_pid = self._read_lock_pid(lock_path)
+            if existing_pid == os.getpid():
+                logger.warning(
+                    "Removing stale compaction lock created by current process",
+                    partition=str(partition_path),
+                    lock_path=str(lock_path),
+                )
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to remove stale compaction lock",
+                        partition=str(partition_path),
+                        lock_path=str(lock_path),
+                        error=str(e),
+                    )
+                    return None
+                return self._acquire_partition_lock(partition_path)
             logger.info("Skipping partition compaction; lock already present", partition=str(partition_path))
             return None
 
@@ -72,6 +90,21 @@ class Compactor:
         except Exception:
             pass
         return "unknown"
+
+    @staticmethod
+    def _read_lock_pid(lock_path: Path) -> int | None:
+        """Read lock owner PID from lock file."""
+        try:
+            first_line = lock_path.read_text(encoding="utf-8").splitlines()[0]
+        except Exception:
+            return None
+        for token in first_line.split():
+            if token.startswith("pid="):
+                try:
+                    return int(token.split("=", 1)[1])
+                except ValueError:
+                    return None
+        return None
 
     @staticmethod
     def _normalize_dict_columns(table: pa.Table) -> pa.Table:
@@ -154,6 +187,35 @@ class Compactor:
             arrays.append(column)
         return pa.table(arrays, schema=schema)
 
+    @staticmethod
+    def _list_compactable_parquet_files(partition_path: Path) -> list[Path]:
+        """List parquet data files, excluding hidden sidecars."""
+        compactable_files: list[Path] = []
+        for candidate in sorted(partition_path.glob("*.parquet")):
+            if candidate.name.startswith("."):
+                logger.warning(
+                    "Skipping hidden parquet sidecar file",
+                    partition=str(partition_path),
+                    file=str(candidate),
+                )
+                continue
+            compactable_files.append(candidate)
+        return compactable_files
+
+    @staticmethod
+    def _safe_stat_size(path: Path, partition_path: Path) -> int | None:
+        """Return file size, skipping unreadable files."""
+        try:
+            return path.stat().st_size
+        except OSError as e:
+            logger.warning(
+                "Skipping unreadable parquet file",
+                partition=str(partition_path),
+                file=str(path),
+                error=str(e),
+            )
+            return None
+
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -163,33 +225,37 @@ class Compactor:
         if lock_path is None:
             return 0
 
-        parquet_files = sorted(partition_path.glob("*.parquet"))
-
-        if len(parquet_files) <= 1:
-            self._release_partition_lock(lock_path)
-            return 0
-
-        # Check total size
-        total_size = sum(f.stat().st_size for f in parquet_files)
-
-        # Only compact if we have multiple small files
-        small_files = [f for f in parquet_files if f.stat().st_size < TARGET_FILE_SIZE]
-
-        if len(small_files) <= 1:
-            self._release_partition_lock(lock_path)
-            return 0
-
-        logger.info(
-            "Compacting partition",
-            partition=str(partition_path),
-            files=len(small_files),
-            total_bytes=total_size,
-        )
         started_at = datetime.now(UTC)
         dataset = self._dataset_label(partition_path)
-        source_bytes = sum(f.stat().st_size for f in small_files)
 
         try:
+            parquet_files = self._list_compactable_parquet_files(partition_path)
+            if len(parquet_files) <= 1:
+                return 0
+
+            sized_files: list[tuple[Path, int]] = []
+            for file_path in parquet_files:
+                file_size = self._safe_stat_size(file_path, partition_path)
+                if file_size is not None:
+                    sized_files.append((file_path, file_size))
+
+            if len(sized_files) <= 1:
+                return 0
+
+            total_size = sum(size for _, size in sized_files)
+            small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
+            if len(small_files) <= 1:
+                return 0
+
+            logger.info(
+                "Compacting partition",
+                partition=str(partition_path),
+                files=len(small_files),
+                total_bytes=total_size,
+            )
+            size_by_path = {path: size for path, size in sized_files}
+            source_bytes = sum(size_by_path[path] for path in small_files)
+
             # Stream files into a single temp parquet, then atomically promote.
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
@@ -296,7 +362,7 @@ class Compactor:
         # Walk through all partitions (directories containing .parquet files)
         for partition_path in layer_path.rglob("*"):
             if partition_path.is_dir():
-                parquet_files = list(partition_path.glob("*.parquet"))
+                parquet_files = self._list_compactable_parquet_files(partition_path)
                 if parquet_files:
                     partitions_scanned += 1
                     merged = self.compact_partition(partition_path)

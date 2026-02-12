@@ -88,6 +88,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Compactor Sidecar and Lock Resilience
+
+- Updated `heber/writer/compactor.py` to ignore hidden sidecar parquet files (for example `._*.parquet`) during partition scans and compaction so non-data filesystem artifacts do not break compaction cycles.
+- Added safe file-size probing in compactor to skip unreadable parquet paths with structured warning logs instead of raising `PermissionError` and aborting the whole cycle.
+- Updated compaction lock acquisition to reclaim stale self-owned `.compaction.lock` files (same PID) before retrying so prior crash paths do not permanently block a partition.
+- Ensured partition locks are always released via top-level `finally`, including early-return paths before merge execution.
+- Added regression coverage in `tests/test_compactor_safety.py` for:
+  - hidden sidecar parquet files,
+  - stale self-lock recovery,
+  - unreadable parquet file stat handling without crashes.
+
+#### Dataflow Health Filesystem Scan Race
+
+- Updated `_latest_file_mtime()` in `heber/ops/dataflow_health.py` to:
+  - skip hidden files like `.compaction.lock`,
+  - handle files disappearing between discovery and `stat()` without crashing the health loop.
+- Added warning-level structured logging for filesystem stat failures (`dataflow_health_filesystem_stat_failed`) so scan anomalies are visible but non-fatal.
+- Added regression tests in `tests/test_dataflow_health.py` for hidden-file exclusion and disappearing-file race handling.
+
 #### Silver Normalization For Aggregate REST Payloads
 
 - Updated `heber/writer/consumer.py` to defensively expand aggregate REST payload envelopes for `bars` and `trades` into item-level Silver writes, while preserving Bronze-first durability.

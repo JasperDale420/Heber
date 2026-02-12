@@ -119,14 +119,37 @@ def _latest_file_mtime(root: Path) -> float | None:
     if not root.exists():
         return None
 
-    latest = root.stat().st_mtime if root.is_file() else None
     if root.is_file():
-        return latest
+        if root.name.startswith("."):
+            return None
+        try:
+            return root.stat().st_mtime
+        except OSError as exc:
+            logger.warning(
+                "dataflow_health_filesystem_stat_failed",
+                path=str(root),
+                error=str(exc),
+            )
+            return None
+
+    latest: float | None = None
 
     for item in root.rglob("*"):
+        if item.name.startswith("."):
+            continue
         if not item.is_file():
             continue
-        mtime = item.stat().st_mtime
+        try:
+            mtime = item.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning(
+                "dataflow_health_filesystem_stat_failed",
+                path=str(item),
+                error=str(exc),
+            )
+            continue
         if latest is None or mtime > latest:
             latest = mtime
     return latest
