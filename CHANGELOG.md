@@ -88,6 +88,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Metadata Stack Shutdown + Health Contracts
+
+- Added compose contract regression tests in `tests/test_compose_metadata_contract.py` to lock critical metadata infra guarantees:
+  - OpenMetadata healthcheck command must target an unauthenticated endpoint.
+  - OpenMetadata and Elasticsearch must define explicit `stop_grace_period`.
+- Updated `docker-compose.yml` metadata services:
+  - Added OpenMetadata healthcheck using `wget -q --spider http://localhost:8585/api/v1/system/version`.
+  - Added `stop_grace_period: 90s` to both `openmetadata` and `elasticsearch`.
+  - Added OpenMetadata `start_period: 90s` to avoid false-negative health during JVM bootstrap.
+- Root cause addressed:
+  - OpenMetadata/Elasticsearch were being force-killed with exit `137` during recreate/shutdown when default Docker stop timeout was too short.
+  - Initial OpenMetadata healthcheck attempt used an authenticated endpoint and a missing binary (`curl`), which kept container health in `starting`.
+
 #### Redis Runtime Stability (Consumer + Watch)
 
 - Added shared runtime retry helpers in `heber/ops/runtime_retry.py`:
