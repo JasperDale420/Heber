@@ -105,6 +105,7 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "alpaca", "gateway_feed": "news", "silver_dataset_name": "news"},
     # Unusual Whales — Options flow
     {"provider": "unusual_whales", "gateway_feed": "flow_alerts", "silver_dataset_name": "flow_alerts"},
+    {"provider": "unusual_whales", "gateway_feed": "flow", "silver_dataset_name": "flow_alerts"},
     {"provider": "unusual_whales", "gateway_feed": "darkpool", "silver_dataset_name": "darkpool"},
     {"provider": "unusual_whales", "gateway_feed": "hottest_chains", "silver_dataset_name": "hottest_chain"},
     # Unusual Whales — Sentiment
@@ -112,6 +113,8 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "unusual_whales", "gateway_feed": "market_tide", "silver_dataset_name": "market_tide"},
     # Unusual Whales — Analytics
     {"provider": "unusual_whales", "gateway_feed": "greek_exposure", "silver_dataset_name": "greek_exposure"},
+    {"provider": "unusual_whales", "gateway_feed": "greeks", "silver_dataset_name": "greek_exposure"},
+    {"provider": "unusual_whales", "gateway_feed": "gex", "silver_dataset_name": "greek_exposure"},
     {"provider": "unusual_whales", "gateway_feed": "max_pain", "silver_dataset_name": "max_pain"},
     {"provider": "unusual_whales", "gateway_feed": "net_premium_ticks", "silver_dataset_name": "net_premium_tick"},
     {"provider": "unusual_whales", "gateway_feed": "iv_rank", "silver_dataset_name": "iv_rank"},

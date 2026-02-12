@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Gateway Feed Alias Compatibility
+
+- Added defensive ingest aliases in `heber/writer/ingest_contracts.py` so legacy/rest feed names still resolve to canonical Silver datasets:
+  - `flow` -> `flow_alerts`
+  - `greeks` -> `greek_exposure`
+  - `gex` -> `greek_exposure`
+- Expanded Data-Gateway feed coverage list with legacy alias names so contract checks route them through canonical schemas.
+- Updated catalog seed mappings in `scripts/seed_catalog.py` for the same alias set, ensuring catalog metadata includes legacy-to-canonical mappings.
+- Expanded alias routing tests in `tests/test_feed_alias_routing.py` to enforce alias + catalog-seed parity.
+
 #### Bronze→Silver Contract Hardening
 
 - Added contract-first ingestion tests for Data Gateway feed coverage, alias routing, instrument-key synthesis, and Bronze-first behavior:
