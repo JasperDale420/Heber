@@ -91,6 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added repo-local Ruff base config at `ruff-base.toml` and updated `pyproject.toml` to extend the local file.
 - This fixes PR CI pre-commit failures where GitHub Actions cannot resolve `../ruff-base.toml`.
+- Added explicit `joblib` dependency in `pyproject.toml` for `heber/ml/trainer.py` save/load paths.
+- This fixes CI unit test failure `ModuleNotFoundError: No module named 'joblib'` in `test_meta_feature_order_contract.py`.
 
 #### Bronze→Silver Runtime Hardening
 
