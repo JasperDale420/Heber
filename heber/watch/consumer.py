@@ -22,7 +22,12 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
-from heber.watch.features import AlertFeatureExtractor, persist_features_to_gold, store_features
+from heber.watch.features import (
+    AlertFeatureExtractor,
+    EnrichmentAuthFailure,
+    persist_features_to_gold,
+    store_features,
+)
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     gateway_url_candidates,
@@ -256,6 +261,9 @@ class AlertWatchConsumer:
                 messages = await self._read_messages()
                 if messages:
                     await self._dispatch_messages(messages)
+            except EnrichmentAuthFailure as auth_error:
+                logger.error("Fatal enrichment auth failure", error=str(auth_error), exc_info=True)
+                raise
             except Exception as e:
                 logger.error("Consumer error", error=str(e))
                 await asyncio.sleep(1)
@@ -326,6 +334,16 @@ class AlertWatchConsumer:
                 elif processed == "missing_occ_symbol":
                     skipped_missing_occ += 1
             except Exception as e:
+                if isinstance(e, EnrichmentAuthFailure):
+                    logger.error(
+                        "Fatal enrichment auth failure while processing parsed alert",
+                        msg_id=msg_id,
+                        alert_id=alert.get("id"),
+                        batch_index=batch_index,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    raise
                 processing_exceptions += 1
                 logger.error(
                     "Failed to process parsed alert",
@@ -879,6 +897,14 @@ class AlertWatchConsumer:
             # Persist feature row to Gold dataset for training-set assembly.
             await asyncio.to_thread(persist_features_to_gold, features)
 
+        except EnrichmentAuthFailure:
+            logger.error(
+                "Feature extraction failed due to repeated auth failures",
+                alert_id=alert.get("id"),
+                watch_id=watch_id,
+                exc_info=True,
+            )
+            raise
         except Exception as e:
             # Don't fail watch creation if feature extraction fails
             logger.warning(

@@ -6,6 +6,11 @@ which flow alerts will hit their target price before stop loss.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import random
+import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -25,6 +30,10 @@ if TYPE_CHECKING:
     from heber.models.silver import FlowAlertRecord
 
 logger = structlog.get_logger(__name__)
+
+
+class EnrichmentAuthFailure(RuntimeError):
+    """Raised when repeated upstream authentication failures require fail-fast behavior."""
 
 
 @dataclass
@@ -201,15 +210,39 @@ class AlertFeatureExtractor:
         self,
         redis: Redis | None = None,
         gateway_url: str | None = None,
+        request_max_attempts: int = 3,
+        retry_base_delay_seconds: float = 0.25,
+        retry_jitter_seconds: float = 0.1,
+        max_concurrent_requests: int = 8,
+        cache_ttl_seconds: float = 30.0,
+        auth_failure_threshold: int = 5,
+        auth_failure_window_seconds: float = 120.0,
     ):
         """Initialize extractor.
 
         Args:
             redis: Redis client for caching/lookups.
             gateway_url: Data Gateway URL for market data enrichment.
+            request_max_attempts: Number of attempts per route for retryable statuses.
+            retry_base_delay_seconds: Base backoff delay between retries.
+            retry_jitter_seconds: Random jitter added to backoff delays.
+            max_concurrent_requests: Max in-flight upstream requests.
+            cache_ttl_seconds: TTL for in-process request cache.
+            auth_failure_threshold: Fail-fast threshold for HTTP 401 in rolling window.
+            auth_failure_window_seconds: Rolling window for auth failure counting.
         """
         self.redis = redis
         self.gateway_url = gateway_url
+        self.request_max_attempts = max(1, int(request_max_attempts))
+        self.retry_base_delay_seconds = max(0.0, float(retry_base_delay_seconds))
+        self.retry_jitter_seconds = max(0.0, float(retry_jitter_seconds))
+        self.max_concurrent_requests = max(1, int(max_concurrent_requests))
+        self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
+        self.auth_failure_threshold = max(1, int(auth_failure_threshold))
+        self.auth_failure_window_seconds = max(1.0, float(auth_failure_window_seconds))
+        self._request_semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        self._response_cache: dict[str, tuple[float, dict]] = {}
+        self._auth_failure_timestamps: deque[float] = deque()
 
     async def extract(self, alert: FlowAlertRecord) -> AlertFeatures:
         """Extract features from a flow alert.
@@ -343,6 +376,167 @@ class AlertFeatureExtractor:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _is_retryable_status(status_code: int) -> bool:
+        return status_code == 429 or 500 <= status_code <= 599
+
+    def _cache_key(self, endpoint: str, symbol: str, params: dict | None) -> str:
+        serialized_params = json.dumps(params or {}, sort_keys=True, default=str)
+        return f"{endpoint}|{symbol}|{serialized_params}"
+
+    def _cache_get(self, key: str) -> dict | None:
+        if self.cache_ttl_seconds <= 0:
+            return None
+        cached = self._response_cache.get(key)
+        if cached is None:
+            return None
+        cached_at, payload = cached
+        if time.monotonic() - cached_at > self.cache_ttl_seconds:
+            self._response_cache.pop(key, None)
+            return None
+        return payload
+
+    def _cache_set(self, key: str, payload: dict) -> None:
+        if self.cache_ttl_seconds <= 0:
+            return
+        self._response_cache[key] = (time.monotonic(), payload)
+
+    def _record_auth_failure(self) -> int:
+        now = time.monotonic()
+        cutoff = now - self.auth_failure_window_seconds
+        while self._auth_failure_timestamps and self._auth_failure_timestamps[0] < cutoff:
+            self._auth_failure_timestamps.popleft()
+        self._auth_failure_timestamps.append(now)
+        return len(self._auth_failure_timestamps)
+
+    async def _sleep_before_retry(self, attempt: int) -> None:
+        delay = self.retry_base_delay_seconds * attempt
+        if self.retry_jitter_seconds > 0:
+            delay += random.uniform(0.0, self.retry_jitter_seconds)
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    async def _request_json_with_retry(
+        self,
+        *,
+        endpoint: str,
+        routes: list[str],
+        symbol: str,
+        params: dict | None = None,
+        alert_id: str | None = None,
+    ) -> dict | None:
+        """Fetch JSON payload with route fallback, retries, throttling, and in-process caching."""
+        cache_key = self._cache_key(endpoint=endpoint, symbol=symbol, params=params)
+        cached_payload = self._cache_get(cache_key)
+        if cached_payload is not None:
+            return cached_payload
+
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for route in routes:
+                for attempt in range(1, self.request_max_attempts + 1):
+                    started = time.perf_counter()
+                    try:
+                        async with self._request_semaphore:
+                            response = await client.get(route, params=params)
+                    except httpx.HTTPError as exc:
+                        duration_ms = int((time.perf_counter() - started) * 1000)
+                        retryable = attempt < self.request_max_attempts
+                        logger.warning(
+                            "Feature enrichment request failed",
+                            endpoint=endpoint,
+                            status_code=None,
+                            symbol=symbol,
+                            alert_id=alert_id,
+                            attempt=attempt,
+                            retryable=retryable,
+                            duration_ms=duration_ms,
+                            route=route,
+                            error=str(exc),
+                        )
+                        if retryable:
+                            await self._sleep_before_retry(attempt)
+                            continue
+                        break
+
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    status_code = response.status_code
+
+                    if status_code == 200:
+                        try:
+                            payload = response.json()
+                        except (TypeError, ValueError) as decode_error:
+                            logger.warning(
+                                "Feature enrichment request failed",
+                                endpoint=endpoint,
+                                status_code=status_code,
+                                symbol=symbol,
+                                alert_id=alert_id,
+                                attempt=attempt,
+                                retryable=False,
+                                duration_ms=duration_ms,
+                                route=route,
+                                error=f"json_decode:{decode_error}",
+                            )
+                            break
+                        if not isinstance(payload, dict):
+                            logger.warning(
+                                "Feature enrichment request failed",
+                                endpoint=endpoint,
+                                status_code=status_code,
+                                symbol=symbol,
+                                alert_id=alert_id,
+                                attempt=attempt,
+                                retryable=False,
+                                duration_ms=duration_ms,
+                                route=route,
+                                error=f"payload_type:{type(payload).__name__}",
+                            )
+                            break
+                        self._cache_set(cache_key, payload)
+                        return payload
+
+                    if status_code == 401:
+                        auth_failures = self._record_auth_failure()
+                        logger.warning(
+                            "Feature enrichment request failed",
+                            endpoint=endpoint,
+                            status_code=status_code,
+                            symbol=symbol,
+                            alert_id=alert_id,
+                            attempt=attempt,
+                            retryable=False,
+                            duration_ms=duration_ms,
+                            route=route,
+                            error="unauthorized",
+                            auth_failures_window=auth_failures,
+                        )
+                        if auth_failures >= self.auth_failure_threshold:
+                            raise EnrichmentAuthFailure(
+                                f"Repeated enrichment authorization failures for {endpoint} ({auth_failures} in window)"
+                            )
+                        break
+
+                    retryable = self._is_retryable_status(status_code)
+                    logger.warning(
+                        "Feature enrichment request failed",
+                        endpoint=endpoint,
+                        status_code=status_code,
+                        symbol=symbol,
+                        alert_id=alert_id,
+                        attempt=attempt,
+                        retryable=retryable,
+                        duration_ms=duration_ms,
+                        route=route,
+                    )
+                    if retryable and attempt < self.request_max_attempts:
+                        await self._sleep_before_retry(attempt)
+                        continue
+                    break
+
+        return None
+
     async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
         """Enrich features with IV rank from Unusual Whales.
 
@@ -354,30 +548,18 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            import httpx
-
             routes = gateway_url_candidates(
                 self.gateway_url,
                 f"/uw/options/{features.underlying}/iv-rank",
             )
-            data: dict | None = None
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                last_status: int | None = None
-                for route in routes:
-                    response = await client.get(route)
-                    last_status = response.status_code
-                    if response.status_code == 200:
-                        data = response.json()
-                        break
-                if data is None:
-                    logger.debug(
-                        "Failed to fetch IV rank",
-                        symbol=features.underlying,
-                        status=last_status,
-                        routes=routes,
-                    )
-                    return features
+            data = await self._request_json_with_retry(
+                endpoint="uw_iv_rank",
+                routes=routes,
+                symbol=features.underlying,
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
 
             # Extract IV rank from response
             iv_data = data.get("data", {})
@@ -391,6 +573,8 @@ class AlertFeatureExtractor:
                     iv_rank=features.iv_rank,
                 )
 
+        except EnrichmentAuthFailure:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to enrich IV rank",
@@ -407,8 +591,6 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            import httpx
-
             routes = gateway_url_candidates(
                 self.gateway_url,
                 f"/alpaca/options/chain/{features.underlying}",
@@ -419,24 +601,15 @@ class AlertFeatureExtractor:
                 "strike_price_lte": features.strike + 0.01,
                 "option_type": "call" if features.put_call == "C" else "put",
             }
-            data: dict | None = None
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                last_status: int | None = None
-                for route in routes:
-                    response = await client.get(route, params=params)
-                    last_status = response.status_code
-                    if response.status_code == 200:
-                        data = response.json()
-                        break
-                if data is None:
-                    logger.debug(
-                        "Failed to fetch option chain for Greeks",
-                        symbol=features.underlying,
-                        status=last_status,
-                        routes=routes,
-                    )
-                    return features
+            data = await self._request_json_with_retry(
+                endpoint="alpaca_options_chain",
+                routes=routes,
+                params=params,
+                symbol=features.underlying,
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
 
             contracts = data.get("data", {}).get("contracts", [])
             if not contracts:
@@ -462,6 +635,8 @@ class AlertFeatureExtractor:
                 iv=features.iv,
             )
 
+        except EnrichmentAuthFailure:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to enrich Greeks",
@@ -493,8 +668,6 @@ class AlertFeatureExtractor:
         try:
             from datetime import timedelta
 
-            import httpx
-
             symbol = features.underlying
             end_date = features.alert_time.date()
             start_date = end_date - timedelta(days=50)
@@ -510,24 +683,15 @@ class AlertFeatureExtractor:
                 "timeframe": "1Day",
                 "limit": 50,
             }
-            data: dict | None = None
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                last_status: int | None = None
-                for route in routes:
-                    response = await client.get(route, params=params)
-                    last_status = response.status_code
-                    if response.status_code == 200:
-                        data = response.json()
-                        break
-                if data is None:
-                    logger.warning(
-                        "Failed to fetch bars for enrichment",
-                        symbol=symbol,
-                        status=last_status,
-                        routes=routes,
-                    )
-                    return features
+            data = await self._request_json_with_retry(
+                endpoint="alpaca_stock_bars",
+                routes=routes,
+                params=params,
+                symbol=symbol,
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
 
             bars = data.get("data", {}).get("bars", [])
             if not bars or len(bars) < 2:
@@ -552,6 +716,8 @@ class AlertFeatureExtractor:
                 vol_20d=features.realized_vol_20d,
             )
 
+        except EnrichmentAuthFailure:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed to enrich market context",

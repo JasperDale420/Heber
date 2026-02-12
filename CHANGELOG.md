@@ -107,6 +107,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `tests/test_config_paths.py`
   - `tests/test_watch_startup_preflight.py`
 
+#### Watch Feature Enrichment Resilience
+
+- Added shared retry/throttle/cache request handling in `heber/watch/features.py` for upstream enrichment calls.
+- Added bounded retries with jitter for retryable statuses (`429`, `5xx`) and structured failure logging fields:
+  - `endpoint`
+  - `status_code`
+  - `symbol`
+  - `alert_id`
+  - `attempt`
+  - `retryable`
+  - `duration_ms`
+- Added rolling-window auth failure tracking with `EnrichmentAuthFailure` fail-fast escalation after repeated `401` responses.
+- Updated watcher flow to propagate fatal enrichment auth failures for restart behavior while still handling non-fatal enrichment errors.
+- Added regression tests in `tests/test_watch_feature_enrichment_resilience.py` for retry success, retry exhaustion logging, auth fail-fast thresholding, and request throttling.
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
