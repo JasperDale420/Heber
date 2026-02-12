@@ -30,6 +30,7 @@ from heber.ops.metrics import (
 )
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
+    FEATURES_KEY,
     AlertFeatureExtractor,
     EnrichmentAuthFailure,
     persist_features_to_gold,
@@ -58,6 +59,7 @@ FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
 DATA_GATEWAY_URL = "http://localhost:8000"
+FEATURE_STORAGE_TTL_SECONDS = 86400 * 7
 
 
 def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
@@ -415,17 +417,17 @@ class AlertWatchConsumer:
         alert_horizon = classify_horizon(dte)
         watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
 
-        # Get entry price (option quote at alert time)
-        entry_price = await self._get_entry_price(alert["occ_symbol"])
+        # Prefer price carried with the alert to avoid stale quote lookups.
+        entry_price = self._coerce_optional_float(alert.get("contract_px"))
+        if entry_price is None or entry_price <= 0:
+            entry_price = await self._get_entry_price(alert["occ_symbol"])
 
         if not entry_price or entry_price <= 0:
             logger.warning(
                 "Could not get entry price",
                 occ_symbol=alert["occ_symbol"],
             )
-            # Use contract_px from alert if available
-            fallback_entry = self._coerce_optional_float(alert.get("contract_px"))
-            entry_price = fallback_entry if fallback_entry is not None and fallback_entry > 0 else 1.0
+            entry_price = 1.0
 
         # Create watch
         watch = await self.manager.create_watch_async(
@@ -975,7 +977,7 @@ class AlertWatchConsumer:
             # Extract features
             features = await self.feature_extractor.extract(record)
 
-            # Store in Redis if async client available
+            # Store in Redis with async client when available.
             if self.async_redis:
                 await store_features(self.async_redis, features)
                 logger.debug(
@@ -984,10 +986,27 @@ class AlertWatchConsumer:
                     watch_id=watch_id,
                     feature_count=len(features.numeric_feature_names()),
                 )
+            elif self.redis is not None and hasattr(self.redis, "set"):
+                key = FEATURES_KEY.format(alert_id=features.alert_id)
+                payload = json.dumps(features.to_dict())
+                await asyncio.to_thread(
+                    self.redis.set,
+                    key,
+                    payload,
+                    FEATURE_STORAGE_TTL_SECONDS,
+                )
+                logger.debug(
+                    "Stored alert features",
+                    alert_id=alert["id"],
+                    watch_id=watch_id,
+                    feature_count=len(features.numeric_feature_names()),
+                    storage_mode="sync_fallback",
+                )
             else:
                 logger.debug(
                     "Skipping feature storage (no async redis)",
                     alert_id=alert["id"],
+                    sync_redis_has_set=bool(getattr(self.redis, "set", None)),
                 )
 
             # Persist feature row to Gold dataset for training-set assembly.

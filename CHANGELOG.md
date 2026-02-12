@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Watch + Consumer Runtime Log RCA Cleanup
+
+- Updated `heber/watch/consumer.py` to prefer alert-carried `contract_px` for watch entry price and only call Data Gateway quote routes when alert price is missing/invalid, removing stale quote fallback noise for normal flow-alert processing.
+- Added sync Redis feature-storage fallback in `heber/watch/consumer.py` (`storage_mode=sync_fallback`) when async Redis client is not configured, replacing repeated `Skipping feature storage (no async redis)` behavior.
+- Updated payload schema allowlists in `heber/writer/consumer.py`:
+  - `market_tide` now allows `call_put_ratio`.
+  - `flow_alerts` now allows `id`, `alert_id`, and `event_id`.
+- Added regression coverage in `tests/test_watch_consumer_reliability.py` and `tests/test_writer_consumer_reliability.py` for:
+  - contract price preference without gateway lookup,
+  - sync Redis feature-storage fallback behavior,
+  - no warning for valid `market_tide.call_put_ratio`,
+  - no warning for valid `flow_alerts.id`.
+
 #### Watch Gateway Fallback Hardening
 
 - Stopped legacy unprefixed route fallback for non-route HTTP statuses in watch polling paths (notably `429`), preventing duplicate failing calls to Data-Gateway.

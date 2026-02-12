@@ -50,6 +50,15 @@ class _CaptureManager:
         return SimpleNamespace(watch_id="watch-1")
 
 
+class _SyncFeatureRedis:
+    def __init__(self) -> None:
+        self.set_calls: list[tuple[str, str, int | None]] = []
+
+    def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        self.set_calls.append((key, value, ex))
+        return True
+
+
 @pytest.mark.asyncio
 async def test_process_flow_alert_retries_then_dead_letters() -> None:
     redis_client = _RedisWithDlq()
@@ -480,3 +489,66 @@ async def test_process_alert_defaults_entry_price_when_fallback_not_positive() -
     assert result == (True, False, "watch_created")
     assert manager.calls
     assert manager.calls[0]["entry_price"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_process_alert_prefers_contract_price_without_gateway_lookup() -> None:
+    redis_client = _RedisWithDlq()
+    manager = _CaptureManager()
+    consumer = AlertWatchConsumer(redis_client, manager)
+    consumer._parse_alert = lambda _data: {  # type: ignore[method-assign]
+        "id": "alert-1",
+        "occ_symbol": "AAPL260220C00100000",
+        "underlying": "AAPL",
+        "put_call": "C",
+        "expiry": "2026-02-20",
+        "strike": 100.0,
+        "spot_px": 200.0,
+        "contract_px": 2.25,
+        "ts_event": datetime.now(UTC),
+        "dte": 5,
+    }
+    consumer._get_entry_price = AsyncMock(return_value=9.99)  # type: ignore[method-assign]
+    consumer._extract_and_store_features = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await consumer._process_alert("2-4", {b"data": b"{}"})
+
+    assert result == (True, False, "watch_created")
+    assert manager.calls
+    assert manager.calls[0]["entry_price"] == 2.25
+    consumer._get_entry_price.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_extract_and_store_features_uses_sync_redis_fallback_when_async_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_client = _SyncFeatureRedis()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    features = SimpleNamespace(
+        alert_id="alert-1",
+        to_dict=lambda: {"alert_id": "alert-1"},
+        numeric_feature_names=lambda: ["f1", "f2"],
+    )
+    consumer.feature_extractor.extract = AsyncMock(return_value=features)  # type: ignore[method-assign]
+    monkeypatch.setattr(watch_consumer_module, "persist_features_to_gold", lambda _features: None)
+
+    await consumer._extract_and_store_features(
+        {
+            "id": "alert-1",
+            "underlying": "AAPL",
+            "occ_symbol": "AAPL260220C00100000",
+            "put_call": "C",
+            "expiry": "2026-02-20",
+            "strike": 100.0,
+            "premium": 1000.0,
+            "volume": 50.0,
+            "ts_event": datetime.now(UTC),
+        },
+        "watch-1",
+    )
+
+    assert len(redis_client.set_calls) == 1
+    key, _value, ttl_seconds = redis_client.set_calls[0]
+    assert key == "heber:watch:features:alert-1"
+    assert ttl_seconds == 86400 * 7

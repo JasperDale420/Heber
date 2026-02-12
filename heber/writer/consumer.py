@@ -69,6 +69,9 @@ class EventConsumer:
         }
         self._payload_allowed: dict[str, set[str]] = {
             "flow_alerts": {
+                "id",
+                "alert_id",
+                "event_id",
                 "timestamp",
                 "symbol",
                 "strike",
@@ -108,6 +111,7 @@ class EventConsumer:
                 "net_put_premium",
                 "net_volume",
                 "sentiment",
+                "call_put_ratio",
                 "provider",
             },
         }

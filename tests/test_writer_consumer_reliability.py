@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import heber.writer.consumer as consumer_module
+from heber.models.envelope import EventEnvelope
 from heber.writer.consumer import EventConsumer
 
 
@@ -190,3 +191,68 @@ async def test_run_unknown_errors_keep_traceback_logging(monkeypatch: pytest.Mon
     warning_mock.assert_not_called()
     assert error_mock.call_count == 1
     assert error_mock.call_args.kwargs["exc_info"] is True
+
+
+def test_market_tide_schema_allows_call_put_ratio_without_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    consumer = EventConsumer()
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+    now = datetime(2026, 2, 12, 21, 0, tzinfo=UTC)
+    envelope = EventEnvelope(
+        event_id="evt-market-tide-1",
+        provider="unusual_whales",
+        feed="market_tide",
+        source="rest",
+        instrument_type="equity",
+        instrument_key="equity:MARKET",
+        symbol="MARKET",
+        ts_event=now,
+        ts_ingest=now,
+        ts_available=now,
+        payload={
+            "timestamp": now.isoformat(),
+            "date": "2026-02-12",
+            "net_call_premium": 1200000,
+            "net_put_premium": 800000,
+            "net_volume": 5000,
+            "sentiment": "bullish",
+            "call_put_ratio": 1.5,
+        },
+    )
+
+    consumer._validate_payload_schema(envelope)
+
+    warning_mock.assert_not_called()
+
+
+def test_flow_alert_schema_allows_id_without_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    consumer = EventConsumer()
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+    now = datetime(2026, 2, 12, 22, 0, tzinfo=UTC)
+    envelope = EventEnvelope(
+        event_id="evt-flow-1",
+        provider="unusual_whales",
+        feed="flow_alerts",
+        source="rest",
+        instrument_type="option",
+        instrument_key="option:SPY260320C00700000",
+        symbol="SPY",
+        ts_event=now,
+        ts_ingest=now,
+        ts_available=now,
+        payload={
+            "id": "flow-1",
+            "timestamp": now.isoformat(),
+            "symbol": "SPY",
+            "strike": 700,
+            "expiry": "2026-03-20",
+            "put_call": "call",
+            "premium": 250000,
+            "volume": 120,
+        },
+    )
+
+    consumer._validate_payload_schema(envelope)
+
+    warning_mock.assert_not_called()
