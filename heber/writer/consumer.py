@@ -23,6 +23,7 @@ from heber.ops.metrics import (
     record_ingest_latency,
     start_metrics_server_from_env,
 )
+from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
@@ -481,6 +482,7 @@ class EventConsumer:
         """Main consumer loop."""
         await self.connect()
         self.running = True
+        error_streak = 0
 
         logger.info(
             "Starting consumer",
@@ -492,12 +494,37 @@ class EventConsumer:
         while self.running:
             try:
                 await self._consume_iteration()
+                error_streak = 0
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice
             except Exception as e:
-                logger.error("Consumer error", error=str(e), exc_info=True)
-                await asyncio.sleep(1)  # Back off on error
+                error_streak += 1
+                delay = calculate_retry_delay(
+                    attempt=error_streak,
+                    base_seconds=settings.redis_retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                is_transient, error_kind = classify_runtime_error(e)
+                if is_transient:
+                    logger.warning(
+                        "Consumer transient runtime error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                else:
+                    logger.error(
+                        "Consumer error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                        exc_info=True,
+                    )
+                await asyncio.sleep(delay)
 
         self._final_flush()
 

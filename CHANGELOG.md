@@ -88,6 +88,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Redis Runtime Stability (Consumer + Watch)
+
+- Added shared runtime retry helpers in `heber/ops/runtime_retry.py`:
+  - transient Redis/runtime error classification
+  - bounded exponential backoff with jitter for long-running loops
+- Updated `heber/writer/consumer.py` run loop to:
+  - detect transient Redis transport/loading errors,
+  - log them as structured warnings without traceback spam,
+  - apply bounded exponential backoff instead of fixed 1-second retry loops.
+- Updated `heber/watch/consumer.py` run loop with the same transient classification and backoff behavior.
+- Added regression tests to lock behavior:
+  - `tests/test_writer_consumer_reliability.py`
+  - `tests/test_watch_consumer_reliability.py`
+  - verifies transient Redis errors back off and avoid noisy error logging,
+  - verifies unknown runtime errors still emit error logs with traceback context.
+
 #### Dataflow Metrics Foundation (Writer + Watch Startup)
 
 - Added `heber_writer_last_write_unixtime{layer,dataset}` in `heber/ops/metrics.py` and wired it to `record_write()` so every successful write updates a freshness timestamp.

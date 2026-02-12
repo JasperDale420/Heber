@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import heber.watch.consumer as watch_consumer_module
 from heber.watch.consumer import AlertWatchConsumer
 
 
@@ -193,6 +195,66 @@ async def test_handle_message_skips_non_flow_alerts_with_ack() -> None:
     should_ack = await consumer._handle_message("3-0", {b"data": b"{}"})
 
     assert should_ack is True
+
+
+@pytest.mark.asyncio
+async def test_run_transient_redis_errors_backoff_without_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.2)
+    consumer._setup_consumer_group_async = AsyncMock()  # type: ignore[method-assign]
+    consumer._read_messages = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            RuntimeError("Connection closed by server."),
+            asyncio.CancelledError(),
+        ]
+    )
+
+    sleep_calls: list[float] = []
+
+    async def _capture_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    warning_mock = MagicMock()
+    error_mock = MagicMock()
+    monkeypatch.setattr(watch_consumer_module.logger, "warning", warning_mock)
+    monkeypatch.setattr(watch_consumer_module.logger, "error", error_mock)
+    monkeypatch.setattr(watch_consumer_module.asyncio, "sleep", _capture_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert len(sleep_calls) == 1
+    assert 0.0 < sleep_calls[0] < 1.0
+    warning_mock.assert_called_once()
+    error_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_unknown_errors_keep_error_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.2)
+    consumer._setup_consumer_group_async = AsyncMock()  # type: ignore[method-assign]
+    consumer._read_messages = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            RuntimeError("unexpected"),
+            asyncio.CancelledError(),
+        ]
+    )
+
+    async def _capture_sleep(_delay: float) -> None:
+        return None
+
+    warning_mock = MagicMock()
+    error_mock = MagicMock()
+    monkeypatch.setattr(watch_consumer_module.logger, "warning", warning_mock)
+    monkeypatch.setattr(watch_consumer_module.logger, "error", error_mock)
+    monkeypatch.setattr(watch_consumer_module.asyncio, "sleep", _capture_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    warning_mock.assert_not_called()
+    assert error_mock.call_count == 1
 
 
 def test_is_flow_alert_supports_string_data_key() -> None:

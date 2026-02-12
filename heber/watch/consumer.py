@@ -28,6 +28,7 @@ from heber.ops.metrics import (
     record_watch_gateway_request,
     record_watch_watch_created,
 )
+from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
     AlertFeatureExtractor,
     EnrichmentAuthFailure,
@@ -255,6 +256,7 @@ class AlertWatchConsumer:
         """Run the consumer as a continuous service."""
         self._running = True
         await self._setup_consumer_group_async()
+        error_streak = 0
 
         logger.info(
             "Starting alert watch consumer",
@@ -267,12 +269,36 @@ class AlertWatchConsumer:
                 messages = await self._read_messages()
                 if messages:
                     await self._dispatch_messages(messages)
+                error_streak = 0
             except EnrichmentAuthFailure as auth_error:
                 logger.error("Fatal enrichment auth failure", error=str(auth_error), exc_info=True)
                 raise
             except Exception as e:
-                logger.error("Consumer error", error=str(e))
-                await asyncio.sleep(1)
+                error_streak += 1
+                delay = calculate_retry_delay(
+                    attempt=error_streak,
+                    base_seconds=self.retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                is_transient, error_kind = classify_runtime_error(e)
+                if is_transient:
+                    logger.warning(
+                        "Alert watch transient runtime error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                else:
+                    logger.error(
+                        "Consumer error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                await asyncio.sleep(delay)
 
     async def _dispatch_messages(self, messages: list) -> None:
         """Dispatch a batch of stream messages."""
