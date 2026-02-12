@@ -50,6 +50,13 @@ def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
                 payload["symbol"] = symbol
             instrument_type = "option"
             instrument_key = f"option:OCC:{occ_symbol}"
+        else:
+            # OCC could not be synthesized — fall back to equity key using payload symbol
+            if symbol is None:
+                symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
+            if symbol is not None:
+                instrument_type = "equity"
+                instrument_key = f"equity:{symbol}"
     elif canonical_feed == "market_tide":
         symbol = "SPY"
         instrument_type = "equity"

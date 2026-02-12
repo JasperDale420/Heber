@@ -64,12 +64,12 @@ def test_bronze_write_persists_even_when_silver_normalization_fails() -> None:
         "flow_alerts",
         {
             "timestamp": NOW.isoformat(),
-            "symbol": "AAPL",
             "premium": "100000",
             "volume": "15",
         },
         instrument_type="option",
         instrument_key="option:AAPL",
+        symbol="",
     )
 
     success, error, retryable = consumer._process_event_once({"data": json.dumps(event)})

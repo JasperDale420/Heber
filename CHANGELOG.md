@@ -87,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### CI Security Scan Stabilization
+
+- Sanitized tracked lakeFS credentials in `.env` to placeholder values so Trivy secret scanning no longer flags a committed AWS-style key.
+- Added explicit `duckdb>=1.1.0` dependency and regenerated `uv.lock` to remove vulnerable `duckdb==1.0.0` (CVE-2024-41672) from CI scan results.
+
 #### CI Ruff Config Portability
 
 - Added repo-local Ruff base config at `ruff-base.toml` and updated `pyproject.toml` to extend the local file.
