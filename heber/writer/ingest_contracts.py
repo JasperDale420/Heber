@@ -20,6 +20,13 @@ FEED_ALIASES: dict[str, str] = {
     "short_interest": "short_data",
     "short_volume": "short_data",
     "historic_option_volume": "historic_option_volume",
+    "ticker_flow": "flow_alerts",
+    "darkpool_ticker": "darkpool",
+    "option_trades": "trades",
+    "crypto_bars": "bars",
+    "crypto_trades": "trades",
+    "institutions": "institution_holdings",
+    "filings": "news",
 }
 FEED_ALIAS_MAP = FEED_ALIASES
 
@@ -41,6 +48,35 @@ DATA_GATEWAY_FEEDS: tuple[str, ...] = (
     "ftds",
     "congress_trades",
     "insider_trades",
+    "earnings",
+    "stock_fundamentals",
+    "option_contract",
+    "screener_result",
+    "institution_holdings",
+    "politician_trades",
+    "etf_holding",
+    "etf_flow",
+    "etf_metadata",
+    "short_data",
+    "ftd",
+    "volatility_stats",
+    "seasonality",
+    "max_pain",
+    "forex",
+    "insider_flow",
+    "institution_activity",
+    "etf_sector_weights",
+    "option_chain_snapshot",
+    "option_history",
+    "volume_profile",
+    "group_flow",
+    "net_premium_tick",
+    "hottest_chain",
+    "iv_term_structure",
+    "mover",
+    "most_active",
+    "corporate_action",
+    "orderbook",
 )
 
 # Field mappings: payload field -> Silver schema field
@@ -252,6 +288,10 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "type": "weight_type",
         "name": "weight_name",
         "weight": "weight_pct",
+    },
+    # Forex
+    "forex": {
+        "currency_pair": "pair",
     },
 }
 
