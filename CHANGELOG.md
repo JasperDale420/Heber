@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Bronze→Silver Contract Hardening
+
+- Added contract-first ingestion tests for Data Gateway feed coverage, alias routing, instrument-key synthesis, and Bronze-first behavior:
+  - `tests/test_ingest_feed_contract_matrix.py`
+  - `tests/test_bronze_first_ingestion.py`
+  - `tests/test_feed_alias_routing.py`
+  - `tests/test_instrument_key_synthesis.py`
+- Added shared ingest contract and normalization modules used by both live consumer and backfill transformer:
+  - `heber/writer/ingest_contracts.py`
+  - `heber/writer/key_normalization.py`
+  - `heber/writer/normalizer.py`
+- Added dedicated Silver dataset schema for `historic_option_volume` in `heber/schemas/silver.py`.
+
 #### Canonical Contracts
 
 - Standardized canonical darkpool naming to `darkpool` across provider/stream/slice metadata:

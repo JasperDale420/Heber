@@ -475,6 +475,29 @@ SILVER_SCHEMAS = {
             ("put_oi_change", pa.int64()),
         ]
     ),
+    "historic_option_volume": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("hov_date", pa.string()),
+            ("expiry", pa.date32()),
+            ("volume", pa.int64()),
+            ("open_interest", pa.int64()),
+            ("call_volume", pa.int64()),
+            ("put_volume", pa.int64()),
+            ("premium", pa.float64()),
+        ]
+    ),
     "etf_holding": pa.schema(
         [
             ("event_id", pa.string()),

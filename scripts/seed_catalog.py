@@ -1,4 +1,4 @@
-"""Seed the Heber Catalog DB with all 44 Silver datasets, feed mappings, and coverage.
+"""Seed the Heber Catalog DB with all Silver datasets, feed mappings, and coverage.
 
 Idempotent — safe to re-run. Uses upsert patterns so existing rows are updated.
 
@@ -60,6 +60,7 @@ DATASET_DESCRIPTIONS: dict[str, str] = {
     "iv_term_structure": "Implied volatility term structure by expiry",
     "volatility_stats": "Realized vs implied volatility statistics",
     "oi_change": "Open interest changes (call/put) from Unusual Whales",
+    "historic_option_volume": "Historic option volume/open interest by expiry",
     # ETF Feeds
     "etf_holding": "ETF constituent holdings and weights",
     "etf_flow": "ETF fund flow data (inflows/outflows)",
@@ -124,7 +125,14 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "unusual_whales", "gateway_feed": "etf_sectors", "silver_dataset_name": "etf_sector_weights"},
     # Unusual Whales — Short / FTD
     {"provider": "unusual_whales", "gateway_feed": "short_interest", "silver_dataset_name": "short_data"},
+    {"provider": "unusual_whales", "gateway_feed": "short_volume", "silver_dataset_name": "short_data"},
     {"provider": "unusual_whales", "gateway_feed": "ftd", "silver_dataset_name": "ftd"},
+    {"provider": "unusual_whales", "gateway_feed": "ftds", "silver_dataset_name": "ftd"},
+    {
+        "provider": "unusual_whales",
+        "gateway_feed": "historic_option_volume",
+        "silver_dataset_name": "historic_option_volume",
+    },
     # Unusual Whales — Alternative Data
     {"provider": "unusual_whales", "gateway_feed": "congress_trades", "silver_dataset_name": "congress_trades"},
     {"provider": "unusual_whales", "gateway_feed": "insider_trades", "silver_dataset_name": "insider_trades"},
@@ -178,7 +186,7 @@ def _schema_to_json(schema) -> dict:
 
 
 async def seed_datasets(session: AsyncSession, dry_run: bool = False) -> int:
-    """Seed the datasets table with all 44 Silver feeds."""
+    """Seed the datasets table with all Silver feeds."""
     storage_root = str(settings.silver_path)
     count = 0
 
