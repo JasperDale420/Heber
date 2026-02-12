@@ -118,3 +118,22 @@ def test_dataflow_health_redis_unavailable_is_critical_fail(monkeypatch) -> None
     assert report["overall_status"] == "fail"
     redis_check = next(check for check in report["checks"] if check["id"] == "redis_connection")
     assert redis_check["status"] == "fail"
+
+
+def test_dataflow_health_report_write_failure_is_warn_only(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+
+    def _raise_write_error(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
+        raise OSError("read-only path")
+
+    monkeypatch.setattr(dataflow_health_module, "_write_report", _raise_write_error)
+
+    report = dataflow_health_module.run_dataflow_health_once(
+        window_seconds=900,
+        mode="manual",
+        report_dir="/data/ops/dataflow-health",
+    )
+
+    assert report["overall_status"] == "ok"

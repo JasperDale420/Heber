@@ -34,7 +34,7 @@ try:
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
-    logger.warning("opentelemetry not installed, tracing disabled")
+    logger.debug("opentelemetry_not_installed")
 
 
 # Environment-based sampling rates (PRD §12.5.6)

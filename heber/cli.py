@@ -74,7 +74,7 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
 
 def _cmd_health_dataflow(args: argparse.Namespace) -> int:
     """Handle the 'health-dataflow' subcommand."""
-    from heber.ops import dataflow_health
+    import heber.ops.dataflow_health as dataflow_health
 
     try:
         if args.loop:

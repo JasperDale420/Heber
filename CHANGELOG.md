@@ -139,6 +139,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added regression tests:
   - `tests/test_dataflow_health.py`
   - `tests/test_cli_health_dataflow.py`
+- Updated `run_dataflow_health_once()` in `heber/ops/dataflow_health.py` to treat report file write errors as warn-only (no command crash), preserving exit-0 behavior.
+- Added regression guard in `tests/test_dataflow_health.py` for report-write failure handling.
+- Updated `tests/test_watch_entrypoint_shutdown.py` to stub metrics startup during shutdown-path tests, preventing port-bind flakiness in full-suite runs.
+- Reduced noisy import-time tracing logs by downgrading missing OpenTelemetry startup message to debug in `heber/ops/tracing.py`.
 
 #### Scheduled Dataflow Health Runner and Docs
 

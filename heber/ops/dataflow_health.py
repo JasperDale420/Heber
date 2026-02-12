@@ -452,8 +452,19 @@ def run_dataflow_health_once(
         settings=settings,
     )
     if report_dir:
-        _write_report(report, Path(report_dir))
-    logger.info("dataflow_health_report", **report)
+        try:
+            _write_report(report, Path(report_dir))
+        except OSError as exc:
+            logger.warning(
+                "dataflow_health_report_write_failed",
+                report_dir=report_dir,
+                error=str(exc),
+            )
+    logger.debug(
+        "dataflow_health_report_generated",
+        overall_status=report["overall_status"],
+        mode=mode,
+    )
     return report
 
 
