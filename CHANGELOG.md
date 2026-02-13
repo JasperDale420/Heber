@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - no per-watch completion info log for `EXPIRED`,
   - completion info log remains for `HIT_TP`.
 
+#### Watch Gateway Auth Fail-Fast Contract
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/writer.py` to enforce a required gateway API key contract during watch-service initialization.
+- Added `_resolve_gateway_api_key()` so watch startup uses explicit CLI key first, then settings key, and raises a clear `ValueError` when neither is configured.
+- This prevents runtime unauthenticated gateway calls that surface as noisy `401` log entries.
+- Added regression coverage:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_gateway_key_contract.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_writer_entrypoint_shutdown.py`
+
 ### Fixed
 
 #### Watch + Consumer Runtime Log RCA Cleanup

@@ -18,6 +18,17 @@ logger = structlog.get_logger(__name__)
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
 
+def _resolve_gateway_api_key(explicit_gateway_api_key: str | None, settings_gateway_api_key: str | None) -> str:
+    """Resolve and validate the gateway API key used by watch components."""
+    candidate = explicit_gateway_api_key
+    if candidate is None:
+        candidate = settings_gateway_api_key
+    normalized = (candidate or "").strip()
+    if not normalized:
+        raise ValueError("HEBER_WATCH_GATEWAY_API_KEY (or DATA_GATEWAY_API_KEY) must be configured")
+    return normalized
+
+
 class LabelWriter:
     """Writes completed watch outcomes to Gold storage.
 
@@ -182,9 +193,10 @@ class WatchService:
         from heber.watch.manager import WatchManager
         from heber.watch.poller import SnapshotPoller
 
-        resolved_gateway_api_key = gateway_api_key
-        if resolved_gateway_api_key is None:
-            resolved_gateway_api_key = settings.watch_gateway_api_key
+        resolved_gateway_api_key = _resolve_gateway_api_key(
+            gateway_api_key,
+            settings.watch_gateway_api_key,
+        )
 
         self.redis = redis_client
         self.manager = WatchManager(redis_client)
