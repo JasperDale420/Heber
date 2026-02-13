@@ -203,10 +203,10 @@ async def test_enrichment_raises_fatal_when_401_threshold_crossed(monkeypatch: p
         auth_failure_window_seconds=300,
     )
 
-    await extractor._enrich_iv_rank(_base_features("AAPL"))
-
     with pytest.raises(EnrichmentAuthFailure):
-        await extractor._enrich_iv_rank(_base_features("MSFT"))
+        await extractor._enrich_iv_rank(_base_features("AAPL"))
+
+    assert _SequencedClient.calls == 3
 
 
 @pytest.mark.asyncio
@@ -265,3 +265,32 @@ async def test_request_json_stops_legacy_fallback_on_rate_limit(monkeypatch: pyt
 
     assert payload is None
     assert _RouteClient.calls == ["http://gateway/api/v1/uw/options/AAPL/iv-rank"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_iv_rank_falls_back_to_options_route_when_canonical_route_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RouteClient.calls = []
+    _RouteClient.responses = {
+        "http://gateway/api/v1/uw/AAPL/iv-rank": _Response(404, {"detail": "not found"}),
+        "http://gateway/uw/AAPL/iv-rank": _Response(404, {"detail": "not found"}),
+        "http://gateway/api/v1/uw/options/AAPL/iv-rank": _Response(200, {"data": {"iv_rank": 55.0}}),
+    }
+    monkeypatch.setattr("httpx.AsyncClient", _RouteClient)
+
+    extractor = AlertFeatureExtractor(
+        gateway_url="http://gateway",
+        request_max_attempts=1,
+        retry_base_delay_seconds=0.0,
+        retry_jitter_seconds=0.0,
+    )
+
+    enriched = await extractor._enrich_iv_rank(_base_features("AAPL"))
+
+    assert enriched.iv_rank == 55.0
+    assert _RouteClient.calls == [
+        "http://gateway/api/v1/uw/AAPL/iv-rank",
+        "http://gateway/uw/AAPL/iv-rank",
+        "http://gateway/api/v1/uw/options/AAPL/iv-rank",
+    ]

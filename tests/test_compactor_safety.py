@@ -101,6 +101,29 @@ def test_compactor_ignores_hidden_sidecar_parquet_files(tmp_path: Path) -> None:
     assert not (partition / ".compaction.lock").exists()
 
 
+def test_compactor_logs_hidden_sidecar_skip_as_debug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-06"
+    partition.mkdir(parents=True)
+    (partition / "._part-2.parquet").write_text("not a parquet payload", encoding="utf-8")
+
+    warning_calls: list[str] = []
+    debug_calls: list[str] = []
+
+    def _capture_warning(message: str, **kwargs) -> None:  # noqa: ANN003
+        warning_calls.append(message)
+
+    def _capture_debug(message: str, **kwargs) -> None:  # noqa: ANN003
+        debug_calls.append(message)
+
+    monkeypatch.setattr(compactor_module.logger, "warning", _capture_warning)
+    monkeypatch.setattr(compactor_module.logger, "debug", _capture_debug)
+
+    _ = Compactor._list_compactable_parquet_files(partition)
+
+    assert "Skipping hidden parquet sidecar file" in debug_calls
+    assert "Skipping hidden parquet sidecar file" not in warning_calls
+
+
 def test_compactor_recovers_from_stale_self_lock(tmp_path: Path) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-07"
     partition.mkdir(parents=True)

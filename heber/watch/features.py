@@ -631,11 +631,21 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            routes = gateway_url_candidates(
-                self.gateway_url,
+            # Prefer canonical Data Gateway route first, then try the historical
+            # options-prefixed shape for mixed-version compatibility.
+            route_patterns = (
+                f"/uw/{features.underlying}/iv-rank",
                 f"/uw/options/{features.underlying}/iv-rank",
-                include_legacy_fallback=self.legacy_route_fallback_enabled,
             )
+            routes: list[str] = []
+            for route_pattern in route_patterns:
+                for candidate in gateway_url_candidates(
+                    self.gateway_url,
+                    route_pattern,
+                    include_legacy_fallback=self.legacy_route_fallback_enabled,
+                ):
+                    if candidate not in routes:
+                        routes.append(candidate)
             data = await self._request_json_with_retry(
                 endpoint="uw_iv_rank",
                 routes=routes,

@@ -154,6 +154,7 @@ def test_dataflow_health_report_write_failure_is_warn_only(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_utc_now", lambda: now)
 
     def _raise_write_error(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
         raise OSError("read-only path")

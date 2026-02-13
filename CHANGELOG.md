@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept existing behavior during market-open windows: missing passive gateway success evidence still reports `warn`.
 - Added regression tests in `/Users/jacobmcmillan/Empire/Heber/tests/test_dataflow_health.py` for both market-closed skip behavior and market-open warning behavior.
 
+#### Log RCA Hardening: Watch Enrichment + Catalog Paths + Compactor Noise
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/features.py` so IV-rank enrichment tries both canonical and options-prefixed route shapes, and no longer fails valid mixed-route environments.
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/sdk/client.py` to use relative request paths with `httpx` `base_url`, preventing accidental path resets that produced catalog `404` noise.
+- Added unprefixed route aliases in `/Users/jacobmcmillan/Empire/Heber/heber/catalog/api.py` for `/datasets` and `/feeds` families so existing callers stop generating avoidable 404s.
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/writer/compactor.py` to log hidden macOS parquet sidecars at `debug` level instead of `warning`.
+- Added regression tests:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_feature_enrichment_resilience.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_dataflow_health.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_sdk_catalog_defaults.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_catalog_route_aliases.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_compactor_safety.py`
+
 ### Fixed
 
 #### Watch + Consumer Runtime Log RCA Cleanup

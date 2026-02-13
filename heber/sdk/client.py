@@ -92,19 +92,19 @@ class HeberClient:
         params = {}
         if layer:
             params["layer"] = layer
-        response = self.http_client.get("/datasets", params=params)
+        response = self.http_client.get("datasets", params=params)
         response.raise_for_status()
         return response.json()["data"]
 
     def get_dataset(self, name: str) -> dict:
         """Get dataset metadata by name."""
-        response = self.http_client.get(f"/datasets/{name}")
+        response = self.http_client.get(f"datasets/{name}")
         response.raise_for_status()
         return response.json()["data"]
 
     def resolve_instrument(self, symbol: str) -> str | None:
         """Resolve symbol to canonical instrument_key."""
-        response = self.http_client.post("/instruments/lookup", json={"symbols": [symbol]})
+        response = self.http_client.post("instruments/lookup", json={"symbols": [symbol]})
         response.raise_for_status()
         data = response.json()["data"]
         if data:
@@ -134,7 +134,7 @@ class HeberClient:
         dataset = self.get_dataset(dataset_name)
 
         # Get schema version
-        response = self.http_client.get(f"/datasets/{dataset_name}/versions")
+        response = self.http_client.get(f"datasets/{dataset_name}/versions")
         response.raise_for_status()
         versions = response.json()["data"]
 

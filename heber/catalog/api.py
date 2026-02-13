@@ -141,6 +141,7 @@ async def health():
 
 
 # Dataset endpoints
+@app.get("/datasets", response_model=DatasetListResponse, include_in_schema=False)
 @app.get("/api/v1/datasets", response_model=DatasetListResponse)
 async def list_datasets(
     layer: str | None = Query(None, description="Filter by layer (bronze|silver|gold)"),
@@ -165,6 +166,7 @@ async def list_datasets(
     )
 
 
+@app.get("/datasets/{name}", response_model=DatasetDetailResponse, include_in_schema=False)
 @app.get("/api/v1/datasets/{name}", response_model=DatasetDetailResponse)
 async def get_dataset(name: str, service: CatalogService = Depends(get_service)):
     dataset = await service.get_dataset(name)
@@ -185,6 +187,7 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
     )
 
 
+@app.get("/datasets/{name}/versions", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/versions")
 async def get_dataset_versions(name: str, service: CatalogService = Depends(get_service)):
     versions = await service.get_dataset_versions(name)
@@ -202,6 +205,7 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
     }
 
 
+@app.get("/datasets/{name}/coverage", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/coverage")
 async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_service)):
     coverage = await service.get_coverage(name)
@@ -295,6 +299,7 @@ async def search_instruments(
 
 
 # Feed mapping endpoints
+@app.get("/feeds", include_in_schema=False)
 @app.get("/api/v1/feeds")
 async def list_feeds(service: CatalogService = Depends(get_service)):
     mappings = await service.list_feed_mappings()
@@ -311,6 +316,7 @@ async def list_feeds(service: CatalogService = Depends(get_service)):
     }
 
 
+@app.get("/feeds/resolve", include_in_schema=False)
 @app.get("/api/v1/feeds/resolve")
 async def resolve_feed(
     provider: str = Query(...),
@@ -330,6 +336,7 @@ async def resolve_feed(
 
 
 # Additional Dataset endpoints (PRD §11.7.3)
+@app.get("/datasets/{name}/versions/{version}", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/versions/{version}")
 async def get_dataset_version(
     name: str,
@@ -368,6 +375,7 @@ class DatasetCreateRequest(BaseModel):
     primary_keys: list | None = None
 
 
+@app.post("/datasets", status_code=201, include_in_schema=False)
 @app.post("/api/v1/datasets", status_code=201)
 async def create_dataset(
     request: DatasetCreateRequest,

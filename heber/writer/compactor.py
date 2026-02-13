@@ -193,7 +193,7 @@ class Compactor:
         compactable_files: list[Path] = []
         for candidate in sorted(partition_path.glob("*.parquet")):
             if candidate.name.startswith("."):
-                logger.warning(
+                logger.debug(
                     "Skipping hidden parquet sidecar file",
                     partition=str(partition_path),
                     file=str(candidate),
