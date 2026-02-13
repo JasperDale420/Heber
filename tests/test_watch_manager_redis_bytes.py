@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from heber.watch import manager as manager_module
 from heber.watch.manager import WatchManager
 from heber.watch.models import WatchHorizon, WatchKeys, WatchStatus
 
@@ -266,3 +267,43 @@ def test_cleanup_expired_non_finite_current_return_defaults_to_zero() -> None:
     assert stored is not None
     assert stored.status == WatchStatus.EXPIRED
     assert stored.outcome_return == 0.0
+
+
+def test_complete_watch_expired_skips_per_watch_completion_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    info_messages: list[str] = []
+
+    def _capture_info(message: str, **kwargs) -> None:  # noqa: ANN003
+        info_messages.append(message)
+
+    monkeypatch.setattr(manager_module.logger, "info", _capture_info)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.EXPIRED,
+        outcome_return=0.0,
+    )
+
+    assert completed is not None
+    assert "Completed alert watch" not in info_messages
+
+
+def test_complete_watch_hit_tp_keeps_completion_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
+    watch = _create_watch(manager)
+    info_messages: list[str] = []
+
+    def _capture_info(message: str, **kwargs) -> None:  # noqa: ANN003
+        info_messages.append(message)
+
+    monkeypatch.setattr(manager_module.logger, "info", _capture_info)
+
+    completed = manager.complete_watch(
+        watch.watch_id,
+        WatchStatus.HIT_TP,
+        outcome_return=0.25,
+    )
+
+    assert completed is not None
+    assert "Completed alert watch" in info_messages

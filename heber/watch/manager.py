@@ -302,12 +302,13 @@ class WatchManager:
         # Remove from active set
         self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch_id)
 
-        logger.info(
-            "Completed alert watch",
-            watch_id=watch_id,
-            status=status.value,
-            outcome_return=normalized_outcome_return,
-        )
+        if status != WatchStatus.EXPIRED:
+            logger.info(
+                "Completed alert watch",
+                watch_id=watch_id,
+                status=status.value,
+                outcome_return=normalized_outcome_return,
+            )
 
         return watch
 

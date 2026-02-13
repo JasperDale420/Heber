@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `/Users/jacobmcmillan/Empire/Heber/tests/test_catalog_route_aliases.py`
   - `/Users/jacobmcmillan/Empire/Heber/tests/test_compactor_safety.py`
 
+#### Watch Expiration Log Flood Reduction
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/manager.py` so `EXPIRED` watch completions no longer emit per-watch `Completed alert watch` info logs.
+- Retained completion info logs for terminal outcomes that matter for trading analysis (`HIT_TP`/`HIT_SL`).
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_manager_redis_bytes.py` to enforce:
+  - no per-watch completion info log for `EXPIRED`,
+  - completion info log remains for `HIT_TP`.
+
 ### Fixed
 
 #### Watch + Consumer Runtime Log RCA Cleanup
