@@ -29,7 +29,15 @@ logger = structlog.get_logger(__name__)
 
 
 def _parse_datasets(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -124,3 +124,55 @@ def test_hotloader_service_mode_invokes_sync_loop() -> None:
     assert fake_syncer.ensure_tables_called is True
     assert fake_syncer.run_sync_loop_called is True
     assert fake_syncer.stop_called is True
+
+
+def test_hotloader_dedupes_dataset_list() -> None:
+    class _FakeSyncer:
+        def __init__(self) -> None:
+            self.ensure_tables_called = False
+            self.synced: list[tuple[str, str | None]] = []
+            self.flush_called = False
+
+        def ensure_tables(self) -> None:
+            self.ensure_tables_called = True
+
+        def sync_from_silver(self, dataset: str, silver_path: str | None = None) -> int:
+            self.synced.append((dataset, silver_path))
+            return 0
+
+        def flush(self) -> int:
+            self.flush_called = True
+            return 0
+
+        async def run_sync_loop(self, datasets, silver_base_path):  # noqa: ANN001
+            raise AssertionError("run_sync_loop should not be called in --once mode")
+
+        def stop(self) -> None:
+            return None
+
+    fake_syncer = _FakeSyncer()
+
+    def fake_factory(*, silver_base_path: str | None = None, **_kwargs) -> _FakeSyncer:
+        assert silver_base_path == "/tmp/silver"
+        return fake_syncer
+
+    exit_code = hotstore_main.main(
+        [
+            "--once",
+            "--datasets",
+            "quotes, bars, quotes, trades, trades",
+            "--silver-base-path",
+            "/tmp/silver",
+        ],
+        syncer_factory=fake_factory,
+        metrics_server_starter=lambda **_kwargs: None,
+    )
+
+    assert exit_code == 0
+    assert fake_syncer.ensure_tables_called is True
+    assert fake_syncer.synced == [
+        ("quotes", "/tmp/silver"),
+        ("bars", "/tmp/silver"),
+        ("trades", "/tmp/silver"),
+    ]
+    assert fake_syncer.flush_called is True
