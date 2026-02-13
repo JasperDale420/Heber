@@ -49,7 +49,7 @@ from heber.watch.gateway import (
     should_try_legacy_fallback_for_status,
 )
 from heber.watch.manager import WatchManager
-from heber.watch.models import WatchHorizon
+from heber.watch.models import POLL_CONFIG, WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
@@ -368,6 +368,7 @@ class AlertWatchConsumer:
 
         created_count = 0
         skipped_missing_occ = 0
+        skipped_stale_window = 0
         processing_exceptions = 0
 
         for batch_index, alert in enumerate(alerts):
@@ -377,6 +378,8 @@ class AlertWatchConsumer:
                     created_count += 1
                 elif processed == "missing_occ_symbol":
                     skipped_missing_occ += 1
+                elif processed == "stale_alert_window":
+                    skipped_stale_window += 1
             except Exception as e:
                 if isinstance(e, EnrichmentAuthFailure):
                     logger.error(
@@ -399,8 +402,12 @@ class AlertWatchConsumer:
 
         if created_count > 0:
             return True, False, "watch_created"
+        if skipped_stale_window > 0 and skipped_missing_occ == 0 and processing_exceptions == 0:
+            return True, False, "stale_alert_window"
         if skipped_missing_occ > 0 and processing_exceptions == 0:
             return True, False, "missing_occ_symbol"
+        if skipped_stale_window > 0 and skipped_missing_occ > 0 and processing_exceptions == 0:
+            return True, False, "stale_or_missing_occ_symbol"
         if processing_exceptions > 0:
             return False, True, "processing_exception"
         return False, False, "alert_parse_failed"
@@ -416,6 +423,23 @@ class AlertWatchConsumer:
         dte = alert.get("dte", 5)
         alert_horizon = classify_horizon(dte)
         watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+        alert_time = self._normalize_alert_time(alert.get("ts_event"))
+        calendar = getattr(self.manager, "calendar", None)
+        if calendar is not None:
+            window_end = calendar.add_trading_hours(
+                alert_time,
+                POLL_CONFIG[watch_horizon]["max_duration_hours"],
+            )
+            if window_end <= datetime.now(UTC):
+                logger.info(
+                    "Skipping stale alert window",
+                    alert_id=alert.get("id"),
+                    occ_symbol=alert.get("occ_symbol"),
+                    horizon=watch_horizon.value,
+                    alert_time=alert_time.isoformat(),
+                    window_end=window_end.isoformat(),
+                )
+                return "stale_alert_window"
 
         # Prefer price carried with the alert to avoid stale quote lookups.
         entry_price = self._coerce_optional_float(alert.get("contract_px"))
@@ -439,7 +463,7 @@ class AlertWatchConsumer:
             strike=alert.get("strike", 0.0),
             entry_price=entry_price,
             spot_at_alert=alert.get("spot_px", 0.0),
-            alert_time=alert.get("ts_event", datetime.now(UTC)),
+            alert_time=alert_time,
             horizon=watch_horizon,
             tp_threshold=self.config.tp_pct,
             sl_threshold=self.config.sl_pct,
@@ -464,6 +488,22 @@ class AlertWatchConsumer:
         if not parsed_alerts:
             return None
         return parsed_alerts[0]
+
+    @staticmethod
+    def _normalize_alert_time(raw: Any) -> datetime:
+        if isinstance(raw, datetime):
+            value = raw
+        elif isinstance(raw, str):
+            try:
+                value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.now(UTC)
+        else:
+            return datetime.now(UTC)
+
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def _parse_alerts(self, data: dict) -> list[dict[str, Any]]:
         """Parse alert(s) from stream message supporting single and batched payloads."""

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Watch Consumer Stale-Window Guard for Backfilled Alerts
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` to skip watch creation when an alert's computed watch window has already ended at processing time.
+- This prevents stale/backfilled flow alerts from becoming active watches that produce no-snapshot expirations and contaminate training labels.
+- Added normalized alert timestamp handling for robust stale-window evaluation.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_consumer_reliability.py` for stale-window skip behavior.
+
 #### Watch Outcomes for Expired No-Snapshot Windows
 
 - Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/checker.py` so watches with no snapshots are completed as `EXPIRED` once `window_end` has passed, and now emit `WatchOutcome` records for writer persistence.

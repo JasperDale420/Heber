@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -44,6 +44,7 @@ class _NoopManager:
 class _CaptureManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.calendar = SimpleNamespace(add_trading_hours=lambda alert_time, hours: alert_time + timedelta(hours=hours))
 
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         self.calls.append(kwargs)
@@ -517,6 +518,33 @@ async def test_process_alert_prefers_contract_price_without_gateway_lookup() -> 
     assert manager.calls
     assert manager.calls[0]["entry_price"] == 2.25
     consumer._get_entry_price.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_alert_skips_stale_window_without_creating_watch() -> None:
+    redis_client = _RedisWithDlq()
+    manager = _CaptureManager()
+    consumer = AlertWatchConsumer(redis_client, manager)
+    consumer._parse_alert = lambda _data: {  # type: ignore[method-assign]
+        "id": "alert-stale-1",
+        "occ_symbol": "AAPL250101C00100000",
+        "underlying": "AAPL",
+        "put_call": "C",
+        "expiry": "2025-01-01",
+        "strike": 100.0,
+        "spot_px": 200.0,
+        "contract_px": 1.25,
+        "ts_event": datetime.now(UTC) - timedelta(days=30),
+        "dte": 0,
+    }
+    consumer._get_entry_price = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    consumer._extract_and_store_features = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await consumer._process_alert("2-5", {b"data": b"{}"})
+
+    assert result == (True, False, "stale_alert_window")
+    assert manager.calls == []
+    consumer._extract_and_store_features.assert_not_awaited()
 
 
 @pytest.mark.asyncio
