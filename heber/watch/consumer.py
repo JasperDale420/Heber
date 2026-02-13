@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -38,6 +37,8 @@ from heber.watch.features import (
 )
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+    coerce_optional_float,
+    coerce_utc_timestamp,
     gateway_auth_headers,
     gateway_url_candidates,
     quote_age_seconds,
@@ -46,7 +47,7 @@ from heber.watch.gateway import (
     route_failure_for_payload_shape,
     route_failure_for_symbol_missing,
     route_failure_for_symbol_shape,
-    should_try_legacy_fallback_for_status,
+    should_continue_route_fallback,
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import POLL_CONFIG, WatchHorizon
@@ -442,7 +443,7 @@ class AlertWatchConsumer:
                 return "stale_alert_window"
 
         # Prefer price carried with the alert to avoid stale quote lookups.
-        entry_price = self._coerce_optional_float(alert.get("contract_px"))
+        entry_price = coerce_optional_float(alert.get("contract_px"))
         if entry_price is None or entry_price <= 0:
             entry_price = await self._get_entry_price(alert["occ_symbol"])
 
@@ -491,19 +492,7 @@ class AlertWatchConsumer:
 
     @staticmethod
     def _normalize_alert_time(raw: Any) -> datetime:
-        if isinstance(raw, datetime):
-            value = raw
-        elif isinstance(raw, str):
-            try:
-                value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            except ValueError:
-                return datetime.now(UTC)
-        else:
-            return datetime.now(UTC)
-
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
+        return coerce_utc_timestamp(raw) or datetime.now(UTC)
 
     def _parse_alerts(self, data: dict) -> list[dict[str, Any]]:
         """Parse alert(s) from stream message supporting single and batched payloads."""
@@ -677,7 +666,7 @@ class AlertWatchConsumer:
                 put_call_raw = normalized_type
         put_call = self._normalize_put_call(put_call_raw or "C")
 
-        strike = self._coerce_optional_float(self._first_present_value(parsed, ("strike",)))
+        strike = coerce_optional_float(self._first_present_value(parsed, ("strike",)))
         if strike is None:
             strike = 0.0
 
@@ -693,20 +682,20 @@ class AlertWatchConsumer:
         volume_raw = self._first_present_value(parsed, ("volume", "size", "contracts", "contract_volume", "total_size"))
         open_interest_raw = self._first_present_value(parsed, ("open_interest", "oi", "openInterest"))
 
-        normalized_spot_px = self._coerce_optional_float(spot_px_raw)
+        normalized_spot_px = coerce_optional_float(spot_px_raw)
         if normalized_spot_px is None:
             normalized_spot_px = 0.0
-        normalized_contract_px = self._coerce_optional_float(contract_px_raw)
+        normalized_contract_px = coerce_optional_float(contract_px_raw)
         if normalized_contract_px is None:
             normalized_contract_px = 0.0
-        normalized_premium = self._coerce_optional_float(premium_raw)
+        normalized_premium = coerce_optional_float(premium_raw)
         if normalized_premium is None:
             normalized_premium = 0.0
-        normalized_volume = self._coerce_optional_float(volume_raw)
+        normalized_volume = coerce_optional_float(volume_raw)
         if normalized_volume is None:
             normalized_volume = 0.0
-        normalized_open_interest = self._coerce_optional_float(open_interest_raw)
-        normalized_volume_oi_ratio = self._coerce_optional_float(
+        normalized_open_interest = coerce_optional_float(open_interest_raw)
+        normalized_volume_oi_ratio = coerce_optional_float(
             self._first_present_value(parsed, ("volume_oi_ratio", "vol_oi_ratio"))
         )
         if normalized_volume_oi_ratio is None and normalized_open_interest is not None and normalized_open_interest > 0:
@@ -770,50 +759,11 @@ class AlertWatchConsumer:
 
     def _parse_timestamp(self, parsed: dict) -> datetime:
         """Parse timestamp from various field formats."""
-        ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
-        if not ts:
-            return datetime.now(UTC)
-
-        if isinstance(ts, str):
-            try:
-                parsed_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
-                numeric = self._coerce_optional_float(ts)
-                if numeric is None:
-                    return datetime.now(UTC)
-                return self._timestamp_from_numeric(numeric)
-            if parsed_ts.tzinfo is None:
-                return parsed_ts.replace(tzinfo=UTC)
-            return parsed_ts.astimezone(UTC)
-        if isinstance(ts, int | float):
-            numeric = self._coerce_optional_float(ts)
-            if numeric is None:
-                return datetime.now(UTC)
-            return self._timestamp_from_numeric(numeric)
+        for key in ("ts_event", "created_at", "timestamp"):
+            result = coerce_utc_timestamp(parsed.get(key))
+            if result is not None:
+                return result
         return datetime.now(UTC)
-
-    @staticmethod
-    def _timestamp_from_numeric(numeric: float) -> datetime:
-        """Parse numeric epoch values (seconds or milliseconds) with fail-soft fallback."""
-        epoch = numeric / 1000.0 if abs(numeric) >= 100_000_000_000 else numeric
-        try:
-            return datetime.fromtimestamp(epoch, tz=UTC)
-        except (OverflowError, OSError, ValueError):
-            return datetime.now(UTC)
-
-    @staticmethod
-    def _coerce_optional_float(value: Any) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric):
-                return None
-            return numeric
-        except (TypeError, ValueError):
-            return None
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.
@@ -845,7 +795,7 @@ class AlertWatchConsumer:
                         route_failures,
                     )
                     if result is None:
-                        if not self._should_continue_route_fallback(route_failures):
+                        if not should_continue_route_fallback(route_failures):
                             break
                         continue
                     price, is_stale, age = result
@@ -866,19 +816,6 @@ class AlertWatchConsumer:
         except Exception as e:
             logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
             return None
-
-    @staticmethod
-    def _should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
-        """Return True when it is useful to try legacy route fallback URLs."""
-        if not route_failures:
-            return True
-        latest = route_failures[-1]
-        if latest.get("failure") != "http_status":
-            return True
-        status = latest.get("status")
-        if not isinstance(status, int):
-            return True
-        return should_try_legacy_fallback_for_status(status)
 
     async def _try_route(
         self,
@@ -1006,18 +943,18 @@ class AlertWatchConsumer:
         route_failures: list[dict[str, Any]],
     ) -> float | None:
         """Extract mid or last price from a validated quote payload."""
-        bid = self._coerce_optional_float(quote_payload.get("bp"))
+        bid = coerce_optional_float(quote_payload.get("bp"))
         if bid is None:
-            bid = self._coerce_optional_float(quote_payload.get("bid_price"))
+            bid = coerce_optional_float(quote_payload.get("bid_price"))
 
-        ask = self._coerce_optional_float(quote_payload.get("ap"))
+        ask = coerce_optional_float(quote_payload.get("ap"))
         if ask is None:
-            ask = self._coerce_optional_float(quote_payload.get("ask_price"))
+            ask = coerce_optional_float(quote_payload.get("ask_price"))
 
         if bid is not None and ask is not None:
             return (bid + ask) / 2
 
-        last_price = self._coerce_optional_float(quote_payload.get("last_price"))
+        last_price = coerce_optional_float(quote_payload.get("last_price"))
         if last_price is not None:
             return last_price
 

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted shared `extract_item_event_timestamp()` and `explode_aggregate_payload()` into `heber/writer/normalizer.py`, consolidating ~190 LOC of duplicated logic from `consumer.py` and `transformer.py`
 - Moved payload validation schemas (`PAYLOAD_REQUIRED_FIELDS`, `PAYLOAD_ALLOWED_FIELDS`) from `heber/writer/consumer.py` inline dicts to `heber/writer/ingest_contracts.py` module-level constants
 
+#### Watch Module DRY Refactor
+
+- Extracted `coerce_optional_float` from `consumer.py`, `poller.py`, and `features.py` (3 duplicates) into `heber/watch/gateway.py`
+- Extracted `should_continue_route_fallback` from `consumer.py` and `poller.py` (2 duplicates) into `heber/watch/gateway.py`
+- Rewrote `consumer.py` timestamp helpers (`_normalize_alert_time`, `_parse_timestamp`, `_timestamp_from_numeric`) to delegate to `gateway.coerce_utc_timestamp`
+- Added boolean guard to `coerce_utc_timestamp` (Python `bool` is subclass of `int`)
+- Net reduction of ~80 LOC of duplicated logic
+
 ### Fixed
 
 #### Docker Startup RCA: Postgres Healthcheck vs Slow Recovery

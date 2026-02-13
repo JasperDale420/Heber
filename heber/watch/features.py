@@ -28,6 +28,7 @@ from heber.ops.metrics import (
     record_watch_gateway_success,
 )
 from heber.watch.gateway import (
+    coerce_optional_float,
     gateway_auth_headers,
     gateway_url_candidates,
     should_try_legacy_fallback_for_status,
@@ -377,22 +378,6 @@ class AlertFeatureExtractor:
         return dt.astimezone(self.MARKET_TIMEZONE)
 
     @staticmethod
-    def _coerce_optional_float(value: object) -> float | None:
-        import math
-
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric):
-                return None
-            return numeric
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
     def _is_retryable_status(status_code: int) -> bool:
         return status_code == 429 or 500 <= status_code <= 599
 
@@ -658,7 +643,7 @@ class AlertFeatureExtractor:
             # Extract IV rank from response
             iv_data = data.get("data", {})
             if iv_data:
-                parsed_iv_rank = self._coerce_optional_float(iv_data.get("iv_rank"))
+                parsed_iv_rank = coerce_optional_float(iv_data.get("iv_rank"))
                 if parsed_iv_rank is not None:
                     features.iv_rank = parsed_iv_rank
                 logger.debug(
@@ -716,11 +701,11 @@ class AlertFeatureExtractor:
                 logger.debug("No valid contracts found for Greeks", symbol=features.underlying)
                 return features
 
-            features.delta = self._coerce_optional_float(contract.get("delta"))
-            features.gamma = self._coerce_optional_float(contract.get("gamma"))
-            features.theta = self._coerce_optional_float(contract.get("theta"))
-            features.vega = self._coerce_optional_float(contract.get("vega"))
-            features.iv = self._coerce_optional_float(contract.get("implied_volatility"))
+            features.delta = coerce_optional_float(contract.get("delta"))
+            features.gamma = coerce_optional_float(contract.get("gamma"))
+            features.theta = coerce_optional_float(contract.get("theta"))
+            features.vega = coerce_optional_float(contract.get("vega"))
+            features.iv = coerce_optional_float(contract.get("implied_volatility", contract.get("iv")))
 
             logger.debug(
                 "Enriched Greeks",
@@ -744,12 +729,12 @@ class AlertFeatureExtractor:
     def _find_matching_contract(self, contracts: list[dict], target_strike: float) -> dict | None:
         """Find the contract matching the target strike, or fall back to the first valid one."""
         for c in contracts:
-            strike_price = self._coerce_optional_float(c.get("strike_price"))
+            strike_price = coerce_optional_float(c.get("strike_price", c.get("strike")))
             if strike_price is not None and abs(strike_price - target_strike) < 0.01:
                 return c
 
         for c in contracts:
-            if self._coerce_optional_float(c.get("strike_price")) is not None:
+            if coerce_optional_float(c.get("strike_price", c.get("strike"))) is not None:
                 return c
 
         return None
@@ -769,11 +754,10 @@ class AlertFeatureExtractor:
 
             routes = gateway_url_candidates(
                 self.gateway_url,
-                "/alpaca/stocks/bars",
+                f"/alpaca/stocks/{symbol}/bars",
                 include_legacy_fallback=self.legacy_route_fallback_enabled,
             )
             params = {
-                "symbol": symbol,
                 "start": start_date.isoformat(),
                 "end": end_date.isoformat(),
                 "timeframe": "1Day",
@@ -795,7 +779,7 @@ class AlertFeatureExtractor:
                 return features
 
             bars = sorted(bars, key=lambda b: b.get("t", ""), reverse=True)
-            closes: list[float | None] = [self._coerce_optional_float(bar.get("c")) for bar in bars]
+            closes: list[float | None] = [coerce_optional_float(bar.get("c", bar.get("close"))) for bar in bars]
 
             if len(closes) < 2 or closes[0] is None or closes[0] <= 0:
                 return features

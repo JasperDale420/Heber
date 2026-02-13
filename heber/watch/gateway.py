@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -192,6 +193,42 @@ def route_failure_for_partial_quotes(
     }
 
 
+def coerce_optional_float(value: Any) -> float | None:
+    """Convert payload values to float when possible, rejecting non-finite results.
+
+    Rejects None, booleans, NaN, and Inf. Used by consumer, poller, and features
+    modules for safe numeric extraction from untrusted payloads.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        return numeric
+    except (TypeError, ValueError):
+        return None
+
+
+def should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
+    """Return True when it is useful to try legacy route fallback URLs.
+
+    Only continues when the latest failure is a 404 (route-shape mismatch);
+    other status codes indicate the route was found but the request itself failed.
+    """
+    if not route_failures:
+        return True
+    latest = route_failures[-1]
+    if latest.get("failure") != "http_status":
+        return True
+    status = latest.get("status")
+    if not isinstance(status, int):
+        return True
+    return should_try_legacy_fallback_for_status(status)
+
+
 def _coerce_numeric_to_utc(value: int | float) -> datetime | None:
     """Convert a numeric epoch (seconds or milliseconds) to a UTC datetime."""
     epoch = value / 1000.0 if abs(value) >= 100_000_000_000 else value
@@ -230,6 +267,8 @@ def _ensure_utc(dt: datetime) -> datetime:
 def coerce_utc_timestamp(value: Any) -> datetime | None:
     """Convert timestamp payload values into UTC-aware datetimes."""
     if value is None:
+        return None
+    if isinstance(value, bool):
         return None
     if isinstance(value, datetime):
         return _ensure_utc(value)

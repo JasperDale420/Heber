@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +15,7 @@ from heber.config import settings
 from heber.ops.metrics import record_watch_gateway_request, record_watch_poll_cycle
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+    coerce_optional_float,
     extract_quote_timestamp,
     gateway_auth_headers,
     gateway_url_candidates,
@@ -24,7 +24,7 @@ from heber.watch.gateway import (
     route_failure_for_http_status,
     route_failure_for_partial_quotes,
     route_failure_for_payload_shape,
-    should_try_legacy_fallback_for_status,
+    should_continue_route_fallback,
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
@@ -243,7 +243,7 @@ class SnapshotPoller:
                     route_failures,
                 )
                 if result is None:
-                    if not self._should_continue_route_fallback(route_failures):
+                    if not should_continue_route_fallback(route_failures):
                         break
                     continue
 
@@ -291,19 +291,6 @@ class SnapshotPoller:
         except Exception as e:
             logger.error("Quote fetch error", error=str(e), batch_size=len(batch), routes=routes)
             return {}
-
-    @staticmethod
-    def _should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
-        """Return True when it is useful to continue trying legacy route fallbacks."""
-        if not route_failures:
-            return True
-        latest = route_failures[-1]
-        if latest.get("failure") != "http_status":
-            return True
-        status = latest.get("status")
-        if not isinstance(status, int):
-            return True
-        return should_try_legacy_fallback_for_status(status)
 
     async def _try_route_for_batch(
         self,
@@ -538,16 +525,16 @@ class SnapshotPoller:
         quote: dict,
     ) -> WatchSnapshot:
         """Create a snapshot from quote data."""
-        bid = self._coerce_optional_float(quote.get("bp"))
+        bid = coerce_optional_float(quote.get("bp"))
         if bid is None:
-            bid = self._coerce_optional_float(quote.get("bid_price"))
+            bid = coerce_optional_float(quote.get("bid_price"))
 
-        ask = self._coerce_optional_float(quote.get("ap"))
+        ask = coerce_optional_float(quote.get("ap"))
         if ask is None:
-            ask = self._coerce_optional_float(quote.get("ask_price"))
+            ask = coerce_optional_float(quote.get("ask_price"))
 
-        last_price = self._coerce_optional_float(quote.get("last_price"))
-        underlying_price = self._coerce_optional_float(quote.get("underlying_price"))
+        last_price = coerce_optional_float(quote.get("last_price"))
+        underlying_price = coerce_optional_float(quote.get("underlying_price"))
 
         if bid is not None and ask is not None:
             mid = (bid + ask) / 2
@@ -569,21 +556,6 @@ class SnapshotPoller:
             underlying_price=underlying_price,
             return_pct=return_pct,
         )
-
-    @staticmethod
-    def _coerce_optional_float(value: Any) -> float | None:
-        """Convert quote payload values to float when possible."""
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric):
-                return None
-            return numeric
-        except (TypeError, ValueError):
-            return None
 
     def _parse_quote_timestamp(self, quote: dict[str, Any]) -> datetime:
         """Resolve snapshot timestamp from quote payload with UTC fallback."""
