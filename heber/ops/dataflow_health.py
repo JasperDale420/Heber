@@ -393,9 +393,13 @@ def generate_dataflow_report(
 
     gateway_last_success = signals.get("gateway_last_success")
     if gateway_last_success is None:
-        gateway_status = "warn"
-        gateway_message = "No passive gateway success evidence from watch metrics."
         gateway_age = None
+        if market_open:
+            gateway_status = "warn"
+            gateway_message = "No passive gateway success evidence from watch metrics."
+        else:
+            gateway_status = "skipped"
+            gateway_message = "Market closed; passive gateway activity check skipped."
     else:
         gateway_age = max(0.0, now_unixtime - float(gateway_last_success))
         if market_open and gateway_age > float(window_seconds):

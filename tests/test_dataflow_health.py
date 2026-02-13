@@ -82,6 +82,34 @@ def test_dataflow_health_market_closed_skips_freshness_checks(monkeypatch) -> No
     assert bars_check["status"] == "skipped"
 
 
+def test_dataflow_health_market_closed_skips_gateway_passive_check_when_metric_missing(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 2, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["gateway_last_success"] = None
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: False)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    gateway_check = next(check for check in report["checks"] if check["id"] == "gateway_passive_activity")
+    assert gateway_check["status"] == "skipped"
+    assert report["overall_status"] == "ok"
+
+
+def test_dataflow_health_market_open_warns_when_gateway_passive_metric_missing(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["gateway_last_success"] = None
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    gateway_check = next(check for check in report["checks"] if check["id"] == "gateway_passive_activity")
+    assert gateway_check["status"] == "warn"
+    assert report["overall_status"] == "warn"
+
+
 def test_dataflow_health_uses_filesystem_fallback_when_metrics_unavailable(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     signals = _signals(now)

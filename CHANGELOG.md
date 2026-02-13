@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Dataflow Health Market-Closed Passive Check Noise
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/ops/dataflow_health.py` so `gateway_passive_activity` is marked `skipped` (instead of `warn`) when the market is closed and no passive gateway success metric is expected.
+- Kept existing behavior during market-open windows: missing passive gateway success evidence still reports `warn`.
+- Added regression tests in `/Users/jacobmcmillan/Empire/Heber/tests/test_dataflow_health.py` for both market-closed skip behavior and market-open warning behavior.
+
+### Fixed
+
 #### Watch + Consumer Runtime Log RCA Cleanup
 
 - Updated `heber/watch/consumer.py` to prefer alert-carried `contract_px` for watch entry price and only call Data Gateway quote routes when alert price is missing/invalid, removing stale quote fallback noise for normal flow-alert processing.
