@@ -10,10 +10,6 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-import structlog
-
-logger = structlog.get_logger(__name__)
-
 
 class SliceStatus(str, Enum):
     """Implementation slice status."""

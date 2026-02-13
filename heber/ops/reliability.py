@@ -8,7 +8,6 @@ Provides:
 
 import hashlib
 import json
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -348,93 +347,3 @@ class DeadLetterQueue:
                 exc_info=True,
             )
             self._queue = []
-
-
-def retry_with_backoff(
-    fn: Callable,
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0,
-    jitter: float = 0.5,
-    on_retry: Callable[[int, Exception], None] | None = None,
-) -> Any:
-    """Execute function with exponential backoff and jitter (PRD §12.4).
-
-    Args:
-        fn: Function to execute
-        max_retries: Maximum retry attempts
-        base_delay: Initial delay in seconds
-        max_delay: Maximum delay cap
-        jitter: Random jitter factor (0-1)
-        on_retry: Callback on each retry with (attempt, exception)
-
-    Returns:
-        Result of fn()
-
-    Raises:
-        Last exception if all retries exhausted
-    """
-    last_exception = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            return fn()
-        except Exception as e:
-            last_exception = e
-
-            if attempt == max_retries:
-                logger.error(
-                    "retry_exhausted",
-                    attempts=attempt + 1,
-                    error=str(e),
-                )
-                raise
-
-            # Calculate backoff with jitter
-            delay = min(base_delay * (2**attempt), max_delay)
-            jitter_amount = delay * jitter * random.random()
-            actual_delay = delay + jitter_amount
-
-            logger.warning(
-                "retry_attempt",
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                delay_seconds=actual_delay,
-                error=str(e),
-            )
-
-            if on_retry:
-                on_retry(attempt + 1, e)
-
-            time.sleep(actual_delay)
-
-    raise last_exception
-
-
-async def retry_with_backoff_async(
-    fn: Callable,
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0,
-    jitter: float = 0.5,
-) -> Any:
-    """Async version of retry_with_backoff."""
-    import asyncio
-
-    last_exception = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except Exception as e:
-            last_exception = e
-
-            if attempt == max_retries:
-                raise
-
-            delay = min(base_delay * (2**attempt), max_delay)
-            jitter_amount = delay * jitter * random.random()
-
-            await asyncio.sleep(delay + jitter_amount)
-
-    raise last_exception

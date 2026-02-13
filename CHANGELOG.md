@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidated duplicate `DataLayer` enum from `openmetadata_client.py` to import from `access_control.py`
 - Extracted `_instrument_response()` helper in `api.py`, replacing 3 identical 8-field constructions
 
+#### Ops Module DRY Refactor
+
+- Deleted ~90 LOC of dead `retry_with_backoff` / `retry_with_backoff_async` from `heber/ops/reliability.py` (superseded by `runtime_retry.py`)
+- Removed unused `logger` / `import structlog` from `slices.py` and `gap_resolutions.py`
+- Removed unused `import random` from `reliability.py`
+- Cleaned up stale exports in `heber/ops/__init__.py`
+
 #### Writer Module DRY Refactor
 
 - Deleted 92 LOC of dead coercion code from `heber/writer/silver.py` (`_coerce_value`, `_coerce_to_*`) and `heber/writer/transformer.py` (`_coerce_value`, `_coerce_to_date`, `_coerce_to_timestamp`)
