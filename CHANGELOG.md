@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Docker Startup RCA: Postgres Healthcheck vs Slow Recovery
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/docker-compose.yml` Postgres healthcheck:
+  - now uses container env vars for DB/user (`POSTGRES_DB`, `POSTGRES_USER`) instead of hard-coded values,
+  - added `start_period: 120s` so slow recovery windows on external volumes do not mark Postgres unhealthy too early.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_compose_postgres_health_contract.py` to enforce this startup contract.
+- Operational remediation applied to local volume:
+  - removed `._*` macOS resource-fork sidecar files from `/Volumes/heber/postgres/data` that were inflating Postgres recovery/fsync time and causing dependency startup failures.
+
 #### Watch Consumer Feature-Payload Mapping for Meta-Label Rows
 
 - Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` so parsed flow alerts now retain feature-critical fields when creating watch feature records:
