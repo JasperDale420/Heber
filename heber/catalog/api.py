@@ -123,17 +123,6 @@ class FeedMappingResponse(BaseModel):
     silver_dataset_name: str
 
 
-class ErrorResponse(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class ErrorEnvelope(BaseModel):
-    error: ErrorResponse
-    meta: MetaResponse
-
-
 # Health check
 @app.get("/health")
 async def health():
@@ -224,22 +213,27 @@ async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_
 
 
 # Instrument endpoints
+def _instrument_response(inst: Any) -> InstrumentResponse:
+    """Build an InstrumentResponse from a DB model instance."""
+    return InstrumentResponse(
+        instrument_key=inst.instrument_key,
+        instrument_type=inst.instrument_type,
+        canonical_symbol=inst.canonical_symbol,
+        underlying_key=inst.underlying_key,
+        occ_symbol=inst.occ_symbol,
+        expiry=inst.expiry,
+        strike=inst.strike,
+        put_call=inst.put_call,
+    )
+
+
 @app.get("/api/v1/instruments/{key}")
 async def get_instrument(key: str, service: CatalogService = Depends(get_service)):
     instrument = await service.get_instrument(key)
     if not instrument:
         raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
     return {
-        "data": InstrumentResponse(
-            instrument_key=instrument.instrument_key,
-            instrument_type=instrument.instrument_type,
-            canonical_symbol=instrument.canonical_symbol,
-            underlying_key=instrument.underlying_key,
-            occ_symbol=instrument.occ_symbol,
-            expiry=instrument.expiry,
-            strike=instrument.strike,
-            put_call=instrument.put_call,
-        ),
+        "data": _instrument_response(instrument),
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -251,19 +245,7 @@ async def lookup_instruments(
 ):
     instruments = await service.lookup_instruments(request.symbols)
     return {
-        "data": [
-            InstrumentResponse(
-                instrument_key=i.instrument_key,
-                instrument_type=i.instrument_type,
-                canonical_symbol=i.canonical_symbol,
-                underlying_key=i.underlying_key,
-                occ_symbol=i.occ_symbol,
-                expiry=i.expiry,
-                strike=i.strike,
-                put_call=i.put_call,
-            )
-            for i in instruments
-        ],
+        "data": [_instrument_response(i) for i in instruments],
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -281,19 +263,7 @@ async def search_instruments(
         limit=limit,
     )
     return {
-        "data": [
-            InstrumentResponse(
-                instrument_key=i.instrument_key,
-                instrument_type=i.instrument_type,
-                canonical_symbol=i.canonical_symbol,
-                underlying_key=i.underlying_key,
-                occ_symbol=i.occ_symbol,
-                expiry=i.expiry,
-                strike=i.strike,
-                put_call=i.put_call,
-            )
-            for i in instruments
-        ],
+        "data": [_instrument_response(i) for i in instruments],
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -528,53 +498,3 @@ async def http_exception_handler(request, exc: HTTPException):
             "meta": {"ts": datetime.now(UTC).isoformat()},
         },
     )
-
-
-# Rate limiting (PRD §11.7.6)
-# Note: Production should use Redis-backed rate limiter
-import time
-from collections import defaultdict
-
-_rate_limit_store: dict = defaultdict(list)
-RATE_LIMITS = {
-    "read": 1000,  # 1000 req/min
-    "write": 100,  # 100 req/min
-}
-
-
-def check_rate_limit(api_key: str, endpoint_type: str = "read"):
-    """Simple in-memory rate limiter (use Redis in production)."""
-    now = time.time()
-    window = 60  # 1 minute
-
-    key = f"{api_key}:{endpoint_type}"
-    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < window]
-
-    limit = RATE_LIMITS.get(endpoint_type, 1000)
-    if len(_rate_limit_store[key]) >= limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    _rate_limit_store[key].append(now)
-
-
-# Authentication middleware (PRD §11.7.2)
-from fastapi import Header
-
-
-def verify_api_key(authorization: str | None = Header(None)):
-    """Simple API key verification (MVP)."""
-    if settings.environment == "dev":
-        return "dev-user"
-
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid Authorization format")
-
-    token = authorization[7:]
-    # In production, validate against a key store
-    if not token or len(token) < 10:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    return token

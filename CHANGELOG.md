@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Catalog Module DRY Refactor
+
+- Deleted ~45 LOC of dead code from `heber/catalog/api.py` (`ErrorResponse`, `ErrorEnvelope`, `check_rate_limit`, `verify_api_key`, and associated imports)
+- Consolidated duplicate `DataLayer` enum from `openmetadata_client.py` to import from `access_control.py`
+- Extracted `_instrument_response()` helper in `api.py`, replacing 3 identical 8-field constructions
+
 #### Writer Module DRY Refactor
 
 - Deleted 92 LOC of dead coercion code from `heber/writer/silver.py` (`_coerce_value`, `_coerce_to_*`) and `heber/writer/transformer.py` (`_coerce_value`, `_coerce_to_date`, `_coerce_to_timestamp`)
