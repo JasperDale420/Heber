@@ -9,13 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
-def _rolling_max_datetime(series: pd.Series, window: int) -> pd.Series:
-    source = pd.to_datetime(series, utc=True, errors="coerce")
-    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
-    source_int = source_naive.astype("int64")
-    rolled = pd.Series(source_int, index=series.index).rolling(window=window, min_periods=1).max()
-    return pd.to_datetime(rolled, utc=True)
+from heber.features.templates._utils import rolling_max_timestamp
 
 
 def compute_relative_features(
@@ -59,7 +53,7 @@ def compute_relative_features(
         df = df.sort_values("bar_start_ts")
         returns = df["close"].pct_change()
         bench_returns = df["benchmark_close"].pct_change()
-        ts_available = _rolling_max_datetime(df["_ts_available_source"], window=60)
+        ts_available = rolling_max_timestamp(df["_ts_available_source"], window=60)
 
         return pd.DataFrame(
             {

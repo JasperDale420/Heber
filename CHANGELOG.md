@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed unused `import random` from `reliability.py`
 - Cleaned up stale exports in `heber/ops/__init__.py`
 
+#### Features Module DRY Refactor
+
+- Extracted shared `rolling_max_timestamp` / `rolling_max_timestamp_time` into new `features/templates/_utils.py`
+- Consolidated 4 duplicate `_derive_ts_available` / `_rolling_max_datetime` implementations from `momentum.py`, `volatility.py`, `flow.py`, and `cross_asset.py`
+
 #### Writer Module DRY Refactor
 
 - Deleted 92 LOC of dead coercion code from `heber/writer/silver.py` (`_coerce_value`, `_coerce_to_*`) and `heber/writer/transformer.py` (`_coerce_value`, `_coerce_to_date`, `_coerce_to_timestamp`)
