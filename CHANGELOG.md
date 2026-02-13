@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Watch Outcomes for Expired No-Snapshot Windows
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/checker.py` so watches with no snapshots are completed as `EXPIRED` once `window_end` has passed, and now emit `WatchOutcome` records for writer persistence.
+- Preserved existing behavior for active windows with no snapshots (`None` until expiry), avoiding premature outcomes.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_zero_price_handling.py` for expired no-snapshot watches to prevent stalled unlabeled records.
+
 #### Dataflow Health Market-Closed Passive Check Noise
 
 - Updated `/Users/jacobmcmillan/Empire/Heber/heber/ops/dataflow_health.py` so `gateway_passive_activity` is marked `skipped` (instead of `warn`) when the market is closed and no passive gateway success metric is expected.

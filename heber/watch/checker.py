@@ -72,12 +72,12 @@ class BarrierChecker:
         """
         snapshots = sorted(self.manager.get_snapshots(watch.watch_id), key=lambda snap: snap.timestamp)
 
-        if not snapshots:
-            return None
-
         now = datetime.now(UTC)
         alert_time = watch.alert_time if watch.alert_time.tzinfo is not None else watch.alert_time.replace(tzinfo=UTC)
         window_end = watch.window_end if watch.window_end.tzinfo is not None else watch.window_end.replace(tzinfo=UTC)
+
+        if not snapshots:
+            return self._handle_no_snapshots(watch, now, alert_time, window_end)
 
         # Build return path
         returns, return_timestamps = self._build_return_path(snapshots, watch.entry_price)
@@ -190,6 +190,36 @@ class BarrierChecker:
             window_end,
             0.0,
             bars_to_hit,
+            0.0,
+            0.0,
+            alert_time,
+            window_end,
+        )
+
+    def _handle_no_snapshots(
+        self,
+        watch: AlertWatch,
+        now: datetime,
+        alert_time: datetime,
+        window_end: datetime,
+    ) -> WatchOutcome | None:
+        """Expire watches with no snapshots once their window has ended."""
+        if now < window_end:
+            return None
+
+        self.manager.complete_watch(
+            watch.watch_id,
+            WatchStatus.EXPIRED,
+            0.0,
+            bars_to_hit=0,
+            outcome_time=window_end,
+        )
+        return self._build_outcome(
+            watch,
+            WatchStatus.EXPIRED,
+            window_end,
+            0.0,
+            0,
             0.0,
             0.0,
             alert_time,
