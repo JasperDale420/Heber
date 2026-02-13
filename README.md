@@ -153,9 +153,15 @@ heber health-dataflow --mode manual --window-seconds 900
 
 ## Documentation
 
-- `docs/architecture.md` - system overview, data flow, and layers
-- `docs/catalog_api.md` - Catalog API reference
-- `docs/data_contract.md` - EventEnvelope + feed schema contract
+- `PRD.md` - product requirements and system scope
+- `docs/ARCHITECTURE.md` - system overview, data flow, and layers
+- `docs/RUNBOOK.md` - operational startup, health checks, and recovery
+- `docs/API_REFERENCE.md` - catalog API endpoint reference
+- `docs/DATA_CONTRACTS.md` - shared envelope/schema contracts
+- `docs/DEPLOYMENT.md` - deployment and rollback procedures
+- `docs/MIGRATION_GUIDE.md` - migration procedures and schema evolution notes
+- `docs/catalog_api.md` - detailed request/response examples for catalog endpoints
+- `docs/data_contract.md` - canonical EventEnvelope and feed schema detail
 - `docs/silver_gold_scope.md` - Silver keep/drop matrix + Gold input plan
 - `docs/schema_registry.md` - schema registry usage
 - `docs/iceberg_migration.md` - Iceberg migration status
@@ -165,6 +171,8 @@ heber health-dataflow --mode manual --window-seconds 900
 - `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
 - `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
 - `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
+- `TESTING.md` - test layout, commands, and quality gate
+- `.env.example` - required environment variable template
 
 ## Repository Structure
 

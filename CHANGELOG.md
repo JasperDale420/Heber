@@ -37,6 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Documentation Standardization Baseline
+
+- Added `AGENTS.md` as the canonical AI-agent instruction file and removed `CLAUDE.md`.
+- Added missing documentation baseline files:
+  - `CONTRIBUTING.md`
+  - `TESTING.md`
+  - `SECURITY.md`
+  - `DEVELOPER_NOTES.md`
+  - `docs/RUNBOOK.md`
+  - `docs/API_REFERENCE.md`
+  - `docs/DATA_CONTRACTS.md`
+  - `docs/DEPLOYMENT.md`
+  - `docs/MIGRATION_GUIDE.md`
+- Normalized canonical naming for required docs:
+  - `prd.md` -> `PRD.md`
+  - `docs/architecture.md` -> `docs/ARCHITECTURE.md`
+- Updated `README.md` documentation index to point to standardized canonical docs and required environment/testing references.
+
 #### Gateway Feed Alias Compatibility
 
 - Fixed `flow_alerts` ingestion producing invalid `equity:` instrument keys by adding defensive fallback logic in `heber/writer/key_normalization.py`.

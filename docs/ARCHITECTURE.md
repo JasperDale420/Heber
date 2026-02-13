@@ -1,5 +1,11 @@
 # Architecture
 
+Related docs:
+
+- `/Users/jacobmcmillan/Empire/Heber/PRD.md`
+- `/Users/jacobmcmillan/Empire/Heber/docs/DATA_CONTRACTS.md`
+- `/Users/jacobmcmillan/Empire/Heber/docs/RUNBOOK.md`
+
 ## Overview
 
 Heber is a lakehouse for market and intelligence data with a strict **zero-leakage** contract. The system ingests events from Data Gateway, writes raw and normalized lake layers, registers datasets in a catalog, and exposes read access through the SDK and API.
