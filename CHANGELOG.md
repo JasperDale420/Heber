@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_gateway_key_contract.py`
   - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_writer_entrypoint_shutdown.py`
 
+#### Alert Labels Gateway Auth Contract
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/features/pipelines/alert_labels.py` so contract-label option-bars fetches now require a configured gateway API key and send authenticated `X-Gateway-Key` headers.
+- Added fail-fast key validation for `use_contract_labels=True` to prevent unauthenticated background calls and noisy `401` failures when this pipeline runs.
+- Added regression coverage in:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_alert_labels_gateway_auth.py`
+
 ### Fixed
 
 #### Watch + Consumer Runtime Log RCA Cleanup
