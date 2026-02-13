@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import pyarrow as pa
+import structlog
 
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
@@ -17,6 +18,10 @@ from heber.writer.ingest_contracts import (
     UnmappedFeedError,
     resolve_silver_feed,
 )
+
+logger = structlog.get_logger(__name__)
+
+_UTC_OFFSET_SUFFIX = "+00:00"
 
 
 class MissingRequiredFieldsError(ValueError):
@@ -149,7 +154,7 @@ def _coerce_date(value: Any) -> date | None:
     if isinstance(value, date):
         return value
     if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        return datetime.fromisoformat(value.replace("Z", _UTC_OFFSET_SUFFIX)).date()
     return None
 
 
@@ -165,7 +170,7 @@ def _coerce_timestamp(value: Any) -> datetime | None:
         stripped = value.strip()
         if stripped.isdigit():
             return _coerce_timestamp(int(stripped))
-        return datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+        return datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))
     return None
 
 
@@ -205,3 +210,129 @@ def _coerce_string(value: Any) -> str:
     if isinstance(value, dict | list):
         return json.dumps(value, default=str)
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Aggregate Payload Helpers
+# ---------------------------------------------------------------------------
+# Shared by the live consumer and the batch transformer so both paths use
+# identical explosion / timestamp-extraction logic.
+
+# Feed → (list_key, context_keys) for aggregate REST payloads.
+_AGGREGATE_FEED_CONFIG: dict[str, tuple[str, tuple[str, ...]]] = {
+    "bars": ("bars", ("symbol", "timeframe")),
+    "trades": ("trades", ("symbol",)),
+}
+
+
+def extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
+    """Parse item-level event timestamp from common provider keys.
+
+    Handles ISO-8601 strings, epoch seconds/milliseconds, and datetime
+    objects.  Returns a timezone-aware UTC datetime or ``None``.
+    """
+    raw = payload.get("timestamp") or payload.get("t") or payload.get("ts_event")
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        if raw.tzinfo is None:
+            return raw.replace(tzinfo=UTC)
+        return raw.astimezone(UTC)
+    if isinstance(raw, int | float):
+        epoch = float(raw)
+        if epoch > 10_000_000_000:
+            epoch /= 1000
+        return datetime.fromtimestamp(epoch, tz=UTC)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return extract_item_event_timestamp({"timestamp": int(text)})  # recurse with parsed int
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", _UTC_OFFSET_SUFFIX))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
+
+
+def explode_aggregate_payload(
+    envelope: EventEnvelope,
+    *,
+    feed_override: str | None = None,
+) -> list[EventEnvelope]:
+    """Explode aggregate REST payloads into per-item candidate envelopes.
+
+    For ``bars`` and ``trades`` feeds whose payload contains a list of
+    individual items, returns one :class:`EventEnvelope` per item.  For all
+    other feeds (or non-list payloads) returns ``[envelope]`` unchanged.
+
+    Args:
+        envelope: Source envelope, potentially containing an aggregate payload.
+        feed_override: Optional canonical feed name used for matching
+            (e.g. when the transformer resolves aliases before calling).
+            Defaults to ``envelope.feed``.
+    """
+
+    payload = envelope.payload if isinstance(envelope.payload, dict) else {}
+    if not isinstance(payload, dict):
+        return [envelope]
+
+    match_feed = feed_override or envelope.feed
+    config = _AGGREGATE_FEED_CONFIG.get(match_feed)  # type: ignore[arg-type]
+    if config is None:
+        return [envelope]
+
+    list_key, context_keys = config
+
+    raw_items = payload.get(list_key)
+    if not isinstance(raw_items, list):
+        return [envelope]
+    if not raw_items:
+        return []
+
+    candidates: list[EventEnvelope] = []
+    skipped = 0
+    for idx, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            skipped += 1
+            continue
+        item_payload = dict(raw_item)
+        for key in context_keys:
+            value = payload.get(key)
+            if value is not None and key not in item_payload:
+                item_payload[key] = value
+        if "symbol" not in item_payload and envelope.symbol:
+            item_payload["symbol"] = envelope.symbol
+
+        item_ts_event = extract_item_event_timestamp(item_payload) or envelope.ts_event
+        item_envelope = envelope.model_copy(
+            update={
+                "event_id": f"{envelope.event_id}:{idx}",
+                "payload": item_payload,
+                "ts_event": item_ts_event,
+            }
+        )
+        candidates.append(item_envelope)
+
+    if skipped:
+        logger.warning(
+            "aggregate_payload_non_dict_items",
+            event_id=envelope.event_id,
+            feed=envelope.feed,
+            total_items=len(raw_items),
+            emitted=len(candidates),
+            skipped=skipped,
+        )
+    elif candidates:
+        logger.info(
+            "aggregate_payload_expanded",
+            event_id=envelope.event_id,
+            feed=envelope.feed,
+            item_count=len(candidates),
+        )
+
+    return candidates

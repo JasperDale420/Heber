@@ -25,7 +25,12 @@ from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
 from heber.writer.ingest_contracts import UnmappedFeedError, is_bronze_only_feed, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import MissingRequiredFieldsError, enforce_required_non_null_fields, envelope_to_silver_row
+from heber.writer.normalizer import (
+    MissingRequiredFieldsError,
+    enforce_required_non_null_fields,
+    envelope_to_silver_row,
+    explode_aggregate_payload,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -236,96 +241,8 @@ class BronzeToSilverTransformer:
         candidate envelope per item so backfill writes typed rows rather than
         null-heavy aggregate blobs.
         """
-        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
-        if not isinstance(payload, dict):
-            return [envelope]
-
         canonical_feed = resolve_silver_feed(feed)
-        list_key: str | None = None
-        context_keys: tuple[str, ...] = ()
-
-        if canonical_feed == "bars":
-            list_key = "bars"
-            context_keys = ("symbol", "timeframe")
-        elif canonical_feed == "trades":
-            list_key = "trades"
-            context_keys = ("symbol",)
-
-        if list_key is None:
-            return [envelope]
-
-        raw_items = payload.get(list_key)
-        if not isinstance(raw_items, list):
-            return [envelope]
-        if not raw_items:
-            return []
-
-        candidates: list[EventEnvelope] = []
-        skipped = 0
-        for idx, raw_item in enumerate(raw_items):
-            if not isinstance(raw_item, dict):
-                skipped += 1
-                continue
-
-            item_payload = dict(raw_item)
-            for key in context_keys:
-                value = payload.get(key)
-                if value is not None and key not in item_payload:
-                    item_payload[key] = value
-            if "symbol" not in item_payload and envelope.symbol:
-                item_payload["symbol"] = envelope.symbol
-
-            item_ts_event = self._extract_item_event_timestamp(item_payload) or envelope.ts_event
-            item_envelope = envelope.model_copy(
-                update={
-                    "event_id": f"{envelope.event_id}:{idx}",
-                    "payload": item_payload,
-                    "ts_event": item_ts_event,
-                }
-            )
-            candidates.append(item_envelope)
-
-        if skipped:
-            logger.warning(
-                "backfill_aggregate_payload_non_dict_items",
-                event_id=envelope.event_id,
-                feed=feed,
-                total_items=len(raw_items),
-                emitted=len(candidates),
-                skipped=skipped,
-            )
-
-        return candidates
-
-    @staticmethod
-    def _extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
-        """Parse item-level event timestamp from common provider keys."""
-        raw = payload.get("timestamp") or payload.get("t") or payload.get("ts_event")
-        if raw is None:
-            return None
-        if isinstance(raw, datetime):
-            if raw.tzinfo is None:
-                return raw.replace(tzinfo=UTC)
-            return raw.astimezone(UTC)
-        if isinstance(raw, int | float):
-            epoch = float(raw)
-            if epoch > 10_000_000_000:
-                epoch /= 1000
-            return datetime.fromtimestamp(epoch, tz=UTC)
-        if isinstance(raw, str):
-            text = raw.strip()
-            if not text:
-                return None
-            if text.isdigit():
-                return BronzeToSilverTransformer._extract_item_event_timestamp({"timestamp": int(text)})
-            try:
-                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-        return None
+        return explode_aggregate_payload(envelope, feed_override=canonical_feed)
 
     def _envelope_to_silver_row(self, envelope: EventEnvelope, feed: str) -> dict[str, Any] | None:
         """Convert EventEnvelope to Silver row format."""
@@ -350,46 +267,6 @@ class BronzeToSilverTransformer:
         except (UnmappedFeedError, ValueError) as exc:
             logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
             return None
-
-    def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
-        """Coerce a value to match the expected Arrow type."""
-        if value is None:
-            return None
-
-        try:
-            if pa.types.is_floating(arrow_type):
-                return float(value) if value != "" else None
-            if pa.types.is_integer(arrow_type):
-                return int(float(value)) if value != "" else None
-            if pa.types.is_date(arrow_type):
-                return self._coerce_to_date(value)
-            if pa.types.is_timestamp(arrow_type):
-                return self._coerce_to_timestamp(value)
-            if pa.types.is_boolean(arrow_type):
-                return bool(value)
-            if pa.types.is_list(arrow_type):
-                return list(value) if value else []
-            return str(value) if value is not None else None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _coerce_to_date(value: Any) -> Any:
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            return datetime.strptime(value[:10], "%Y-%m-%d").date()
-        return value
-
-    @staticmethod
-    def _coerce_to_timestamp(value: Any) -> Any:
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if isinstance(value, int | float):
-            return datetime.fromtimestamp(value)
-        return value
 
     def _write_silver_batch(
         self,

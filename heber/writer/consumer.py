@@ -27,6 +27,8 @@ from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_erro
 from heber.writer.bronze import BronzeWriter
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
+    PAYLOAD_ALLOWED_FIELDS,
+    PAYLOAD_REQUIRED_FIELDS,
     UnmappedFeedError,
     is_bronze_only_feed,
     is_contracted_feed,
@@ -34,6 +36,7 @@ from heber.writer.ingest_contracts import (
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.normalizer import explode_aggregate_payload
 from heber.writer.silver import SilverWriter
 
 logger = structlog.get_logger(__name__)
@@ -48,73 +51,8 @@ class EventConsumer:
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-        self._payload_required: dict[str, set[str]] = {
-            "flow_alerts": {
-                "timestamp",
-                "symbol",
-                "strike",
-                "expiry",
-                "put_call",
-                "premium",
-                "volume",
-            },
-            "market_tide": {
-                "timestamp",
-                "date",
-                "net_call_premium",
-                "net_put_premium",
-                "net_volume",
-                "sentiment",
-            },
-        }
-        self._payload_allowed: dict[str, set[str]] = {
-            "flow_alerts": {
-                "id",
-                "alert_id",
-                "event_id",
-                "timestamp",
-                "symbol",
-                "strike",
-                "expiry",
-                "put_call",
-                "premium",
-                "volume",
-                "open_interest",
-                "side",
-                "is_sweep",
-                "is_unusual",
-                "sentiment",
-                "option_chain",
-                "price",
-                "underlying_price",
-                "alert_rule",
-                "alert_type",
-                "aggressor",
-                "tags",
-                "provider",
-                # UW additional fields (P1)
-                "trade_count",
-                "volume_oi_ratio",
-                "total_ask_side_prem",
-                "total_bid_side_prem",
-                "has_floor",
-                "has_multileg",
-                "has_singleleg",
-                "all_opening_trades",
-                "total_size",
-                "expiry_count",
-            },
-            "market_tide": {
-                "timestamp",
-                "date",
-                "net_call_premium",
-                "net_put_premium",
-                "net_volume",
-                "sentiment",
-                "call_put_ratio",
-                "provider",
-            },
-        }
+        self._payload_required = PAYLOAD_REQUIRED_FIELDS
+        self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
 
     async def connect(self):
         """Connect to Redis."""
@@ -550,100 +488,7 @@ class EventConsumer:
         candidate event per item so Silver writes typed rows instead of null-heavy
         aggregate blobs.
         """
-        payload = envelope.payload if isinstance(envelope.payload, dict) else {}
-        if not isinstance(payload, dict):
-            return [envelope]
-
-        list_key: str | None = None
-        context_keys: tuple[str, ...] = ()
-        if envelope.feed == "bars":
-            list_key = "bars"
-            context_keys = ("symbol", "timeframe")
-        elif envelope.feed == "trades":
-            list_key = "trades"
-            context_keys = ("symbol",)
-
-        if list_key is None:
-            return [envelope]
-
-        raw_items = payload.get(list_key)
-        if not isinstance(raw_items, list):
-            return [envelope]
-        if not raw_items:
-            return []
-
-        candidates: list[EventEnvelope] = []
-        skipped = 0
-        for idx, raw_item in enumerate(raw_items):
-            if not isinstance(raw_item, dict):
-                skipped += 1
-                continue
-            item_payload = dict(raw_item)
-            for key in context_keys:
-                value = payload.get(key)
-                if value is not None and key not in item_payload:
-                    item_payload[key] = value
-            if "symbol" not in item_payload and envelope.symbol:
-                item_payload["symbol"] = envelope.symbol
-
-            item_ts_event = self._extract_item_event_timestamp(item_payload) or envelope.ts_event
-            item_envelope = envelope.model_copy(
-                update={
-                    "event_id": f"{envelope.event_id}:{idx}",
-                    "payload": item_payload,
-                    "ts_event": item_ts_event,
-                }
-            )
-            candidates.append(item_envelope)
-
-        if len(candidates) != len(raw_items):
-            logger.warning(
-                "silver_aggregate_payload_non_dict_items",
-                event_id=envelope.event_id,
-                feed=envelope.feed,
-                total_items=len(raw_items),
-                emitted=len(candidates),
-                skipped=skipped,
-            )
-        else:
-            logger.info(
-                "silver_aggregate_payload_expanded",
-                event_id=envelope.event_id,
-                feed=envelope.feed,
-                item_count=len(candidates),
-            )
-
-        return candidates
-
-    @staticmethod
-    def _extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
-        """Parse item-level event timestamp from common provider keys."""
-        raw = payload.get("timestamp") or payload.get("t") or payload.get("ts_event")
-        if raw is None:
-            return None
-        if isinstance(raw, datetime):
-            if raw.tzinfo is None:
-                return raw.replace(tzinfo=UTC)
-            return raw.astimezone(UTC)
-        if isinstance(raw, int | float):
-            epoch = float(raw)
-            if epoch > 10_000_000_000:
-                epoch /= 1000
-            return datetime.fromtimestamp(epoch, tz=UTC)
-        if isinstance(raw, str):
-            text = raw.strip()
-            if not text:
-                return None
-            if text.isdigit():
-                return EventConsumer._extract_item_event_timestamp({"timestamp": int(text)})
-            try:
-                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-        return None
+        return explode_aggregate_payload(envelope)
 
     async def run(self):
         """Main consumer loop."""

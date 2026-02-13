@@ -92,60 +92,6 @@ class SilverWriter:
         enforce_required_non_null_fields(feed=silver_feed, row=row, event_id=normalized.event_id)
         return row, normalized
 
-    def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
-        """Coerce a value to match the expected Arrow type."""
-        if value is None:
-            return None
-
-        try:
-            if pa.types.is_floating(arrow_type):
-                return self._coerce_to_float(value)
-            if pa.types.is_integer(arrow_type):
-                return self._coerce_to_int(value)
-            if pa.types.is_date(arrow_type):
-                return self._coerce_to_date(value)
-            if pa.types.is_timestamp(arrow_type):
-                return self._coerce_to_timestamp(value)
-            return value
-        except (ValueError, TypeError) as e:
-            logger.warning(
-                "Type coercion failed",
-                value=str(value)[:50],
-                target_type=str(arrow_type),
-                error=str(e),
-            )
-            return None
-
-    @staticmethod
-    def _coerce_to_float(value: Any) -> float | None:
-        return float(value) if value != "" else None
-
-    @staticmethod
-    def _coerce_to_int(value: Any) -> int | None:
-        return int(float(value)) if value != "" else None
-
-    @staticmethod
-    def _coerce_to_date(value: Any) -> Any:
-        from datetime import date, datetime
-
-        if isinstance(value, date):
-            return value
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            return datetime.strptime(value[:10], "%Y-%m-%d").date()
-        return value
-
-    @staticmethod
-    def _coerce_to_timestamp(value: Any) -> Any:
-        from datetime import datetime
-
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value
-
     def _get_file_path(self, partition_key: str) -> Path:
         """Get file path for a partition."""
         base = settings.silver_path / partition_key

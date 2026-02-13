@@ -72,6 +72,77 @@ BRONZE_ONLY_SILVER_DATASETS: tuple[str, ...] = (
     "institution_holdings",
 )
 
+# Required and allowed payload keys for schema validation.
+# Required keys trigger a warning when missing; unexpected keys (outside
+# the allowed set) also trigger a warning.
+PAYLOAD_REQUIRED_FIELDS: dict[str, set[str]] = {
+    "flow_alerts": {
+        "timestamp",
+        "symbol",
+        "strike",
+        "expiry",
+        "put_call",
+        "premium",
+        "volume",
+    },
+    "market_tide": {
+        "timestamp",
+        "date",
+        "net_call_premium",
+        "net_put_premium",
+        "net_volume",
+        "sentiment",
+    },
+}
+
+PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
+    "flow_alerts": {
+        "id",
+        "alert_id",
+        "event_id",
+        "timestamp",
+        "symbol",
+        "strike",
+        "expiry",
+        "put_call",
+        "premium",
+        "volume",
+        "open_interest",
+        "side",
+        "is_sweep",
+        "is_unusual",
+        "sentiment",
+        "option_chain",
+        "price",
+        "underlying_price",
+        "alert_rule",
+        "alert_type",
+        "aggressor",
+        "tags",
+        "provider",
+        "trade_count",
+        "volume_oi_ratio",
+        "total_ask_side_prem",
+        "total_bid_side_prem",
+        "has_floor",
+        "has_multileg",
+        "has_singleleg",
+        "all_opening_trades",
+        "total_size",
+        "expiry_count",
+    },
+    "market_tide": {
+        "timestamp",
+        "date",
+        "net_call_premium",
+        "net_put_premium",
+        "net_volume",
+        "sentiment",
+        "call_put_ratio",
+        "provider",
+    },
+}
+
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
@@ -124,9 +195,13 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     },
     "quotes": {
         "bp": "bid_px",
+        "bid_price": "bid_px",
         "bs": "bid_sz",
+        "bid_size": "bid_sz",
         "ap": "ask_px",
+        "ask_price": "ask_px",
         "as": "ask_sz",
+        "ask_size": "ask_sz",
         "bx": "bid_exchange",
         "ax": "ask_exchange",
     },

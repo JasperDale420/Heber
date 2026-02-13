@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Writer Module DRY Refactor
+
+- Deleted 92 LOC of dead coercion code from `heber/writer/silver.py` (`_coerce_value`, `_coerce_to_*`) and `heber/writer/transformer.py` (`_coerce_value`, `_coerce_to_date`, `_coerce_to_timestamp`)
+- Extracted shared `extract_item_event_timestamp()` and `explode_aggregate_payload()` into `heber/writer/normalizer.py`, consolidating ~190 LOC of duplicated logic from `consumer.py` and `transformer.py`
+- Moved payload validation schemas (`PAYLOAD_REQUIRED_FIELDS`, `PAYLOAD_ALLOWED_FIELDS`) from `heber/writer/consumer.py` inline dicts to `heber/writer/ingest_contracts.py` module-level constants
+
 ### Fixed
 
 #### Docker Startup RCA: Postgres Healthcheck vs Slow Recovery
