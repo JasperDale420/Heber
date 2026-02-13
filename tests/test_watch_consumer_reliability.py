@@ -310,6 +310,64 @@ def test_map_alert_fields_coerces_invalid_or_non_finite_numbers_to_zero() -> Non
     assert mapped["contract_px"] == 0.0
 
 
+def test_map_alert_fields_preserves_flow_metadata_for_feature_extraction() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    mapped = consumer._map_alert_fields(
+        {
+            "id": "evt-1",
+            "option_chain": "AAPL260220C00100000",
+            "symbol": "AAPL",
+            "put_call": "C",
+            "expiry": "2026-02-20",
+            "strike": 100.0,
+            "premium": 250000.0,
+            "volume": 150.0,
+            "open_interest": 500.0,
+            "alert_type": "SWEEP",
+            "side": "ask",
+            "aggressor": "BULLISH",
+            "tags": ["bullish", "unusual"],
+        }
+    )
+
+    assert mapped["premium"] == 250000.0
+    assert mapped["volume"] == 150.0
+    assert mapped["open_interest"] == 500.0
+    assert mapped["alert_type"] == "SWEEP"
+    assert mapped["side"] == "ask"
+    assert mapped["aggressor"] == "BULLISH"
+    assert mapped["tags"] == ["bullish", "unusual"]
+
+
+def test_map_alert_fields_supports_common_numeric_aliases() -> None:
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+
+    mapped = consumer._map_alert_fields(
+        {
+            "event_id": "evt-2",
+            "option_chain": "AAPL260220P00100000",
+            "symbol": "AAPL",
+            "put_call": "P",
+            "expiry": "2026-02-20",
+            "strike": 100.0,
+            "total_premium": 12345.0,
+            "size": 42.0,
+            "oi": 777.0,
+            "price": 1.25,
+            "underlying_price": 199.5,
+        }
+    )
+
+    assert mapped["premium"] == 12345.0
+    assert mapped["volume"] == 42.0
+    assert mapped["open_interest"] == 777.0
+    assert mapped["contract_px"] == 1.25
+    assert mapped["spot_px"] == 199.5
+
+
 def test_parse_timestamp_normalizes_naive_iso_to_utc() -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(redis_client, _NoopManager())
@@ -580,3 +638,56 @@ async def test_extract_and_store_features_uses_sync_redis_fallback_when_async_mi
     key, _value, ttl_seconds = redis_client.set_calls[0]
     assert key == "heber:watch:features:alert-1"
     assert ttl_seconds == 86400 * 7
+
+
+@pytest.mark.asyncio
+async def test_extract_and_store_features_preserves_flow_payload_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_client = _SyncFeatureRedis()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager())
+    captured: dict[str, object] = {}
+
+    features = SimpleNamespace(
+        alert_id="alert-2",
+        to_dict=lambda: {"alert_id": "alert-2"},
+        numeric_feature_names=lambda: ["f1", "f2"],
+    )
+
+    async def _extract(record):  # noqa: ANN001
+        captured["record"] = record
+        return features
+
+    consumer.feature_extractor.extract = _extract  # type: ignore[method-assign]
+    monkeypatch.setattr(watch_consumer_module, "persist_features_to_gold", lambda _features: None)
+
+    await consumer._extract_and_store_features(
+        {
+            "id": "alert-2",
+            "underlying": "TSLA",
+            "occ_symbol": "TSLA260220C00700000",
+            "put_call": "C",
+            "expiry": "2026-02-20",
+            "strike": 700.0,
+            "premium": 345000.0,
+            "volume": 210.0,
+            "open_interest": 1500.0,
+            "spot_px": 690.5,
+            "contract_px": 12.25,
+            "alert_type": "SWEEP",
+            "side": "ask",
+            "aggressor": "BULLISH",
+            "tags": ["bullish", "unusual"],
+            "ts_event": datetime(2026, 2, 12, 15, 30, tzinfo=UTC),
+        },
+        "watch-2",
+    )
+
+    record = captured["record"]
+    assert record.premium == 345000.0
+    assert record.volume == 210.0
+    assert record.open_interest == 1500.0
+    assert record.alert_type == "SWEEP"
+    assert record.side == "ask"
+    assert record.aggressor == "BULLISH"
+    assert record.tags == ["bullish", "unusual"]

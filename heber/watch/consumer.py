@@ -631,24 +631,96 @@ class AlertWatchConsumer:
 
         return parsed
 
+    @staticmethod
+    def _first_present_value(parsed: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            if key in parsed and parsed[key] is not None:
+                return parsed[key]
+        return None
+
+    @staticmethod
+    def _normalize_optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _normalize_tags(value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                decoded = json.loads(raw)
+                if isinstance(decoded, list):
+                    tags = [str(item).strip() for item in decoded if str(item).strip()]
+                    return tags or None
+            except json.JSONDecodeError:
+                pass
+            tags = [part.strip() for part in raw.replace("|", ",").split(",") if part.strip()]
+            return tags or None
+        if isinstance(value, list | tuple | set):
+            tags = [str(item).strip() for item in value if str(item).strip()]
+            return tags or None
+        return None
+
     def _map_alert_fields(self, parsed: dict) -> dict:
         """Map various field name conventions to standard fields."""
-        put_call = self._normalize_put_call(parsed.get("put_call") or parsed.get("type", "C"))
-        spot_px = parsed.get("spot_px")
-        if spot_px is None:
-            spot_px = parsed.get("underlying_price", 0)
-        contract_px = parsed.get("contract_px")
-        if contract_px is None:
-            contract_px = parsed.get("price", 0)
-        strike = self._coerce_optional_float(parsed.get("strike", 0))
+        put_call_raw = self._first_present_value(parsed, ("put_call", "option_type", "call_put"))
+        type_raw = parsed.get("type")
+        if put_call_raw is None and isinstance(type_raw, str):
+            normalized_type = type_raw.strip().upper()
+            if normalized_type.startswith("C") or normalized_type.startswith("P"):
+                put_call_raw = normalized_type
+        put_call = self._normalize_put_call(put_call_raw or "C")
+
+        strike = self._coerce_optional_float(self._first_present_value(parsed, ("strike",)))
         if strike is None:
             strike = 0.0
-        normalized_spot_px = self._coerce_optional_float(spot_px)
+
+        spot_px_raw = self._first_present_value(parsed, ("spot_px", "underlying_price", "spot", "underlying_px"))
+        contract_px_raw = self._first_present_value(
+            parsed,
+            ("contract_px", "price", "option_price", "mid", "mid_price"),
+        )
+        premium_raw = self._first_present_value(
+            parsed,
+            ("premium", "total_premium", "premium_amount", "notional_premium", "notional"),
+        )
+        volume_raw = self._first_present_value(parsed, ("volume", "size", "contracts", "contract_volume", "total_size"))
+        open_interest_raw = self._first_present_value(parsed, ("open_interest", "oi", "openInterest"))
+
+        normalized_spot_px = self._coerce_optional_float(spot_px_raw)
         if normalized_spot_px is None:
             normalized_spot_px = 0.0
-        normalized_contract_px = self._coerce_optional_float(contract_px)
+        normalized_contract_px = self._coerce_optional_float(contract_px_raw)
         if normalized_contract_px is None:
             normalized_contract_px = 0.0
+        normalized_premium = self._coerce_optional_float(premium_raw)
+        if normalized_premium is None:
+            normalized_premium = 0.0
+        normalized_volume = self._coerce_optional_float(volume_raw)
+        if normalized_volume is None:
+            normalized_volume = 0.0
+        normalized_open_interest = self._coerce_optional_float(open_interest_raw)
+        normalized_volume_oi_ratio = self._coerce_optional_float(
+            self._first_present_value(parsed, ("volume_oi_ratio", "vol_oi_ratio"))
+        )
+        if normalized_volume_oi_ratio is None and normalized_open_interest is not None and normalized_open_interest > 0:
+            normalized_volume_oi_ratio = normalized_volume / normalized_open_interest
+
+        alert_type = self._normalize_optional_text(
+            self._first_present_value(parsed, ("alert_type", "flow_type", "order_type"))
+        )
+        if alert_type is None and isinstance(type_raw, str):
+            normalized_type = type_raw.strip().upper()
+            if not (normalized_type.startswith("C") or normalized_type.startswith("P")):
+                alert_type = normalized_type
+        if alert_type is None:
+            alert_type = "UNKNOWN"
 
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
@@ -659,6 +731,18 @@ class AlertWatchConsumer:
             "strike": strike,
             "spot_px": normalized_spot_px,
             "contract_px": normalized_contract_px,
+            "premium": normalized_premium,
+            "volume": normalized_volume,
+            "open_interest": normalized_open_interest,
+            "alert_type": alert_type,
+            "side": self._normalize_optional_text(self._first_present_value(parsed, ("side", "execution_side"))),
+            "aggressor": self._normalize_optional_text(self._first_present_value(parsed, ("aggressor",))),
+            "tags": self._normalize_tags(self._first_present_value(parsed, ("tags", "tag_list", "flags"))),
+            "is_sweep": parsed.get("is_sweep"),
+            "is_unusual": parsed.get("is_unusual"),
+            "sentiment": self._normalize_optional_text(parsed.get("sentiment")),
+            "trade_count": parsed.get("trade_count"),
+            "volume_oi_ratio": normalized_volume_oi_ratio,
         }
 
     @staticmethod

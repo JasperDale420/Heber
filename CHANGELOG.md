@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Watch Consumer Feature-Payload Mapping for Meta-Label Rows
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` so parsed flow alerts now retain feature-critical fields when creating watch feature records:
+  - `premium`, `volume`, `open_interest`
+  - `alert_type`, `side`, `aggressor`, `tags`
+  - `is_sweep`, `is_unusual`, `sentiment`, `trade_count`, `volume_oi_ratio`
+- Added alias support for common payload variants (`total_premium`, `size`, `oi`, etc.) and derived `volume_oi_ratio` when missing.
+- This fixes sparse meta-label feature rows caused by dropping flow payload fields before extraction.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_consumer_reliability.py` to enforce payload preservation and extractor input fidelity.
+
 #### Watch Consumer Stale-Window Guard for Backfilled Alerts
 
 - Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` to skip watch creation when an alert's computed watch window has already ended at processing time.
