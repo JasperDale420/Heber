@@ -21,7 +21,7 @@ import structlog
 from prometheus_client import Counter, Histogram
 
 from heber.storage.iceberg_catalog import (
-    SILVER_SCHEMAS,
+    ICEBERG_SILVER_SCHEMAS,
     get_iceberg_catalog,
     initialize_silver_tables,
 )
@@ -89,7 +89,7 @@ class IcebergSilverWriter:
         self._ensure_initialized()
 
         if table_name not in self._tables:
-            if table_name not in SILVER_SCHEMAS:
+            if table_name not in ICEBERG_SILVER_SCHEMAS:
                 raise ValueError(f"Unknown Silver table: {table_name}")
             # Try to load from catalog
             full_name = f"silver.{table_name}"

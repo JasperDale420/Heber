@@ -7,7 +7,7 @@ This module provides the storage layer abstractions, including:
 """
 
 from heber.storage.iceberg_catalog import (
-    SILVER_SCHEMAS,
+    ICEBERG_SILVER_SCHEMAS,
     IcebergCatalogType,
     IcebergConfig,
     create_silver_table,
@@ -29,7 +29,7 @@ __all__ = [
     "IcebergCatalogType",
     "get_iceberg_catalog",
     # Table schemas
-    "SILVER_SCHEMAS",
+    "ICEBERG_SILVER_SCHEMAS",
     "get_silver_bars_schema",
     "get_silver_quotes_schema",
     "get_silver_trades_schema",
