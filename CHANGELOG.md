@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Market Data Normalization for Backtesting Accuracy
+
+- Added instrument-type-aware normalization for core market data feeds (bars, quotes, trades) in `heber/writer/key_normalization.py`
+- Added `_normalize_crypto_symbol()` handling `BTC/USD`, `BTC-USD`, `BTCUSD`, `BTC_USD`, `ETHUSDT` crypto formats with known-quote-currency disambiguation
+- Added `_normalize_equity_symbol()` supporting extended tickers like `BRK.B`, `JRI.RT`
+- Added `_normalize_market_data_envelope()` routing normalization by instrument type (equity, crypto, option)
+- Added `validate_market_data_payload()` with quality flags (`high_below_low`, `negative_price`, `negative_volume`, `inverted_spread`, `non_positive_price`, `negative_size`) for suspect market data — flags data rather than rejecting to preserve backtesting completeness
+- Added option trades instrument key preservation through `option:OCC:` prefix detection
+- Previously, bars/quotes/trades feeds fell through to a no-op generic branch with no validation
+- Added 12 new tests to `tests/test_instrument_key_synthesis.py` covering all instrument types and quality validation
+
 #### Catalog Module DRY Refactor
 
 - Deleted ~45 LOC of dead code from `heber/catalog/api.py` (`ErrorResponse`, `ErrorEnvelope`, `check_rate_limit`, `verify_api_key`, and associated imports)
@@ -40,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewrote `consumer.py` timestamp helpers (`_normalize_alert_time`, `_parse_timestamp`, `_timestamp_from_numeric`) to delegate to `gateway.coerce_utc_timestamp`
 - Added boolean guard to `coerce_utc_timestamp` (Python `bool` is subclass of `int`)
 - Net reduction of ~80 LOC of duplicated logic
+
+#### Watch Module DRY Refactor (Phase 2)
+
+- Added `is_retryable_http_status` and `parse_retry_after` to `heber/watch/gateway.py`.
+- **Refactoring**:
+  - `watch` module: Consolidated retry logic and data coercion helper functions into `gateway.py` to eliminate DRY violations.
+  - `backtest` module: Extracted shared `_load_split_data` logic in `BacktestDataLoader` to reduce duplication.
+  - `sdk` module: Extracted shared `_read_parquet_dataset` helper in `HeberClient` to consolidate parquet reading and filtering logic.
+  - `ml` module: Refactored `MetaLabelDatasetBuilder` to use `HeberClient` for data loading, removing duplicate parquet reading logic and legacy path support.
+- Consolidated duplicate `_coerce_finite_outcome_return` in `heber/watch/manager.py` to use `gateway.coerce_optional_float`.
 
 ### Fixed
 
