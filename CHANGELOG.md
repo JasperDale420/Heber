@@ -628,6 +628,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added shared ingest contract and normalization modules used by both live consumer and backfill transformer:
   - `heber/writer/ingest_contracts.py`
   - `heber/writer/key_normalization.py`
+
+### Performance
+
+- Switched universe DataFrame ingestion to `itertuples()` to avoid per-row Series allocation, reducing CPU and memory overhead when building large universe snapshots.
   - `heber/writer/normalizer.py`
 - Added dedicated Silver dataset schema for `historic_option_volume` in `heber/schemas/silver.py`.
 

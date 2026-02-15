@@ -272,32 +272,39 @@ def create_universe_manager_from_dataframe(
         UniverseManager populated with instruments
     """
     instruments = []
+    columns = list(df.columns)
+    column_index = {name: idx for idx, name in enumerate(columns)}
+    instrument_idx = column_index[instrument_key_col]
+    list_date_idx = column_index[list_date_col]
+    delist_date_idx = column_index.get(delist_date_col)
+    delist_reason_idx = column_index.get(delist_reason_col)
 
-    for _, row in df.iterrows():
-        list_date = row[list_date_col]
+    # PERF: itertuples avoids pandas Series allocation per row (faster, less memory).
+    for row in df.itertuples(index=False, name=None):
+        list_date = row[list_date_idx]
         if isinstance(list_date, str):
             list_date = date.fromisoformat(list_date)
         elif isinstance(list_date, datetime):
             list_date = list_date.date()
 
         delist_date = None
-        if pd.notna(row.get(delist_date_col)):
-            delist_date = row[delist_date_col]
+        if delist_date_idx is not None and pd.notna(row[delist_date_idx]):
+            delist_date = row[delist_date_idx]
             if isinstance(delist_date, str):
                 delist_date = date.fromisoformat(delist_date)
             elif isinstance(delist_date, datetime):
                 delist_date = delist_date.date()
 
         delist_reason = None
-        if pd.notna(row.get(delist_reason_col)):
+        if delist_reason_idx is not None and pd.notna(row[delist_reason_idx]):
             try:
-                delist_reason = DelistReason(row[delist_reason_col])
+                delist_reason = DelistReason(row[delist_reason_idx])
             except ValueError:
                 delist_reason = DelistReason.OTHER
 
         instruments.append(
             InstrumentLifecycle(
-                instrument_key=row[instrument_key_col],
+                instrument_key=row[instrument_idx],
                 list_date=list_date,
                 delist_date=delist_date,
                 delist_reason=delist_reason,

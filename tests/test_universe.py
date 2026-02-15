@@ -178,6 +178,25 @@ class TestCreateFromDataFrame:
         assert len(manager.instruments) == 2
         assert manager.instruments["equity:XYZ"].delist_reason == DelistReason.BANKRUPTCY
 
+    def test_create_from_dataframe_avoids_iterrows(self, monkeypatch):
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:ABC"],
+                "list_date": ["2010-01-01"],
+                "delist_date": [None],
+                "delist_reason": [None],
+            }
+        )
+
+        def _iterrows_boom(*_args, **_kwargs):
+            raise AssertionError("iterrows should not be used for performance")
+
+        monkeypatch.setattr(df, "iterrows", _iterrows_boom)
+
+        manager = create_universe_manager_from_dataframe(df)
+
+        assert len(manager.instruments) == 1
+
 
 class TestUniverseSnapshot:
     """Test UniverseSnapshot."""
