@@ -199,30 +199,25 @@ def compute_atr(
     bars_df: pd.DataFrame,
     period: int = 14,
 ) -> pd.DataFrame:
-    """Compute Average True Range for volatility scaling."""
+    """Compute Average True Range for volatility scaling.
+
+    Uses the canonical ATR implementation from volatility module,
+    applying it per-instrument via groupby.
+    """
+    from heber.features.templates.volatility import compute_atr as _core_atr
+
     df = bars_df.copy()
     df = df.sort_values(["instrument_key", "bar_start_ts"]).reset_index(drop=True)
 
-    # Compute true range components
-    high = df["high"]
-    low = df["low"]
-    prev_close = df.groupby("instrument_key")["close"].shift(1)
-
-    # True range is max of: high-low, |high-prev_close|, |low-prev_close|
-    df["_tr"] = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    # Compute ATR as rolling mean of TR per instrument
-    df["atr"] = df.groupby("instrument_key")["_tr"].transform(lambda x: x.rolling(window=period, min_periods=1).mean())
-
-    # Drop temporary column
-    df = df.drop(columns=["_tr"])
+    # Apply ATR per instrument group using canonical implementation
+    df["atr"] = (
+        df.groupby("instrument_key", group_keys=False)
+        .apply(
+            lambda g: _core_atr(g["high"], g["low"], g["close"], period).fillna(method="bfill"),
+            include_groups=False,
+        )
+        .reset_index(level=0, drop=True)
+    )
 
     return df
 

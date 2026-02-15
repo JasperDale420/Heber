@@ -1,9 +1,10 @@
-"""Label Management Module (PRD §29).
+"""Gold Layer Module (PRD §28-29).
 
 Provides utilities for managing forward-looking labels with proper
-availability tracking to prevent leakage in ML training.
+availability tracking, train/test splits, and duration parsing.
 """
 
+from heber.gold.duration import parse_duration
 from heber.gold.labels import (
     LabelDataset,
     LabelMetadata,
@@ -13,6 +14,7 @@ from heber.gold.labels import (
 )
 
 __all__ = [
+    "parse_duration",
     "LabelDataset",
     "LabelMetadata",
     "write_label",

@@ -6,43 +6,17 @@ ML experiments with proper embargo periods to prevent leakage.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import structlog
 
+from heber.gold.duration import parse_duration
+
 logger = structlog.get_logger(__name__)
 
-
-def parse_period(period_str: str) -> timedelta:
-    """Parse period string like '12M', '3M', '5d' into timedelta.
-
-    Args:
-        period_str: Period string with unit suffix (M=months, d=days, w=weeks)
-
-    Returns:
-        timedelta object (approximates months as 30 days)
-
-    Raises:
-        ValueError: If format is invalid
-    """
-    pattern = r"(\d+)([Mdw])"
-    match = re.match(pattern, period_str)
-    if not match:
-        raise ValueError(f"Invalid period format: {period_str}")
-
-    value = int(match.group(1))
-    unit = match.group(2)
-
-    if unit == "M":
-        return timedelta(days=value * 30)
-    elif unit == "d":
-        return timedelta(days=value)
-    elif unit == "w":
-        return timedelta(weeks=value)
-    else:
-        raise ValueError(f"Unknown unit: {unit}")
+# Backwards-compatible alias
+parse_period = parse_duration
 
 
 @dataclass
@@ -133,10 +107,10 @@ def walk_forward_splits(
     if isinstance(end, str):
         end = datetime.fromisoformat(end)
 
-    train_delta = parse_period(train_period)
-    test_delta = parse_period(test_period)
-    step_delta = parse_period(step)
-    embargo_delta = parse_period(embargo)
+    train_delta = parse_duration(train_period)
+    test_delta = parse_duration(test_period)
+    step_delta = parse_duration(step)
+    embargo_delta = parse_duration(embargo)
     embargo_days = embargo_delta.days
 
     splits: list[TrainTestSplit] = []
@@ -198,9 +172,9 @@ def expanding_window_splits(
     if isinstance(end, str):
         end = datetime.fromisoformat(end)
 
-    min_train_delta = parse_period(min_train_period)
-    test_delta = parse_period(test_period)
-    embargo_delta = parse_period(embargo)
+    min_train_delta = parse_duration(min_train_period)
+    test_delta = parse_duration(test_period)
+    embargo_delta = parse_duration(embargo)
     embargo_days = embargo_delta.days
 
     splits: list[TrainTestSplit] = []
@@ -250,7 +224,7 @@ def purge_window(
     Returns:
         Purge duration (typically equals forward_window)
     """
-    return parse_period(forward_window)
+    return parse_duration(forward_window)
 
 
 def check_holdout_access(
