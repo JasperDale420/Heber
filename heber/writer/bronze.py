@@ -17,6 +17,7 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
+from heber.writer.utils import get_bronze_partition_key
 
 logger = structlog.get_logger(__name__)
 
@@ -31,9 +32,7 @@ class BronzeWriter:
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
-        dt = envelope.ts_event.strftime("%Y-%m-%d")
-        hour = envelope.ts_event.strftime("%H")
-        return f"provider={envelope.provider}/feed={envelope.feed}/dt={dt}/hour={hour}"
+        return get_bronze_partition_key(envelope)
 
     def _get_file_path(self, partition_key: str) -> Path:
         """Get file path for a partition."""

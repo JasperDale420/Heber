@@ -8,7 +8,7 @@ feeds (bars, quotes, trades) and alternative data feeds.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -390,17 +390,10 @@ def _extract_underlying_from_occ(occ_symbol: str) -> str | None:
 
 
 def _coerce_date(value: Any) -> date | None:
-    if value is None:
-        return None
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-    except ValueError:
-        return None
+    """Coerce a value to a date. Delegates to normalizer._coerce_date."""
+    from heber.writer.normalizer import _coerce_date as _normalizer_coerce_date
+
+    return _normalizer_coerce_date(value)
 
 
 def _coerce_put_call(value: Any) -> str | None:

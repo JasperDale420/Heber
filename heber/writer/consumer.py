@@ -1,6 +1,10 @@
 """Redis Streams consumer for incoming events.
 
 Subscribes to the event stream from Data Gateway and routes to Bronze/Silver writers.
+
+This module uses ``redis.asyncio`` directly rather than the ``EventBus`` abstraction
+because it requires low-level stream control (``XREADGROUP``, ``XACK``, ``XCLAIM``,
+``XADD`` for DLQ) that the ``EventBus`` interface does not expose.
 """
 
 import asyncio
@@ -36,8 +40,8 @@ from heber.writer.ingest_contracts import (
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import explode_aggregate_payload
 from heber.writer.silver import SilverWriter
+from heber.writer.utils import build_silver_candidates
 
 logger = structlog.get_logger(__name__)
 
@@ -213,7 +217,8 @@ class EventConsumer:
                 )
                 record_event_processed(feed=feed, provider=provider, status="success")
                 return True, None, True
-            silver_candidates = self._build_silver_candidates(envelope)
+
+            silver_candidates = build_silver_candidates(envelope)
             if not silver_candidates:
                 logger.info(
                     "silver_write_skipped_empty_aggregate",
@@ -480,15 +485,6 @@ class EventConsumer:
         normalized = normalized.model_copy(update={"feed": silver_feed})
         self._validate_instrument_key(normalized)
         self.silver_writer.write(normalized)
-
-    def _build_silver_candidates(self, envelope: EventEnvelope) -> list[EventEnvelope]:
-        """Build candidate envelopes for Silver writes.
-
-        For REST aggregate payloads (bars/trades list envelopes), explode into one
-        candidate event per item so Silver writes typed rows instead of null-heavy
-        aggregate blobs.
-        """
-        return explode_aggregate_payload(envelope)
 
     async def run(self):
         """Main consumer loop."""

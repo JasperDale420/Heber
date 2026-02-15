@@ -1,4 +1,4 @@
-"""Compatibility facade for legacy writer.hotstore imports.
+"""Writer hotstore entrypoint — runtime entrypoint for ``python -m heber.writer.hotstore``.
 
 Hot Store sync/read/write logic now lives in `heber.hotstore.sync`.
 This module preserves the prior import path while using the unified
