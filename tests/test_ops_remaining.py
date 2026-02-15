@@ -44,7 +44,7 @@ class TestStreamRegistry:
 
         critical = registry.get_streams_by_priority(StreamPriority.CRITICAL)
 
-        assert len(critical) == 3  # bars, quotes, trades
+        assert len(critical) == 3
 
     def test_get_streams_for_consumer(self):
         registry = StreamRegistry()
@@ -100,7 +100,6 @@ class TestSliceManager:
 
         ready = manager.get_ready_slices()
 
-        # Slices 2-6 depend on 1, and 1 is completed
         assert len(ready) >= 4
 
     def test_mark_completed(self):
@@ -145,7 +144,7 @@ class TestGapResolutionRegistry:
 
         all_decisions = registry.list_all()
 
-        assert len(all_decisions) == 6  # 6 categories
+        assert len(all_decisions) == 6
 
     def test_get_by_category(self):
         registry = GapResolutionRegistry()
@@ -169,35 +168,3 @@ class TestGapResolutionRegistry:
 
         assert report["summary"]["total_decisions"] == 18
         assert len(report["summary"]["by_category"]) == 6
-
-
-def run_all_remaining_tests() -> dict[str, bool]:
-    """Run all remaining phase tests."""
-    results = {}
-
-    test_classes = [
-        TestStreamRegistry,
-        TestSliceManager,
-        TestGapResolutionRegistry,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nRemaining Phase Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_remaining_tests()

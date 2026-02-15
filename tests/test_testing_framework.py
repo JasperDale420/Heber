@@ -54,7 +54,7 @@ class TestCIGateEnforcer:
 
         test_results = {
             TestCategory.UNIT: True,
-            TestCategory.INTEGRATION: False,  # Failed
+            TestCategory.INTEGRATION: False,
             TestCategory.LEAKAGE: True,
         }
         check_results = {"lint": True, "typecheck": True, "coverage": True}
@@ -74,19 +74,17 @@ class TestCIGateEnforcer:
     def test_flaky_detection(self):
         enforcer = CIGateEnforcer()
 
-        # Record mostly passing tests with occasional failures
         for i in range(20):
             run = TestRun(
                 test_name="test_example",
                 category=TestCategory.UNIT,
-                passed=(i % 10 != 0),  # 10% failure rate
+                passed=(i % 10 != 0),
                 duration_seconds=0.1,
             )
             enforcer.record_test_run(run)
 
         flaky = enforcer.get_flaky_tests()
 
-        # 10% failure rate > 5% threshold, should not be flaky (it's worse)
         assert "test_example" not in flaky
 
     def test_generate_report(self):
@@ -120,7 +118,6 @@ class TestPerformanceTester:
         tester = PerformanceTester()
         tester.set_baseline("read_latency_p99", 0.4)
 
-        # 50% increase in latency is a regression
         result = tester.detect_regression("read_latency_p99", 0.6, threshold_percent=10)
 
         assert result.is_regression
@@ -130,7 +127,6 @@ class TestPerformanceTester:
         tester = PerformanceTester()
         tester.set_baseline("read_latency_p99", 0.4)
 
-        # Similar latency is not a regression
         result = tester.detect_regression("read_latency_p99", 0.42, threshold_percent=10)
 
         assert not result.is_regression
@@ -202,38 +198,3 @@ class TestE2ETestSuite:
         assert "on_merge_to_main" in schedule
         assert "nightly" in schedule
         assert len(schedule["on_merge_to_main"]) == 3
-
-
-def run_all_framework_tests() -> dict[str, bool]:
-    """Run all framework tests."""
-    results = {}
-
-    test_classes = [
-        TestCoverageRequirement,
-        TestCIGateEnforcer,
-        TestPerformanceTester,
-        TestUnitTestFramework,
-        TestIntegrationTestHarness,
-        TestE2ETestSuite,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nFramework Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_framework_tests()

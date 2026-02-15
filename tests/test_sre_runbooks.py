@@ -143,7 +143,7 @@ class TestEscalationPolicy:
 
         policy = manager.get_escalation_policy(IncidentSeverity.P4_LOW)
 
-        assert policy.initial_response_minutes == 1440  # Next business day
+        assert policy.initial_response_minutes == 1440
 
 
 class TestOnCallManager:
@@ -173,7 +173,7 @@ class TestOnCallManager:
 
     def test_acknowledge_incident(self):
         manager = OnCallManager()
-        incident = manager.create_incident(
+        manager.create_incident(
             incident_id="INC-002",
             title="Test",
             severity=IncidentSeverity.P2_HIGH,
@@ -183,8 +183,8 @@ class TestOnCallManager:
         result = manager.acknowledge_incident("INC-002", "bob")
 
         assert result
-        assert incident.acknowledged_at is not None
-        assert incident.assigned_to == "bob"
+        assert manager.incidents["INC-002"].acknowledged_at is not None
+        assert manager.incidents["INC-002"].assigned_to == "bob"
 
     def test_resolve_incident(self):
         manager = OnCallManager()
@@ -207,11 +207,11 @@ class TestOnCallManager:
             title="Old Incident",
             severity=IncidentSeverity.P1_CRITICAL,
             alert_name="TestAlert",
-            created_at=datetime.now(UTC) - timedelta(minutes=20),  # 20 min ago
+            created_at=datetime.now(UTC) - timedelta(minutes=20),
         )
         manager.incidents["INC-004"] = incident
 
-        assert manager.should_escalate(incident)  # P1 escalates after 15 min
+        assert manager.should_escalate(incident)
 
     def test_get_open_incidents(self):
         manager = OnCallManager()
@@ -255,38 +255,3 @@ class TestIncident:
 
         assert incident.time_to_resolve is not None
         assert incident.time_to_resolve.total_seconds() == pytest.approx(3600, rel=1)
-
-
-def run_all_runbook_tests() -> dict[str, bool]:
-    """Run all runbook and on-call tests."""
-    results = {}
-
-    test_classes = [
-        TestRunbook,
-        TestRunbookRegistry,
-        TestOnCallSchedule,
-        TestEscalationPolicy,
-        TestOnCallManager,
-        TestIncident,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nRunbook & On-Call Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_runbook_tests()

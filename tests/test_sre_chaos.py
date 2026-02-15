@@ -154,8 +154,8 @@ class TestCapacityPlanner:
 
         triggered = planner.check_triggers(
             {
-                "consumer_cpu": 85,  # Over 70% threshold
-                "consumer_lag": 30,  # Under 60s threshold
+                "consumer_cpu": 85,
+                "consumer_lag": 30,
             }
         )
 
@@ -215,37 +215,3 @@ class TestCapacityForecast:
 
         assert d["quarter"] == "Q1 2026"
         assert d["events_per_day_fmt"] == "50M"
-
-
-def run_all_chaos_capacity_tests() -> dict[str, bool]:
-    """Run all chaos and capacity tests."""
-    results = {}
-
-    test_classes = [
-        TestChaosExperiment,
-        TestChaosRegistry,
-        TestScalingTrigger,
-        TestCapacityPlanner,
-        TestCapacityForecast,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nChaos & Capacity Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_chaos_capacity_tests()

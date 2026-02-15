@@ -45,7 +45,7 @@ class TestSyntheticDataGenerator:
         quote = gen.generate_quote("MSFT", datetime.now(UTC))
 
         assert quote["symbol"] == "MSFT"
-        assert quote["ask_price"] > quote["bid_price"]  # Spread is positive
+        assert quote["ask_price"] > quote["bid_price"]
 
     def test_deterministic_with_seed(self):
         gen1 = SyntheticDataGenerator(seed=42)
@@ -78,7 +78,7 @@ class TestTestDataConfig:
 
         dates = config.date_range
 
-        assert len(dates) == 5  # Jan 1-5
+        assert len(dates) == 5
 
 
 class TestFixtureRegistry:
@@ -143,8 +143,8 @@ class TestLeakageValidator:
         asof_time = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         query_result = [
-            {"symbol": "AAPL", "ts_available": "2025-01-15T09:00:00+00:00"},  # OK
-            {"symbol": "AAPL", "ts_available": "2025-01-15T11:00:00+00:00"},  # FUTURE!
+            {"symbol": "AAPL", "ts_available": "2025-01-15T09:00:00+00:00"},
+            {"symbol": "AAPL", "ts_available": "2025-01-15T11:00:00+00:00"},
         ]
 
         result = validator.validate_no_future_data(query_result, asof_time)
@@ -155,7 +155,7 @@ class TestLeakageValidator:
     def test_validate_backfill_ts_available_pass(self):
         validator = LeakageValidator()
         ts_commit = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
-        ts_available = ts_commit + timedelta(seconds=2)  # Within tolerance
+        ts_available = ts_commit + timedelta(seconds=2)
 
         result = validator.validate_backfill_ts_available(ts_available, ts_commit)
 
@@ -164,7 +164,7 @@ class TestLeakageValidator:
     def test_validate_backfill_ts_available_fail(self):
         validator = LeakageValidator()
         ts_commit = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
-        ts_available = datetime(2025, 1, 16, 10, 0, 0, tzinfo=UTC)  # Day off!
+        ts_available = datetime(2025, 1, 16, 10, 0, 0, tzinfo=UTC)
 
         result = validator.validate_backfill_ts_available(ts_available, ts_commit)
 
@@ -174,7 +174,7 @@ class TestLeakageValidator:
         validator = LeakageValidator()
         feature_ts = datetime(2025, 1, 15, 9, 0, 0, tzinfo=UTC)
         input_available = datetime(2025, 1, 15, 9, 30, 0, tzinfo=UTC)
-        label_ts = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)  # After input available
+        label_ts = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         result = validator.validate_gold_lineage(feature_ts, input_available, label_ts)
 
@@ -183,7 +183,7 @@ class TestLeakageValidator:
     def test_validate_gold_lineage_fail(self):
         validator = LeakageValidator()
         feature_ts = datetime(2025, 1, 15, 9, 0, 0, tzinfo=UTC)
-        input_available = datetime(2025, 1, 15, 11, 0, 0, tzinfo=UTC)  # AFTER label!
+        input_available = datetime(2025, 1, 15, 11, 0, 0, tzinfo=UTC)
         label_ts = datetime(2025, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         result = validator.validate_gold_lineage(feature_ts, input_available, label_ts)
@@ -202,36 +202,3 @@ class TestLeakageValidator:
         assert report["summary"]["total"] == 2
         assert report["summary"]["passed"] == 2
         assert report["verdict"] == "PASSED"
-
-
-def run_all_testing_tests() -> dict[str, bool]:
-    """Run all testing module tests."""
-    results = {}
-
-    test_classes = [
-        TestSyntheticDataGenerator,
-        TestTestDataConfig,
-        TestFixtureRegistry,
-        TestLeakageValidator,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nTesting Module Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_testing_tests()

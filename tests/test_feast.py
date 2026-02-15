@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 mock_feast = MagicMock()
 sys.modules["feast"] = mock_feast
 
-# Now import after mocking
 from heber.feast.materialization import (
     search_features,
 )
@@ -161,37 +160,3 @@ class TestListFeatureViews:
 
         assert len(views) == 1
         assert views[0]["name"] == "momentum_features"
-
-
-def run_all_feast_tests() -> dict[str, bool]:
-    """Run all Feast integration tests."""
-    results = {}
-
-    test_classes = [
-        TestMaterializeFunctions,
-        TestHistoricalFeatures,
-        TestOnlineFeatures,
-        TestSearchFeatures,
-        TestListFeatureViews,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nFeast Integration Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_feast_tests()

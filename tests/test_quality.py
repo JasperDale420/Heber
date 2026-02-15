@@ -36,7 +36,6 @@ class TestFillRateCheck:
     def test_full_fill_rate(self):
         validator = DataQualityValidator()
 
-        # Create data with 10 symbols, 10 days each
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
         symbols = [f"SYM{i}" for i in range(10)]
 
@@ -58,7 +57,6 @@ class TestFillRateCheck:
         dates = pd.date_range("2024-01-01", periods=10, freq="D")
 
         rows = []
-        # SYM0 has all 10 days, SYM1 has only 5 days
         for date in dates:
             rows.append({"instrument_key": "SYM0", "ts_event": date})
         for date in dates[:5]:
@@ -103,7 +101,7 @@ class TestNonNullRateCheck:
         rate, cols = validator.check_non_null_rate(df, ["open", "close"])
 
         assert rate < 1.0
-        assert len(cols) == 2  # Both columns below 99%
+        assert len(cols) == 2
 
 
 class TestFreshnessCheck:
@@ -117,7 +115,7 @@ class TestFreshnessCheck:
         df = pd.DataFrame(
             {
                 "ts_event": [
-                    datetime(2024, 1, 10, 16, 0, tzinfo=UTC),  # 2 hours ago
+                    datetime(2024, 1, 10, 16, 0, tzinfo=UTC),
                 ]
             }
         )
@@ -135,7 +133,7 @@ class TestFreshnessCheck:
         df = pd.DataFrame(
             {
                 "ts_event": [
-                    datetime(2024, 1, 9, 16, 0, tzinfo=UTC),  # 26 hours ago
+                    datetime(2024, 1, 9, 16, 0, tzinfo=UTC),
                 ]
             }
         )
@@ -158,9 +156,9 @@ class TestGapCheck:
             }
         )
 
-        gap, dates = validator.check_gaps(df, max_gap_seconds=7200)  # 2 hour max
+        gap, dates = validator.check_gaps(df, max_gap_seconds=7200)
 
-        assert gap == pytest.approx(3600)  # 1 hour between rows
+        assert gap == pytest.approx(3600)
         assert len(dates) == 0
 
     def test_has_gap(self):
@@ -171,12 +169,12 @@ class TestGapCheck:
                 "ts_event": [
                     datetime(2024, 1, 1, 10, 0),
                     datetime(2024, 1, 1, 11, 0),
-                    datetime(2024, 1, 3, 10, 0),  # 2-day gap
+                    datetime(2024, 1, 3, 10, 0),
                 ]
             }
         )
 
-        gap, dates = validator.check_gaps(df, max_gap_seconds=86400)  # 1 day max
+        gap, dates = validator.check_gaps(df, max_gap_seconds=86400)
 
         assert gap > 86400
         assert len(dates) > 0
@@ -225,7 +223,7 @@ class TestFullValidation:
 
         df = pd.DataFrame(
             {
-                "value": [1, None, 3, None, 5],  # 60% non-null
+                "value": [1, None, 3, None, 5],
             }
         )
 
@@ -249,39 +247,3 @@ class TestDefaultValidator:
         assert "bars" in validator.contracts
         assert "trades" in validator.contracts
         assert len(validator.contracts["bars"]) >= 4
-
-
-def run_all_quality_tests() -> dict[str, bool]:
-    """Run all quality tests."""
-    results = {}
-
-    test_classes = [
-        TestQualityContract,
-        TestFillRateCheck,
-        TestNonNullRateCheck,
-        TestFreshnessCheck,
-        TestGapCheck,
-        TestFullValidation,
-        TestDefaultValidator,
-    ]
-
-    for test_class in test_classes:
-        instance = test_class()
-        for method_name in dir(instance):
-            if method_name.startswith("test_"):
-                try:
-                    getattr(instance, method_name)()
-                    results[f"{test_class.__name__}.{method_name}"] = True
-                except Exception as e:
-                    results[f"{test_class.__name__}.{method_name}"] = False
-                    print(f"FAILED: {test_class.__name__}.{method_name}: {e}")
-
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nData Quality Tests: {passed}/{total} passed")
-
-    return results
-
-
-if __name__ == "__main__":
-    run_all_quality_tests()

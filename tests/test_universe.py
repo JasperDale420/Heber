@@ -43,9 +43,7 @@ class TestInstrumentLifecycle:
             delist_date=date(2023, 6, 30),
         )
 
-        # 30 days before delist
         assert inst.will_delist_within(date(2023, 6, 1), 30)
-        # 31 days before delist
         assert not inst.will_delist_within(date(2023, 5, 30), 30)
 
 
@@ -56,11 +54,11 @@ class TestUniverseManager:
         """Setup test universe."""
         self.manager = UniverseManager(
             [
-                InstrumentLifecycle("equity:AAPL", date(1980, 12, 12)),  # Never delisted
-                InstrumentLifecycle("equity:MSFT", date(1986, 3, 13)),  # Never delisted
+                InstrumentLifecycle("equity:AAPL", date(1980, 12, 12)),
+                InstrumentLifecycle("equity:MSFT", date(1986, 3, 13)),
                 InstrumentLifecycle("equity:ENRN", date(1985, 1, 1), date(2001, 12, 2), DelistReason.BANKRUPTCY),
                 InstrumentLifecycle("equity:TWTR", date(2013, 11, 7), date(2022, 10, 28), DelistReason.ACQUISITION),
-                InstrumentLifecycle("equity:NVDA", date(1999, 1, 22)),  # Never delisted
+                InstrumentLifecycle("equity:NVDA", date(1999, 1, 22)),
             ]
         )
 
@@ -71,21 +69,21 @@ class TestUniverseManager:
         assert "equity:AAPL" in universe
         assert "equity:MSFT" in universe
         assert "equity:ENRN" in universe
-        assert "equity:TWTR" not in universe  # Not listed yet
+        assert "equity:TWTR" not in universe
 
     def test_get_universe_after_enron_bankruptcy(self):
         """Test universe after Enron delisted."""
         universe = self.manager.get_universe(date(2002, 1, 1))
 
         assert "equity:AAPL" in universe
-        assert "equity:ENRN" not in universe  # Delisted
+        assert "equity:ENRN" not in universe
 
     def test_get_universe_after_twitter_acquisition(self):
         """Test universe after Twitter acquired."""
         universe = self.manager.get_universe(date(2023, 1, 1))
 
         assert "equity:AAPL" in universe
-        assert "equity:TWTR" not in universe  # Acquired
+        assert "equity:TWTR" not in universe
 
     def test_filter_dataframe_basic(self):
         """Test basic DataFrame filtering."""
@@ -96,14 +94,13 @@ class TestUniverseManager:
             }
         )
 
-        # Before Enron bankruptcy
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2001, 1, 1),
             exclude_future_delistings=False,
         )
 
-        assert len(result) == 3  # All included
+        assert len(result) == 3
 
     def test_filter_dataframe_exclude_future_delistings(self):
         """Test filtering with future delist exclusion."""
@@ -114,14 +111,12 @@ class TestUniverseManager:
             }
         )
 
-        # Before Enron bankruptcy, but exclude future delistings
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2001, 1, 1),
             exclude_future_delistings=True,
         )
 
-        # ENRN is active but will delist later, so excluded
         assert len(result) == 2
         assert "equity:ENRN" not in result["instrument_key"].values
 
@@ -134,7 +129,6 @@ class TestUniverseManager:
             }
         )
 
-        # 15 days before Twitter acquisition
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2022, 10, 13),
@@ -198,56 +192,3 @@ class TestUniverseSnapshot:
 
         assert d["asof_date"] == "2024-01-15"
         assert d["count"] == 2
-
-
-def run_all_survivor_bias_tests() -> dict[str, bool]:
-    """Run all survivor bias tests."""
-    results = {}
-    test_classes = [
-        TestInstrumentLifecycle,
-        TestUniverseManager,
-        TestCreateFromDataFrame,
-        TestUniverseSnapshot,
-    ]
-
-    for test_class in test_classes:
-        _run_test_class(test_class, results)
-
-    _print_summary(results)
-    return results
-
-
-def _run_test_class(test_class: type, results: dict[str, bool]) -> None:
-    """Run all test methods in a test class."""
-    instance = test_class()
-    for method_name in dir(instance):
-        if method_name.startswith("test_"):
-            _run_test_method(instance, method_name, test_class.__name__, results)
-
-
-def _run_test_method(
-    instance: object,
-    method_name: str,
-    class_name: str,
-    results: dict[str, bool],
-) -> None:
-    """Run a single test method and record result."""
-    try:
-        if hasattr(instance, "setup_method"):
-            instance.setup_method()
-        getattr(instance, method_name)()
-        results[f"{class_name}.{method_name}"] = True
-    except Exception as e:
-        results[f"{class_name}.{method_name}"] = False
-        print(f"FAILED: {class_name}.{method_name}: {e}")
-
-
-def _print_summary(results: dict[str, bool]) -> None:
-    """Print test results summary."""
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    print(f"\nSurvivor Bias Tests: {passed}/{total} passed")
-
-
-if __name__ == "__main__":
-    run_all_survivor_bias_tests()
