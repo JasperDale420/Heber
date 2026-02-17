@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Alert Feature Enrichment Expansion
+
+- Added `gex`, `vex`, `max_pain_strike`, `max_pain_distance_pct`, `market_tide_net_premium`, `market_tide_direction` fields to `AlertFeatures` dataclass
+- Implemented `_enrich_gex()`, `_enrich_max_pain()`, `_enrich_market_tide()` methods in `AlertFeatureExtractor` using Data Gateway endpoints
+- Fixed `0.0` falsy evaluation bug in all enrichment methods — replaced `or` chains with explicit `None` checks
+- Added 16 unit tests covering new enrichment paths in `test_watch_feature_enrichment_expansion.py`
+
 ### Changed
 
 #### Market Data Normalization for Backtesting Accuracy

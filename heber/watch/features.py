@@ -11,7 +11,6 @@ import json
 import random
 import time
 from collections import deque
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -31,6 +30,8 @@ from heber.watch.gateway import (
     coerce_optional_float,
     gateway_auth_headers,
     gateway_url_candidates,
+    is_retryable_http_status,
+    parse_retry_after,
     should_try_legacy_fallback_for_status,
 )
 
@@ -97,6 +98,18 @@ class AlertFeatures:
     underlying_1d_return: float | None = None
     realized_vol_20d: float | None = None
     iv_rank: float | None = None  # IV percentile over past year
+
+    # GEX / Market Structure (from UW greek-exposure)
+    gex: float | None = None  # Net gamma exposure
+    vex: float | None = None  # Net vanna exposure
+
+    # Max Pain (from UW max-pain)
+    max_pain_strike: float | None = None
+    max_pain_distance_pct: float | None = None  # (spot - max_pain) / spot
+
+    # Market Tide (from UW market-tide)
+    market_tide_net_premium: float | None = None
+    market_tide_direction: str | None = None  # bullish / bearish / neutral
 
     # Timing features
     hour_of_day: int = 0
@@ -366,6 +379,15 @@ class AlertFeatureExtractor:
         # Enrich with IV rank from UW
         features = await self._enrich_iv_rank(features)
 
+        # Enrich with GEX from UW greek-exposure
+        features = await self._enrich_gex(features)
+
+        # Enrich with max pain from UW
+        features = await self._enrich_max_pain(features)
+
+        # Enrich with market tide from UW
+        features = await self._enrich_market_tide(features)
+
         return features
 
     def _to_market_time(self, dt: datetime) -> datetime:
@@ -376,10 +398,6 @@ class AlertFeatureExtractor:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(self.MARKET_TIMEZONE)
-
-    @staticmethod
-    def _is_retryable_status(status_code: int) -> bool:
-        return status_code == 429 or 500 <= status_code <= 599
 
     def _cache_key(self, endpoint: str, symbol: str, params: dict | None) -> str:
         serialized_params = json.dumps(params or {}, sort_keys=True, default=str)
@@ -409,21 +427,6 @@ class AlertFeatureExtractor:
             self._auth_failure_timestamps.popleft()
         self._auth_failure_timestamps.append(now)
         return len(self._auth_failure_timestamps)
-
-    @staticmethod
-    def _retry_after_seconds(headers: object) -> float | None:
-        if not isinstance(headers, Mapping):
-            return None
-        raw = headers.get("Retry-After")
-        if raw is None:
-            return None
-        try:
-            retry_after = float(raw)
-        except (TypeError, ValueError):
-            return None
-        if retry_after < 0:
-            return None
-        return retry_after
 
     async def _sleep_before_retry(self, attempt: int, minimum_delay: float | None = None) -> None:
         delay = self.retry_base_delay_seconds * attempt
@@ -576,8 +579,8 @@ class AlertFeatureExtractor:
                             )
                         break
 
-                    retryable = self._is_retryable_status(status_code)
-                    retry_after_hint = self._retry_after_seconds(getattr(response, "headers", {}))
+                    retryable = is_retryable_http_status(status_code)
+                    retry_after_hint = parse_retry_after(getattr(response, "headers", {}))
                     logger.warning(
                         "Feature enrichment request failed",
                         endpoint=endpoint,
@@ -659,6 +662,196 @@ class AlertFeatureExtractor:
                 "Failed to enrich IV rank",
                 error=str(e),
                 underlying=features.underlying,
+            )
+
+        return features
+
+    async def _enrich_gex(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with GEX/VEX from Unusual Whales greek-exposure endpoint.
+
+        GEX (gamma exposure) and VEX (vanna exposure) indicate market maker
+        hedging pressure on the underlying.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping GEX enrichment")
+            return features
+
+        try:
+            route_patterns = (
+                f"/uw/gex/{features.underlying}",
+                f"/uw/{features.underlying}/greek-exposure",
+            )
+            routes: list[str] = []
+            for route_pattern in route_patterns:
+                for candidate in gateway_url_candidates(
+                    self.gateway_url,
+                    route_pattern,
+                    include_legacy_fallback=self.legacy_route_fallback_enabled,
+                ):
+                    if candidate not in routes:
+                        routes.append(candidate)
+            data = await self._request_json_with_retry(
+                endpoint="uw_gex",
+                routes=routes,
+                symbol=features.underlying,
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
+
+            gex_data = data.get("data", {})
+            if isinstance(gex_data, list) and gex_data:
+                gex_data = gex_data[0]
+            if isinstance(gex_data, dict):
+                parsed_gex = coerce_optional_float(gex_data.get("gamma_exposure"))
+                if parsed_gex is None:
+                    parsed_gex = coerce_optional_float(gex_data.get("gex_oi"))
+                if parsed_gex is None:
+                    parsed_gex = coerce_optional_float(gex_data.get("gex"))
+                if parsed_gex is not None:
+                    features.gex = parsed_gex
+                parsed_vex = coerce_optional_float(gex_data.get("vanna_exposure"))
+                if parsed_vex is None:
+                    parsed_vex = coerce_optional_float(gex_data.get("vex_oi"))
+                if parsed_vex is None:
+                    parsed_vex = coerce_optional_float(gex_data.get("vex"))
+                if parsed_vex is not None:
+                    features.vex = parsed_vex
+                logger.debug(
+                    "Enriched GEX",
+                    symbol=features.underlying,
+                    gex=features.gex,
+                    vex=features.vex,
+                )
+
+        except EnrichmentAuthFailure:
+            raise
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich GEX",
+                error=str(e),
+                underlying=features.underlying,
+            )
+
+        return features
+
+    async def _enrich_max_pain(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with max pain strike and distance from UW.
+
+        Max pain is the strike price where option holders would experience
+        the greatest financial loss at expiration. Distance to max pain
+        indicates how far the current price is from this level.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping max pain enrichment")
+            return features
+
+        try:
+            route_patterns = (
+                f"/uw/options/{features.underlying}/max-pain",
+                f"/uw/{features.underlying}/max-pain",
+            )
+            routes: list[str] = []
+            for route_pattern in route_patterns:
+                for candidate in gateway_url_candidates(
+                    self.gateway_url,
+                    route_pattern,
+                    include_legacy_fallback=self.legacy_route_fallback_enabled,
+                ):
+                    if candidate not in routes:
+                        routes.append(candidate)
+            data = await self._request_json_with_retry(
+                endpoint="uw_max_pain",
+                routes=routes,
+                symbol=features.underlying,
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
+
+            mp_data = data.get("data", {})
+            if isinstance(mp_data, list) and mp_data:
+                mp_data = mp_data[0]
+            if isinstance(mp_data, dict):
+                strike = coerce_optional_float(mp_data.get("max_pain_strike"))
+                if strike is None:
+                    strike = coerce_optional_float(mp_data.get("max_pain"))
+                if strike is None:
+                    strike = coerce_optional_float(mp_data.get("price"))
+                if strike is not None:
+                    features.max_pain_strike = strike
+                    if features.spot_price and features.spot_price > 0:
+                        features.max_pain_distance_pct = (features.spot_price - strike) / features.spot_price
+                logger.debug(
+                    "Enriched max pain",
+                    symbol=features.underlying,
+                    max_pain_strike=features.max_pain_strike,
+                    max_pain_distance_pct=features.max_pain_distance_pct,
+                )
+
+        except EnrichmentAuthFailure:
+            raise
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich max pain",
+                error=str(e),
+                underlying=features.underlying,
+            )
+
+        return features
+
+    async def _enrich_market_tide(self, features: AlertFeatures) -> AlertFeatures:
+        """Enrich features with market tide sentiment from UW.
+
+        Market tide aggregates net premium across the options market,
+        indicating overall bullish/bearish positioning.
+        """
+        if not self.gateway_url:
+            logger.debug("No gateway URL, skipping market tide enrichment")
+            return features
+
+        try:
+            routes = gateway_url_candidates(
+                self.gateway_url,
+                "/uw/market/tide",
+                include_legacy_fallback=self.legacy_route_fallback_enabled,
+            )
+            data = await self._request_json_with_retry(
+                endpoint="uw_market_tide",
+                routes=routes,
+                symbol="MARKET",
+                alert_id=features.alert_id,
+            )
+            if data is None:
+                return features
+
+            tide_data = data.get("data", {})
+            if isinstance(tide_data, list) and tide_data:
+                tide_data = tide_data[0]
+            if isinstance(tide_data, dict):
+                net_premium = coerce_optional_float(tide_data.get("net_premium"))
+                if net_premium is None:
+                    net_premium = coerce_optional_float(tide_data.get("net_call_premium"))
+                if net_premium is not None:
+                    features.market_tide_net_premium = net_premium
+                    if net_premium > 0:
+                        features.market_tide_direction = "bullish"
+                    elif net_premium < 0:
+                        features.market_tide_direction = "bearish"
+                    else:
+                        features.market_tide_direction = "neutral"
+                logger.debug(
+                    "Enriched market tide",
+                    net_premium=features.market_tide_net_premium,
+                    direction=features.market_tide_direction,
+                )
+
+        except EnrichmentAuthFailure:
+            raise
+        except Exception as e:
+            logger.warning(
+                "Failed to enrich market tide",
+                error=str(e),
             )
 
         return features
