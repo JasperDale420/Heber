@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced `scripts/init_volume.sh` with explicit `find -delete` cleanup of macOS `._*` resource fork files as a fallback to `dot_clean`.
 - Added contract test in `tests/test_compose_postgres_health_contract.py` to enforce Postgres healthcheck parameters.
 
+### Removed
+
+#### Unused Docker Services: OpenMetadata and Elasticsearch
+
+- Removed `openmetadata` and `elasticsearch` services from `docker-compose.yml` — neither is used by the core Heber pipeline.
+- OpenMetadata client (`heber/catalog/openmetadata_client.py`) already gracefully falls back to `MockOpenMetadataClient` when the server is unavailable.
+- Elasticsearch had zero code references outside the compose file.
+- Removed `heber_openmetadata` database from `scripts/init-databases.sh`.
+- Deleted `tests/test_compose_metadata_contract.py` (tested removed services).
+- Saves ~1GB RAM and significantly speeds up Docker startup.
+
 ### Added
 
 #### Alert Feature Enrichment Expansion
