@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -11,6 +10,7 @@ from typing import Any
 import structlog
 
 from heber.calendar import MarketCalendar
+from heber.watch.gateway import coerce_optional_float
 from heber.watch.models import (
     POLL_CONFIG,
     AlertWatch,
@@ -176,13 +176,25 @@ class WatchManager:
     def get_active_watches(self) -> list[AlertWatch]:
         """Get all watches with WATCHING status."""
         watch_ids = self.redis.smembers(WatchKeys.ACTIVE_WATCHES)
+        if not watch_ids:
+            return []
+
+        # Normalize IDs and build keys
+        keys = [WatchKeys.watch_key(self._normalize_redis_id(wid)) for wid in watch_ids]
+        
+        # Batch fetch
+        data_list = self.redis.mget(keys)
 
         watches = []
-        for watch_id in watch_ids:
-            watch_id = self._normalize_redis_id(watch_id)
-            watch = self.get_watch(watch_id)
-            if watch and watch.status == WatchStatus.WATCHING:
-                watches.append(watch)
+        for data in data_list:
+            if data:
+                try:
+                    watch = AlertWatch.model_validate_json(data)
+                    # Double check status (though index should be kept in sync)
+                    if watch.status == WatchStatus.WATCHING:
+                        watches.append(watch)
+                except Exception as e:
+                    logger.warning("Failed to deserialize watch during bulk fetch", error=str(e))
 
         return watches
 
@@ -257,6 +269,62 @@ class WatchManager:
     ) -> AlertWatch | None:
         """Async wrapper for update_watch_price."""
         return await asyncio.to_thread(self.update_watch_price, watch_id, current_price, timestamp)
+
+    def update_watch_prices_bulk(
+        self,
+        updates: list[tuple[AlertWatch, float, datetime]],
+    ) -> int:
+        """Update multiple watches in a single pipeline.
+
+        Args:
+            updates: List of (watch, current_price, timestamp) tuples
+
+        Returns:
+            Number of watches updated
+        """
+        if not updates:
+            return 0
+
+        pipeline = self.redis.pipeline()
+        updated_count = 0
+
+        for watch, price, timestamp in updates:
+            # Common update logic (duplicate of update_watch_price logic but optimized for loop)
+            current_return: float | None = None
+            mfe = watch.mfe
+            mae = watch.mae
+            
+            if watch.entry_price > 0:
+                current_return = (price - watch.entry_price) / watch.entry_price
+                prior_mfe = watch.mfe if watch.mfe is not None else -float("inf")
+                prior_mae = watch.mae if watch.mae is not None else float("inf")
+                mfe = max(prior_mfe, current_return)
+                mae = min(prior_mae, current_return)
+            
+            normalized_timestamp = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+
+            watch.current_price = price
+            watch.current_return = current_return
+            watch.mfe = mfe
+            watch.mae = mae
+            watch.snapshot_count += 1
+            watch.updated_at = normalized_timestamp.astimezone(UTC)
+
+            key = WatchKeys.watch_key(watch.watch_id)
+            pipeline.set(key, watch.model_dump_json())
+            updated_count += 1
+
+        if updated_count > 0:
+            pipeline.execute()
+            
+        return updated_count
+
+    async def update_watch_prices_bulk_async(
+        self,
+        updates: list[tuple[AlertWatch, float, datetime]],
+    ) -> int:
+        """Async wrapper for update_watch_prices_bulk."""
+        return await asyncio.to_thread(self.update_watch_prices_bulk, updates)
 
     def complete_watch(
         self,
@@ -384,15 +452,7 @@ class WatchManager:
     @staticmethod
     def _coerce_finite_outcome_return(value: float | None) -> float:
         """Normalize outcome returns to finite values for persistence."""
-        if value is None:
-            return 0.0
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return 0.0
-        if not math.isfinite(numeric):
-            return 0.0
-        return numeric
+        return coerce_optional_float(value) or 0.0
 
     def _save_watch(self, watch: AlertWatch) -> None:
         """Save watch to Redis."""

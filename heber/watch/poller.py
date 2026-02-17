@@ -117,11 +117,14 @@ class SnapshotPoller:
             )
 
         # Update watches with new prices
-        updated = 0
+        updates: list[tuple[AlertWatch, float, datetime]] = []
+        snapshots: list[WatchSnapshot] = []
+
         for symbol, quote in quotes.items():
             for watch in symbol_to_watches.get(symbol, []):
                 snapshot = self._create_snapshot(watch, quote)
-                await self.manager.add_snapshot_async(snapshot)
+                snapshots.append(snapshot)
+                
                 price_for_watch = snapshot.mid_px if snapshot.mid_px is not None else snapshot.last_px
                 if price_for_watch is None:
                     logger.warning(
@@ -130,12 +133,18 @@ class SnapshotPoller:
                         occ_symbol=watch.occ_symbol,
                     )
                     continue
-                await self.manager.update_watch_price_async(
-                    watch.watch_id,
-                    price_for_watch,
-                    snapshot.timestamp,
-                )
-                updated += 1
+                
+                updates.append((watch, price_for_watch, snapshot.timestamp))
+
+        # Persist snapshots
+        # TODO(Optimization): Batch snapshot writes if volume becomes an issue
+        for snapshot in snapshots:
+            await self.manager.add_snapshot_async(snapshot)
+
+        # Bulk update watch state
+        updated = 0
+        if updates:
+            updated = await self.manager.update_watch_prices_bulk_async(updates)
 
         record_watch_poll_cycle(status="success")
         return {
@@ -204,9 +213,14 @@ class SnapshotPoller:
         quotes = {}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
+            tasks = []
             for i in range(0, len(symbols), self.batch_size):
                 batch = symbols[i : i + self.batch_size]
-                batch_result = await self._fetch_batch(client, batch)
+                tasks.append(self._fetch_batch(client, batch))
+            
+            results = await asyncio.gather(*tasks)
+
+            for batch_result in results:
                 quotes.update(batch_result)
 
         return quotes
