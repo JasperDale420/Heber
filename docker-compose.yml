@@ -13,6 +13,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-heber_catalog}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/postgres/data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     ports:
       - "5433:5432"
     healthcheck:
@@ -47,6 +48,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     logging:
       driver: json-file
       options:
@@ -76,6 +78,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     logging:
       driver: json-file
       options:
@@ -203,6 +206,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     logging:
       driver: json-file
       options:

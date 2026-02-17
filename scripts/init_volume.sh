@@ -56,10 +56,16 @@ if [ "$HOST_OS" = "Darwin" ]; then
         done
         echo "Resource fork cleanup complete"
     else
-        echo "Skipping resource fork cleanup: dot_clean is not installed"
+        echo "Skipping dot_clean: not installed"
     fi
+
+    # Belt-and-suspenders: remove any remaining ._* files that dot_clean missed
+    # or that macOS recreated after chmod operations above.
+    echo "Removing remaining ._* resource fork files..."
+    removed_count=$(find "$VOLUME_ROOT" -name '._*' -type f -delete -print 2>/dev/null | wc -l | tr -d ' ')
+    echo "Removed $removed_count resource fork files"
 else
-    echo "Skipping resource fork cleanup: host OS is $HOST_OS (dot_clean is macOS-only)"
+    echo "Skipping resource fork cleanup: host OS is $HOST_OS (macOS-only)"
 fi
 
 echo ""

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Docker Startup: Multi-Database Init and Healthcheck Timing
+
+- Created `scripts/init-databases.sh` to provision auxiliary Postgres databases (`heber_lakefs`, `heber_apicurio`, `heber_openmetadata`) at container first-init time via `/docker-entrypoint-initdb.d/`.
+- Root cause: Postgres only creates the database specified by `POSTGRES_DB` (`heber_catalog`); lakeFS, Apicurio Registry, and OpenMetadata each need their own database and were crash-looping with misleading DNS/connection errors.
+- Mounted the init script in `docker-compose.yml` Postgres volumes.
+- Added `start_period` to healthchecks for ClickHouse (30s), MinIO (60s), and Elasticsearch (60s) to prevent false-unhealthy verdicts during slow startup on the external NTFS volume.
+- Enhanced `scripts/init_volume.sh` with explicit `find -delete` cleanup of macOS `._*` resource fork files as a fallback to `dot_clean`.
+- Added contract test in `tests/test_compose_postgres_health_contract.py` to enforce Postgres healthcheck parameters.
+
 ### Added
 
 #### Alert Feature Enrichment Expansion
