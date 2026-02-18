@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from heber.catalog.db import Base
+from heber.catalog.seeds import seed_datasets, seed_feed_mappings, seed_schema_versions
 from heber.catalog.service import CatalogService
 from heber.config import settings
 from heber.ops.metrics import start_metrics_server_from_env
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("catalog_schema_bootstrap_applied", mode="sqlalchemy_create_all", environment=settings.environment)
+
+        async with async_session() as session:
+            await seed_datasets(session)
+            await seed_schema_versions(session)
+            await seed_feed_mappings(session)
+        logger.info("catalog_data_seeded")
     else:
         logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)
     yield

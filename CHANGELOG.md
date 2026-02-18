@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Catalog Feed Mapping Auto-Seed
+
+- Extracted seed data and functions from `scripts/seed_catalog.py` into `heber/catalog/seeds.py` for importability.
+- Auto-seed `feed_mappings`, `datasets`, and `schema_versions` tables on catalog startup via the `lifespan` handler in `heber/catalog/api.py`.
+- Ensures all 55 provider→feed→Silver dataset mappings are present without manual script execution.
+- `scripts/seed_catalog.py` now imports from `heber/catalog/seeds.py`, retaining only coverage scanning and CLI logic.
+
 #### Enrichment Backfill Scanner
 
 - New `EnrichmentBackfillScanner` in `heber/watch/backfill_scanner.py` — periodic background task that scans recent Gold feature partitions for rows with null enrichment fields (Greeks, GEX, IV rank, max pain, market tide), re-enriches via the Data Gateway, and patches parquet using dedup-on-alert_id
