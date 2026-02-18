@@ -354,7 +354,17 @@ class SectorTideRecord(SilverBase):
 class GreekExposureRecord(SilverBase):
     """GEX exposure data from UW greek_exposure endpoint."""
 
-    gamma_exposure: float
+    call_gamma: float
+    put_gamma: float | None = None
+    call_delta: float | None = None
+    put_delta: float | None = None
+    call_vanna: float | None = None
+    put_vanna: float | None = None
+    call_charm: float | None = None
+    put_charm: float | None = None
+    strike: float | None = None
+    expiry: str | None = None
+    dte: int | None = None
 
 
 class MaxPainRecord(SilverBase):

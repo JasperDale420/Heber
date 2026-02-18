@@ -83,7 +83,17 @@ def _make_extractor() -> AlertFeatureExtractor:
 async def test_enrich_gex_populates_gex_and_vex(monkeypatch: pytest.MonkeyPatch) -> None:
     _SequencedClient.calls = 0
     _SequencedClient.responses = [
-        _Response(200, {"data": {"gamma_exposure": 1_500_000.0, "vanna_exposure": -320_000.0}}),
+        _Response(
+            200,
+            {
+                "data": {
+                    "call_gamma": 1_000_000.0,
+                    "put_gamma": 500_000.0,
+                    "call_vanna": -200_000.0,
+                    "put_vanna": -120_000.0,
+                }
+            },
+        ),
     ]
     monkeypatch.setattr("httpx.AsyncClient", _SequencedClient)
 

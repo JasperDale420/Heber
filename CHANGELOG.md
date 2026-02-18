@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Data Health Remediation
 
 - Removed dead `sentiment` field from `flow_alerts` Silver schema, Pydantic model, and ingest allowed fields — UW never populates this for flow alerts (it exists only in `market_tide`/`sector_tide`).
-- Removed 5 unpopulated columns (`delta_exposure`, `vanna_exposure`, `charm_exposure`, `strike`, `expiry`) from `greek_exposure` Silver schema and Pydantic model — UW only provides `gamma_exposure` at the symbol level.
+- Aligned `greek_exposure` Silver schema, Pydantic model, ingest contracts, and GEX enrichment with UW API's split call/put fields (`call_gamma`, `put_gamma`, `call_delta`, `put_delta`, `call_vanna`, `put_vanna`, `call_charm`, `put_charm`) plus grouping fields (`strike`, `expiry`, `dte`).
 
 #### News Feed Bronze-Only Policy
 

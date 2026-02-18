@@ -703,18 +703,29 @@ class AlertFeatureExtractor:
             if isinstance(gex_data, list) and gex_data:
                 gex_data = gex_data[0]
             if isinstance(gex_data, dict):
-                parsed_gex = coerce_optional_float(gex_data.get("gamma_exposure"))
-                if parsed_gex is None:
-                    parsed_gex = coerce_optional_float(gex_data.get("gex_oi"))
-                if parsed_gex is None:
-                    parsed_gex = coerce_optional_float(gex_data.get("gex"))
+                # Prefer split call/put fields from UW API, sum for net exposure
+                call_g = coerce_optional_float(gex_data.get("call_gamma"))
+                put_g = coerce_optional_float(gex_data.get("put_gamma"))
+                if call_g is not None or put_g is not None:
+                    parsed_gex = (call_g or 0.0) + (put_g or 0.0)
+                else:
+                    parsed_gex = coerce_optional_float(gex_data.get("gamma_exposure"))
+                    if parsed_gex is None:
+                        parsed_gex = coerce_optional_float(gex_data.get("gex_oi"))
+                    if parsed_gex is None:
+                        parsed_gex = coerce_optional_float(gex_data.get("gex"))
                 if parsed_gex is not None:
                     features.gex = parsed_gex
-                parsed_vex = coerce_optional_float(gex_data.get("vanna_exposure"))
-                if parsed_vex is None:
-                    parsed_vex = coerce_optional_float(gex_data.get("vex_oi"))
-                if parsed_vex is None:
-                    parsed_vex = coerce_optional_float(gex_data.get("vex"))
+                call_v = coerce_optional_float(gex_data.get("call_vanna"))
+                put_v = coerce_optional_float(gex_data.get("put_vanna"))
+                if call_v is not None or put_v is not None:
+                    parsed_vex = (call_v or 0.0) + (put_v or 0.0)
+                else:
+                    parsed_vex = coerce_optional_float(gex_data.get("vanna_exposure"))
+                    if parsed_vex is None:
+                        parsed_vex = coerce_optional_float(gex_data.get("vex_oi"))
+                    if parsed_vex is None:
+                        parsed_vex = coerce_optional_float(gex_data.get("vex"))
                 if parsed_vex is not None:
                     features.vex = parsed_vex
                 logger.debug(

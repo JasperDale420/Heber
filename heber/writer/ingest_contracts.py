@@ -412,7 +412,7 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "darkpool": {"underlying", "price", "size"},
     "market_tide": {"total_call_premium", "total_put_premium"},
     "sector_tide": {"sector", "net_call_premium", "net_put_premium"},
-    "greek_exposure": {"gamma_exposure"},
+    "greek_exposure": {"call_gamma"},
     "iv_rank": {"iv_rank"},
     "oi_change": {"oi_date", "call_oi", "put_oi"},
     "historic_option_volume": {"hov_date", "expiry", "volume"},

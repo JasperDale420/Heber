@@ -208,7 +208,17 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("gamma_exposure", pa.float64()),
+            ("call_gamma", pa.float64()),
+            ("put_gamma", pa.float64()),
+            ("call_delta", pa.float64()),
+            ("put_delta", pa.float64()),
+            ("call_vanna", pa.float64()),
+            ("put_vanna", pa.float64()),
+            ("call_charm", pa.float64()),
+            ("put_charm", pa.float64()),
+            ("strike", pa.float64()),
+            ("expiry", pa.string()),
+            ("dte", pa.int32()),
         ]
     ),
     "max_pain": pa.schema(
