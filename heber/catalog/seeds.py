@@ -9,16 +9,20 @@ Extracted from scripts/seed_catalog.py so the catalog lifespan can import cleanl
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from datetime import date as date_type
+from pathlib import Path
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from heber.catalog.db import Dataset, DatasetVersion, FeedMapping
+from heber.catalog.db import DataCoverage, Dataset, DatasetVersion, FeedMapping
 from heber.config import settings
 from heber.schemas.silver import SILVER_SCHEMAS
 
 logger = structlog.get_logger(__name__)
+
+_DATE_PARTITION_RE = __import__("re").compile(r"^dt=(\d{4}-\d{2}-\d{2})$")
 
 # ── Dataset Descriptions ─────────────────────────────────────────────────────
 
@@ -359,3 +363,101 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
     await session.commit()
     logger.info("auto_discover_complete", disk_feeds=len(disk_feeds), new=count)
     return count
+
+
+def _scan_partition_dates(feed_dir: Path) -> tuple[str, str, int] | None:
+    """Scan a feed directory for dt= partitions and return (min_date, max_date, count)."""
+    dates: list[str] = []
+    for sub in feed_dir.rglob("dt=*"):
+        if not sub.is_dir():
+            continue
+        match = _DATE_PARTITION_RE.match(sub.name)
+        if match:
+            dates.append(match.group(1))
+    if not dates:
+        return None
+    return min(dates), max(dates), len(dates)
+
+
+async def seed_coverage_from_disk(session: AsyncSession) -> int:
+    """Scan Silver partition directories and populate data_coverage with date ranges.
+
+    Walks ``settings.silver_path`` for ``feed={name}`` directories, then scans
+    each for ``dt=YYYY-MM-DD`` subdirectories (at any nesting depth below the feed).
+    For each feed, upserts a single aggregate DataCoverage record with
+    ``instrument_key="__all__"`` containing the observed min/max dates.
+
+    Returns the number of coverage records upserted.
+    """
+    silver_root = settings.silver_path
+    if not silver_root.exists():
+        logger.warning("coverage_scan_skipped", reason="silver_path_not_found", path=str(silver_root))
+        return 0
+
+    upserted = 0
+    for entry in sorted(silver_root.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(".") or not entry.name.startswith("feed="):
+            continue
+
+        feed_name = entry.name.split("=", 1)[1]
+        scan = _scan_partition_dates(entry)
+        if scan is None:
+            continue
+
+        dt_min_str, dt_max_str, partition_count = scan
+        upserted += await _upsert_coverage(
+            session,
+            feed_name,
+            dt_min_str,
+            dt_max_str,
+            partition_count,
+        )
+
+    if upserted:
+        await session.commit()
+
+    logger.info("coverage_seeded_from_disk", upserted=upserted)
+    return upserted
+
+
+async def _upsert_coverage(
+    session: AsyncSession,
+    feed_name: str,
+    dt_min_str: str,
+    dt_max_str: str,
+    partition_count: int,
+) -> int:
+    """Upsert a single aggregate DataCoverage record for a feed."""
+    dt_min = date_type.fromisoformat(dt_min_str)
+    dt_max = date_type.fromisoformat(dt_max_str)
+
+    existing = await session.execute(
+        select(DataCoverage)
+        .where(DataCoverage.dataset_name == feed_name)
+        .where(DataCoverage.instrument_key == "__all__")
+    )
+    coverage = existing.scalar_one_or_none()
+
+    if coverage:
+        coverage.dt_min = dt_min
+        coverage.dt_max = dt_max
+        coverage.approx_row_count = partition_count
+        coverage.last_updated_ts = datetime.now(UTC)
+    else:
+        coverage = DataCoverage(
+            dataset_name=feed_name,
+            instrument_key="__all__",
+            dt_min=dt_min,
+            dt_max=dt_max,
+            approx_row_count=partition_count,
+        )
+        session.add(coverage)
+
+    logger.debug(
+        "coverage_upserted",
+        dataset=feed_name,
+        dt_min=dt_min_str,
+        dt_max=dt_max_str,
+        partitions=partition_count,
+    )
+    return 1

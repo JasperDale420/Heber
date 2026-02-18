@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from heber.catalog.db import Base
 from heber.catalog.seeds import (
     discover_datasets_from_disk,
+    seed_coverage_from_disk,
     seed_datasets,
     seed_feed_mappings,
     seed_schema_versions,
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI):
             await seed_datasets(session)
             await seed_schema_versions(session)
             await seed_feed_mappings(session)
+            await seed_coverage_from_disk(session)
         logger.info("catalog_data_seeded")
     else:
         logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)

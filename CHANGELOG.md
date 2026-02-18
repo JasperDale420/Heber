@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Catalog Coverage Seeding from Disk
+
+- Added `seed_coverage_from_disk()` to `heber/catalog/seeds.py` — scans Silver `feed=` directories for `dt=YYYY-MM-DD` partitions and upserts aggregate `DataCoverage` records with min/max date ranges.
+- Extracted `_scan_partition_dates()` helper for partition directory scanning (no Parquet I/O involved).
+- Coverage seeding runs during catalog startup alongside existing dataset/feed seeds in `heber/catalog/api.py`.
+- Added unit tests in `tests/test_seed_coverage.py` covering partition scanning, empty directories, and file-vs-directory edge cases.
+- Enables Atlas manifest generation to render Heber coverage windows for agent hypothesis generation.
+
+### Added
+
 #### Catalog Feed Mapping Auto-Seed
 
 - Extracted seed data and functions from `scripts/seed_catalog.py` into `heber/catalog/seeds.py` for importability.
