@@ -107,7 +107,6 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
         "side",
         "is_sweep",
         "is_unusual",
-        "sentiment",
         "option_chain",
         "price",
         "underlying_price",

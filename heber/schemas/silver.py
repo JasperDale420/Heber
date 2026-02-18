@@ -108,7 +108,6 @@ SILVER_SCHEMAS = {
             # UW additional fields (P1)
             ("is_sweep", pa.bool_()),
             ("is_unusual", pa.bool_()),
-            ("sentiment", pa.string()),
             ("trade_count", pa.int64()),
             ("volume_oi_ratio", pa.float64()),
             ("total_ask_side_prem", pa.float64()),
@@ -210,11 +209,6 @@ SILVER_SCHEMAS = {
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
             ("gamma_exposure", pa.float64()),
-            ("delta_exposure", pa.float64()),
-            ("vanna_exposure", pa.float64()),
-            ("charm_exposure", pa.float64()),
-            ("strike", pa.float64()),
-            ("expiry", pa.date32()),
         ]
     ),
     "max_pain": pa.schema(

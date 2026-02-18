@@ -163,7 +163,6 @@ class FlowAlertRecord(SilverBase):
     # UW additional flags (P1)
     is_sweep: bool | None = None
     is_unusual: bool | None = None
-    sentiment: str | None = Field(None, description=_SENTIMENT_DESC)
     trade_count: int | None = None
     volume_oi_ratio: float | None = None
     total_ask_side_prem: float | None = None
@@ -353,14 +352,9 @@ class SectorTideRecord(SilverBase):
 
 
 class GreekExposureRecord(SilverBase):
-    """GEX/DEX/VEX exposure data from UW greek_exposure endpoint."""
+    """GEX exposure data from UW greek_exposure endpoint."""
 
     gamma_exposure: float
-    delta_exposure: float | None = None
-    vanna_exposure: float | None = None
-    charm_exposure: float | None = None
-    strike: float | None = None
-    expiry: date | None = None
 
 
 class MaxPainRecord(SilverBase):
