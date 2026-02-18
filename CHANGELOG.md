@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### News Feed Bronze-Only Policy
+
+- Added `"news"` to `BRONZE_ONLY_SILVER_DATASETS` in `heber/writer/ingest_contracts.py` so news events are persisted in Bronze but skipped for Silver writes.
+- News is free-text content without a structured Silver use-case; this prevents null-heavy Silver rows.
+
+#### Core Parquet Read Helper
+
+- Added `heber/core/parquet.py` with `read_parquet_dataset()` for standardized Parquet reading with time-range and as-of-time filtering.
+- Added `tests/test_core_parquet.py` with 5 unit tests covering basic read, time-range filtering, as-of filtering, column pruning, and filter pushdown.
+
+#### Writer / SDK / Backtest / ML DRY Refactoring
+
+- Extracted `get_partition_key`, `write_silver_parquet`, and `build_silver_candidates` into `heber/writer/utils.py`.
+- Refactored `SilverWriter` and `BronzeToSilverTransformer` to use shared writer utilities.
+- Added `HeberClient._read_parquet_dataset` wrapper delegating to `heber.core.parquet.read_parquet_dataset`.
+- Consolidated `BacktestDataLoader.load_train_data`/`load_test_data` into shared `_load_data_split` helper.
+- Refactored `MetaLabelDatasetBuilder` to use `HeberClient._read_parquet_dataset`, removing legacy path fallbacks.
+
 #### Trades Silver Field Mapping: Dual-Key Support
 
 - Added explicit full-name key aliases (`price`, `size`, `exchange`, `trade_id`, `tape`) to `FIELD_MAPPINGS["trades"]` in `heber/writer/ingest_contracts.py` alongside existing short Alpaca WebSocket keys (`p`, `s`, `x`, `i`, `z`).

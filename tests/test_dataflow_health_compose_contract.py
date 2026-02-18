@@ -53,3 +53,11 @@ def test_consumer_and_watch_metrics_ports_exposed_to_host() -> None:
 
     assert "9090:9090" in consumer_ports
     assert "9091:9090" in watch_ports
+
+
+def test_watch_service_has_gateway_api_key_env_wiring() -> None:
+    compose = _load_compose()
+    services = compose["services"]
+    env = _env_to_dict(services["heber-watch"].get("environment"))
+
+    assert "HEBER_WATCH_GATEWAY_API_KEY" in env

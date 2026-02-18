@@ -14,6 +14,7 @@ import polars as pl
 import structlog
 
 from heber.config import settings
+from heber.sdk.client import HeberClient
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -24,17 +25,11 @@ logger = structlog.get_logger(__name__)
 _PROJECT_WATCH = "project=watch"
 _VERSION_V1 = "version=v1"
 
+
 # Default paths
 DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
-LEGACY_FEATURES_PATHS = [
-    DEFAULT_GOLD_PATH / "meta_labels" / "features",
-]
-LEGACY_OUTCOMES_PATHS = [
-    DEFAULT_GOLD_PATH / "labels_alert_barriers",
-    DEFAULT_GOLD_PATH / "labels_alert_barriers" / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1,
-]
 
 
 @dataclass
@@ -75,6 +70,7 @@ class MetaLabelDatasetBuilder:
         """
         self.config = config or DatasetConfig()
         self.redis = redis
+        self.client = HeberClient()
 
     def build_from_parquet(
         self,
@@ -150,64 +146,59 @@ class MetaLabelDatasetBuilder:
 
     def _load_outcomes(self, start_date: date, end_date: date) -> pl.DataFrame:
         """Load outcomes from Gold layer."""
-        candidates = [self.config.outcomes_path, *LEGACY_OUTCOMES_PATHS]
-        for outcomes_path in candidates:
-            dataset = self._load_partitioned_dataset(outcomes_path, start_date, end_date)
-            if not dataset.is_empty():
-                if outcomes_path != self.config.outcomes_path:
-                    logger.info(
-                        "Loaded outcomes from legacy path fallback",
-                        configured_path=str(self.config.outcomes_path),
-                        loaded_path=str(outcomes_path),
-                    )
-                return dataset
+        # Partition filter
+        filters = [
+            ("dt", ">=", start_date.strftime("%Y-%m-%d")),
+            ("dt", "<=", end_date.strftime("%Y-%m-%d")),
+        ]
 
-        logger.warning(
-            "Outcomes path does not exist or contains no data",
-            configured_path=str(self.config.outcomes_path),
-        )
-        return pl.DataFrame()
+        try:
+            # Use internal _read_parquet_dataset to support arbitrary path config
+            df_pd = self.client._read_parquet_dataset(
+                path=self.config.outcomes_path,
+                filters=filters,
+            )
+
+            if df_pd.empty:
+                logger.warning(
+                    "Outcomes path does not exist or contains no data",
+                    configured_path=str(self.config.outcomes_path),
+                )
+                return pl.DataFrame()
+
+            return pl.from_pandas(df_pd)
+
+        except Exception as e:
+            logger.error("Failed to load outcomes", path=str(self.config.outcomes_path), error=str(e))
+            return pl.DataFrame()
 
     def _load_features(self, start_date: date, end_date: date) -> pl.DataFrame:
         """Load features from Gold layer."""
-        candidates = [self.config.features_path, *LEGACY_FEATURES_PATHS]
-        for features_path in candidates:
-            dataset = self._load_partitioned_dataset(features_path, start_date, end_date)
-            if not dataset.is_empty():
-                if features_path != self.config.features_path:
-                    logger.info(
-                        "Loaded features from legacy path fallback",
-                        configured_path=str(self.config.features_path),
-                        loaded_path=str(features_path),
-                    )
-                return dataset
+        # Partition filter
+        filters = [
+            ("dt", ">=", start_date.strftime("%Y-%m-%d")),
+            ("dt", "<=", end_date.strftime("%Y-%m-%d")),
+        ]
 
-        logger.warning(
-            "Features path does not exist or contains no data",
-            configured_path=str(self.config.features_path),
-        )
-        return pl.DataFrame()
+        try:
+            # Use internal _read_parquet_dataset to support arbitrary path config
+            df_pd = self.client._read_parquet_dataset(
+                path=self.config.features_path,
+                filters=filters,
+            )
 
-    @staticmethod
-    def _load_partitioned_dataset(base_path: Path, start_date: date, end_date: date) -> pl.DataFrame:
-        """Load dt-partitioned parquet files in a date range."""
-        if not base_path.exists():
+            if df_pd.empty:
+                logger.warning(
+                    "Features path does not exist or contains no data",
+                    configured_path=str(self.config.features_path),
+                )
+                return pl.DataFrame()
+
+            return pl.from_pandas(df_pd)
+
+        except Exception as e:
+            logger.error("Failed to load features", path=str(self.config.features_path), error=str(e))
             return pl.DataFrame()
-
-        dfs = []
-        for dt_dir in base_path.glob("dt=*"):
-            dt_str = dt_dir.name.replace("dt=", "")
-            try:
-                dt = datetime.strptime(dt_str, "%Y-%m-%d").date()
-                if start_date <= dt <= end_date:
-                    for pq_file in dt_dir.glob("*.parquet"):
-                        dfs.append(pl.read_parquet(pq_file))
-            except ValueError:
-                continue
-
-        if not dfs:
-            return pl.DataFrame()
-        return pl.concat(dfs, how="vertical_relaxed")
 
     def _join_features_outcomes(
         self,
@@ -443,7 +434,10 @@ def persist_features_to_gold(
         out_file = partition_path / "data.parquet"
         if out_file.exists():
             existing = pl.read_parquet(out_file)
-            partition_df = pl.concat([existing, partition_df], how="vertical_relaxed")
+            partition_df = pl.concat(
+                [existing, partition_df],
+                how="diagonal_relaxed",
+            )
             if "alert_id" in partition_df.columns:
                 partition_df = partition_df.unique(subset=["alert_id"], keep="last")
         partition_df.write_parquet(out_file)

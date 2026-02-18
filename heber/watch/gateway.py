@@ -13,6 +13,30 @@ DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
 
 
+def is_retryable_http_status(status_code: int) -> bool:
+    """Return True if the HTTP status code indicates a transient error."""
+    return status_code in {429, 500, 502, 503, 504}
+
+
+def parse_retry_after(headers: Any) -> float | None:
+    """Parse Retry-After header from response headers.
+
+    Handles both integer seconds and HTTP-date formats (though currently
+    only float/int parsing is implemented as that's what we need).
+    Returns None if header is missing or invalid.
+    """
+    if not hasattr(headers, "get"):
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+        return val if val >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def gateway_auth_headers(gateway_api_key: str | None) -> dict[str, str]:
     """Build HTTP headers for Data Gateway auth when a key is configured."""
     if gateway_api_key is None:

@@ -294,3 +294,39 @@ async def test_enrich_iv_rank_falls_back_to_options_route_when_canonical_route_4
         "http://gateway/uw/AAPL/iv-rank",
         "http://gateway/api/v1/uw/options/AAPL/iv-rank",
     ]
+
+
+@pytest.mark.asyncio
+async def test_enrich_market_context_uses_symbol_bars_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RouteClient.calls = []
+    _RouteClient.responses = {
+        "http://gateway/api/v1/alpaca/stocks/AAPL/bars": _Response(
+            200,
+            {
+                "success": True,
+                "data": {
+                    "symbol": "AAPL",
+                    "bars": [
+                        {"t": "2026-02-07T00:00:00Z", "close": 110.0},
+                        {"t": "2026-02-06T00:00:00Z", "close": 100.0},
+                        {"t": "2026-02-05T00:00:00Z", "close": 90.0},
+                    ],
+                },
+            },
+        ),
+    }
+    monkeypatch.setattr("httpx.AsyncClient", _RouteClient)
+
+    extractor = AlertFeatureExtractor(
+        gateway_url="http://gateway",
+        request_max_attempts=1,
+        retry_base_delay_seconds=0.0,
+        retry_jitter_seconds=0.0,
+    )
+
+    enriched = await extractor._enrich_market_context(_base_features("AAPL"))
+
+    assert _RouteClient.calls == ["http://gateway/api/v1/alpaca/stocks/AAPL/bars"]
+    assert enriched.underlying_1d_return == pytest.approx(0.1)

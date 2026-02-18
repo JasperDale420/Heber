@@ -181,7 +181,7 @@ class WatchManager:
 
         # Normalize IDs and build keys
         keys = [WatchKeys.watch_key(self._normalize_redis_id(wid)) for wid in watch_ids]
-        
+
         # Batch fetch
         data_list = self.redis.mget(keys)
 
@@ -293,14 +293,14 @@ class WatchManager:
             current_return: float | None = None
             mfe = watch.mfe
             mae = watch.mae
-            
+
             if watch.entry_price > 0:
                 current_return = (price - watch.entry_price) / watch.entry_price
                 prior_mfe = watch.mfe if watch.mfe is not None else -float("inf")
                 prior_mae = watch.mae if watch.mae is not None else float("inf")
                 mfe = max(prior_mfe, current_return)
                 mae = min(prior_mae, current_return)
-            
+
             normalized_timestamp = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
 
             watch.current_price = price
@@ -316,7 +316,7 @@ class WatchManager:
 
         if updated_count > 0:
             pipeline.execute()
-            
+
         return updated_count
 
     async def update_watch_prices_bulk_async(

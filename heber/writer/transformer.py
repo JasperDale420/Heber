@@ -16,8 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
@@ -29,7 +27,11 @@ from heber.writer.normalizer import (
     MissingRequiredFieldsError,
     enforce_required_non_null_fields,
     envelope_to_silver_row,
-    explode_aggregate_payload,
+)
+from heber.writer.utils import (
+    build_silver_candidates,
+    get_partition_key,
+    write_silver_parquet,
 )
 
 logger = structlog.get_logger(__name__)
@@ -180,25 +182,35 @@ class BronzeToSilverTransformer:
         if not dt_dir.exists():
             return 0
 
-        records: list[dict[str, Any]] = []
+        buffers: dict[str, list[dict[str, Any]]] = defaultdict(list)
         files_processed = 0
         total_records = 0
 
         # Process all hour directories and files
         for item in dt_dir.rglob("*.jsonl.gz"):
-            records.extend(self._read_bronze_file(item, feed))
+            for row in self._read_bronze_file(item, feed):
+                # Calculate partition key for each row to match live ingestion layout
+                # (e.g. handle hourly partitioning for quotes/trades)
+                p_key = get_partition_key(
+                    feed=silver_feed,
+                    instrument_type=row.get("instrument_type", "unknown"),
+                    ts_event=row["ts_event"],
+                )
+                buffers[p_key].append(row)
+
+                # Flush specific partition if big enough
+                if len(buffers[p_key]) >= self.batch_size:
+                    self._flush_buffer(buffers[p_key], p_key, silver_feed)
+                    total_records += len(buffers[p_key])
+                    buffers[p_key] = []
+
             files_processed += 1
 
-            # Flush in batches
-            if len(records) >= self.batch_size:
-                self._write_silver_batch(records, silver_feed, dt)
-                total_records += len(records)
-                records = []
-
         # Final flush
-        if records:
-            self._write_silver_batch(records, silver_feed, dt)
-            total_records += len(records)
+        for p_key, rows in buffers.items():
+            if rows:
+                self._flush_buffer(rows, p_key, silver_feed)
+                total_records += len(rows)
 
         logger.info(
             "Transformed partition",
@@ -220,7 +232,8 @@ class BronzeToSilverTransformer:
                     try:
                         event_dict = json.loads(line.strip())
                         envelope = EventEnvelope.model_validate(event_dict)
-                        candidates = self._build_silver_candidates(envelope, feed)
+                        # Use shared logic to explode aggregates (bars/trades)
+                        candidates = build_silver_candidates(envelope, feed_override=feed)
                         for candidate in candidates:
                             row = self._envelope_to_silver_row(candidate, feed)
                             if row:
@@ -233,16 +246,6 @@ class BronzeToSilverTransformer:
             logger.error("Failed to read Bronze file", path=str(file_path), error=str(e))
 
         return records
-
-    def _build_silver_candidates(self, envelope: EventEnvelope, feed: str) -> list[EventEnvelope]:
-        """Build candidate envelopes for Silver writes.
-
-        For aggregate REST payloads (bars/trades arrays), explode into one
-        candidate envelope per item so backfill writes typed rows rather than
-        null-heavy aggregate blobs.
-        """
-        canonical_feed = resolve_silver_feed(feed)
-        return explode_aggregate_payload(envelope, feed_override=canonical_feed)
 
     def _envelope_to_silver_row(self, envelope: EventEnvelope, feed: str) -> dict[str, Any] | None:
         """Convert EventEnvelope to Silver row format."""
@@ -268,42 +271,35 @@ class BronzeToSilverTransformer:
             logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
             return None
 
-    def _write_silver_batch(
+    def _flush_buffer(
         self,
-        records: list[dict[str, Any]],
-        feed: str,
-        dt: str,
+        rows: list[dict[str, Any]],
+        partition_key: str,
+        dataset: str,
     ) -> None:
-        """Write a batch of records to Silver Parquet."""
-        if not records:
+        """Flush a buffer to Silver Parquet."""
+        if not rows:
             return
 
-        schema = SILVER_SCHEMAS.get(feed)
+        schema = SILVER_SCHEMAS.get(dataset)
         if not schema:
-            logger.warning("No schema for feed", feed=feed)
+            logger.warning("No schema for feed", feed=dataset)
             return
 
-        # Build partition path
-        instrument_type = records[0].get("instrument_type", "unknown")
-        partition_path = self.silver_path / f"feed={feed}" / f"instrument_type={instrument_type}" / f"dt={dt}"
+        # Path management
+        partition_path = self.silver_path / partition_key
         partition_path.mkdir(parents=True, exist_ok=True)
 
-        # Generate unique filename
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         file_path = partition_path / f"part-{ts}.parquet"
 
-        try:
-            table = pa.Table.from_pylist(records, schema=schema)
-            pq.write_table(
-                table,
-                file_path,
-                compression="snappy",
-                row_group_size=100_000,
-            )
-            logger.debug("Wrote Silver batch", path=str(file_path), records=len(records))
-        except Exception as e:
-            logger.error("Failed to write Silver batch", error=str(e), exc_info=True)
-            raise
+        write_silver_parquet(
+            rows=rows,
+            schema=schema,
+            file_path=file_path,
+            partition_key=partition_key,
+            dataset=dataset,
+        )
 
 
 def backfill_silver(

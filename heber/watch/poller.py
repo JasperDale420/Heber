@@ -124,7 +124,7 @@ class SnapshotPoller:
             for watch in symbol_to_watches.get(symbol, []):
                 snapshot = self._create_snapshot(watch, quote)
                 snapshots.append(snapshot)
-                
+
                 price_for_watch = snapshot.mid_px if snapshot.mid_px is not None else snapshot.last_px
                 if price_for_watch is None:
                     logger.warning(
@@ -133,7 +133,7 @@ class SnapshotPoller:
                         occ_symbol=watch.occ_symbol,
                     )
                     continue
-                
+
                 updates.append((watch, price_for_watch, snapshot.timestamp))
 
         # Persist snapshots
@@ -217,7 +217,7 @@ class SnapshotPoller:
             for i in range(0, len(symbols), self.batch_size):
                 batch = symbols[i : i + self.batch_size]
                 tasks.append(self._fetch_batch(client, batch))
-            
+
             results = await asyncio.gather(*tasks)
 
             for batch_result in results:

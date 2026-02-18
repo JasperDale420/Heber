@@ -59,7 +59,12 @@ async def test_enrich_greeks_preserves_zero_values(monkeypatch: pytest.MonkeyPat
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -98,7 +103,12 @@ async def test_market_context_does_not_skip_zero_close_day(monkeypatch: pytest.M
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -148,7 +158,12 @@ async def test_enrich_greeks_skips_malformed_contract_strike_and_uses_valid_matc
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -161,6 +176,57 @@ async def test_enrich_greeks_skips_malformed_contract_strike_and_uses_valid_matc
     assert enriched.theta == -0.03
     assert enriched.vega == 0.44
     assert enriched.iv == 0.55
+
+
+@pytest.mark.asyncio
+async def test_enrich_greeks_matches_contract_when_gateway_uses_strike_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "data": {
+                    "contracts": [
+                        {
+                            "strike": 100.0,
+                            "delta": 0.21,
+                            "gamma": 0.12,
+                            "theta": -0.01,
+                            "vega": 0.34,
+                            "iv": 0.45,
+                        }
+                    ]
+                }
+            }
+
+    class _Client:
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
+            return _Response()
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
+
+    extractor = AlertFeatureExtractor(gateway_url="http://gateway:8000")
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta == 0.21
+    assert enriched.gamma == 0.12
+    assert enriched.theta == -0.01
+    assert enriched.vega == 0.34
+    assert enriched.iv == 0.45
 
 
 @pytest.mark.asyncio
@@ -194,7 +260,12 @@ async def test_enrich_greeks_treats_non_finite_values_as_missing(
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -240,7 +311,12 @@ async def test_enrich_greeks_treats_boolean_values_as_missing(
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -273,7 +349,12 @@ async def test_enrich_iv_rank_treats_non_finite_values_as_missing(
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
@@ -310,7 +391,12 @@ async def test_market_context_treats_non_finite_close_as_missing(
         async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
             return False
 
-        async def get(self, route: str, params: dict | None = None) -> _Response:  # noqa: ARG002
+        async def get(
+            self,
+            route: str,
+            params: dict | None = None,  # noqa: ARG002
+            headers: dict[str, str] | None = None,  # noqa: ARG002
+        ) -> _Response:
             return _Response()
 
     monkeypatch.setattr("httpx.AsyncClient", lambda *args, **kwargs: _Client())  # noqa: ARG005
