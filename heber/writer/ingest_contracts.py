@@ -202,11 +202,18 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "ax": "ask_exchange",
     },
     "trades": {
+        # Short Alpaca WebSocket keys
         "p": "price",
         "s": "size",
         "x": "exchange",
         "i": "trade_id",
         "z": "tape",
+        # Full-name keys from Alpaca REST / aggregate payloads
+        "price": "price",
+        "size": "size",
+        "exchange": "exchange",
+        "trade_id": "trade_id",
+        "tape": "tape",
     },
     # Options Flow
     "flow_alerts": {

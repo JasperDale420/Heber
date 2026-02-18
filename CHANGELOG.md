@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Trades Silver Field Mapping: Dual-Key Support
+
+- Added explicit full-name key aliases (`price`, `size`, `exchange`, `trade_id`, `tape`) to `FIELD_MAPPINGS["trades"]` in `heber/writer/ingest_contracts.py` alongside existing short Alpaca WebSocket keys (`p`, `s`, `x`, `i`, `z`).
+- Removed invalid `taker_side` mapping that doesn't exist in the Silver trades schema.
+- Added 4 regression tests in `tests/test_trades_dual_key_normalization.py` covering short-key mapping, full-name-key mapping, short-key precedence, and empty-payload handling.
+
 #### Docker Startup: Multi-Database Init and Healthcheck Timing
 
 - Created `scripts/init-databases.sh` to provision auxiliary Postgres databases (`heber_lakefs`, `heber_apicurio`, `heber_openmetadata`) at container first-init time via `/docker-entrypoint-initdb.d/`.
