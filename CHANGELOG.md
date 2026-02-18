@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `discover_datasets_from_disk()` to `heber/catalog/seeds.py` — scans Silver directory for `feed=X` partitions and auto-registers unknown datasets with default identity feed mappings (`provider="discovered"`).
 - New `catalog_auto_discover` config flag (default `True`) gates automatic discovery on catalog startup.
+- Auto-discovery now runs in **all environments**, not just dev (idempotent).
+- Periodic background re-scan every `catalog_discover_interval_seconds` (default 300s, set to 0 to disable).
 - Added `--discover` CLI flag to `scripts/seed_catalog.py` for manual trigger.
 - Skips macOS `._` resource forks and non-`feed=` directories.
 

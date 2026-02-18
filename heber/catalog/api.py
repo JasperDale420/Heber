@@ -3,6 +3,7 @@
 See PRD Section 11.7 for API contract.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +46,20 @@ def _should_auto_create_catalog_tables() -> bool:
     return settings.environment == "dev"
 
 
+async def _periodic_discovery_loop() -> None:
+    """Background loop that periodically re-scans Silver for new datasets."""
+    interval = settings.catalog_discover_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with async_session() as session:
+                discovered = await discover_datasets_from_disk(session)
+                if discovered:
+                    logger.info("catalog_periodic_discovery", new_datasets=discovered)
+        except Exception:
+            logger.exception("catalog_periodic_discovery_error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -60,16 +75,33 @@ async def lifespan(app: FastAPI):
             await seed_datasets(session)
             await seed_schema_versions(session)
             await seed_feed_mappings(session)
-
-        if settings.catalog_auto_discover:
-            async with async_session() as session:
-                discovered = await discover_datasets_from_disk(session)
-                logger.info("catalog_auto_discovery_done", new_datasets=discovered)
-
         logger.info("catalog_data_seeded")
     else:
         logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)
+
+    # Auto-discovery runs in all environments (idempotent)
+    discovery_task = None
+    if settings.catalog_auto_discover:
+        async with async_session() as session:
+            discovered = await discover_datasets_from_disk(session)
+            logger.info("catalog_auto_discovery_done", new_datasets=discovered)
+
+        if settings.catalog_discover_interval_seconds > 0:
+            discovery_task = asyncio.create_task(_periodic_discovery_loop())
+            logger.info(
+                "catalog_periodic_discovery_started",
+                interval_seconds=settings.catalog_discover_interval_seconds,
+            )
+
     yield
+
+    if discovery_task is not None:
+        discovery_task.cancel()
+        try:
+            await discovery_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("catalog_periodic_discovery_stopped")
 
 
 app = FastAPI(

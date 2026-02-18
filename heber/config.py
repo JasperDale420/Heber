@@ -142,6 +142,10 @@ class Settings(BaseSettings):
         default=True,
         description="Scan Silver directory on startup and auto-register unknown datasets",
     )
+    catalog_discover_interval_seconds: int = Field(
+        default=300,
+        description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
+    )
 
     # Gold layer paths (used by feature_views/_paths.py)
     gold_root: Path | None = Field(
