@@ -170,7 +170,7 @@ class LabelWriter:
 class WatchService:
     """Orchestrates all watch components.
 
-    Runs consumer, poller, checker, and writer together.
+    Runs consumer, poller, checker, writer, and enrichment backfill together.
     """
 
     def __init__(
@@ -189,7 +189,9 @@ class WatchService:
             output_path: Path for Gold output
         """
         from heber.config import settings
+        from heber.watch.backfill_scanner import EnrichmentBackfillScanner
         from heber.watch.consumer import AlertWatchConsumer
+        from heber.watch.features import DEFAULT_FEATURES_OUTPUT_PATH, AlertFeatureExtractor
         from heber.watch.manager import WatchManager
         from heber.watch.poller import SnapshotPoller
 
@@ -215,6 +217,21 @@ class WatchService:
         )
         self.checker = BarrierChecker(self.manager)
         self.writer = LabelWriter(output_path=output_path)
+
+        # Enrichment backfill scanner
+        backfill_extractor = AlertFeatureExtractor(
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
+        self.backfill_scanner = EnrichmentBackfillScanner(
+            feature_extractor=backfill_extractor,
+            features_output_path=DEFAULT_FEATURES_OUTPUT_PATH,
+            interval_seconds=settings.enrichment_backfill_interval,
+            lookback_days=settings.enrichment_backfill_lookback_days,
+            batch_size=settings.enrichment_backfill_batch_size,
+        )
+        self._backfill_enabled = settings.enrichment_backfill_enabled
         self._running = False
 
     async def run(self) -> None:
@@ -223,14 +240,20 @@ class WatchService:
 
         self._running = True
 
-        logger.info("Starting watch service")
+        logger.info(
+            "Starting watch service",
+            enrichment_backfill_enabled=self._backfill_enabled,
+        )
 
-        # Run consumer, poller, and checker loop concurrently
-        await asyncio.gather(
+        coroutines = [
             self.consumer.run(),
             self.poller.run(),
             self._check_and_write_loop(),
-        )
+        ]
+        if self._backfill_enabled:
+            coroutines.append(self.backfill_scanner.run())
+
+        await asyncio.gather(*coroutines)
 
     async def _check_and_write_loop(self) -> None:
         """Periodically check for completed watches and write labels."""
@@ -254,6 +277,7 @@ class WatchService:
         self._running = False
         self.consumer.stop()
         self.poller.stop()
+        self.backfill_scanner.stop()
         self.writer.flush()
         logger.info("Watch service stopped")
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Enrichment Backfill Scanner
+
+- New `EnrichmentBackfillScanner` in `heber/watch/backfill_scanner.py` — periodic background task that scans recent Gold feature partitions for rows with null enrichment fields (Greeks, GEX, IV rank, max pain, market tide), re-enriches via the Data Gateway, and patches parquet using dedup-on-alert_id
+- Integrated as optional fourth coroutine in `WatchService.run()`, gated by `HEBER_ENRICHMENT_BACKFILL_ENABLED`
+- Config settings: `enrichment_backfill_enabled`, `enrichment_backfill_interval`, `enrichment_backfill_lookback_days`, `enrichment_backfill_batch_size`
+- Prometheus metrics: `heber_enrichment_backfill_{scanned,patched,failed}_total`, `heber_enrichment_backfill_duration_seconds`
+- 12 unit tests covering row detection, partition reading, re-enrichment flow, batch limiting, and market hours gating
+
 ### Fixed
 
 #### SonarQube Code Quality Remediation

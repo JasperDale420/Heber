@@ -195,6 +195,24 @@ class Settings(BaseSettings):
         description="Enable legacy unprefixed gateway route fallback after /api/v1 routes",
     )
 
+    # Enrichment backfill scanner
+    enrichment_backfill_enabled: bool = Field(
+        default=True,
+        description="Enable periodic re-enrichment of Gold feature rows with null fields",
+    )
+    enrichment_backfill_interval: int = Field(
+        default=3600,
+        description="Seconds between enrichment backfill scans",
+    )
+    enrichment_backfill_lookback_days: int = Field(
+        default=3,
+        description="Number of days back to scan for incomplete feature rows",
+    )
+    enrichment_backfill_batch_size: int = Field(
+        default=50,
+        description="Max rows to re-enrich per scan cycle",
+    )
+
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
 
