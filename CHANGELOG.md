@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### SonarQube Code Quality Remediation
+
+- **`features.py`** — Reduced cognitive complexity of 5 functions by extracting 7 shared helpers:
+  - `_request_json_with_retry` (CC 37→~8): decomposed into `_try_route`, `_send_request`, `_process_response`, `_parse_success`, `_handle_auth_failure`, `_handle_retryable_failure`
+  - `_enrich_gex` (CC 41→~10): extracted `_coalesce_split_or_fallback`, `_unwrap_data_payload`
+  - `_enrich_max_pain` (CC 23→~10): used `_coalesce_first`, `_unwrap_data_payload`
+  - `_enrich_market_tide` (CC 16→~8): used `_classify_direction`, `_coalesce_first`
+  - `_enrich_iv_rank`: used `_build_enrichment_routes` to eliminate duplicated route-building loops
+  - Added `_LOG_ENRICHMENT_FAILED` constant to deduplicate string literal
+- **`ingest_contracts.py`** — Simplified `_AMOUNT_RANGE_RE` regex via `_NUM_PATTERN` constant; extracted `_build_insider_relationships()` from `_normalize_insider_payload`
+- **`trainer.py`** — Added `# NOSONAR python:S930` to suppress false positive on `Path.with_suffix()` calls
+
 #### Data Health Remediation
 
 - Removed dead `sentiment` field from `flow_alerts` Silver schema, Pydantic model, and ingest allowed fields — UW never populates this for flow alerts (it exists only in `market_tide`/`sector_tide`).

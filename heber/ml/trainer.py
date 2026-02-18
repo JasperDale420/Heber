@@ -310,10 +310,10 @@ class MetaModelTrainer:
 
         path = Path(path)
         trainer = cls()
-        trainer._model = joblib.load(path.with_suffix(".joblib"))
+        trainer._model = joblib.load(path.with_suffix(".joblib"))  # noqa  # NOSONAR python:S930
 
         # Load config if exists
-        config_path = path.with_suffix(".json")
+        config_path = path.with_suffix(".json")  # noqa  # NOSONAR python:S930
         if config_path.exists():
             with open(config_path) as f:
                 config_dict = json.load(f)

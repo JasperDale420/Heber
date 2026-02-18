@@ -430,7 +430,8 @@ class UnmappedFeedError(ValueError):
     """Raised when a feed cannot be routed to a known Silver schema."""
 
 
-_AMOUNT_RANGE_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d+)?)\s*(?:-\s*\$?\s*([\d,]+(?:\.\d+)?))?")
+_NUM_PATTERN = r"[\d,]+(?:\.\d+)?"
+_AMOUNT_RANGE_RE = re.compile(rf"\$?\s*({_NUM_PATTERN})\s*(?:-\s*\$?\s*({_NUM_PATTERN}))?")
 
 
 def resolve_silver_feed(feed: str) -> str | None:
@@ -532,17 +533,21 @@ def _normalize_insider_payload(payload: dict[str, Any]) -> None:
     if payload.get("shares") is None:
         payload["shares"] = payload.get("amount") or payload.get("size")
 
-    relationships: list[str] = []
-    if payload.get("is_director"):
-        relationships.append("director")
-    if payload.get("is_officer"):
-        relationships.append("officer")
-    if payload.get("is_ten_percent_owner"):
-        relationships.append("ten_percent_owner")
-    if payload.get("is_10b5_1"):
-        relationships.append("10b5-1")
-    if relationships and payload.get("insider_relationship") is None:
-        payload["insider_relationship"] = "|".join(relationships)
+    relationship = _build_insider_relationships(payload)
+    if relationship and payload.get("insider_relationship") is None:
+        payload["insider_relationship"] = relationship
+
+
+def _build_insider_relationships(payload: dict[str, Any]) -> str | None:
+    """Aggregate boolean insider role flags into a pipe-delimited relationship string."""
+    flag_map = {
+        "is_director": "director",
+        "is_officer": "officer",
+        "is_ten_percent_owner": "ten_percent_owner",
+        "is_10b5_1": "10b5-1",
+    }
+    parts = [label for flag, label in flag_map.items() if payload.get(flag)]
+    return "|".join(parts) if parts else None
 
 
 def _normalize_tide_payload(payload: dict[str, Any], call_key: str, put_key: str) -> None:

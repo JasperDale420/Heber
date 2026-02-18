@@ -42,6 +42,49 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_LOG_ENRICHMENT_FAILED = "Feature enrichment request failed"
+
+
+def _unwrap_data_payload(response: dict) -> object:
+    """Extract the 'data' value from an API response, unwrapping single-element lists."""
+    data = response.get("data", {})
+    if isinstance(data, list) and data:
+        data = data[0]
+    return data
+
+
+def _coalesce_first(data: dict, *keys: str) -> float | None:
+    """Return the first non-None coerced float among *keys*."""
+    for key in keys:
+        value = coerce_optional_float(data.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _coalesce_split_or_fallback(
+    data: dict,
+    *,
+    call_key: str,
+    put_key: str,
+    fallbacks: tuple[str, ...],
+) -> float | None:
+    """Sum call+put split fields if present; otherwise try fallback keys in order."""
+    call_val = coerce_optional_float(data.get(call_key))
+    put_val = coerce_optional_float(data.get(put_key))
+    if call_val is not None or put_val is not None:
+        return (call_val or 0.0) + (put_val or 0.0)
+    return _coalesce_first(data, *fallbacks)
+
+
+def _classify_direction(value: float) -> str:
+    """Classify a numeric value as 'bullish', 'bearish', or 'neutral'."""
+    if value > 0:
+        return "bullish"
+    if value < 0:
+        return "bearish"
+    return "neutral"
+
 
 class EnrichmentAuthFailure(RuntimeError):
     """Raised when repeated upstream authentication failures require fail-fast behavior."""
@@ -428,6 +471,57 @@ class AlertFeatureExtractor:
         self._auth_failure_timestamps.append(now)
         return len(self._auth_failure_timestamps)
 
+    def _build_enrichment_routes(self, *route_patterns: str) -> list[str]:
+        """Build de-duplicated URL list from one or more route patterns."""
+        routes: list[str] = []
+        for pattern in route_patterns:
+            for candidate in gateway_url_candidates(
+                self.gateway_url,
+                pattern,
+                include_legacy_fallback=self.legacy_route_fallback_enabled,
+            ):
+                if candidate not in routes:
+                    routes.append(candidate)
+        return routes
+
+    def _log_and_record_failure(
+        self,
+        *,
+        endpoint: str,
+        status_code: int | None,
+        symbol: str,
+        alert_id: str | None,
+        attempt: int,
+        retryable: bool,
+        duration_ms: int,
+        route: str,
+        error: str | None = None,
+        extra: dict | None = None,
+    ) -> None:
+        """Log a warning and record a gateway request metric for a failed enrichment call."""
+        log_kwargs: dict = {
+            "endpoint": endpoint,
+            "status_code": status_code,
+            "symbol": symbol,
+            "alert_id": alert_id,
+            "attempt": attempt,
+            "retryable": retryable,
+            "duration_ms": duration_ms,
+            "route": route,
+        }
+        if error is not None:
+            log_kwargs["error"] = error
+        if extra:
+            log_kwargs.update(extra)
+        logger.warning(_LOG_ENRICHMENT_FAILED, **log_kwargs)
+        record_watch_gateway_request(
+            component="features",
+            endpoint=endpoint,
+            outcome="transport_error" if status_code is None else "http_error",
+            status_code=status_code,
+            duration_seconds=duration_ms / 1000.0,
+        )
+
     async def _sleep_before_retry(self, attempt: int, minimum_delay: float | None = None) -> None:
         delay = self.retry_base_delay_seconds * attempt
         if self.retry_jitter_seconds > 0:
@@ -454,159 +548,150 @@ class AlertFeatureExtractor:
 
         import httpx
 
+        ctx = {"endpoint": endpoint, "symbol": symbol, "alert_id": alert_id}
         async with httpx.AsyncClient(timeout=10.0) as client:
             for route in routes:
-                for attempt in range(1, self.request_max_attempts + 1):
-                    started = time.perf_counter()
-                    try:
-                        async with self._request_semaphore:
-                            response = await client.get(
-                                route,
-                                params=params,
-                                headers=self.gateway_headers or None,
-                            )
-                    except httpx.HTTPError as exc:
-                        duration_ms = int((time.perf_counter() - started) * 1000)
-                        retryable = attempt < self.request_max_attempts
-                        logger.warning(
-                            "Feature enrichment request failed",
-                            endpoint=endpoint,
-                            status_code=None,
-                            symbol=symbol,
-                            alert_id=alert_id,
-                            attempt=attempt,
-                            retryable=retryable,
-                            duration_ms=duration_ms,
-                            route=route,
-                            error=str(exc),
-                        )
-                        record_watch_gateway_request(
-                            component="features",
-                            endpoint=endpoint,
-                            outcome="transport_error",
-                            status_code=None,
-                            duration_seconds=duration_ms / 1000.0,
-                        )
-                        if retryable:
-                            await self._sleep_before_retry(attempt)
-                            continue
-                        break
-
-                    duration_ms = int((time.perf_counter() - started) * 1000)
-                    status_code = response.status_code
-
-                    if status_code == 200:
-                        try:
-                            payload = response.json()
-                        except (TypeError, ValueError) as decode_error:
-                            logger.warning(
-                                "Feature enrichment request failed",
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                symbol=symbol,
-                                alert_id=alert_id,
-                                attempt=attempt,
-                                retryable=False,
-                                duration_ms=duration_ms,
-                                route=route,
-                                error=f"json_decode:{decode_error}",
-                            )
-                            record_watch_gateway_request(
-                                component="features",
-                                endpoint=endpoint,
-                                outcome="http_error",
-                                status_code=status_code,
-                                duration_seconds=duration_ms / 1000.0,
-                            )
-                            break
-                        if not isinstance(payload, dict):
-                            logger.warning(
-                                "Feature enrichment request failed",
-                                endpoint=endpoint,
-                                status_code=status_code,
-                                symbol=symbol,
-                                alert_id=alert_id,
-                                attempt=attempt,
-                                retryable=False,
-                                duration_ms=duration_ms,
-                                route=route,
-                                error=f"payload_type:{type(payload).__name__}",
-                            )
-                            record_watch_gateway_request(
-                                component="features",
-                                endpoint=endpoint,
-                                outcome="http_error",
-                                status_code=status_code,
-                                duration_seconds=duration_ms / 1000.0,
-                            )
-                            break
-                        self._cache_set(cache_key, payload)
-                        record_watch_gateway_request(
-                            component="features",
-                            endpoint=endpoint,
-                            outcome="success",
-                            status_code=status_code,
-                            duration_seconds=duration_ms / 1000.0,
-                        )
-                        record_watch_gateway_success(component="features", endpoint=endpoint)
-                        return payload
-
-                    if status_code == 401:
-                        auth_failures = self._record_auth_failure()
-                        logger.warning(
-                            "Feature enrichment request failed",
-                            endpoint=endpoint,
-                            status_code=status_code,
-                            symbol=symbol,
-                            alert_id=alert_id,
-                            attempt=attempt,
-                            retryable=False,
-                            duration_ms=duration_ms,
-                            route=route,
-                            error="unauthorized",
-                            auth_failures_window=auth_failures,
-                        )
-                        record_watch_gateway_request(
-                            component="features",
-                            endpoint=endpoint,
-                            outcome="http_error",
-                            status_code=status_code,
-                            duration_seconds=duration_ms / 1000.0,
-                        )
-                        if auth_failures >= self.auth_failure_threshold:
-                            raise EnrichmentAuthFailure(
-                                f"Repeated enrichment authorization failures for {endpoint} ({auth_failures} in window)"
-                            )
-                        break
-
-                    retryable = is_retryable_http_status(status_code)
-                    retry_after_hint = parse_retry_after(getattr(response, "headers", {}))
-                    logger.warning(
-                        "Feature enrichment request failed",
-                        endpoint=endpoint,
-                        status_code=status_code,
-                        symbol=symbol,
-                        alert_id=alert_id,
-                        attempt=attempt,
-                        retryable=retryable,
-                        duration_ms=duration_ms,
-                        route=route,
-                    )
-                    record_watch_gateway_request(
-                        component="features",
-                        endpoint=endpoint,
-                        outcome="http_error",
-                        status_code=status_code,
-                        duration_seconds=duration_ms / 1000.0,
-                    )
-                    if retryable and attempt < self.request_max_attempts:
-                        await self._sleep_before_retry(attempt, minimum_delay=retry_after_hint)
-                        continue
-                    if not should_try_legacy_fallback_for_status(status_code):
-                        return None
-                    break
+                result = await self._try_route(client, route, params, ctx)
+                if result is False:
+                    return None  # hard stop (e.g. rate-limited)
+                if result is not None:
+                    self._cache_set(cache_key, result)
+                    return result
 
         return None
+
+    async def _try_route(
+        self,
+        client: object,
+        route: str,
+        params: dict | None,
+        ctx: dict,
+    ) -> dict | None | bool:
+        """Attempt all retries for a single route.
+
+        Returns:
+            dict — success payload
+            None — route exhausted, try next route
+            False — stop all routes and return None to caller (e.g. rate-limited)
+        """
+        for attempt in range(1, self.request_max_attempts + 1):
+            started = time.perf_counter()
+            response = await self._send_request(client, route, params, started, attempt, ctx)
+            if response is None:
+                continue  # transport error, already logged — retry handled inside _send_request
+            if response == "break":
+                return None
+
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            result = await self._process_response(response, route, duration_ms, attempt, ctx)
+            if isinstance(result, dict):
+                return result
+            if result == "continue":
+                continue
+            if result == "return_none":
+                return False  # stop all routes
+            # result == "break" -> try next route
+            break
+        return None
+
+    async def _send_request(
+        self, client: object, route: str, params: dict | None, started: float, attempt: int, ctx: dict
+    ) -> object | None | str:
+        """Send HTTP request with semaphore. Returns response, None to retry, or 'break' to stop."""
+        import httpx
+
+        try:
+            async with self._request_semaphore:
+                return await client.get(route, params=params, headers=self.gateway_headers or None)
+        except httpx.HTTPError as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            retryable = attempt < self.request_max_attempts
+            self._log_and_record_failure(
+                endpoint=ctx["endpoint"],
+                status_code=None,
+                symbol=ctx["symbol"],
+                alert_id=ctx["alert_id"],
+                attempt=attempt,
+                retryable=retryable,
+                duration_ms=duration_ms,
+                route=route,
+                error=str(exc),
+            )
+            if retryable:
+                await self._sleep_before_retry(attempt)
+                return None  # signals retry
+            return "break"
+
+    async def _process_response(
+        self, response: object, route: str, duration_ms: int, attempt: int, ctx: dict
+    ) -> dict | str:
+        """Handle an HTTP response. Returns payload dict, or 'continue'/'break'/'return_none' sentinel."""
+        status_code = response.status_code
+        fail_kwargs = {
+            "endpoint": ctx["endpoint"],
+            "status_code": status_code,
+            "symbol": ctx["symbol"],
+            "alert_id": ctx["alert_id"],
+            "attempt": attempt,
+            "duration_ms": duration_ms,
+            "route": route,
+        }
+
+        if status_code == 200:
+            return self._parse_success(response, fail_kwargs)
+
+        if status_code == 401:
+            return self._handle_auth_failure(fail_kwargs)
+
+        return await self._handle_retryable_failure(response, attempt, fail_kwargs)
+
+    def _parse_success(self, response: object, fail_kwargs: dict) -> dict | str:
+        """Parse a 200 response. Returns payload dict or 'break' on decode error."""
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as decode_error:
+            self._log_and_record_failure(**fail_kwargs, retryable=False, error=f"json_decode:{decode_error}")
+            return "break"
+        if not isinstance(payload, dict):
+            self._log_and_record_failure(**fail_kwargs, retryable=False, error=f"payload_type:{type(payload).__name__}")
+            return "break"
+        record_watch_gateway_request(
+            component="features",
+            endpoint=fail_kwargs["endpoint"],
+            outcome="success",
+            status_code=200,
+            duration_seconds=fail_kwargs["duration_ms"] / 1000.0,
+        )
+        record_watch_gateway_success(component="features", endpoint=fail_kwargs["endpoint"])
+        return payload
+
+    def _handle_auth_failure(self, fail_kwargs: dict) -> str:
+        """Handle 401 responses. Returns 'break' or raises EnrichmentAuthFailure."""
+        auth_failures = self._record_auth_failure()
+        self._log_and_record_failure(
+            **fail_kwargs,
+            retryable=False,
+            error="unauthorized",
+            extra={"auth_failures_window": auth_failures},
+        )
+        if auth_failures >= self.auth_failure_threshold:
+            raise EnrichmentAuthFailure(
+                f"Repeated enrichment authorization failures for {fail_kwargs['endpoint']} ({auth_failures} in window)"
+            )
+        return "break"
+
+    async def _handle_retryable_failure(self, response: object, attempt: int, fail_kwargs: dict) -> str:
+        """Handle non-200/non-401 responses. Returns 'continue', 'break', or 'return_none'."""
+        status_code = fail_kwargs["status_code"]
+        retryable = is_retryable_http_status(status_code)
+        retry_after_hint = parse_retry_after(getattr(response, "headers", {}))
+        self._log_and_record_failure(**fail_kwargs, retryable=retryable)
+        if retryable and attempt < self.request_max_attempts:
+            await self._sleep_before_retry(attempt, minimum_delay=retry_after_hint)
+            return "continue"
+        if not should_try_legacy_fallback_for_status(status_code):
+            return "return_none"
+        return "break"
 
     async def _enrich_iv_rank(self, features: AlertFeatures) -> AlertFeatures:
         """Enrich features with IV rank from Unusual Whales.
@@ -619,21 +704,10 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            # Prefer canonical Data Gateway route first, then try the historical
-            # options-prefixed shape for mixed-version compatibility.
-            route_patterns = (
+            routes = self._build_enrichment_routes(
                 f"/uw/{features.underlying}/iv-rank",
                 f"/uw/options/{features.underlying}/iv-rank",
             )
-            routes: list[str] = []
-            for route_pattern in route_patterns:
-                for candidate in gateway_url_candidates(
-                    self.gateway_url,
-                    route_pattern,
-                    include_legacy_fallback=self.legacy_route_fallback_enabled,
-                ):
-                    if candidate not in routes:
-                        routes.append(candidate)
             data = await self._request_json_with_retry(
                 endpoint="uw_iv_rank",
                 routes=routes,
@@ -643,7 +717,6 @@ class AlertFeatureExtractor:
             if data is None:
                 return features
 
-            # Extract IV rank from response
             iv_data = data.get("data", {})
             if iv_data:
                 parsed_iv_rank = coerce_optional_float(iv_data.get("iv_rank"))
@@ -677,19 +750,10 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            route_patterns = (
+            routes = self._build_enrichment_routes(
                 f"/uw/gex/{features.underlying}",
                 f"/uw/{features.underlying}/greek-exposure",
             )
-            routes: list[str] = []
-            for route_pattern in route_patterns:
-                for candidate in gateway_url_candidates(
-                    self.gateway_url,
-                    route_pattern,
-                    include_legacy_fallback=self.legacy_route_fallback_enabled,
-                ):
-                    if candidate not in routes:
-                        routes.append(candidate)
             data = await self._request_json_with_retry(
                 endpoint="uw_gex",
                 routes=routes,
@@ -699,33 +763,22 @@ class AlertFeatureExtractor:
             if data is None:
                 return features
 
-            gex_data = data.get("data", {})
-            if isinstance(gex_data, list) and gex_data:
-                gex_data = gex_data[0]
+            gex_data = _unwrap_data_payload(data)
             if isinstance(gex_data, dict):
-                # Prefer split call/put fields from UW API, sum for net exposure
-                call_g = coerce_optional_float(gex_data.get("call_gamma"))
-                put_g = coerce_optional_float(gex_data.get("put_gamma"))
-                if call_g is not None or put_g is not None:
-                    parsed_gex = (call_g or 0.0) + (put_g or 0.0)
-                else:
-                    parsed_gex = coerce_optional_float(gex_data.get("gamma_exposure"))
-                    if parsed_gex is None:
-                        parsed_gex = coerce_optional_float(gex_data.get("gex_oi"))
-                    if parsed_gex is None:
-                        parsed_gex = coerce_optional_float(gex_data.get("gex"))
+                parsed_gex = _coalesce_split_or_fallback(
+                    gex_data,
+                    call_key="call_gamma",
+                    put_key="put_gamma",
+                    fallbacks=("gamma_exposure", "gex_oi", "gex"),
+                )
                 if parsed_gex is not None:
                     features.gex = parsed_gex
-                call_v = coerce_optional_float(gex_data.get("call_vanna"))
-                put_v = coerce_optional_float(gex_data.get("put_vanna"))
-                if call_v is not None or put_v is not None:
-                    parsed_vex = (call_v or 0.0) + (put_v or 0.0)
-                else:
-                    parsed_vex = coerce_optional_float(gex_data.get("vanna_exposure"))
-                    if parsed_vex is None:
-                        parsed_vex = coerce_optional_float(gex_data.get("vex_oi"))
-                    if parsed_vex is None:
-                        parsed_vex = coerce_optional_float(gex_data.get("vex"))
+                parsed_vex = _coalesce_split_or_fallback(
+                    gex_data,
+                    call_key="call_vanna",
+                    put_key="put_vanna",
+                    fallbacks=("vanna_exposure", "vex_oi", "vex"),
+                )
                 if parsed_vex is not None:
                     features.vex = parsed_vex
                 logger.debug(
@@ -758,19 +811,10 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            route_patterns = (
+            routes = self._build_enrichment_routes(
                 f"/uw/options/{features.underlying}/max-pain",
                 f"/uw/{features.underlying}/max-pain",
             )
-            routes: list[str] = []
-            for route_pattern in route_patterns:
-                for candidate in gateway_url_candidates(
-                    self.gateway_url,
-                    route_pattern,
-                    include_legacy_fallback=self.legacy_route_fallback_enabled,
-                ):
-                    if candidate not in routes:
-                        routes.append(candidate)
             data = await self._request_json_with_retry(
                 endpoint="uw_max_pain",
                 routes=routes,
@@ -780,15 +824,9 @@ class AlertFeatureExtractor:
             if data is None:
                 return features
 
-            mp_data = data.get("data", {})
-            if isinstance(mp_data, list) and mp_data:
-                mp_data = mp_data[0]
+            mp_data = _unwrap_data_payload(data)
             if isinstance(mp_data, dict):
-                strike = coerce_optional_float(mp_data.get("max_pain_strike"))
-                if strike is None:
-                    strike = coerce_optional_float(mp_data.get("max_pain"))
-                if strike is None:
-                    strike = coerce_optional_float(mp_data.get("price"))
+                strike = _coalesce_first(mp_data, "max_pain_strike", "max_pain", "price")
                 if strike is not None:
                     features.max_pain_strike = strike
                     if features.spot_price and features.spot_price > 0:
@@ -822,11 +860,7 @@ class AlertFeatureExtractor:
             return features
 
         try:
-            routes = gateway_url_candidates(
-                self.gateway_url,
-                "/uw/market/tide",
-                include_legacy_fallback=self.legacy_route_fallback_enabled,
-            )
+            routes = self._build_enrichment_routes("/uw/market/tide")
             data = await self._request_json_with_retry(
                 endpoint="uw_market_tide",
                 routes=routes,
@@ -836,21 +870,12 @@ class AlertFeatureExtractor:
             if data is None:
                 return features
 
-            tide_data = data.get("data", {})
-            if isinstance(tide_data, list) and tide_data:
-                tide_data = tide_data[0]
+            tide_data = _unwrap_data_payload(data)
             if isinstance(tide_data, dict):
-                net_premium = coerce_optional_float(tide_data.get("net_premium"))
-                if net_premium is None:
-                    net_premium = coerce_optional_float(tide_data.get("net_call_premium"))
+                net_premium = _coalesce_first(tide_data, "net_premium", "net_call_premium")
                 if net_premium is not None:
                     features.market_tide_net_premium = net_premium
-                    if net_premium > 0:
-                        features.market_tide_direction = "bullish"
-                    elif net_premium < 0:
-                        features.market_tide_direction = "bearish"
-                    else:
-                        features.market_tide_direction = "neutral"
+                    features.market_tide_direction = _classify_direction(net_premium)
                 logger.debug(
                     "Enriched market tide",
                     net_premium=features.market_tide_net_premium,
