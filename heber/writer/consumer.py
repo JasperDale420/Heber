@@ -559,8 +559,8 @@ class EventConsumer:
             groupname=settings.redis_consumer_group,
             consumername=self.consumer_name,
             streams={settings.redis_stream_name: ">"},
-            count=100,
-            block=1000,
+            count=settings.redis_read_batch_size,
+            block=settings.redis_read_block_ms,
         )
         # Always check for flush even with no messages (handles idle periods)
         self._flush_layers()

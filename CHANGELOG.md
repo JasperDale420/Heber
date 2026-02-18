@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Consumer Bandwidth Tuning
+
+- Increased default consumer batch size from 100 to 500 messages per `XREADGROUP` call via new `redis_read_batch_size` setting (configurable 10–5,000), reducing Redis round trips ~5× during backfill bursts
+- Increased default block timeout from 1,000ms to 2,000ms via new `redis_read_block_ms` setting (configurable 100–10,000), allowing larger batches to fill before returning
+
 ### Added
 
 #### Catalog Coverage Seeding from Disk

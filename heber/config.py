@@ -71,6 +71,18 @@ class Settings(BaseSettings):
         default=0.25,
         description="Base backoff delay between processing retries",
     )
+    redis_read_batch_size: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        description="Max messages per XREADGROUP call (higher = more throughput during backfill)",
+    )
+    redis_read_block_ms: int = Field(
+        default=2000,
+        ge=100,
+        le=10000,
+        description="XREADGROUP block timeout in ms (longer allows larger batches to fill)",
+    )
 
     # ClickHouse (Hot Store)
     clickhouse_host: str = Field(default="localhost")
