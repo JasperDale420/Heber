@@ -289,3 +289,73 @@ async def seed_feed_mappings(session: AsyncSession, dry_run: bool = False) -> in
 
     logger.info("feed_mappings_seeded", count=count, dry_run=dry_run)
     return count
+
+
+async def discover_datasets_from_disk(session: AsyncSession) -> int:
+    """Scan Silver directory and auto-register unknown datasets and feed mappings.
+
+    Walks ``settings.silver_path`` for Hive-style ``feed=X`` directories. Any
+    feed found on disk that is not already registered in the ``datasets`` table
+    gets a new Dataset row (sensible defaults) and an identity FeedMapping
+    (``provider="discovered"``).
+
+    Returns the number of newly registered datasets.
+    """
+    silver_root = settings.silver_path
+    if not silver_root.exists():
+        logger.warning("auto_discover_skipped", reason="silver_path_not_found", path=str(silver_root))
+        return 0
+
+    # Collect feed names present on disk
+    disk_feeds: set[str] = set()
+    for entry in silver_root.iterdir():
+        # Skip macOS resource fork files and non-directories
+        if entry.name.startswith(".") or entry.name.startswith("._"):
+            continue
+        if entry.is_dir() and entry.name.startswith("feed="):
+            disk_feeds.add(entry.name.split("=", 1)[1])
+
+    if not disk_feeds:
+        logger.info("auto_discover_no_feeds_on_disk", path=str(silver_root))
+        return 0
+
+    # Find what's already registered in the DB
+    existing_result = await session.execute(select(Dataset.dataset_name))
+    known_datasets: set[str] = {row[0] for row in existing_result.all()}
+
+    new_feeds = disk_feeds - known_datasets
+    if not new_feeds:
+        logger.info("auto_discover_complete", disk_feeds=len(disk_feeds), new=0)
+        return 0
+
+    # Register each unknown feed
+    count = 0
+    for feed_name in sorted(new_feeds):
+        # Create Dataset
+        dataset = Dataset(
+            dataset_name=feed_name,
+            layer="silver",
+            owner="shared",
+            description=f"Auto-discovered Silver dataset: {feed_name}",
+            storage_root=str(silver_root),
+            path_template="feed={feed}/instrument_type={instrument_type}/dt={dt}",
+            partition_cols=["feed", "instrument_type", "dt"],
+            primary_keys=["event_id"],
+            is_active=True,
+        )
+        session.add(dataset)
+
+        # Create default identity FeedMapping so resolve_feed can find it
+        feed_map = FeedMapping(
+            provider="discovered",
+            gateway_feed=feed_name,
+            silver_dataset_name=feed_name,
+        )
+        session.add(feed_map)
+
+        logger.info("auto_discovered_dataset", dataset=feed_name)
+        count += 1
+
+    await session.commit()
+    logger.info("auto_discover_complete", disk_feeds=len(disk_feeds), new=count)
+    return count

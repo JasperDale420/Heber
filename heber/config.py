@@ -137,6 +137,12 @@ class Settings(BaseSettings):
     # Environment
     environment: Literal["dev", "staging", "prod"] = Field(default="dev")
 
+    # Catalog auto-discovery
+    catalog_auto_discover: bool = Field(
+        default=True,
+        description="Scan Silver directory on startup and auto-register unknown datasets",
+    )
+
     # Gold layer paths (used by feature_views/_paths.py)
     gold_root: Path | None = Field(
         default=None,

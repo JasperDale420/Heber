@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ensures all 55 provider→feed→Silver dataset mappings are present without manual script execution.
 - `scripts/seed_catalog.py` now imports from `heber/catalog/seeds.py`, retaining only coverage scanning and CLI logic.
 
+#### Catalog Auto-Discovery
+
+- Added `discover_datasets_from_disk()` to `heber/catalog/seeds.py` — scans Silver directory for `feed=X` partitions and auto-registers unknown datasets with default identity feed mappings (`provider="discovered"`).
+- New `catalog_auto_discover` config flag (default `True`) gates automatic discovery on catalog startup.
+- Added `--discover` CLI flag to `scripts/seed_catalog.py` for manual trigger.
+- Skips macOS `._` resource forks and non-`feed=` directories.
+
 #### Enrichment Backfill Scanner
 
 - New `EnrichmentBackfillScanner` in `heber/watch/backfill_scanner.py` — periodic background task that scans recent Gold feature partitions for rows with null enrichment fields (Greeks, GEX, IV rank, max pain, market tide), re-enriches via the Data Gateway, and patches parquet using dedup-on-alert_id

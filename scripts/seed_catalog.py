@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from heber.catalog.db import Base, DataCoverage
 from heber.catalog.seeds import (
+    discover_datasets_from_disk,
     seed_datasets,
     seed_feed_mappings,
     seed_schema_versions,
@@ -131,7 +132,7 @@ async def scan_coverage(session: AsyncSession, dry_run: bool = False) -> int:
     return count
 
 
-async def main(scan: bool = False, dry_run: bool = False) -> None:
+async def main(scan: bool = False, discover: bool = False, dry_run: bool = False) -> None:
     """Run all seed operations."""
     engine = create_async_engine(settings.postgres_url, echo=False)
     async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -149,6 +150,11 @@ async def main(scan: bool = False, dry_run: bool = False) -> None:
         if scan:
             coverage = await scan_coverage(session, dry_run=dry_run)
 
+    discovered = 0
+    if discover:
+        async with async_session_factory() as session:
+            discovered = await discover_datasets_from_disk(session)
+
     await engine.dispose()
 
     print(f"\nCatalog seed complete {'(DRY RUN)' if dry_run else ''}:")
@@ -157,12 +163,15 @@ async def main(scan: bool = False, dry_run: bool = False) -> None:
     print(f"  Feed mappings:    {mappings}")
     if scan:
         print(f"  Coverage entries: {coverage}")
+    if discover:
+        print(f"  Discovered:       {discovered}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed the Heber Catalog database")
     parser.add_argument("--scan", action="store_true", help="Scan Silver parquet files for data coverage")
+    parser.add_argument("--discover", action="store_true", help="Auto-discover datasets from Silver directory")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing to DB")
     args = parser.parse_args()
 
-    asyncio.run(main(scan=args.scan, dry_run=args.dry_run))
+    asyncio.run(main(scan=args.scan, discover=args.discover, dry_run=args.dry_run))
