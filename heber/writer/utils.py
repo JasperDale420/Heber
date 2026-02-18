@@ -99,6 +99,16 @@ def write_silver_parquet(
         # Create Arrow table
         table = pa.Table.from_pylist(rows, schema=schema)
 
+        # Audit for unexpected null values before writing
+        from heber.quality.write_audit import audit_null_fields
+
+        audit_null_fields(
+            table,
+            layer="silver",
+            dataset=dataset,
+            context={"partition": partition_key, "file": str(file_path)},
+        )
+
         # Write Parquet with compression
         pq.write_table(
             table,

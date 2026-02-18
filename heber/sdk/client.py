@@ -467,6 +467,21 @@ class HeberClient:
 
             # Drop temporary dt column
             write_df = group_df.drop(columns=["dt"])
+
+            # Audit for unexpected null values before writing
+            from heber.quality.write_audit import audit_null_fields
+
+            audit_null_fields(
+                write_df,
+                layer="gold",
+                dataset=dataset,
+                context={
+                    "project": project,
+                    "version": version,
+                    "date": str(dt),
+                },
+            )
+
             write_df.to_parquet(file_path, compression="snappy")
 
             total_rows += len(write_df)

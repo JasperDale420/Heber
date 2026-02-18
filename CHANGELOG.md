@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prometheus metrics: `heber_enrichment_backfill_{scanned,patched,failed}_total`, `heber_enrichment_backfill_duration_seconds`
 - 12 unit tests covering row detection, partition reading, re-enrichment flow, batch limiting, and market hours gating
 
+#### Write-Time Null Field Audit Logging
+
+- New `audit_null_fields()` in `heber/quality/write_audit.py` — inspects DataFrames at write time for unexpected null values, emitting structured warning logs with per-column null counts and Prometheus counters (`heber_write_null_fields_total`)
+- Hooked into 4 critical write paths: Silver writer (`write_silver_parquet`), Gold feature persistence (`persist_features_to_gold`), Gold label writer (`LabelWriter._write_to_parquet`), and SDK Gold writer (`HeberClient.write_gold`)
+- `EXPECTED_NON_NULL` registry maps `(layer, dataset)` → required non-null columns; unknown datasets get all columns audited
+- Supports pandas, Polars, and PyArrow data types
+- 13 unit tests covering all three data types, Prometheus metrics, and config validation
+
 ### Fixed
 
 #### SonarQube Code Quality Remediation

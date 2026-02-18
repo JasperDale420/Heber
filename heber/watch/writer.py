@@ -137,7 +137,19 @@ class LabelWriter:
                 final_file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
                 current_tmp_file = partition_path / f".{final_file_path.name}.tmp"
 
-                group.drop(columns=["_date"]).to_parquet(current_tmp_file, compression="snappy")
+                write_group = group.drop(columns=["_date"])
+
+                # Audit for unexpected null values before writing
+                from heber.quality.write_audit import audit_null_fields
+
+                audit_null_fields(
+                    write_group,
+                    layer="gold",
+                    dataset=self.dataset,
+                    context={"date": str(dt), "path": str(partition_path)},
+                )
+
+                write_group.to_parquet(current_tmp_file, compression="snappy")
                 staged_files.append((current_tmp_file, final_file_path, len(group)))
                 current_tmp_file = None
 

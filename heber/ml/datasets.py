@@ -431,6 +431,16 @@ def persist_features_to_gold(
         partition_path = output_path / f"dt={dt_str}"
         partition_path.mkdir(parents=True, exist_ok=True)
 
+        # Audit for unexpected null values before writing
+        from heber.quality.write_audit import audit_null_fields
+
+        audit_null_fields(
+            partition_df,
+            layer="gold",
+            dataset="meta_label_features",
+            context={"date": dt_str, "path": str(partition_path)},
+        )
+
         out_file = partition_path / "data.parquet"
         if out_file.exists():
             existing = pl.read_parquet(out_file)
