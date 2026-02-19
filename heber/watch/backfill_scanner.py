@@ -18,8 +18,8 @@ import structlog
 from prometheus_client import Counter, Histogram
 
 if TYPE_CHECKING:
+    from heber.calendar.market import MarketCalendar
     from heber.watch.features import AlertFeatureExtractor
-    from heber.watch.models import MarketCalendar
 
 logger = structlog.get_logger(__name__)
 
@@ -80,7 +80,7 @@ class EnrichmentBackfillScanner:
         self._running = False
 
         if calendar is None:
-            from heber.watch.models import MarketCalendar
+            from heber.calendar.market import MarketCalendar
 
             calendar = MarketCalendar()
         self.calendar = calendar
@@ -301,7 +301,9 @@ class EnrichmentBackfillScanner:
         if "alert_time" in features_df.columns:
             col = features_df["alert_time"]
             if col.dtype == pl.Utf8:
-                features_df = features_df.with_columns(pl.col("alert_time").str.to_datetime().alias("alert_time"))
+                features_df = features_df.with_columns(
+                    pl.col("alert_time").str.to_datetime(time_zone="UTC").alias("alert_time")
+                )
 
         persist_features_to_gold(
             features_df=features_df,

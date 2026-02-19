@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `DATA_GATEWAY_URL` in `docker-compose.yml` to point to port `8081` for the `heber-watch` service, matching the external port exposed by the Data Gateway container.
 - Resolves `ConnectError: All connection attempts failed` and restores quote fetching for active watches.
 
+#### Backfill Scanner Polars DateTime Parsing
+
+- Fixed `str.to_datetime()` call in `heber/watch/backfill_scanner.py` to pass `time_zone="UTC"`, allowing Polars to parse timezone-aware ISO 8601 `alert_time` strings.
+- Resolves `polars.exceptions.ComputeError` that caused 100% of enrichment backfill attempts to fail.
+
 #### Catalog Event Loop Blocking During Startup
 
 - Refactored `heber/catalog/seeds.py` to offload blocking file I/O (`iterdir`, `rglob`) to threads via `asyncio.to_thread`, preventing the event loop from freezing during data discovery and coverage seeding
