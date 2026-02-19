@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
     record_batch_processed,
     record_dlq_event,
@@ -612,6 +613,7 @@ class EventConsumer:
 
 async def main():
     """Entry point for the consumer."""
+    configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
     start_metrics_server_from_env(default_port=9090)
     consumer = EventConsumer()
 

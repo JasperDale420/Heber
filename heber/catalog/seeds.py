@@ -295,6 +295,27 @@ async def seed_feed_mappings(session: AsyncSession, dry_run: bool = False) -> in
     return count
 
 
+import asyncio  # Added import
+
+
+def _scan_silver_feeds_blocking(silver_root: Path) -> set[str]:
+    """Blocking helper to scan for feed directories."""
+    if not silver_root.exists():
+        return set()
+
+    disk_feeds: set[str] = set()
+    try:
+        for entry in silver_root.iterdir():
+            # Skip macOS resource fork files and non-directories
+            if entry.name.startswith(".") or entry.name.startswith("._"):
+                continue
+            if entry.is_dir() and entry.name.startswith("feed="):
+                disk_feeds.add(entry.name.split("=", 1)[1])
+    except OSError:
+        pass
+    return disk_feeds
+
+
 async def discover_datasets_from_disk(session: AsyncSession) -> int:
     """Scan Silver directory and auto-register unknown datasets and feed mappings.
 
@@ -306,18 +327,14 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
     Returns the number of newly registered datasets.
     """
     silver_root = settings.silver_path
-    if not silver_root.exists():
+
+    # Run blocking I/O in thread
+    if not await asyncio.to_thread(lambda: silver_root.exists()):
         logger.warning("auto_discover_skipped", reason="silver_path_not_found", path=str(silver_root))
         return 0
 
-    # Collect feed names present on disk
-    disk_feeds: set[str] = set()
-    for entry in silver_root.iterdir():
-        # Skip macOS resource fork files and non-directories
-        if entry.name.startswith(".") or entry.name.startswith("._"):
-            continue
-        if entry.is_dir() and entry.name.startswith("feed="):
-            disk_feeds.add(entry.name.split("=", 1)[1])
+    # Collect feed names present on disk (in thread)
+    disk_feeds = await asyncio.to_thread(_scan_silver_feeds_blocking, silver_root)
 
     if not disk_feeds:
         logger.info("auto_discover_no_feeds_on_disk", path=str(silver_root))
@@ -368,12 +385,17 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
 def _scan_partition_dates(feed_dir: Path) -> tuple[str, str, int] | None:
     """Scan a feed directory for dt= partitions and return (min_date, max_date, count)."""
     dates: list[str] = []
-    for sub in feed_dir.rglob("dt=*"):
-        if not sub.is_dir():
-            continue
-        match = _DATE_PARTITION_RE.match(sub.name)
-        if match:
-            dates.append(match.group(1))
+    # rglob is blocking and can be slow on large trees
+    try:
+        for sub in feed_dir.rglob("dt=*"):
+            if not sub.is_dir():
+                continue
+            match = _DATE_PARTITION_RE.match(sub.name)
+            if match:
+                dates.append(match.group(1))
+    except OSError:
+        pass
+
     if not dates:
         return None
     return min(dates), max(dates), len(dates)
@@ -390,17 +412,23 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
     Returns the number of coverage records upserted.
     """
     silver_root = settings.silver_path
-    if not silver_root.exists():
+    if not await asyncio.to_thread(lambda: silver_root.exists()):
         logger.warning("coverage_scan_skipped", reason="silver_path_not_found", path=str(silver_root))
         return 0
 
     upserted = 0
-    for entry in sorted(silver_root.iterdir()):
+    # Directory listing is blocking
+    entries = await asyncio.to_thread(lambda: sorted(list(silver_root.iterdir())))
+
+    for entry in entries:
         if not entry.is_dir() or entry.name.startswith(".") or not entry.name.startswith("feed="):
             continue
 
         feed_name = entry.name.split("=", 1)[1]
-        scan = _scan_partition_dates(entry)
+
+        # Run blocking rglob scan in thread
+        scan = await asyncio.to_thread(_scan_partition_dates, entry)
+
         if scan is None:
             continue
 

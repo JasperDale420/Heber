@@ -58,6 +58,15 @@ def run() -> None:
 
     redis_url, gateway_url, output_path = _get_defaults()
 
+    # Initialize logging early
+    # Note: We don't have access to settings instance here directly without importing config,
+    # but _get_defaults used it. Let's just use the default log level or fetch settings.
+    from heber.config import get_settings
+    from heber.ops.logging import configure_logging
+
+    settings = get_settings()
+    configure_logging(service_name="heber-watch", log_level=settings.log_level, json_output=True)
+
     parser = argparse.ArgumentParser(
         description="Run the alert watch service",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -533,6 +533,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _build_parser().parse_args()
+
+    # Configure logging based on mode
+    # For manual runs (CLI), we might want human-readable logs, but adherence to PRD says JSON.
+    # However, this tool prints JSON report to stdout, so logs should go to stderr or be suppressed.
+    # The logging module handles this via structlog configuration.
+    from heber.config import get_settings
+    from heber.ops.logging import configure_logging
+
+    s = get_settings()
+    # Ensure logs don't interfere with JSON report on stdout if running manually
+    configure_logging(service_name="heber-dataflow-health", log_level=s.log_level, json_output=True)
+
     try:
         if args.loop:
             run_dataflow_health_loop(

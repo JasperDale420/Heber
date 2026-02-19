@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Catalog Event Loop Blocking During Startup
+
+- Refactored `heber/catalog/seeds.py` to offload blocking file I/O (`iterdir`, `rglob`) to threads via `asyncio.to_thread`, preventing the event loop from freezing during data discovery and coverage seeding
+- Extracted `_scan_silver_feeds_blocking()` helper for thread-safe feed directory scanning
+- Fixes `heber-catalog` healthcheck timeouts that prevented dependent services (`consumer`, `watch`, `dataflow-health`) from starting
+
+#### Compactor Schema Conflict on Temporal ↔ String Columns
+
+- Added `_is_temporal()` helper and widening rules to `_resolve_column_type()` in `heber/writer/compactor.py`
+- Temporal types (`date32`, `timestamp`, etc.) now safely widen to `string` instead of raising `SchemaConflictError`
+- Added `large_string` ↔ `string` unification (resolves to `large_string`)
+- Resolves 500+ compaction failures on `greek_exposure` feed where `expiry` column changed from `date32[day]` to `string`
+
+### Changed
+
+#### Structured JSON Logging Across All Services
+
+- Explicitly set `json_output=True` in `configure_logging()` for `catalog`, `consumer`, `watch`, `compactor`, and `dataflow_health`
+- Added `log_level` field to `Settings` in `heber/config.py` (default: `"INFO"`)
+
+### Removed
+
+#### Unused Hot Store (ClickHouse) Functionality
+
+- Deleted `heber/hotstore/` directory (client, sync, tables, init) and `heber/writer/hotstore.py`
+- Removed 7 ClickHouse/hotloader config fields from `heber/config.py`
+- Removed ClickHouse service from `docker-compose.yml` and related env vars from consumer/catalog services
+- Removed `clickhouse-connect` dependency from `pyproject.toml`
+- Removed Hot Store metrics, alerts, dashboard panels from `heber/ops/`
+- Removed Hot Store runbook, SLI, capacity entries, and chaos experiment from `heber/sre/`
+- Removed Hot Store performance SLOs, environment configs, mock strategies, and test specs from `heber/testing/`
+- Deleted `tests/test_hotstore_unification.py`, `tests/test_hotstore_facade_alignment.py`, and hotloader test cases
+- Deleted all `k8s/**/hotloader.yaml` manifests (deployments, PDBs, services)
+- Deleted `docs/hot_store.md` and removed all Hot Store/ClickHouse references from `README.md`
+- Updated 8 test files to adjust assertion counts after removal
+
 ### Changed
 
 #### Consumer Bandwidth Tuning

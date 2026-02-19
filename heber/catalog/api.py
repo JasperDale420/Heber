@@ -23,6 +23,7 @@ from heber.catalog.seeds import (
 )
 from heber.catalog.service import CatalogService
 from heber.config import settings
+from heber.ops.logging import configure_logging
 from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
@@ -74,6 +75,9 @@ async def _periodic_discovery_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    # Initialize logging first
+    configure_logging(service_name="heber-catalog", log_level=settings.log_level, json_output=True)
+
     if settings.metrics_port:
         start_metrics_server_from_env(default_port=9090)
 

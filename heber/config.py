@@ -84,13 +84,6 @@ class Settings(BaseSettings):
         description="XREADGROUP block timeout in ms (longer allows larger batches to fill)",
     )
 
-    # ClickHouse (Hot Store)
-    clickhouse_host: str = Field(default="localhost")
-    clickhouse_port: int = Field(default=9000)
-    clickhouse_user: str = Field(default="default")
-    clickhouse_password: str = Field(default="")
-    clickhouse_database: str = Field(default="heber")
-
     # API
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)
@@ -184,13 +177,6 @@ class Settings(BaseSettings):
     backfill_port: int = Field(default=8080)
     backfill_log_level: str = Field(default="info")
 
-    # Hot store writer
-    hotloader_datasets: str = Field(
-        default="quotes,trades,bars",
-        description="Comma-separated datasets for hot loading",
-    )
-    hotloader_silver_base_path: str | None = Field(default=None, description="Override silver base path for hot loader")
-
     # Watch consumer
     watch_redis_url: str = Field(
         default="redis://localhost:6379",
@@ -275,6 +261,11 @@ class Settings(BaseSettings):
     service_version: str = Field(
         default="0.1.0",
         validation_alias=AliasChoices("HEBER_SERVICE_VERSION", "SERVICE_VERSION"),
+    )
+    log_level: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("HEBER_LOG_LEVEL", "LOG_LEVEL"),
+        description="Global logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
     shutdown_timeout_seconds: int = Field(default=30)
 

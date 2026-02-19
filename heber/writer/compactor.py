@@ -33,6 +33,11 @@ class SchemaConflictError(RuntimeError):
         self.incoming_type = incoming_type
 
 
+def _is_temporal_type(dt: pa.DataType) -> bool:
+    """Check if a type is a date, timestamp, time, or duration type."""
+    return pa.types.is_date(dt) or pa.types.is_timestamp(dt) or pa.types.is_time(dt) or pa.types.is_duration(dt)
+
+
 class Compactor:
     """Compacts small Parquet files into larger ones."""
 
@@ -127,8 +132,23 @@ class Compactor:
         return pa.table(arrays, schema=pa.schema(fields))
 
     @staticmethod
+    def _is_temporal(dt: pa.DataType) -> bool:
+        """Check if a type is a date or timestamp type."""
+        return _is_temporal_type(dt)
+
+    @staticmethod
     def _resolve_column_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
-        """Resolve a compatible unified type for one column."""
+        """Resolve a compatible unified type for one column.
+
+        Widening rules (safe casts only):
+        - null + T → T
+        - int + int → int64
+        - int/float + float/int → float64
+        - string + string → string
+        - large_string ↔ string → large_string
+        - temporal (date/timestamp) ↔ string → string
+        - temporal + temporal (different) → string
+        """
         if existing_type.equals(incoming_type):
             return existing_type
         if pa.types.is_null(existing_type):
@@ -143,8 +163,27 @@ class Compactor:
             or (pa.types.is_floating(existing_type) and pa.types.is_floating(incoming_type))
         ):
             return pa.float64()
-        if pa.types.is_string(existing_type) and pa.types.is_string(incoming_type):
+
+        # String-like unification
+        both_string_like = (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)) and (
+            pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)
+        )
+        if both_string_like:
+            if pa.types.is_large_string(existing_type) or pa.types.is_large_string(incoming_type):
+                return pa.large_string()
             return pa.string()
+
+        # Temporal ↔ string: widen to string (dates can always be represented as strings)
+        is_existing_temporal = _is_temporal_type(existing_type)
+        is_incoming_temporal = _is_temporal_type(incoming_type)
+        if is_existing_temporal and (pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)):
+            return incoming_type
+        if is_incoming_temporal and (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)):
+            return existing_type
+        # Two different temporal types → string as fallback
+        if is_existing_temporal and is_incoming_temporal:
+            return pa.string()
+
         return None
 
     def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
@@ -404,6 +443,10 @@ class Compactor:
 
 async def main():
     """Entry point for the compactor."""
+    # Settings are imported at module level, so we can use them
+    from heber.ops.logging import configure_logging
+
+    configure_logging(service_name="heber-compactor", log_level=settings.log_level, json_output=True)
     start_metrics_server_from_env(default_port=9090)
     compactor = Compactor()
 
