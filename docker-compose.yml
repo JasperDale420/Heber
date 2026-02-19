@@ -29,33 +29,6 @@ services:
         max-file: "5"
     restart: unless-stopped
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.1
-    container_name: heber-clickhouse
-    user: "101:101" # clickhouse:clickhouse — skips root chown on startup
-    volumes:
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/data:/var/lib/clickhouse
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/logs:/var/log/clickhouse-server
-    ports:
-      - "8124:8123" # HTTP
-      - "9002:9000" # Native
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    healthcheck:
-      test: [ "CMD", "clickhouse-client", "--query", "SELECT 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: unless-stopped
-
   # =============================================================================
   # OSS Infrastructure (Phase 1-5 Migration)
   # =============================================================================
@@ -157,7 +130,6 @@ services:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
-      - HEBER_CLICKHOUSE_HOST=clickhouse
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -191,7 +163,6 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
-      - HEBER_CLICKHOUSE_HOST=clickhouse
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -245,7 +216,7 @@ services:
     environment:
       # Uses heber:events stream from Data Gateway's Redis
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
-      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - DATA_GATEWAY_URL=http://host.docker.internal:8081
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
       - HEBER_GOLD_PATH=/data/gold/labels_alert_barriers

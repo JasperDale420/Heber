@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Heber Watch Port Configuration
+
+- Fixed `DATA_GATEWAY_URL` in `docker-compose.yml` to point to port `8081` for the `heber-watch` service, matching the external port exposed by the Data Gateway container.
+- Resolves `ConnectError: All connection attempts failed` and restores quote fetching for active watches.
+
 #### Catalog Event Loop Blocking During Startup
 
 - Refactored `heber/catalog/seeds.py` to offload blocking file I/O (`iterdir`, `rglob`) to threads via `asyncio.to_thread`, preventing the event loop from freezing during data discovery and coverage seeding
