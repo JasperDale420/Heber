@@ -12,6 +12,7 @@ import pandas as pd
 import structlog
 
 from heber.config import settings
+from heber.core.http_client import create_http_client, raise_for_status
 from heber.core.parquet import read_parquet_dataset
 from heber.versioning import (
     get_version_manager,
@@ -67,7 +68,7 @@ class HeberClient:
             headers = {}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
-            self._http_client = httpx.Client(
+            self._http_client = create_http_client(
                 base_url=self.catalog_url,
                 headers=headers,
                 timeout=30.0,
@@ -93,19 +94,19 @@ class HeberClient:
         if layer:
             params["layer"] = layer
         response = self.http_client.get("datasets", params=params)
-        response.raise_for_status()
+        raise_for_status(response)
         return response.json()["data"]
 
     def get_dataset(self, name: str) -> dict:
         """Get dataset metadata by name."""
         response = self.http_client.get(f"datasets/{name}")
-        response.raise_for_status()
+        raise_for_status(response)
         return response.json()["data"]
 
     def resolve_instrument(self, symbol: str) -> str | None:
         """Resolve symbol to canonical instrument_key."""
         response = self.http_client.post("instruments/lookup", json={"symbols": [symbol]})
-        response.raise_for_status()
+        raise_for_status(response)
         data = response.json()["data"]
         if data:
             return data[0]["instrument_key"]
@@ -135,7 +136,7 @@ class HeberClient:
 
         # Get schema version
         response = self.http_client.get(f"datasets/{dataset_name}/versions")
-        response.raise_for_status()
+        raise_for_status(response)
         versions = response.json()["data"]
 
         if schema_version == "latest":

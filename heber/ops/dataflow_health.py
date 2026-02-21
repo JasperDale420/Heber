@@ -14,12 +14,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
 import redis
 import structlog
 
 from heber.calendar import MarketCalendar
 from heber.config import Settings, get_settings
+from heber.core.http_client import create_http_client, raise_for_status
 
 logger = structlog.get_logger(__name__)
 
@@ -88,8 +88,9 @@ def _parse_prometheus_text(payload: str) -> list[tuple[str, dict[str, str], floa
 
 def _fetch_metrics_samples(metrics_url: str) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
     try:
-        response = httpx.get(metrics_url, timeout=5.0)
-        response.raise_for_status()
+        with create_http_client(timeout=5.0) as client:
+            response = client.get(metrics_url)
+        raise_for_status(response)
         return _parse_prometheus_text(response.text), None
     except Exception as exc:
         return None, str(exc)
