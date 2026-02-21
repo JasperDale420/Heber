@@ -25,6 +25,25 @@ EQUITY_EXTENDED_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$")
 UNDERLYING_PATTERN = re.compile(r"^[A-Z]{1,6}$")
 CRYPTO_SYMBOL_PATTERN = re.compile(r"^[A-Z]{2,10}-[A-Z]{2,10}$")
 
+# Known crypto quote currencies for splitting concatenated symbols (e.g. BTCUSD → BTC-USD).
+_KNOWN_QUOTES: frozenset[str] = frozenset(
+    {
+        "USD",
+        "USDT",
+        "USDC",
+        "EUR",
+        "GBP",
+        "BTC",
+        "ETH",
+        "BUSD",
+        "DAI",
+        "JPY",
+        "AUD",
+        "CAD",
+        "CHF",
+    }
+)
+
 # Feeds that represent core market data and require instrument-type-aware normalization.
 MARKET_DATA_FEEDS: frozenset[str] = frozenset({"bars", "quotes", "trades"})
 
@@ -211,23 +230,6 @@ def _normalize_crypto_symbol(value: Any) -> str | None:
     # Try splitting concatenated symbols like BTCUSD, ETHUSDT.
     # Use known quote currencies to disambiguate the split point.
     if "-" not in normalized and len(normalized) >= 5:
-        _KNOWN_QUOTES = frozenset(
-            {
-                "USD",
-                "USDT",
-                "USDC",
-                "EUR",
-                "GBP",
-                "BTC",
-                "ETH",
-                "BUSD",
-                "DAI",
-                "JPY",
-                "AUD",
-                "CAD",
-                "CHF",
-            }
-        )
         for quote_len in (4, 3):
             if len(normalized) > quote_len:
                 base = normalized[:-quote_len]

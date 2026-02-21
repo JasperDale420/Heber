@@ -93,6 +93,15 @@ class SilverWriter:
         partition_key = self._get_partition_key(normalized)
         self.buffers[partition_key].append(row)
 
+    def write_row(self, partition_key: str, row: dict[str, Any]) -> None:
+        """Buffer a pre-normalized Silver row for writing.
+
+        Use this when the caller has already performed normalization
+        (e.g. ``normalize_envelope_for_silver`` + ``envelope_to_silver_row``)
+        to avoid duplicating that work.
+        """
+        self.buffers[partition_key].append(row)
+
     def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
         now = datetime.now(UTC)

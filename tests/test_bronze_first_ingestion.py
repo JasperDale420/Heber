@@ -32,7 +32,7 @@ def test_bronze_is_written_before_silver_on_success_path() -> None:
     call_order: list[str] = []
 
     consumer.bronze_writer.write = MagicMock(side_effect=lambda _envelope: call_order.append("bronze"))
-    consumer.silver_writer.write = MagicMock(side_effect=lambda _envelope: call_order.append("silver"))
+    consumer.silver_writer.write_row = MagicMock(side_effect=lambda _pk, _row: call_order.append("silver"))
 
     event = _event_payload(
         "bars",
@@ -84,7 +84,7 @@ def test_bronze_write_persists_even_when_silver_normalization_fails() -> None:
 def test_rest_bars_aggregate_payload_is_expanded_into_multiple_silver_writes() -> None:
     consumer = EventConsumer()
     consumer.bronze_writer.write = MagicMock()
-    consumer.silver_writer.write = MagicMock()
+    consumer.silver_writer.write_row = MagicMock()
 
     event = _event_payload(
         "bars",
@@ -125,13 +125,14 @@ def test_rest_bars_aggregate_payload_is_expanded_into_multiple_silver_writes() -
     assert error is None
     assert retryable is True
     consumer.bronze_writer.write.assert_called_once()
-    assert consumer.silver_writer.write.call_count == 2
+    assert consumer.silver_writer.write_row.call_count == 2
 
-    first_payload = consumer.silver_writer.write.call_args_list[0].args[0].payload
-    second_payload = consumer.silver_writer.write.call_args_list[1].args[0].payload
-    assert first_payload["open"] == "100.0"
-    assert second_payload["close"] == "101.2"
-    assert first_payload["timeframe"] == "1Min"
+    # Verify first row has expected open value, second has expected close value
+    first_row = consumer.silver_writer.write_row.call_args_list[0].args[1]
+    second_row = consumer.silver_writer.write_row.call_args_list[1].args[1]
+    assert first_row["open"] == 100.0
+    assert second_row["close"] == 101.2
+    assert first_row["timeframe"] == "1Min"
 
 
 def test_rest_trades_aggregate_empty_list_skips_silver_write() -> None:

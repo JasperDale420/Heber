@@ -42,8 +42,9 @@ from heber.writer.ingest_contracts import (
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
 from heber.writer.silver import SilverWriter
-from heber.writer.utils import build_silver_candidates
+from heber.writer.utils import build_silver_candidates, get_partition_key
 
 logger = structlog.get_logger(__name__)
 
@@ -194,7 +195,7 @@ class EventConsumer:
             # Bronze-first policy: persist envelope before Silver normalization/validation.
             self.bronze_writer.write(envelope)
             bronze_written = True
-            logger.info(
+            logger.debug(
                 "bronze_write_success",
                 event_id=envelope.event_id,
                 feed=envelope.feed,
@@ -498,7 +499,12 @@ class EventConsumer:
         )
 
     def _write_silver_candidate(self, source_envelope: EventEnvelope, candidate: EventEnvelope) -> None:
-        """Normalize and persist one candidate event to Silver."""
+        """Normalize and persist one candidate event to Silver.
+
+        Performs normalization once and passes the pre-normalized row
+        directly to ``SilverWriter.write_row()`` to avoid the double
+        normalization that ``SilverWriter.write()`` would trigger.
+        """
         normalized = normalize_envelope_for_silver(candidate)
         silver_feed = resolve_silver_feed(normalized.feed)
         if silver_feed is None:
@@ -512,7 +518,17 @@ class EventConsumer:
 
         normalized = normalized.model_copy(update={"feed": silver_feed})
         self._validate_instrument_key(normalized)
-        self.silver_writer.write(normalized)
+
+        # Build the Silver row and buffer it directly, skipping
+        # SilverWriter._envelope_to_row() which would re-normalize.
+        row = envelope_to_silver_row(normalized)
+        enforce_required_non_null_fields(feed=silver_feed, row=row, event_id=normalized.event_id)
+        partition_key = get_partition_key(
+            feed=normalized.feed,
+            instrument_type=normalized.instrument_type,
+            ts_event=normalized.ts_event,
+        )
+        self.silver_writer.write_row(partition_key, row)
 
     async def run(self):
         """Main consumer loop."""

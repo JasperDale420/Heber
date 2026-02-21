@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from functools import lru_cache
 from typing import Any
 
 import pyarrow as pa
@@ -104,12 +105,14 @@ def missing_required_non_null_fields(feed: str, row: Mapping[str, Any]) -> list[
     return sorted(missing)
 
 
-def _target_to_source_map(feed: str) -> dict[str, list[str]]:
+@lru_cache(maxsize=64)
+def _target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
     mapping = FIELD_MAPPINGS.get(feed, {})
     target_to_source: dict[str, list[str]] = {}
     for source_name, target_name in mapping.items():
         target_to_source.setdefault(target_name, []).append(source_name)
-    return target_to_source
+    # Return tuples so the result is hashable/cacheable
+    return {k: tuple(v) for k, v in target_to_source.items()}
 
 
 def _coerce_value(value: Any, arrow_type: pa.DataType) -> Any:

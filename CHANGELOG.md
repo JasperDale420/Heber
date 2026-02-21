@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `redis_process_concurrency` setting to `heber/config.py` (configurable 1–50, env: `HEBER_REDIS_PROCESS_CONCURRENCY`).
 - Added 5 regression tests in `tests/test_consumer_concurrency.py` covering concurrent execution, error isolation, DLQ routing, semaphore limits, and exception handling.
 
+#### Silver Normalization Throughput
+
+- Eliminated double `normalize_envelope_for_silver()` call per event — consumer now passes pre-normalized rows to `SilverWriter.write_row()`, cutting Silver CPU per event by ~50%.
+- Cached `_target_to_source_map()` with `@lru_cache` in `heber/writer/normalizer.py` — field mapping dicts are now built once per feed instead of per event.
+- Moved `_KNOWN_QUOTES` frozenset to module level in `heber/writer/key_normalization.py` to avoid per-call reconstruction.
+- Downgraded per-event `bronze_write_success` log from INFO to DEBUG to reduce I/O under backfill load.
+
 ### Fixed
 
 #### Flow Alerts Payload Schema: Allow `sentiment` Key
