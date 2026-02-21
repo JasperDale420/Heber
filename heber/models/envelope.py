@@ -10,6 +10,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+# Matches Data-Gateway's SCHEMA_VERSION in gateway/core/envelope.py
+ENVELOPE_SCHEMA_VERSION = "v1"
+
 
 class Lineage(BaseModel):
     """Lineage metadata for tracing event origin.
@@ -80,7 +83,7 @@ class EventEnvelope(BaseModel):
     ts_ingest: datetime = Field(..., description="Gateway receive/process time")
 
     # === Fields from Data-Gateway (optional with defaults) ===
-    schema_version: str = Field(default="v1", description="Envelope schema version")
+    schema_version: str = Field(default=ENVELOPE_SCHEMA_VERSION, description="Envelope schema version")
     lineage: dict[str, Any] = Field(default_factory=dict, description="Sequence numbers, stream IDs")
     quality_flags: list[str] = Field(default_factory=list, description="validated, deduped, cached")
     payload: dict[str, Any] = Field(..., description="Normalized event data")

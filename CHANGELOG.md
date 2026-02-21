@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - chore: workspace sync checkpoint and gitignore audit (2026-02-21)
+
+### Changed
+
+- **Cross-Repo Audit: Schema Version Constant** (2026-02-21):
+  - Replaced hardcoded `"v1"` with `ENVELOPE_SCHEMA_VERSION` constant in `heber/models/envelope.py` and `heber/catalog/openmetadata_client.py`.
+- **Cross-Repo Audit: HTTP Client Wrapper** (2026-02-21):
+  - Replaced raw `httpx.Client` with `create_http_client` in `heber/sdk/client.py`.
+
 ### Fixed
 
 #### SonarQube Code Quality Remediation

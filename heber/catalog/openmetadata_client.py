@@ -18,6 +18,7 @@ import structlog
 from prometheus_client import Counter, Histogram
 
 from heber.catalog.access_control import DataLayer
+from heber.models.envelope import ENVELOPE_SCHEMA_VERSION
 
 logger = structlog.get_logger(__name__)
 
@@ -77,7 +78,7 @@ class TableMetadata:
     name: str
     layer: DataLayer
     description: str = ""
-    schema_version: str = "v1"
+    schema_version: str = ENVELOPE_SCHEMA_VERSION
     owner: str = ""
     tags: list[str] = field(default_factory=list)
     custom_properties: dict[str, str] = field(default_factory=dict)
