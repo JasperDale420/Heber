@@ -27,7 +27,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   # =============================================================================
   # OSS Infrastructure (Phase 1-5 Migration)
@@ -51,13 +51,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 120s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   # lakeFS - Git for data (Phase 2)
   lakefs:
@@ -84,12 +84,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 120s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   # Apicurio Registry - Schema Registry (Phase 4)
   # Note: Karapace requires Kafka; Apicurio supports PostgreSQL standalone mode
@@ -112,12 +113,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 120s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   # Heber Services
   heber-catalog:
@@ -144,12 +146,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 120s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   heber-consumer:
     build:
@@ -181,7 +184,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   heber-compactor:
     build:
@@ -204,7 +207,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   # Watch Service - Tracks flow alert outcomes for ML labeling
   heber-watch:
@@ -236,7 +239,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
   heber-dataflow-health:
     build:
@@ -270,7 +273,7 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    restart: unless-stopped
+    restart: always
 
 volumes:
   heber-data:

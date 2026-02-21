@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+#### Docker Restart Resilience
+
+- Changed all 9 services in `docker-compose.yml` from `restart: unless-stopped` to `restart: always` so containers restart after Docker daemon restarts (previously stayed `Exited(255)`)
+- Added `start_period: 120s` to lakeFS, Apicurio, and heber-catalog healthchecks to prevent false-unhealthy verdicts while Postgres initializes
+- Raised MinIO `start_period` from 60s to 120s for consistency with Postgres warm-up window
+- Root cause: external volume `/Volumes/heber` not mounted on daemon restart caused Postgres bind-mount failure, cascading to all dependent services
+- Added contract test `tests/test_compose_restart_contract.py` enforcing restart policy and start_period requirements
+
 #### Consumer Concurrent Message Processing
 
 - Refactored `_process_stream_messages()` in `heber/writer/consumer.py` to use `asyncio.gather()` with a configurable semaphore (`redis_process_concurrency`, default 10) instead of serial iteration, enabling up to 10× throughput improvement during backfill bursts.
