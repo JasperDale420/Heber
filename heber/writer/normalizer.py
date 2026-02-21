@@ -228,6 +228,29 @@ _AGGREGATE_FEED_CONFIG: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+def _epoch_to_utc(epoch: float) -> datetime:
+    """Convert an epoch timestamp (seconds or milliseconds) to UTC datetime."""
+    if epoch > 10_000_000_000:
+        epoch /= 1000
+    return datetime.fromtimestamp(epoch, tz=UTC)
+
+
+def _parse_string_timestamp(text: str) -> datetime | None:
+    """Parse a string timestamp, handling ISO-8601 and numeric strings."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        return _epoch_to_utc(float(int(stripped)))
+    try:
+        parsed = datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
     """Parse item-level event timestamp from common provider keys.
 
@@ -242,24 +265,36 @@ def extract_item_event_timestamp(payload: dict[str, Any]) -> datetime | None:
             return raw.replace(tzinfo=UTC)
         return raw.astimezone(UTC)
     if isinstance(raw, int | float):
-        epoch = float(raw)
-        if epoch > 10_000_000_000:
-            epoch /= 1000
-        return datetime.fromtimestamp(epoch, tz=UTC)
+        return _epoch_to_utc(float(raw))
     if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return None
-        if text.isdigit():
-            return extract_item_event_timestamp({"timestamp": int(text)})  # recurse with parsed int
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", _UTC_OFFSET_SUFFIX))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
+        return _parse_string_timestamp(raw)
     return None
+
+
+def _build_item_envelope(
+    envelope: EventEnvelope,
+    idx: int,
+    raw_item: dict[str, Any],
+    context_keys: tuple[str, ...],
+    payload: dict[str, Any],
+) -> EventEnvelope:
+    """Build a single item envelope from an aggregate payload expansion."""
+    item_payload = dict(raw_item)
+    for key in context_keys:
+        value = payload.get(key)
+        if value is not None and key not in item_payload:
+            item_payload[key] = value
+    if "symbol" not in item_payload and envelope.symbol:
+        item_payload["symbol"] = envelope.symbol
+
+    item_ts_event = extract_item_event_timestamp(item_payload) or envelope.ts_event
+    return envelope.model_copy(
+        update={
+            "event_id": f"{envelope.event_id}:{idx}",
+            "payload": item_payload,
+            "ts_event": item_ts_event,
+        }
+    )
 
 
 def explode_aggregate_payload(
@@ -272,14 +307,7 @@ def explode_aggregate_payload(
     For ``bars`` and ``trades`` feeds whose payload contains a list of
     individual items, returns one :class:`EventEnvelope` per item.  For all
     other feeds (or non-list payloads) returns ``[envelope]`` unchanged.
-
-    Args:
-        envelope: Source envelope, potentially containing an aggregate payload.
-        feed_override: Optional canonical feed name used for matching
-            (e.g. when the transformer resolves aliases before calling).
-            Defaults to ``envelope.feed``.
     """
-
     payload = envelope.payload if isinstance(envelope.payload, dict) else {}
     if not isinstance(payload, dict):
         return [envelope]
@@ -303,23 +331,7 @@ def explode_aggregate_payload(
         if not isinstance(raw_item, dict):
             skipped += 1
             continue
-        item_payload = dict(raw_item)
-        for key in context_keys:
-            value = payload.get(key)
-            if value is not None and key not in item_payload:
-                item_payload[key] = value
-        if "symbol" not in item_payload and envelope.symbol:
-            item_payload["symbol"] = envelope.symbol
-
-        item_ts_event = extract_item_event_timestamp(item_payload) or envelope.ts_event
-        item_envelope = envelope.model_copy(
-            update={
-                "event_id": f"{envelope.event_id}:{idx}",
-                "payload": item_payload,
-                "ts_event": item_ts_event,
-            }
-        )
-        candidates.append(item_envelope)
+        candidates.append(_build_item_envelope(envelope, idx, raw_item, context_keys, payload))
 
     if skipped:
         logger.warning(

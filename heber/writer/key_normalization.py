@@ -47,6 +47,8 @@ _KNOWN_QUOTES: frozenset[str] = frozenset(
 # Feeds that represent core market data and require instrument-type-aware normalization.
 MARKET_DATA_FEEDS: frozenset[str] = frozenset({"bars", "quotes", "trades"})
 
+_OPTION_OCC_PREFIX = "OPTION:OCC:"
+
 SECTOR_ETF_MAP: dict[str, str] = {
     "TECHNOLOGY": "XLK",
     "FINANCIALS": "XLF",
@@ -62,6 +64,136 @@ SECTOR_ETF_MAP: dict[str, str] = {
 }
 
 
+def _normalize_flow_alert(
+    symbol: str | None,
+    payload: dict[str, Any],
+    instrument_key: str,
+) -> tuple[str | None, str, str]:
+    """Normalize symbol and instrument key for flow_alerts feed."""
+    occ_symbol = _extract_occ_symbol(payload) or _extract_occ_from_key(instrument_key)
+    if occ_symbol is None:
+        occ_symbol = _build_occ_from_payload(payload)
+    if occ_symbol is not None:
+        payload["option_chain"] = occ_symbol
+        if symbol is None:
+            symbol = _extract_underlying_from_occ(occ_symbol)
+        if symbol is not None:
+            payload["symbol"] = symbol
+        return symbol, "option", f"option:OCC:{occ_symbol}"
+
+    # OCC could not be synthesized — fall back to equity key using payload symbol
+    if symbol is None:
+        symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
+    if symbol is not None:
+        return symbol, "equity", f"equity:{symbol}"
+    return symbol, "equity", instrument_key
+
+
+def _normalize_congress_insider(
+    symbol: str | None,
+    payload: dict[str, Any],
+) -> tuple[str | None, str, str] | None:
+    """Normalize symbol for congress_trades/insider_trades feeds."""
+    if symbol is None:
+        symbol = _normalize_symbol(payload.get("ticker")) or _normalize_symbol(payload.get("symbol"))
+    if symbol is not None:
+        return symbol, "equity", f"equity:{symbol}"
+    return None
+
+
+def _normalize_news(
+    symbol: str | None,
+    payload: dict[str, Any],
+) -> tuple[str | None, str, str] | None:
+    """Normalize symbol for news feed."""
+    if symbol is None:
+        symbol = _normalize_symbol(payload.get("symbol"))
+    if symbol is None:
+        symbols = payload.get("symbols")
+        if isinstance(symbols, list) and symbols:
+            symbol = _normalize_symbol(symbols[0])
+    if symbol is not None:
+        payload["symbol"] = symbol
+        return symbol, "equity", f"equity:{symbol}"
+    return None
+
+
+def _normalize_market_tide(
+    _symbol: str | None,
+    _payload: dict[str, Any],
+    _instrument_key: str,
+) -> tuple[str | None, str, str]:
+    return "SPY", "equity", "equity:SPY"
+
+
+def _normalize_sector_tide(
+    _symbol: str | None,
+    payload: dict[str, Any],
+    _instrument_key: str,
+) -> tuple[str | None, str, str]:
+    symbol = _sector_to_etf(payload.get("sector"))
+    return symbol, "equity", f"equity:{symbol}"
+
+
+# Dispatch table: feed → normalizer function
+_FEED_NORMALIZERS: dict[str, Any] = {
+    "flow_alerts": _normalize_flow_alert,
+    "market_tide": _normalize_market_tide,
+    "sector_tide": _normalize_sector_tide,
+}
+
+
+def _normalize_by_feed(
+    canonical_feed: str,
+    symbol: str | None,
+    instrument_type: str,
+    instrument_key: str,
+    payload: dict[str, Any],
+    envelope: EventEnvelope,
+) -> tuple[str | None, str, str]:
+    """Route normalization to the appropriate handler based on feed type."""
+    normalizer = _FEED_NORMALIZERS.get(canonical_feed)
+    if normalizer is not None:
+        return normalizer(symbol, payload, instrument_key)
+
+    if canonical_feed in {"congress_trades", "insider_trades"}:
+        result = _normalize_congress_insider(symbol, payload)
+        return result if result is not None else (symbol, instrument_type, instrument_key)
+
+    if canonical_feed == "news":
+        result = _normalize_news(symbol, payload)
+        return result if result is not None else (symbol, instrument_type, instrument_key)
+
+    if canonical_feed in MARKET_DATA_FEEDS:
+        return _normalize_market_data_envelope(
+            symbol=envelope.symbol,
+            instrument_type=instrument_type,
+            instrument_key=instrument_key,
+            payload=payload,
+        )
+
+    # Fallback: generic symbol extraction
+    if symbol is None:
+        symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
+        if symbol is not None and instrument_type == "equity":
+            instrument_key = f"equity:{symbol}"
+    return symbol, instrument_type, instrument_key
+
+
+def _collect_quality_flags(
+    envelope: EventEnvelope,
+    canonical_feed: str,
+    payload: dict[str, Any],
+) -> list[str]:
+    """Build list of quality flags, checking market data if applicable."""
+    flags = list(envelope.quality_flags)
+    if canonical_feed in MARKET_DATA_FEEDS:
+        suspect = validate_market_data_payload(canonical_feed, payload)
+        if suspect:
+            flags.extend(suspect)
+    return flags
+
+
 def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
     """Normalize feed alias, payload, symbol, and instrument key for Silver writes."""
     canonical_feed = resolve_feed_alias(envelope.feed)
@@ -71,75 +203,21 @@ def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
     instrument_type = envelope.instrument_type.lower().strip()
     instrument_key = envelope.instrument_key
 
-    if canonical_feed == "flow_alerts":
-        occ_symbol = _extract_occ_symbol(payload) or _extract_occ_from_key(envelope.instrument_key)
-        if occ_symbol is None:
-            occ_symbol = _build_occ_from_payload(payload)
-        if occ_symbol is not None:
-            payload["option_chain"] = occ_symbol
-            if symbol is None:
-                symbol = _extract_underlying_from_occ(occ_symbol)
-            if symbol is not None:
-                payload["symbol"] = symbol
-            instrument_type = "option"
-            instrument_key = f"option:OCC:{occ_symbol}"
-        else:
-            # OCC could not be synthesized — fall back to equity key using payload symbol
-            if symbol is None:
-                symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
-            if symbol is not None:
-                instrument_type = "equity"
-                instrument_key = f"equity:{symbol}"
-    elif canonical_feed == "market_tide":
-        symbol = "SPY"
-        instrument_type = "equity"
-        instrument_key = "equity:SPY"
-    elif canonical_feed == "sector_tide":
-        symbol = _sector_to_etf(payload.get("sector"))
-        instrument_type = "equity"
-        instrument_key = f"equity:{symbol}"
-    elif canonical_feed in {"congress_trades", "insider_trades"}:
-        if symbol is None:
-            symbol = _normalize_symbol(payload.get("ticker")) or _normalize_symbol(payload.get("symbol"))
-        if symbol is not None:
-            instrument_type = "equity"
-            instrument_key = f"equity:{symbol}"
-    elif canonical_feed == "news":
-        if symbol is None:
-            symbol = _normalize_symbol(payload.get("symbol"))
-        if symbol is None:
-            symbols = payload.get("symbols")
-            if isinstance(symbols, list) and symbols:
-                symbol = _normalize_symbol(symbols[0])
-        if symbol is not None:
-            payload["symbol"] = symbol
-            instrument_type = "equity"
-            instrument_key = f"equity:{symbol}"
-    elif canonical_feed in MARKET_DATA_FEEDS:
-        symbol, instrument_type, instrument_key = _normalize_market_data_envelope(
-            symbol=envelope.symbol,
-            instrument_type=instrument_type,
-            instrument_key=instrument_key,
-            payload=payload,
-        )
-    elif symbol is None:
-        symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
-        if symbol is not None and instrument_type == "equity":
-            instrument_key = f"equity:{symbol}"
-
-    # Validate market data payload and add quality flags for suspect data.
-    quality_flags = list(envelope.quality_flags)
-    if canonical_feed in MARKET_DATA_FEEDS:
-        suspect_flags = validate_market_data_payload(canonical_feed, payload)
-        if suspect_flags:
-            quality_flags.extend(suspect_flags)
+    symbol, instrument_type, instrument_key = _normalize_by_feed(
+        canonical_feed,
+        symbol,
+        instrument_type,
+        instrument_key,
+        payload,
+        envelope,
+    )
 
     updates: dict[str, Any] = {
         "feed": canonical_feed,
         "payload": payload,
         "instrument_type": instrument_type or envelope.instrument_type,
         "instrument_key": instrument_key,
-        "quality_flags": quality_flags,
+        "quality_flags": _collect_quality_flags(envelope, canonical_feed, payload),
     }
     if symbol is not None:
         updates["symbol"] = symbol
@@ -201,6 +279,19 @@ def _normalize_market_data_envelope(
     return symbol, instrument_type, instrument_key
 
 
+def _try_split_concatenated_crypto(text: str) -> str | None:
+    """Try splitting concatenated crypto symbols like BTCUSD → BTC-USD."""
+    for quote_len in (4, 3):
+        if len(text) > quote_len:
+            base = text[:-quote_len]
+            quote = text[-quote_len:]
+            if quote in _KNOWN_QUOTES:
+                candidate = f"{base}-{quote}"
+                if CRYPTO_SYMBOL_PATTERN.fullmatch(candidate):
+                    return candidate
+    return None
+
+
 def _normalize_crypto_symbol(value: Any) -> str | None:
     """Normalize a crypto symbol to canonical BASE-QUOTE format.
 
@@ -228,16 +319,8 @@ def _normalize_crypto_symbol(value: Any) -> str | None:
         return normalized
 
     # Try splitting concatenated symbols like BTCUSD, ETHUSDT.
-    # Use known quote currencies to disambiguate the split point.
     if "-" not in normalized and len(normalized) >= 5:
-        for quote_len in (4, 3):
-            if len(normalized) > quote_len:
-                base = normalized[:-quote_len]
-                quote = normalized[-quote_len:]
-                if quote in _KNOWN_QUOTES:
-                    candidate = f"{base}-{quote}"
-                    if CRYPTO_SYMBOL_PATTERN.fullmatch(candidate):
-                        return candidate
+        return _try_split_concatenated_crypto(normalized)
 
     return None
 
@@ -336,8 +419,8 @@ def _extract_occ_symbol(payload: dict[str, Any]) -> str | None:
             continue
         text = str(raw).strip().upper().replace(" ", "")
         text = text.removeprefix("OCC:")
-        if text.startswith("OPTION:OCC:"):
-            text = text.removeprefix("OPTION:OCC:")
+        if text.startswith(_OPTION_OCC_PREFIX):
+            text = text.removeprefix(_OPTION_OCC_PREFIX)
         match = OCC_PATTERN.search(text)
         if match:
             return match.group(1)
@@ -346,8 +429,8 @@ def _extract_occ_symbol(payload: dict[str, Any]) -> str | None:
 
 def _extract_occ_from_key(instrument_key: str) -> str | None:
     key = instrument_key.strip().upper()
-    if key.startswith("OPTION:OCC:"):
-        candidate = key.removeprefix("OPTION:OCC:")
+    if key.startswith(_OPTION_OCC_PREFIX):
+        candidate = key.removeprefix(_OPTION_OCC_PREFIX)
         match = OCC_PATTERN.fullmatch(candidate)
         if match:
             return match.group(1)
