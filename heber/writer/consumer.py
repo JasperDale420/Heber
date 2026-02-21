@@ -152,34 +152,84 @@ class EventConsumer:
             )
             return False
 
+    def _parse_and_validate_envelope(self, event_data: dict) -> EventEnvelope:
+        """Parse event data dict into a validated EventEnvelope."""
+        payload_str = (
+            event_data.get(b"data") or event_data.get("data") or event_data.get(b"payload") or event_data.get("payload")
+        )
+        if payload_str is None:
+            raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
+
+        if isinstance(payload_str, bytes):
+            payload_str = payload_str.decode("utf-8")
+
+        event_dict = json.loads(payload_str)
+        envelope = EventEnvelope.model_validate(event_dict)
+
+        if envelope.ts_available is None:
+            envelope = envelope.with_ts_available(datetime.now(UTC))
+
+        return envelope
+
+    def _write_silver_candidates(self, envelope: EventEnvelope) -> None:
+        """Write silver candidates from an envelope, handling aggregate mode failures."""
+        silver_candidates = build_silver_candidates(envelope)
+        if not silver_candidates:
+            logger.info(
+                "silver_write_skipped_empty_aggregate",
+                event_id=envelope.event_id,
+                feed=envelope.feed,
+                provider=envelope.provider,
+            )
+            return
+
+        aggregate_mode = len(silver_candidates) > 1
+        silver_success_count = 0
+        silver_failure_count = 0
+        last_error: Exception | None = None
+
+        for candidate in silver_candidates:
+            try:
+                self._write_silver_candidate(envelope, candidate)
+                silver_success_count += 1
+            except (UnmappedFeedError, ValueError, ValidationError) as exc:
+                last_error = exc
+                silver_failure_count += 1
+                if aggregate_mode:
+                    logger.warning(
+                        "silver_aggregate_item_failed",
+                        source_event_id=envelope.event_id,
+                        item_event_id=candidate.event_id,
+                        feed=candidate.feed,
+                        error=str(exc),
+                    )
+                    continue
+                raise
+
+        if silver_failure_count > 0:
+            logger.warning(
+                "silver_aggregate_write_summary",
+                source_event_id=envelope.event_id,
+                feed=envelope.feed,
+                success_count=silver_success_count,
+                failed_count=silver_failure_count,
+            )
+
+        if silver_success_count == 0:
+            if last_error is not None:
+                raise last_error
+            raise ValueError("all_aggregate_items_failed")
+
     def _process_event_once(self, event_data: dict) -> tuple[bool, str | None, bool]:
         """Process an event one time and return `(success, error, retryable)`."""
         feed = "unknown"
         provider = "unknown"
         bronze_written = False
         try:
-            # Parse envelope - Data Gateway sends 'data', legacy uses 'payload'
-            payload_str = (
-                event_data.get(b"data")
-                or event_data.get("data")
-                or event_data.get(b"payload")
-                or event_data.get("payload")
-            )
-            if payload_str is None:
-                raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
-
-            if isinstance(payload_str, bytes):
-                payload_str = payload_str.decode("utf-8")
-
-            event_dict = json.loads(payload_str)
-            envelope = EventEnvelope.model_validate(event_dict)
+            envelope = self._parse_and_validate_envelope(event_data)
             feed = envelope.feed
             provider = envelope.provider
             record_event_received(feed=feed, provider=provider)
-
-            # Set ts_available if not present
-            if envelope.ts_available is None:
-                envelope = envelope.with_ts_available(datetime.now(UTC))
 
             ingest_lag = max((envelope.ts_ingest - envelope.ts_event).total_seconds(), 0.0)
             availability_lag = max((envelope.ts_available - envelope.ts_event).total_seconds(), 0.0)
@@ -192,7 +242,6 @@ class EventConsumer:
 
             self._validate_payload_schema(envelope)
 
-            # Bronze-first policy: persist envelope before Silver normalization/validation.
             self.bronze_writer.write(envelope)
             bronze_written = True
             logger.debug(
@@ -221,59 +270,12 @@ class EventConsumer:
                 record_event_processed(feed=feed, provider=provider, status="success")
                 return True, None, True
 
-            silver_candidates = build_silver_candidates(envelope)
-            if not silver_candidates:
-                logger.info(
-                    "silver_write_skipped_empty_aggregate",
-                    event_id=envelope.event_id,
-                    feed=envelope.feed,
-                    provider=envelope.provider,
-                )
-                record_event_processed(feed=feed, provider=provider, status="success")
-                return True, None, True
-
-            aggregate_mode = len(silver_candidates) > 1
-            silver_success_count = 0
-            silver_failure_count = 0
-            last_error: Exception | None = None
-
-            for candidate in silver_candidates:
-                try:
-                    self._write_silver_candidate(envelope, candidate)
-                    silver_success_count += 1
-                except (UnmappedFeedError, ValueError, ValidationError) as exc:
-                    last_error = exc
-                    silver_failure_count += 1
-                    if aggregate_mode:
-                        logger.warning(
-                            "silver_aggregate_item_failed",
-                            source_event_id=envelope.event_id,
-                            item_event_id=candidate.event_id,
-                            feed=candidate.feed,
-                            error=str(exc),
-                        )
-                        continue
-                    raise
-
-            if silver_failure_count > 0:
-                logger.warning(
-                    "silver_aggregate_write_summary",
-                    source_event_id=envelope.event_id,
-                    feed=envelope.feed,
-                    success_count=silver_success_count,
-                    failed_count=silver_failure_count,
-                )
-
-            if silver_success_count == 0:
-                if last_error is not None:
-                    raise last_error
-                raise ValueError("all_aggregate_items_failed")
+            self._write_silver_candidates(envelope)
 
             logger.debug(
                 "Processed event",
                 event_id=envelope.event_id,
                 feed=envelope.feed,
-                silver_writes=silver_success_count,
             )
             record_event_processed(feed=feed, provider=provider, status="success")
             return True, None, True

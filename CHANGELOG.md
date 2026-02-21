@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### SonarQube Code Quality Remediation
+
+- **cli.py** — `_cmd_health_dataflow` now returns 1 on exception (was always returning 0, BLOCKER S3516)
+- **catalog/api.py** — Re-raise `asyncio.CancelledError` after cleanup in lifespan shutdown (MAJOR S7497)
+- **writer/compactor.py** — Replaced dict comprehension with `dict()` constructor (MINOR S7500); extracted `_resolve_numeric_type`, `_resolve_string_or_temporal_type` helpers from `_resolve_column_type` (CC 25→~8); extracted `_collect_small_files`, `_merge_tables_to_parquet` helpers from `compact_partition` (CC 18→~12)
+- **watch/poller.py** — Resolved TODO comment (INFO S1135); extracted `_build_updates_from_quotes` from `poll_once` (CC 17→~11)
+- **writer/consumer.py** — Extracted `_parse_and_validate_envelope`, `_write_silver_candidates` from `_process_event_once` (CC 23→~13)
+- **watch/consumer.py** — Extracted `_classify_alert_results`, `_process_one_alert_safe` from `_process_alert` (CC 25→~11); extracted `_coerce_float_or_default`, `_resolve_put_call`, `_resolve_alert_type` from `_map_alert_fields` (CC 22→~8)
+
 ### Changed
 
 #### Docker Restart Resilience
@@ -33,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Downgraded per-event `bronze_write_success` log from INFO to DEBUG to reduce I/O under backfill load.
 
 ### Fixed
+
+#### SonarQube NOSONAR Suppression Syntax
+
+- Fixed `# NOSONAR` comment format in `heber/ml/trainer.py` (lines 313, 316) — removed `# noqa` prefix and rule ID suffix so SonarQube correctly suppresses the false-positive S930 warnings on `Path.with_suffix()` calls
 
 #### Flow Alerts Payload Schema: Allow `sentiment` Key
 

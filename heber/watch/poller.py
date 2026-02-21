@@ -12,6 +12,7 @@ import structlog
 
 from heber.calendar import MarketCalendar
 from heber.config import settings
+from heber.core.http_client import create_async_http_client
 from heber.ops.metrics import record_watch_gateway_request, record_watch_poll_cycle
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
@@ -75,50 +76,14 @@ class SnapshotPoller:
         self.calendar = calendar or MarketCalendar()
         self._running = False
 
-    async def poll_once(self) -> dict[str, Any]:
-        """Run a single poll cycle.
-
-        Returns:
-            Stats from the poll cycle
-        """
-        # Get active watches grouped by symbol
-        active = await self.manager.get_active_watches_async()
-
-        if not active:
-            record_watch_poll_cycle(status="success")
-            return {"watches": 0, "quotes": 0, "errors": 0}
-
-        now = datetime.now(UTC)
-        due_watches = [watch for watch in active if self._is_watch_due(watch, now)]
-        if not due_watches:
-            record_watch_poll_cycle(status="success")
-            return {"watches": len(active), "due_watches": 0, "quotes": 0, "errors": 0}
-
-        # Group by unique symbol
-        symbol_to_watches: dict[str, list[AlertWatch]] = {}
-        for watch in due_watches:
-            symbol = watch.occ_symbol
-            if symbol not in symbol_to_watches:
-                symbol_to_watches[symbol] = []
-            symbol_to_watches[symbol].append(watch)
-
-        symbols = list(symbol_to_watches.keys())
-        logger.info("Polling quotes", symbols=len(symbols), watches=len(active), due_watches=len(due_watches))
-
-        # Fetch quotes in batches
-        quotes = await self._fetch_quotes(symbols)
-        if quotes:
-            record_watch_gateway_request(
-                component="poller",
-                endpoint="alpaca_options_quotes",
-                outcome="success",
-                status_code=200,
-                duration_seconds=0.0,
-            )
-
-        # Update watches with new prices
-        updates: list[tuple[AlertWatch, float, datetime]] = []
+    def _build_updates_from_quotes(
+        self,
+        quotes: dict[str, dict],
+        symbol_to_watches: dict[str, list[AlertWatch]],
+    ) -> tuple[list[WatchSnapshot], list[tuple[AlertWatch, float, datetime]]]:
+        """Build snapshots and price updates from fetched quotes."""
         snapshots: list[WatchSnapshot] = []
+        updates: list[tuple[AlertWatch, float, datetime]] = []
 
         for symbol, quote in quotes.items():
             for watch in symbol_to_watches.get(symbol, []):
@@ -136,12 +101,49 @@ class SnapshotPoller:
 
                 updates.append((watch, price_for_watch, snapshot.timestamp))
 
-        # Persist snapshots
-        # TODO(Optimization): Batch snapshot writes if volume becomes an issue
+        return snapshots, updates
+
+    async def poll_once(self) -> dict[str, Any]:
+        """Run a single poll cycle.
+
+        Returns:
+            Stats from the poll cycle
+        """
+        active = await self.manager.get_active_watches_async()
+
+        if not active:
+            record_watch_poll_cycle(status="success")
+            return {"watches": 0, "quotes": 0, "errors": 0}
+
+        now = datetime.now(UTC)
+        due_watches = [watch for watch in active if self._is_watch_due(watch, now)]
+        if not due_watches:
+            record_watch_poll_cycle(status="success")
+            return {"watches": len(active), "due_watches": 0, "quotes": 0, "errors": 0}
+
+        symbol_to_watches: dict[str, list[AlertWatch]] = {}
+        for watch in due_watches:
+            symbol_to_watches.setdefault(watch.occ_symbol, []).append(watch)
+
+        symbols = list(symbol_to_watches.keys())
+        logger.info("Polling quotes", symbols=len(symbols), watches=len(active), due_watches=len(due_watches))
+
+        quotes = await self._fetch_quotes(symbols)
+        if quotes:
+            record_watch_gateway_request(
+                component="poller",
+                endpoint="alpaca_options_quotes",
+                outcome="success",
+                status_code=200,
+                duration_seconds=0.0,
+            )
+
+        snapshots, updates = self._build_updates_from_quotes(quotes, symbol_to_watches)
+
+        # Snapshots are written individually; batch writes can be added if volume warrants it.
         for snapshot in snapshots:
             await self.manager.add_snapshot_async(snapshot)
 
-        # Bulk update watch state
         updated = 0
         if updates:
             updated = await self.manager.update_watch_prices_bulk_async(updates)
@@ -212,7 +214,7 @@ class SnapshotPoller:
         """
         quotes = {}
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_async_http_client(timeout=30.0) as client:
             tasks = []
             for i in range(0, len(symbols), self.batch_size):
                 batch = symbols[i : i + self.batch_size]

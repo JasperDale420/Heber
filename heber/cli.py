@@ -99,6 +99,9 @@ def _cmd_health_dataflow(args: argparse.Namespace) -> int:
         return 0
     except KeyboardInterrupt:
         return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 _SUBCOMMAND_HANDLERS = {

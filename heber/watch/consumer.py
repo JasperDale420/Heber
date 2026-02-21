@@ -17,6 +17,7 @@ import redis
 import structlog
 
 from heber.config import settings
+from heber.core.http_client import create_async_http_client
 from heber.features.templates.alert_labels import (
     AlertHorizon,
     ContractBarrierConfig,
@@ -353,11 +354,58 @@ class AlertWatchConsumer:
             pass
         return False
 
+    @staticmethod
+    def _classify_alert_results(
+        created: int,
+        missing_occ: int,
+        stale_window: int,
+        exceptions: int,
+    ) -> tuple[bool, bool, str]:
+        """Classify batch processing results into (success, retryable, reason)."""
+        if created > 0:
+            return True, False, "watch_created"
+        if stale_window > 0 and missing_occ == 0 and exceptions == 0:
+            return True, False, "stale_alert_window"
+        if missing_occ > 0 and exceptions == 0:
+            return True, False, "missing_occ_symbol"
+        if stale_window > 0 and missing_occ > 0 and exceptions == 0:
+            return True, False, "stale_or_missing_occ_symbol"
+        if exceptions > 0:
+            return False, True, "processing_exception"
+        return False, False, "alert_parse_failed"
+
+    async def _process_one_alert_safe(
+        self,
+        alert: dict,
+        msg_id: str,
+        batch_index: int,
+    ) -> str:
+        """Process a single alert, returning status string or raising on fatal auth errors."""
+        try:
+            return await self._process_parsed_alert(alert)
+        except EnrichmentAuthFailure:
+            logger.error(
+                "Fatal enrichment auth failure while processing parsed alert",
+                msg_id=msg_id,
+                alert_id=alert.get("id"),
+                batch_index=batch_index,
+                exc_info=True,
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                "Failed to process parsed alert",
+                msg_id=msg_id,
+                alert_id=alert.get("id"),
+                batch_index=batch_index,
+                error=str(e),
+            )
+            return "processing_exception"
+
     async def _process_alert(self, msg_id: str, data: dict) -> tuple[bool, bool, str]:
         """Process one stream message that may contain one or many alerts."""
         alerts = self._parse_alerts(data)
         if not alerts:
-            # Backward-compatible hook for tests/overrides that monkeypatch _parse_alert.
             parser_override = self.__dict__.get("_parse_alert")
             if callable(parser_override):
                 parsed = parser_override(data)
@@ -373,45 +421,22 @@ class AlertWatchConsumer:
         processing_exceptions = 0
 
         for batch_index, alert in enumerate(alerts):
-            try:
-                processed = await self._process_parsed_alert(alert)
-                if processed == "watch_created":
-                    created_count += 1
-                elif processed == "missing_occ_symbol":
-                    skipped_missing_occ += 1
-                elif processed == "stale_alert_window":
-                    skipped_stale_window += 1
-            except Exception as e:
-                if isinstance(e, EnrichmentAuthFailure):
-                    logger.error(
-                        "Fatal enrichment auth failure while processing parsed alert",
-                        msg_id=msg_id,
-                        alert_id=alert.get("id"),
-                        batch_index=batch_index,
-                        error=str(e),
-                        exc_info=True,
-                    )
-                    raise
+            result = await self._process_one_alert_safe(alert, msg_id, batch_index)
+            if result == "watch_created":
+                created_count += 1
+            elif result == "missing_occ_symbol":
+                skipped_missing_occ += 1
+            elif result == "stale_alert_window":
+                skipped_stale_window += 1
+            elif result == "processing_exception":
                 processing_exceptions += 1
-                logger.error(
-                    "Failed to process parsed alert",
-                    msg_id=msg_id,
-                    alert_id=alert.get("id"),
-                    batch_index=batch_index,
-                    error=str(e),
-                )
 
-        if created_count > 0:
-            return True, False, "watch_created"
-        if skipped_stale_window > 0 and skipped_missing_occ == 0 and processing_exceptions == 0:
-            return True, False, "stale_alert_window"
-        if skipped_missing_occ > 0 and processing_exceptions == 0:
-            return True, False, "missing_occ_symbol"
-        if skipped_stale_window > 0 and skipped_missing_occ > 0 and processing_exceptions == 0:
-            return True, False, "stale_or_missing_occ_symbol"
-        if processing_exceptions > 0:
-            return False, True, "processing_exception"
-        return False, False, "alert_parse_failed"
+        return self._classify_alert_results(
+            created_count,
+            skipped_missing_occ,
+            skipped_stale_window,
+            processing_exceptions,
+        )
 
     async def _process_parsed_alert(self, alert: dict[str, Any]) -> str:
         """Process one parsed alert and create its watch."""
@@ -656,60 +681,64 @@ class AlertWatchConsumer:
             return tags or None
         return None
 
-    def _map_alert_fields(self, parsed: dict) -> dict:
-        """Map various field name conventions to standard fields."""
+    @staticmethod
+    def _coerce_float_or_default(value: Any, default: float = 0.0) -> float:
+        """Coerce value to float, returning default if None."""
+        result = coerce_optional_float(value)
+        return result if result is not None else default
+
+    def _resolve_put_call(self, parsed: dict) -> str:
+        """Resolve put/call from available parsed fields."""
         put_call_raw = self._first_present_value(parsed, ("put_call", "option_type", "call_put"))
         type_raw = parsed.get("type")
         if put_call_raw is None and isinstance(type_raw, str):
             normalized_type = type_raw.strip().upper()
             if normalized_type.startswith("C") or normalized_type.startswith("P"):
                 put_call_raw = normalized_type
-        put_call = self._normalize_put_call(put_call_raw or "C")
+        return self._normalize_put_call(put_call_raw or "C")
 
-        strike = coerce_optional_float(self._first_present_value(parsed, ("strike",)))
-        if strike is None:
-            strike = 0.0
-
-        spot_px_raw = self._first_present_value(parsed, ("spot_px", "underlying_price", "spot", "underlying_px"))
-        contract_px_raw = self._first_present_value(
-            parsed,
-            ("contract_px", "price", "option_price", "mid", "mid_price"),
+    def _resolve_alert_type(self, parsed: dict) -> str:
+        """Resolve alert_type from available parsed fields."""
+        alert_type = self._normalize_optional_text(
+            self._first_present_value(parsed, ("alert_type", "flow_type", "order_type"))
         )
-        premium_raw = self._first_present_value(
-            parsed,
-            ("premium", "total_premium", "premium_amount", "notional_premium", "notional"),
-        )
-        volume_raw = self._first_present_value(parsed, ("volume", "size", "contracts", "contract_volume", "total_size"))
-        open_interest_raw = self._first_present_value(parsed, ("open_interest", "oi", "openInterest"))
+        if alert_type is not None:
+            return alert_type
+        type_raw = parsed.get("type")
+        if isinstance(type_raw, str):
+            normalized_type = type_raw.strip().upper()
+            if not (normalized_type.startswith("C") or normalized_type.startswith("P")):
+                return normalized_type
+        return "UNKNOWN"
 
-        normalized_spot_px = coerce_optional_float(spot_px_raw)
-        if normalized_spot_px is None:
-            normalized_spot_px = 0.0
-        normalized_contract_px = coerce_optional_float(contract_px_raw)
-        if normalized_contract_px is None:
-            normalized_contract_px = 0.0
-        normalized_premium = coerce_optional_float(premium_raw)
-        if normalized_premium is None:
-            normalized_premium = 0.0
-        normalized_volume = coerce_optional_float(volume_raw)
-        if normalized_volume is None:
-            normalized_volume = 0.0
-        normalized_open_interest = coerce_optional_float(open_interest_raw)
+    def _map_alert_fields(self, parsed: dict) -> dict:
+        """Map various field name conventions to standard fields."""
+        put_call = self._resolve_put_call(parsed)
+        strike = self._coerce_float_or_default(self._first_present_value(parsed, ("strike",)))
+
+        normalized_spot_px = self._coerce_float_or_default(
+            self._first_present_value(parsed, ("spot_px", "underlying_price", "spot", "underlying_px"))
+        )
+        normalized_contract_px = self._coerce_float_or_default(
+            self._first_present_value(parsed, ("contract_px", "price", "option_price", "mid", "mid_price"))
+        )
+        normalized_premium = self._coerce_float_or_default(
+            self._first_present_value(
+                parsed, ("premium", "total_premium", "premium_amount", "notional_premium", "notional")
+            )
+        )
+        normalized_volume = self._coerce_float_or_default(
+            self._first_present_value(parsed, ("volume", "size", "contracts", "contract_volume", "total_size"))
+        )
+        normalized_open_interest = coerce_optional_float(
+            self._first_present_value(parsed, ("open_interest", "oi", "openInterest"))
+        )
+
         normalized_volume_oi_ratio = coerce_optional_float(
             self._first_present_value(parsed, ("volume_oi_ratio", "vol_oi_ratio"))
         )
         if normalized_volume_oi_ratio is None and normalized_open_interest is not None and normalized_open_interest > 0:
             normalized_volume_oi_ratio = normalized_volume / normalized_open_interest
-
-        alert_type = self._normalize_optional_text(
-            self._first_present_value(parsed, ("alert_type", "flow_type", "order_type"))
-        )
-        if alert_type is None and isinstance(type_raw, str):
-            normalized_type = type_raw.strip().upper()
-            if not (normalized_type.startswith("C") or normalized_type.startswith("P")):
-                alert_type = normalized_type
-        if alert_type is None:
-            alert_type = "UNKNOWN"
 
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
@@ -723,7 +752,7 @@ class AlertWatchConsumer:
             "premium": normalized_premium,
             "volume": normalized_volume,
             "open_interest": normalized_open_interest,
-            "alert_type": alert_type,
+            "alert_type": self._resolve_alert_type(parsed),
             "side": self._normalize_optional_text(self._first_present_value(parsed, ("side", "execution_side"))),
             "aggressor": self._normalize_optional_text(self._first_present_value(parsed, ("aggressor",))),
             "tags": self._normalize_tags(self._first_present_value(parsed, ("tags", "tag_list", "flags"))),
@@ -775,7 +804,7 @@ class AlertWatchConsumer:
             Mid price or None
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with create_async_http_client(timeout=10.0) as client:
                 routes = gateway_url_candidates(
                     self.gateway_url,
                     "/alpaca/options/quotes",

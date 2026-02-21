@@ -116,8 +116,8 @@ async def lifespan(app: FastAPI):
         try:
             await discovery_task
         except asyncio.CancelledError:
-            pass
-        logger.info("catalog_periodic_scan_stopped")
+            logger.info("catalog_periodic_scan_stopped")
+            raise
 
 
 app = FastAPI(

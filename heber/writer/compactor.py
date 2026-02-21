@@ -137,6 +137,40 @@ class Compactor:
         return _is_temporal_type(dt)
 
     @staticmethod
+    def _resolve_numeric_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
+        """Resolve compatible numeric types via widening."""
+        if pa.types.is_integer(existing_type) and pa.types.is_integer(incoming_type):
+            return pa.int64()
+        if (pa.types.is_integer(existing_type) or pa.types.is_floating(existing_type)) and (
+            pa.types.is_integer(incoming_type) or pa.types.is_floating(incoming_type)
+        ):
+            return pa.float64()
+        return None
+
+    @staticmethod
+    def _resolve_string_or_temporal_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
+        """Resolve string-like and temporal type unification."""
+        is_existing_string = pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)
+        is_incoming_string = pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)
+
+        if is_existing_string and is_incoming_string:
+            if pa.types.is_large_string(existing_type) or pa.types.is_large_string(incoming_type):
+                return pa.large_string()
+            return pa.string()
+
+        is_existing_temporal = _is_temporal_type(existing_type)
+        is_incoming_temporal = _is_temporal_type(incoming_type)
+
+        if is_existing_temporal and is_incoming_string:
+            return incoming_type
+        if is_incoming_temporal and is_existing_string:
+            return existing_type
+        if is_existing_temporal and is_incoming_temporal:
+            return pa.string()
+
+        return None
+
+    @staticmethod
     def _resolve_column_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
         """Resolve a compatible unified type for one column.
 
@@ -155,36 +189,12 @@ class Compactor:
             return incoming_type
         if pa.types.is_null(incoming_type):
             return existing_type
-        if pa.types.is_integer(existing_type) and pa.types.is_integer(incoming_type):
-            return pa.int64()
-        if (
-            (pa.types.is_integer(existing_type) and pa.types.is_floating(incoming_type))
-            or (pa.types.is_floating(existing_type) and pa.types.is_integer(incoming_type))
-            or (pa.types.is_floating(existing_type) and pa.types.is_floating(incoming_type))
-        ):
-            return pa.float64()
 
-        # String-like unification
-        both_string_like = (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)) and (
-            pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)
-        )
-        if both_string_like:
-            if pa.types.is_large_string(existing_type) or pa.types.is_large_string(incoming_type):
-                return pa.large_string()
-            return pa.string()
+        numeric = Compactor._resolve_numeric_type(existing_type, incoming_type)
+        if numeric is not None:
+            return numeric
 
-        # Temporal ↔ string: widen to string (dates can always be represented as strings)
-        is_existing_temporal = _is_temporal_type(existing_type)
-        is_incoming_temporal = _is_temporal_type(incoming_type)
-        if is_existing_temporal and (pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)):
-            return incoming_type
-        if is_incoming_temporal and (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)):
-            return existing_type
-        # Two different temporal types → string as fallback
-        if is_existing_temporal and is_incoming_temporal:
-            return pa.string()
-
-        return None
+        return Compactor._resolve_string_or_temporal_type(existing_type, incoming_type)
 
     def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
         """Build unified schema across tables, raising on true type conflicts."""
@@ -255,6 +265,58 @@ class Compactor:
             )
             return None
 
+    def _collect_small_files(self, partition_path: Path) -> list[Path] | None:
+        """Collect compactable parquet files below the target size threshold.
+
+        Returns list of small file paths, or None if there aren't enough files to compact.
+        """
+        parquet_files = self._list_compactable_parquet_files(partition_path)
+        if len(parquet_files) <= 1:
+            return None
+
+        sized_files: list[tuple[Path, int]] = []
+        for file_path in parquet_files:
+            file_size = self._safe_stat_size(file_path, partition_path)
+            if file_size is not None:
+                sized_files.append((file_path, file_size))
+
+        if len(sized_files) <= 1:
+            return None
+
+        small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
+        if len(small_files) <= 1:
+            return None
+
+        total_size = sum(size for _, size in sized_files)
+        logger.info(
+            "Compacting partition",
+            partition=str(partition_path),
+            files=len(small_files),
+            total_bytes=total_size,
+        )
+        return small_files
+
+    def _merge_tables_to_parquet(
+        self,
+        source_tables: list[pa.Table],
+        unified_schema: pa.Schema,
+        temp_path: Path,
+    ) -> int:
+        """Write source tables to a temporary parquet file, returning total row count."""
+        writer = None
+        merged_rows = 0
+        try:
+            for source_table in source_tables:
+                table = self._align_table_to_schema(source_table, unified_schema)
+                if writer is None:
+                    writer = pq.ParquetWriter(temp_path, unified_schema, compression="snappy")
+                writer.write_table(table, row_group_size=250_000)
+                merged_rows += table.num_rows
+        finally:
+            if writer is not None:
+                writer.close()
+        return merged_rows
+
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -268,41 +330,11 @@ class Compactor:
         dataset = self._dataset_label(partition_path)
 
         try:
-            parquet_files = self._list_compactable_parquet_files(partition_path)
-            if len(parquet_files) <= 1:
+            small_files = self._collect_small_files(partition_path)
+            if small_files is None:
                 return 0
 
-            sized_files: list[tuple[Path, int]] = []
-            for file_path in parquet_files:
-                file_size = self._safe_stat_size(file_path, partition_path)
-                if file_size is not None:
-                    sized_files.append((file_path, file_size))
-
-            if len(sized_files) <= 1:
-                return 0
-
-            total_size = sum(size for _, size in sized_files)
-            small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
-            if len(small_files) <= 1:
-                return 0
-
-            logger.info(
-                "Compacting partition",
-                partition=str(partition_path),
-                files=len(small_files),
-                total_bytes=total_size,
-            )
-            size_by_path = {path: size for path, size in sized_files}
-            source_bytes = sum(size_by_path[path] for path in small_files)
-
-            # Stream files into a single temp parquet, then atomically promote.
-            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-            merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
-            temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
-            source_tables: list[pa.Table] = []
-            for source_file in small_files:
-                source_table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
-                source_tables.append(source_table)
+            source_tables = [self._normalize_dict_columns(pq.ParquetFile(f).read()) for f in small_files]
 
             try:
                 unified_schema = self._build_unified_schema(source_tables)
@@ -323,29 +355,17 @@ class Compactor:
                 )
                 return 0
 
-            writer = None
-            merged_rows = 0
-            try:
-                for source_table in source_tables:
-                    table = self._align_table_to_schema(source_table, unified_schema)
-                    if writer is None:
-                        writer = pq.ParquetWriter(
-                            temp_path,
-                            unified_schema,
-                            compression="snappy",
-                        )
-                    writer.write_table(table, row_group_size=250_000)
-                    merged_rows += table.num_rows
-            finally:
-                if writer is not None:
-                    writer.close()
+            ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+            merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
+            temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
 
-            # Atomic file promotion once the merge succeeds.
+            merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path)
+
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0
+            source_bytes = sum(f.stat().st_size for f in small_files if f.exists())
             reclaimed = max(source_bytes - merged_size, 0)
 
-            # Delete source files only after merged output is durable.
             for f in small_files:
                 f.unlink()
 
@@ -356,7 +376,6 @@ class Compactor:
                 bytes_reclaimed=reclaimed,
                 duration=(datetime.now(UTC) - started_at).total_seconds(),
             )
-
             logger.info(
                 "Compaction complete",
                 partition=str(partition_path),
@@ -364,7 +383,6 @@ class Compactor:
                 output_file=str(merged_path),
                 rows=merged_rows,
             )
-
             return len(small_files)
 
         except Exception as e:
@@ -375,7 +393,6 @@ class Compactor:
                 bytes_reclaimed=0,
                 duration=(datetime.now(UTC) - started_at).total_seconds(),
             )
-            # Best-effort cleanup: never delete source files on failed compaction.
             for stale_temp in partition_path.glob(".compacted-*.tmp"):
                 stale_temp.unlink(missing_ok=True)
             logger.error(
