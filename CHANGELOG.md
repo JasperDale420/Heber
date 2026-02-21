@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Consumer Concurrent Message Processing
+
+- Refactored `_process_stream_messages()` in `heber/writer/consumer.py` to use `asyncio.gather()` with a configurable semaphore (`redis_process_concurrency`, default 10) instead of serial iteration, enabling up to 10× throughput improvement during backfill bursts.
+- Optimized `_consume_iteration()` to only flush Bronze/Silver on idle iterations (no messages), eliminating a redundant `_flush_layers()` call under load.
+- Added batch throughput logging (`batch_processed` event) with messages/second, elapsed time, and concurrency level for backfill observability.
+- Added `redis_process_concurrency` setting to `heber/config.py` (configurable 1–50, env: `HEBER_REDIS_PROCESS_CONCURRENCY`).
+- Added 5 regression tests in `tests/test_consumer_concurrency.py` covering concurrent execution, error isolation, DLQ routing, semaphore limits, and exception handling.
+
 ### Fixed
 
 #### Flow Alerts Payload Schema: Allow `sentiment` Key

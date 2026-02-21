@@ -10,6 +10,7 @@ because it requires low-level stream control (``XREADGROUP``, ``XACK``, ``XCLAIM
 import asyncio
 import json
 import signal
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -355,27 +356,53 @@ class EventConsumer:
         return str(event_dict.get("feed") or "unknown")
 
     async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
-        """Process a list of stream messages and return `(acked_ids, failed_ids)`."""
+        """Process a list of stream messages concurrently and return `(acked_ids, failed_ids)`.
+
+        Uses a semaphore to limit concurrency to ``redis_process_concurrency``.
+        Processing order is non-deterministic but result ordering is preserved
+        for correct ACK/DLQ routing.
+        """
+        sem = asyncio.Semaphore(settings.redis_process_concurrency)
+
+        async def _process_one(message_id: Any, message_data: dict) -> tuple[str, bool, str | None, int]:
+            async with sem:
+                success, error, attempts = await self._process_with_retry(message_data)
+                return self._decode_string(message_id), success, error, attempts
+
+        results = await asyncio.gather(
+            *[_process_one(mid, mdata) for mid, mdata in stream_messages],
+            return_exceptions=True,
+        )
+
         processed_ids: list[str] = []
         failed_ids: list[str] = []
 
-        for message_id, message_data in stream_messages:
-            success, error, attempts = await self._process_with_retry(message_data)
-            message_id_str = self._decode_string(message_id)
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                mid_str = self._decode_string(stream_messages[i][0])
+                logger.error(
+                    "Unexpected error processing message",
+                    message_id=mid_str,
+                    error=str(result),
+                    exc_info=True,
+                )
+                failed_ids.append(mid_str)
+                continue
+
+            message_id_str, success, error, attempts = result
             if success:
                 processed_ids.append(message_id_str)
                 continue
 
-            feed = self._extract_feed_from_message(message_data)
+            feed = self._extract_feed_from_message(stream_messages[i][1])
             moved_to_dlq = await self._send_to_dlq(
-                message_id=message_id,
-                message_data=message_data,
+                message_id=stream_messages[i][0],
+                message_data=stream_messages[i][1],
                 error=error,
                 attempts=attempts,
                 feed=feed,
             )
             if moved_to_dlq:
-                # Ack after durable DLQ write so poison messages don't block group progress.
                 processed_ids.append(message_id_str)
             else:
                 failed_ids.append(message_id_str)
@@ -552,7 +579,7 @@ class EventConsumer:
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
 
-        Flow: read batch → process all → flush to disk → ACK all.
+        Flow: read batch → process all concurrently → flush to disk → ACK all.
         This ensures data is persisted before we acknowledge to Redis,
         preventing data loss on crash.
         """
@@ -563,17 +590,21 @@ class EventConsumer:
             count=settings.redis_read_batch_size,
             block=settings.redis_read_block_ms,
         )
-        # Always check for flush even with no messages (handles idle periods)
-        self._flush_layers()
 
         if not messages:
+            # Flush on idle iterations to respect time-based flush thresholds
+            self._flush_layers()
             return
+
+        t0 = time.monotonic()
 
         # Collect successfully processed message IDs
         processed_ids: list[str] = []
         failed_ids: list[str] = []
+        total_messages = 0
 
         for _stream_name, stream_messages in messages:
+            total_messages += len(stream_messages)
             record_batch_processed(feed="mixed", batch_size=len(stream_messages))
             ack_ids, stream_failed_ids = await self._process_stream_messages(stream_messages)
             processed_ids.extend(ack_ids)
@@ -589,7 +620,18 @@ class EventConsumer:
                 settings.redis_consumer_group,
                 *processed_ids,
             )
-            logger.debug("Acknowledged batch", count=len(processed_ids))
+
+        elapsed = time.monotonic() - t0
+        rate = total_messages / elapsed if elapsed > 0 else 0
+        logger.info(
+            "batch_processed",
+            total=total_messages,
+            acked=len(processed_ids),
+            failed=len(failed_ids),
+            elapsed_seconds=round(elapsed, 3),
+            messages_per_second=round(rate, 1),
+            concurrency=settings.redis_process_concurrency,
+        )
 
         if failed_ids:
             logger.warning(

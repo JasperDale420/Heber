@@ -83,6 +83,12 @@ class Settings(BaseSettings):
         le=10000,
         description="XREADGROUP block timeout in ms (longer allows larger batches to fill)",
     )
+    redis_process_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max messages processed concurrently within each XREADGROUP batch",
+    )
 
     # API
     api_host: str = Field(default="0.0.0.0")
