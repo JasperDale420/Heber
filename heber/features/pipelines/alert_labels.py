@@ -19,10 +19,10 @@ import os
 from datetime import datetime, timedelta
 from typing import Any
 
-import httpx
 import pandas as pd
 import structlog
 
+from heber.core.http_client import create_async_http_client
 from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     SlippageModel,
@@ -371,7 +371,7 @@ class AlertLabelsPipeline:
         gateway_key = self._require_gateway_api_key()
         auth_headers = gateway_auth_headers(gateway_key)
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with create_async_http_client(timeout=60.0) as client:
                 # Batch symbols (API may have limits)
                 batch_size = 100
                 all_bars = []

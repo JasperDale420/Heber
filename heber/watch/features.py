@@ -21,6 +21,7 @@ import polars as pl
 import structlog
 
 from heber.config import settings
+from heber.core.http_client import create_async_http_client
 from heber.ml.datasets import persist_features_to_gold as persist_features_frame_to_gold
 from heber.ops.metrics import (
     record_watch_gateway_request,
@@ -546,10 +547,8 @@ class AlertFeatureExtractor:
         if cached_payload is not None:
             return cached_payload
 
-        import httpx
-
         ctx = {"endpoint": endpoint, "symbol": symbol, "alert_id": alert_id}
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with create_async_http_client(timeout=10.0) as client:
             for route in routes:
                 result = await self._try_route(client, route, params, ctx)
                 if result is False:
