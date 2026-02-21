@@ -2,6 +2,7 @@
 
 import sys
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Mock feast module before importing materialization
@@ -19,7 +20,7 @@ class TestMaterializeFunctions:
     def test_materialize_incremental(self):
         mock_store = MagicMock()
         mock_store.list_feature_views.return_value = [
-            MagicMock(name="momentum_features"),
+            SimpleNamespace(name="momentum_features"),
         ]
         mock_feast.FeatureStore.return_value = mock_store
 

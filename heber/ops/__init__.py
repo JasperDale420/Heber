@@ -83,7 +83,6 @@ from heber.ops.metrics import (
     record_write,
     record_write_error,
     set_consumer_lag,
-    set_hotstore_lag,
     set_service_info,
     start_metrics_server,
     start_metrics_server_from_env,
@@ -139,7 +138,6 @@ __all__ = [
     "record_api_request",
     "record_dlq_event",
     "set_consumer_lag",
-    "set_hotstore_lag",
     # Alerting (§12.5.4)
     "AlertRule",
     "Severity",

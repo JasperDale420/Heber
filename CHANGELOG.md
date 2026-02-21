@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Flow Alerts Payload Schema: Allow `sentiment` Key
+
+- Added `sentiment` to `PAYLOAD_ALLOWED_FIELDS["flow_alerts"]` in `heber/writer/ingest_contracts.py` — the Data Gateway now includes a `sentiment` field in flow alert payloads, which was producing ~9,900 `payload_unexpected_keys` warnings per day.
+
+#### Bronze-Only Policy: `institution_holdings` Feed
+
+- Added `institution_holdings` to `BRONZE_ONLY_SILVER_DATASETS` — this feed has no Silver schema and was incorrectly routing to Silver writes.
+
+#### Silver Writer Metrics Instrumentation
+
+- Wired `record_write` / `record_write_error` from `heber.ops.metrics` into `SilverWriter._flush_partition` for flush duration, rows written, and bytes written tracking.
+
+#### K8s Kustomization: Remove Deleted Hotloader References
+
+- Removed `deployments/hotloader.yaml`, `services/hotloader.yaml`, and `pdb/hotloader.yaml` from `k8s/base/kustomization.yaml` — these manifests were deleted when Hot Store was removed but the references remained, breaking `kubectl kustomize`.
+
+#### Test Suite: Fix 16 Failing Tests (725/725 passing)
+
+- Added `update_watch_prices_bulk_async` to `_AsyncOnlyManager` and `_Manager` test mocks to match the poller's bulk-update API.
+- Added `mget` to `_BytesRedis` test mock for `WatchManager.get_active_watches()` bulk-fetch.
+- Fixed `test_process_event_rejects_invalid_instrument_key` to use a truly non-normalizable key (key normalization was auto-fixing the previous test input).
+- Fixed catalog migration tests to mock `async_session` and seed functions, avoiding `greenlet` dependency.
+- Fixed feast materialization test `MagicMock(name=...)` serialization issue by using `SimpleNamespace`.
+
 #### Heber Watch Port Configuration
 
 - Fixed `DATA_GATEWAY_URL` in `docker-compose.yml` to point to port `8081` for the `heber-watch` service, matching the external port exposed by the Data Gateway container.

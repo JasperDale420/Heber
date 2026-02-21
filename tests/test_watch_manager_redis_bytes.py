@@ -26,6 +26,9 @@ class _BytesRedis:
     def get(self, key: str) -> bytes | None:
         return self._kv.get(key)
 
+    def mget(self, keys: list[str]) -> list[bytes | None]:
+        return [self._kv.get(k) for k in keys]
+
     def sadd(self, key: str, *values: str | bytes) -> None:
         bucket = self._sets.setdefault(key, set())
         for value in values:

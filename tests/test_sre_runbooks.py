@@ -72,7 +72,7 @@ class TestRunbookRegistry:
     def test_default_runbooks_loaded(self):
         registry = RunbookRegistry()
 
-        assert len(registry.runbooks) >= 6
+        assert len(registry.runbooks) >= 5
         assert "consumer_lag" in registry.runbooks
         assert "leakage_violation" in registry.runbooks
 

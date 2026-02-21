@@ -91,7 +91,6 @@ DEFAULT_STAGING_CONFIG: list[StagingConfig] = [
     StagingConfig("RDS", "db.t3.small (Postgres)"),
     StagingConfig("Redis", "t3.micro"),
     StagingConfig("S3", "Separate bucket (heber-staging)"),
-    StagingConfig("ClickHouse", "Single node"),
 ]
 
 
@@ -131,11 +130,6 @@ DEFAULT_LOCAL_SERVICES: list[DockerComposeService] = [
         image="minio/minio",
         ports=["9000:9000", "9001:9001"],
         environment={"MINIO_ROOT_USER": "minioadmin", "MINIO_ROOT_PASSWORD": "minioadmin"},
-    ),
-    DockerComposeService(
-        name="clickhouse",
-        image="clickhouse/clickhouse-server",
-        ports=["8123:8123", "9000:9000"],
     ),
 ]
 

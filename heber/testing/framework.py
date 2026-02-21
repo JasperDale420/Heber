@@ -83,7 +83,6 @@ DEFAULT_MOCK_STRATEGIES: list[MockStrategy] = [
     MockStrategy("S3", "moto", "S3 mock or localstack"),
     MockStrategy("Redis", "fakeredis", "or testcontainers"),
     MockStrategy("Postgres", "testcontainers", "ephemeral DB"),
-    MockStrategy("ClickHouse", "testcontainers", "or mock"),
 ]
 
 
@@ -144,10 +143,6 @@ DEFAULT_INTEGRATION_TEST_SPECS: list[IntegrationTestSpec] = [
     IntegrationTestSpec(
         suite_name="SDK Integration",
         components=["SDK", "Catalog", "S3"],
-    ),
-    IntegrationTestSpec(
-        suite_name="Hot Store Integration",
-        components=["Hotloader", "ClickHouse"],
     ),
 ]
 
@@ -217,11 +212,6 @@ DEFAULT_E2E_TEST_CASES: list[E2ETestCase] = [
         flow="Compaction",
         scenario="Many small files → Compacted",
         success_criteria="File count reduced, data intact",
-    ),
-    E2ETestCase(
-        flow="Hot Store",
-        scenario="Silver → ClickHouse → get_latest()",
-        success_criteria="Latest values correct",
     ),
 ]
 

@@ -66,7 +66,7 @@ DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
 # Feeds to persist in Bronze but skip Silver by default until an active Gold use-case exists.
 # Currently empty — all contracted feeds get Silver normalization. Add canonical Silver
 # dataset names here to gate them out of Silver writes.
-BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset({"news"})
+BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset({"news", "institution_holdings"})
 
 # Required and allowed payload keys for schema validation.
 # Required keys trigger a warning when missing; unexpected keys (outside
@@ -125,6 +125,7 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
         "all_opening_trades",
         "total_size",
         "expiry_count",
+        "sentiment",
     },
     "market_tide": {
         "timestamp",

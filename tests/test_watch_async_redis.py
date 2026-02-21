@@ -62,6 +62,11 @@ class _AsyncOnlyManager:
         self.updated_prices.append(_price)
         return None
 
+    async def update_watch_prices_bulk_async(self, updates):  # noqa: ANN001
+        for watch, price, ts in updates:
+            await self.update_watch_price_async(watch.watch_id, price, ts)
+        return len(updates)
+
 
 class _StrictPriceManager(_AsyncOnlyManager):
     async def update_watch_price_async(self, _watch_id, _price, _timestamp):  # noqa: ANN001

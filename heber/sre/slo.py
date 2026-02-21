@@ -188,11 +188,6 @@ DEFAULT_SLIS: dict[str, SLI] = {
         metric_query="max by (dataset) (time() - heber_dataset_latest_ts_available_timestamp_seconds)",
         description="Seconds since latest data became available",
     ),
-    "hotstore_lag": SLI(
-        name="hotstore_lag",
-        metric_query="heber_hotstore_lag_seconds",
-        description="Hot Store sync lag in seconds",
-    ),
     "catalog_availability": SLI(
         name="catalog_availability",
         metric_query='up{job="heber-catalog"}',

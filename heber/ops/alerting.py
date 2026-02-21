@@ -66,14 +66,6 @@ ALERTING_RULES = [
         description="Write errors in {{ $labels.layer }} exceeding 1% for 5 minutes",
     ),
     AlertRule(
-        name="HeberHotStoreLagHigh",
-        expr="heber_hotstore_lag_seconds > 300",
-        for_duration="5m",
-        severity=Severity.WARNING,
-        summary="Hot Store sync lag is high",
-        description="Hot Store {{ $labels.dataset }} has sync lag > 300s for 5 minutes. Current: {{ $value }}s",
-    ),
-    AlertRule(
         name="HeberAvailabilityLagSpike",
         expr="histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 30",
         for_duration="5m",
@@ -158,11 +150,6 @@ DASHBOARDS = {
                 "title": "Error Rate (by type)",
                 "query": "rate(heber_writer_errors_total[5m])",
                 "type": "graph",
-            },
-            {
-                "title": "Hot Store Sync Lag",
-                "query": "heber_hotstore_lag_seconds",
-                "type": "gauge",
             },
         ],
     },

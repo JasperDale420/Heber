@@ -54,6 +54,11 @@ class _Manager:
     async def update_watch_price_async(self, watch_id: str, price: float, ts: datetime) -> None:  # noqa: ARG002
         self.updated.append((watch_id, price))
 
+    async def update_watch_prices_bulk_async(self, updates: list) -> int:
+        for watch, price, ts in updates:
+            await self.update_watch_price_async(watch.watch_id, price, ts)
+        return len(updates)
+
 
 @pytest.mark.asyncio
 async def test_poll_once_records_poll_and_gateway_success_metrics(monkeypatch: pytest.MonkeyPatch) -> None:

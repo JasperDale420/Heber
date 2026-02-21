@@ -59,7 +59,7 @@ class TestChaosRegistry:
     def test_default_experiments_loaded(self):
         registry = ChaosRegistry()
 
-        assert len(registry.experiments) >= 7
+        assert len(registry.experiments) >= 6
         assert "Kill Consumer Pod" in registry.experiments
 
     def test_get_by_name(self):

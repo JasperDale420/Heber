@@ -21,14 +21,11 @@ resources:
   - deployments/consumer.yaml
   - deployments/compactor.yaml
   - deployments/catalog.yaml
-  - deployments/hotloader.yaml
   - deployments/backfill.yaml
   - services/consumer.yaml
   - services/catalog.yaml
-  - services/hotloader.yaml
   - pdb/consumer.yaml
   - pdb/catalog.yaml
-  - pdb/hotloader.yaml
   - hpa/consumer.yaml
   - hpa/catalog.yaml
 

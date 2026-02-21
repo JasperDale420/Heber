@@ -35,7 +35,6 @@ def test_worker_deployments_use_exec_probes() -> None:
     worker_expectations = {
         ROOT / "k8s/base/deployments/consumer.yaml": "heber.writer.consumer",
         ROOT / "k8s/base/deployments/compactor.yaml": "heber.writer.compactor",
-        ROOT / "k8s/base/deployments/hotloader.yaml": "heber.writer.hotstore",
         ROOT / "k8s/base/deployments/backfill.yaml": "heber.backfill",
     }
 

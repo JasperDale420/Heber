@@ -137,14 +137,14 @@ class TestEnvironmentManager:
 
         services = manager.get_local_services()
 
-        assert len(services) >= 4  # postgres, redis, minio, clickhouse
+        assert len(services) >= 3  # postgres, redis, minio
 
     def test_get_staging_config(self):
         manager = EnvironmentManager()
 
         config = manager.get_staging_config()
 
-        assert len(config) >= 5
+        assert len(config) >= 4
 
     def test_generate_docker_compose(self):
         manager = EnvironmentManager()

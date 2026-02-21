@@ -175,31 +175,6 @@ DLQ_GROWING_RUNBOOK = Runbook(
     ],
 )
 
-HOTSTORE_SYNC_RUNBOOK = Runbook(
-    title="Hot Store Sync Failure",
-    alert_name="HeberHotStoreLagHigh",
-    severity=IncidentSeverity.P2_HIGH,
-    symptoms=[
-        "heber_hotstore_lag_seconds > 300s",
-        "Hot Store queries return stale data",
-    ],
-    triage_steps=[
-        TriageStep(1, "kubectl logs -l app=heber-hotloader", "Check hotloader pod"),
-        TriageStep(2, "clickhouse-client -q 'SELECT 1'", "Check ClickHouse health"),
-        TriageStep(3, "", "Check network between EKS and ClickHouse"),
-    ],
-    common_causes=[
-        "ClickHouse cluster unhealthy",
-        "Hotloader pod crash",
-        "Network partition",
-    ],
-    resolutions=[
-        ResolutionAction("ClickHouse down", "Check CH logs, restart if needed"),
-        ResolutionAction("Hotloader OOM", "Increase memory, restart"),
-        ResolutionAction("Network issue", "Check security groups, VPC endpoints"),
-    ],
-    fallback="If Hot Store is down, queries should fall back to Silver (slower but correct)",
-)
 
 CATALOG_UNREACHABLE_RUNBOOK = Runbook(
     title="Catalog Unreachable",
@@ -282,7 +257,6 @@ LEAKAGE_VIOLATION_RUNBOOK = Runbook(
 DEFAULT_RUNBOOKS: dict[str, Runbook] = {
     "consumer_lag": CONSUMER_LAG_RUNBOOK,
     "dlq_growing": DLQ_GROWING_RUNBOOK,
-    "hotstore_sync": HOTSTORE_SYNC_RUNBOOK,
     "catalog_unreachable": CATALOG_UNREACHABLE_RUNBOOK,
     "compaction_stuck": COMPACTION_STUCK_RUNBOOK,
     "leakage_violation": LEAKAGE_VIOLATION_RUNBOOK,

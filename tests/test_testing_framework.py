@@ -138,7 +138,7 @@ class TestPerformanceTester:
 
         assert "slos" in report
         assert "load_scenarios" in report
-        assert len(report["slos"]) == 5
+        assert len(report["slos"]) == 4
 
 
 class TestUnitTestFramework:
@@ -169,7 +169,7 @@ class TestIntegrationTestHarness:
 
         specs = harness.list_all_specs()
 
-        assert len(specs) >= 6
+        assert len(specs) >= 5
 
     def test_get_spec(self):
         harness = IntegrationTestHarness()
@@ -188,7 +188,7 @@ class TestE2ETestSuite:
 
         tests = suite.list_all()
 
-        assert len(tests) == 7
+        assert len(tests) == 6
 
     def test_get_schedule(self):
         suite = E2ETestSuite()

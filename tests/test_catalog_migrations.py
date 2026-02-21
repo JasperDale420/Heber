@@ -43,6 +43,21 @@ async def test_catalog_lifespan_auto_creates_tables_in_dev(monkeypatch: pytest.M
     stub_engine = _StubEngine()
     monkeypatch.setattr(catalog_api, "engine", stub_engine)
     monkeypatch.setattr(catalog_api.settings, "environment", "dev")
+    monkeypatch.setattr(catalog_api.settings, "catalog_auto_discover", False)
+    monkeypatch.setattr(catalog_api.settings, "metrics_port", 0)
+
+    # Mock async_session and seed functions so lifespan doesn't hit real SQLAlchemy async
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    @asynccontextmanager
+    async def _stub_session():
+        yield AsyncMock()
+
+    monkeypatch.setattr(catalog_api, "async_session", _stub_session)
+    monkeypatch.setattr(catalog_api, "seed_datasets", AsyncMock())
+    monkeypatch.setattr(catalog_api, "seed_schema_versions", AsyncMock())
+    monkeypatch.setattr(catalog_api, "seed_feed_mappings", AsyncMock())
 
     assert catalog_api._should_auto_create_catalog_tables() is True
 
@@ -58,6 +73,7 @@ async def test_catalog_lifespan_skips_auto_create_tables_outside_dev(monkeypatch
     stub_engine = _StubEngine()
     monkeypatch.setattr(catalog_api, "engine", stub_engine)
     monkeypatch.setattr(catalog_api.settings, "environment", "prod")
+    monkeypatch.setattr(catalog_api.settings, "catalog_auto_discover", False)
 
     assert catalog_api._should_auto_create_catalog_tables() is False
 

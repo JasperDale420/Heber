@@ -27,7 +27,6 @@ Local ports from `docker-compose.yml`:
 - Catalog API: `http://localhost:8085`
 - Postgres: `localhost:5433`
 - Redis: `localhost:6380`
-- ClickHouse: `localhost:8124` (HTTP), `localhost:9002` (native)
 - Consumer metrics: `http://localhost:9090/metrics`
 - Watch metrics: `http://localhost:9091/metrics`
 - lakeFS: `http://localhost:8000`
@@ -43,8 +42,6 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
                                     heber-catalog (Postgres)
                                             v
                                       SDK + CLI
-                                            v
-                                Hot Store (ClickHouse)
 ```
 
 ## Storage Layout
@@ -55,7 +52,6 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - `data/silver/` - normalized Parquet (feed/instrument_type/dt[/hour])
 - `data/gold/` - features/labels Parquet (dataset/project/version/dt)
 - `postgres/` - catalog database
-- `clickhouse/` - hot store
 - `redis/` - event bus streams
 
 ## Services
@@ -65,7 +61,6 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - **heber-compactor**: Parquet file compaction (Silver/Gold)
 - **heber-watch**: Real-time flow alert tracking → TP/SL labels for ML
 - **heber-dataflow-health**: Scheduled JSON proof-of-flow checks (Gateway → Ingest → Storage)
-- **Hot Store**: ClickHouse for low-latency reads (sync helpers in `heber/hotstore/`)
 
 ### Watch Service
 
@@ -165,7 +160,6 @@ heber health-dataflow --mode manual --window-seconds 900
 - `docs/silver_gold_scope.md` - Silver keep/drop matrix + Gold input plan
 - `docs/schema_registry.md` - schema registry usage
 - `docs/iceberg_migration.md` - Iceberg migration status
-- `docs/hot_store.md` - Hot Store usage and sync notes
 - `docs/configuration.md` - environment variables and local vs container settings
 - `docs/sdk.md` - SDK usage and semantics
 - `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
@@ -182,7 +176,7 @@ The `heber/` package contains the core logic:
 - **Lake**: `writer`, `storage` (Iceberg), `versioning` (lakeFS)
 - **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
 - **Intelligence**: `ml` (meta-labeling), `backtest`, `firewall` (zero-leakage), `universe`
-- **Serving**: `sdk`, `hotstore` (ClickHouse), `watch` (real-time)
+- **Serving**: `sdk`, `watch` (real-time)
 - **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
 
 ## Development

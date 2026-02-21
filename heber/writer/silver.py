@@ -19,6 +19,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.metrics import record_write, record_write_error
 from heber.schemas.silver import get_silver_schema
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
@@ -133,10 +134,20 @@ class SilverWriter:
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         file_path = partition_path / f"part-{ts}.parquet"
 
-        write_silver_parquet(
-            rows=rows,
-            schema=schema,
-            file_path=file_path,
-            partition_key=partition_key,
-            dataset=feed,
-        )
+        try:
+            t0 = datetime.now(UTC)
+            write_silver_parquet(
+                rows=rows,
+                schema=schema,
+                file_path=file_path,
+                partition_key=partition_key,
+                dataset=feed,
+            )
+            duration = (datetime.now(UTC) - t0).total_seconds()
+            bytes_written = file_path.stat().st_size if file_path.exists() else 0
+            record_write(
+                layer="silver", dataset=feed, rows=len(rows), bytes_written=bytes_written, duration_seconds=duration
+            )
+        except Exception:
+            record_write_error(layer="silver", error_type="flush_failed")
+            raise

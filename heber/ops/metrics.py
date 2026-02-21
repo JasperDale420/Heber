@@ -243,32 +243,6 @@ catalog_db_connections_active = _get_or_create(
 
 
 # =============================================================================
-# Hot Store Metrics (PRD §12.5.2)
-# =============================================================================
-
-hotstore_rows_synced_total = _get_or_create(
-    Counter,
-    "heber_hotstore_rows_synced_total",
-    "Rows synced to Hot Store",
-    ["dataset"],
-)
-
-hotstore_lag_seconds = _get_or_create(
-    Gauge,
-    "heber_hotstore_lag_seconds",
-    "Sync lag behind Silver in seconds",
-    ["dataset"],
-)
-
-hotstore_sync_errors_total = _get_or_create(
-    Counter,
-    "heber_hotstore_sync_errors_total",
-    "Sync failures",
-    ["dataset", "error_type"],
-)
-
-
-# =============================================================================
 # Anti-Leakage Latency Metrics (PRD §12.5.3)
 # =============================================================================
 
@@ -459,11 +433,6 @@ def record_dlq_event(feed: str, error_type: str) -> None:
 def set_consumer_lag(stream: str, lag_seconds: float) -> None:
     """Set consumer lag gauge."""
     consumer_lag_seconds.labels(stream=stream).set(lag_seconds)
-
-
-def set_hotstore_lag(dataset: str, lag_seconds: float) -> None:
-    """Set Hot Store sync lag."""
-    hotstore_lag_seconds.labels(dataset=dataset).set(lag_seconds)
 
 
 # =============================================================================
