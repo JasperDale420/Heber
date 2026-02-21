@@ -418,7 +418,7 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
 
     upserted = 0
     # Directory listing is blocking
-    entries = await asyncio.to_thread(lambda: sorted(list(silver_root.iterdir())))
+    entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
 
     for entry in entries:
         if not entry.is_dir() or entry.name.startswith(".") or not entry.name.startswith("feed="):

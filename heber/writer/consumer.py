@@ -42,7 +42,11 @@ from heber.writer.ingest_contracts import (
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
+from heber.writer.normalizer import (
+    MissingRequiredFieldsError,
+    enforce_required_non_null_fields,
+    envelope_to_silver_row,
+)
 from heber.writer.silver import SilverWriter
 from heber.writer.utils import build_silver_candidates, get_partition_key
 
@@ -192,7 +196,7 @@ class EventConsumer:
             try:
                 self._write_silver_candidate(envelope, candidate)
                 silver_success_count += 1
-            except (UnmappedFeedError, ValueError, ValidationError) as exc:
+            except (UnmappedFeedError, MissingRequiredFieldsError, ValidationError) as exc:
                 last_error = exc
                 silver_failure_count += 1
                 if aggregate_mode:
@@ -282,7 +286,7 @@ class EventConsumer:
         except UnmappedFeedError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             return False, str(exc), False
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+        except (json.JSONDecodeError, MissingRequiredFieldsError, ValidationError) as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             if bronze_written:
                 logger.warning(

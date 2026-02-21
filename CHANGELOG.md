@@ -15,8 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **catalog/api.py** — Re-raise `asyncio.CancelledError` after cleanup in lifespan shutdown (MAJOR S7497)
 - **writer/compactor.py** — Replaced dict comprehension with `dict()` constructor (MINOR S7500); extracted `_resolve_numeric_type`, `_resolve_string_or_temporal_type` helpers from `_resolve_column_type` (CC 25→~8); extracted `_collect_small_files`, `_merge_tables_to_parquet` helpers from `compact_partition` (CC 18→~12)
 - **watch/poller.py** — Resolved TODO comment (INFO S1135); extracted `_build_updates_from_quotes` from `poll_once` (CC 17→~11)
-- **writer/consumer.py** — Extracted `_parse_and_validate_envelope`, `_write_silver_candidates` from `_process_event_once` (CC 23→~13)
+- **writer/consumer.py** — Extracted `_parse_and_validate_envelope`, `_write_silver_candidates` from `_process_event_once` (CC 23→~13); replaced redundant `ValueError` in except tuples with explicit `MissingRequiredFieldsError` (MINOR S5713)
 - **watch/consumer.py** — Extracted `_classify_alert_results`, `_process_one_alert_safe` from `_process_alert` (CC 25→~11); extracted `_coerce_float_or_default`, `_resolve_put_call`, `_resolve_alert_type` from `_map_alert_fields` (CC 22→~8)
+- **ops/dataflow_health.py** — `main()` now returns 1 on error (BLOCKER S3516); extracted `_safe_stat_mtime` from `_latest_file_mtime` (CC 18→~8); extracted `_build_gateway_check` from `generate_dataflow_report` (CC 18→~12)
+- **watch/backfill_scanner.py** — Let `CancelledError` propagate naturally instead of flag pattern (MAJOR S7497)
+- **writer/transformer.py** — Removed redundant `ValueError` from except tuple (MINOR S5713)
+- **catalog/seeds.py** — Removed redundant `list()` call wrapping `sorted()` (MINOR S7508)
 
 ### Changed
 

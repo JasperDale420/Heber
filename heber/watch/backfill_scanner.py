@@ -94,13 +94,8 @@ class EnrichmentBackfillScanner:
             lookback_days=self.lookback_days,
             batch_size=self.batch_size,
         )
-        cancelled = False
         while self._running:
-            try:
-                await asyncio.sleep(self.interval_seconds)
-            except asyncio.CancelledError:
-                cancelled = True
-                break
+            await asyncio.sleep(self.interval_seconds)
 
             if not self._running:
                 break
@@ -116,9 +111,6 @@ class EnrichmentBackfillScanner:
                     "Enrichment backfill scan failed",
                     exc_info=True,
                 )
-
-        if cancelled:
-            raise asyncio.CancelledError
 
     def stop(self) -> None:
         """Stop the scanner."""

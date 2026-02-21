@@ -267,7 +267,7 @@ class BronzeToSilverTransformer:
                 missing_fields=exc.missing_fields,
             )
             return None
-        except (UnmappedFeedError, ValueError) as exc:
+        except UnmappedFeedError as exc:
             logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
             return None
 

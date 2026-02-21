@@ -115,6 +115,21 @@ def _metric_max(
     return max(values)
 
 
+def _safe_stat_mtime(path: Path) -> float | None:
+    """Return st_mtime for a file, or None on error."""
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning(
+            "dataflow_health_filesystem_stat_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        return None
+
+
 def _latest_file_mtime(root: Path) -> float | None:
     if not root.exists():
         return None
@@ -122,35 +137,15 @@ def _latest_file_mtime(root: Path) -> float | None:
     if root.is_file():
         if root.name.startswith("."):
             return None
-        try:
-            return root.stat().st_mtime
-        except OSError as exc:
-            logger.warning(
-                "dataflow_health_filesystem_stat_failed",
-                path=str(root),
-                error=str(exc),
-            )
-            return None
+        return _safe_stat_mtime(root)
 
     latest: float | None = None
 
     for item in root.rglob("*"):
-        if item.name.startswith("."):
+        if item.name.startswith(".") or not item.is_file():
             continue
-        if not item.is_file():
-            continue
-        try:
-            mtime = item.stat().st_mtime
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            logger.warning(
-                "dataflow_health_filesystem_stat_failed",
-                path=str(item),
-                error=str(exc),
-            )
-            continue
-        if latest is None or mtime > latest:
+        mtime = _safe_stat_mtime(item)
+        if mtime is not None and (latest is None or mtime > latest):
             latest = mtime
     return latest
 
@@ -338,6 +333,39 @@ def _overall_status(summary: dict[str, int]) -> str:
     return "ok"
 
 
+def _build_gateway_check(
+    gateway_last_success: float | None,
+    now_unixtime: float,
+    market_open: bool,
+    window_seconds: int,
+) -> dict[str, Any]:
+    """Build the gateway passive activity health check dict."""
+    if gateway_last_success is None:
+        gateway_age = None
+        if market_open:
+            status, message = "warn", "No passive gateway success evidence from watch metrics."
+        else:
+            status, message = "skipped", "Market closed; passive gateway activity check skipped."
+    else:
+        gateway_age = max(0.0, now_unixtime - float(gateway_last_success))
+        if market_open and gateway_age > float(window_seconds):
+            status, message = "warn", "Gateway passive evidence is stale."
+        else:
+            status, message = "ok", "Gateway passive evidence is fresh."
+
+    return {
+        "id": "gateway_passive_activity",
+        "status": status,
+        "severity": "warning",
+        "observed": {
+            "last_success_unixtime": gateway_last_success,
+            "age_seconds": gateway_age,
+        },
+        "threshold": {"max_age_seconds": window_seconds},
+        "message": message,
+    }
+
+
 def generate_dataflow_report(
     *,
     window_seconds: int,
@@ -391,35 +419,13 @@ def generate_dataflow_report(
         }
     )
 
-    gateway_last_success = signals.get("gateway_last_success")
-    if gateway_last_success is None:
-        gateway_age = None
-        if market_open:
-            gateway_status = "warn"
-            gateway_message = "No passive gateway success evidence from watch metrics."
-        else:
-            gateway_status = "skipped"
-            gateway_message = "Market closed; passive gateway activity check skipped."
-    else:
-        gateway_age = max(0.0, now_unixtime - float(gateway_last_success))
-        if market_open and gateway_age > float(window_seconds):
-            gateway_status = "warn"
-            gateway_message = "Gateway passive evidence is stale."
-        else:
-            gateway_status = "ok"
-            gateway_message = "Gateway passive evidence is fresh."
     checks.append(
-        {
-            "id": "gateway_passive_activity",
-            "status": gateway_status,
-            "severity": "warning",
-            "observed": {
-                "last_success_unixtime": gateway_last_success,
-                "age_seconds": gateway_age,
-            },
-            "threshold": {"max_age_seconds": window_seconds},
-            "message": gateway_message,
-        }
+        _build_gateway_check(
+            signals.get("gateway_last_success"),
+            now_unixtime,
+            market_open,
+            window_seconds,
+        )
     )
 
     feed_signals = signals.get("feeds", {})
@@ -438,8 +444,7 @@ def generate_dataflow_report(
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "skipped": 0}
     for check in checks:
-        status = check["status"]
-        summary[status] += 1
+        summary[check["status"]] += 1
 
     return {
         "ts_utc": now_utc.isoformat(),
@@ -568,6 +573,9 @@ def main() -> int:
         return 0
     except KeyboardInterrupt:
         return 0
+    except Exception as e:
+        print(f"Error: {e}", file=__import__("sys").stderr)
+        return 1
 
 
 if __name__ == "__main__":
