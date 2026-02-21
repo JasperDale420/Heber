@@ -9,19 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
-def _derive_ts_available(df: pd.DataFrame, lookback_hours: int) -> pd.Series:
-    if "ts_available" in df.columns:
-        source = pd.to_datetime(df["ts_available"], utc=True, errors="coerce")
-    else:
-        source = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
-
-    ts_event = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
-    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
-    source_int = source_naive.astype("int64")
-    series = pd.Series(source_int.to_numpy(), index=ts_event)
-    rolled = series.rolling(f"{lookback_hours}h", min_periods=1).max()
-    return pd.to_datetime(rolled.values, utc=True)
+from heber.features.templates._utils import rolling_max_timestamp_time
 
 
 def compute_flow_features(
@@ -49,7 +37,9 @@ def compute_flow_features(
         if df.empty:
             continue
 
-        ts_available = _derive_ts_available(df, lookback_hours)
+        source = df["ts_available"] if "ts_available" in df.columns else df["ts_event"]
+        ts_event = pd.to_datetime(df["ts_event"], utc=True, errors="coerce")
+        ts_available = rolling_max_timestamp_time(source, ts_event, lookback_hours)
         df = df.set_index("ts_event")
 
         # Premium aggregates

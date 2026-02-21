@@ -1,11 +1,16 @@
 """Redis Streams consumer for incoming events.
 
 Subscribes to the event stream from Data Gateway and routes to Bronze/Silver writers.
+
+This module uses ``redis.asyncio`` directly rather than the ``EventBus`` abstraction
+because it requires low-level stream control (``XREADGROUP``, ``XACK``, ``XCLAIM``,
+``XADD`` for DLQ) that the ``EventBus`` interface does not expose.
 """
 
 import asyncio
 import json
 import signal
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +20,7 @@ from pydantic import ValidationError
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
+from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
     record_batch_processed,
     record_dlq_event,
@@ -23,15 +29,22 @@ from heber.ops.metrics import (
     record_ingest_latency,
     start_metrics_server_from_env,
 )
+from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
+    PAYLOAD_ALLOWED_FIELDS,
+    PAYLOAD_REQUIRED_FIELDS,
     UnmappedFeedError,
+    is_bronze_only_feed,
     is_contracted_feed,
+    resolve_feed_alias,
     resolve_silver_feed,
 )
 from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
 from heber.writer.silver import SilverWriter
+from heber.writer.utils import build_silver_candidates, get_partition_key
 
 logger = structlog.get_logger(__name__)
 
@@ -45,69 +58,8 @@ class EventConsumer:
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-        self._payload_required: dict[str, set[str]] = {
-            "flow_alerts": {
-                "timestamp",
-                "symbol",
-                "strike",
-                "expiry",
-                "put_call",
-                "premium",
-                "volume",
-            },
-            "market_tide": {
-                "timestamp",
-                "date",
-                "net_call_premium",
-                "net_put_premium",
-                "net_volume",
-                "sentiment",
-            },
-        }
-        self._payload_allowed: dict[str, set[str]] = {
-            "flow_alerts": {
-                "timestamp",
-                "symbol",
-                "strike",
-                "expiry",
-                "put_call",
-                "premium",
-                "volume",
-                "open_interest",
-                "side",
-                "is_sweep",
-                "is_unusual",
-                "sentiment",
-                "option_chain",
-                "price",
-                "underlying_price",
-                "alert_rule",
-                "alert_type",
-                "aggressor",
-                "tags",
-                "provider",
-                # UW additional fields (P1)
-                "trade_count",
-                "volume_oi_ratio",
-                "total_ask_side_prem",
-                "total_bid_side_prem",
-                "has_floor",
-                "has_multileg",
-                "has_singleleg",
-                "all_opening_trades",
-                "total_size",
-                "expiry_count",
-            },
-            "market_tide": {
-                "timestamp",
-                "date",
-                "net_call_premium",
-                "net_put_premium",
-                "net_volume",
-                "sentiment",
-                "provider",
-            },
-        }
+        self._payload_required = PAYLOAD_REQUIRED_FIELDS
+        self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
 
     async def connect(self):
         """Connect to Redis."""
@@ -243,7 +195,7 @@ class EventConsumer:
             # Bronze-first policy: persist envelope before Silver normalization/validation.
             self.bronze_writer.write(envelope)
             bronze_written = True
-            logger.info(
+            logger.debug(
                 "bronze_write_success",
                 event_id=envelope.event_id,
                 feed=envelope.feed,
@@ -258,27 +210,70 @@ class EventConsumer:
                     event_id=envelope.event_id,
                 )
                 raise UnmappedFeedError(DLQ_REASON_UNCONTRACTED)
-
-            normalized = normalize_envelope_for_silver(envelope)
-            silver_feed = resolve_silver_feed(normalized.feed)
-            if silver_feed is None:
-                logger.warning(
-                    "silver_schema_unmapped",
-                    source_feed=envelope.feed,
-                    canonical_feed=normalized.feed,
+            if is_bronze_only_feed(envelope.feed):
+                logger.info(
+                    "silver_write_skipped_policy",
                     event_id=envelope.event_id,
+                    source_feed=envelope.feed,
+                    canonical_feed=resolve_feed_alias(envelope.feed),
+                    reason="bronze_only_feed_policy",
                 )
-                raise UnmappedFeedError("unmapped_feed")
+                record_event_processed(feed=feed, provider=provider, status="success")
+                return True, None, True
 
-            normalized = normalized.model_copy(update={"feed": silver_feed})
-            self._validate_instrument_key(normalized)
-            self.silver_writer.write(normalized)
+            silver_candidates = build_silver_candidates(envelope)
+            if not silver_candidates:
+                logger.info(
+                    "silver_write_skipped_empty_aggregate",
+                    event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    provider=envelope.provider,
+                )
+                record_event_processed(feed=feed, provider=provider, status="success")
+                return True, None, True
+
+            aggregate_mode = len(silver_candidates) > 1
+            silver_success_count = 0
+            silver_failure_count = 0
+            last_error: Exception | None = None
+
+            for candidate in silver_candidates:
+                try:
+                    self._write_silver_candidate(envelope, candidate)
+                    silver_success_count += 1
+                except (UnmappedFeedError, ValueError, ValidationError) as exc:
+                    last_error = exc
+                    silver_failure_count += 1
+                    if aggregate_mode:
+                        logger.warning(
+                            "silver_aggregate_item_failed",
+                            source_event_id=envelope.event_id,
+                            item_event_id=candidate.event_id,
+                            feed=candidate.feed,
+                            error=str(exc),
+                        )
+                        continue
+                    raise
+
+            if silver_failure_count > 0:
+                logger.warning(
+                    "silver_aggregate_write_summary",
+                    source_event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    success_count=silver_success_count,
+                    failed_count=silver_failure_count,
+                )
+
+            if silver_success_count == 0:
+                if last_error is not None:
+                    raise last_error
+                raise ValueError("all_aggregate_items_failed")
 
             logger.debug(
                 "Processed event",
-                event_id=normalized.event_id,
-                feed=normalized.feed,
-                instrument_key=normalized.instrument_key,
+                event_id=envelope.event_id,
+                feed=envelope.feed,
+                silver_writes=silver_success_count,
             )
             record_event_processed(feed=feed, provider=provider, status="success")
             return True, None, True
@@ -362,27 +357,53 @@ class EventConsumer:
         return str(event_dict.get("feed") or "unknown")
 
     async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
-        """Process a list of stream messages and return `(acked_ids, failed_ids)`."""
+        """Process a list of stream messages concurrently and return `(acked_ids, failed_ids)`.
+
+        Uses a semaphore to limit concurrency to ``redis_process_concurrency``.
+        Processing order is non-deterministic but result ordering is preserved
+        for correct ACK/DLQ routing.
+        """
+        sem = asyncio.Semaphore(settings.redis_process_concurrency)
+
+        async def _process_one(message_id: Any, message_data: dict) -> tuple[str, bool, str | None, int]:
+            async with sem:
+                success, error, attempts = await self._process_with_retry(message_data)
+                return self._decode_string(message_id), success, error, attempts
+
+        results = await asyncio.gather(
+            *[_process_one(mid, mdata) for mid, mdata in stream_messages],
+            return_exceptions=True,
+        )
+
         processed_ids: list[str] = []
         failed_ids: list[str] = []
 
-        for message_id, message_data in stream_messages:
-            success, error, attempts = await self._process_with_retry(message_data)
-            message_id_str = self._decode_string(message_id)
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                mid_str = self._decode_string(stream_messages[i][0])
+                logger.error(
+                    "Unexpected error processing message",
+                    message_id=mid_str,
+                    error=str(result),
+                    exc_info=True,
+                )
+                failed_ids.append(mid_str)
+                continue
+
+            message_id_str, success, error, attempts = result
             if success:
                 processed_ids.append(message_id_str)
                 continue
 
-            feed = self._extract_feed_from_message(message_data)
+            feed = self._extract_feed_from_message(stream_messages[i][1])
             moved_to_dlq = await self._send_to_dlq(
-                message_id=message_id,
-                message_data=message_data,
+                message_id=stream_messages[i][0],
+                message_data=stream_messages[i][1],
                 error=error,
                 attempts=attempts,
                 feed=feed,
             )
             if moved_to_dlq:
-                # Ack after durable DLQ write so poison messages don't block group progress.
                 processed_ids.append(message_id_str)
             else:
                 failed_ids.append(message_id_str)
@@ -477,10 +498,43 @@ class EventConsumer:
             f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}"
         )
 
+    def _write_silver_candidate(self, source_envelope: EventEnvelope, candidate: EventEnvelope) -> None:
+        """Normalize and persist one candidate event to Silver.
+
+        Performs normalization once and passes the pre-normalized row
+        directly to ``SilverWriter.write_row()`` to avoid the double
+        normalization that ``SilverWriter.write()`` would trigger.
+        """
+        normalized = normalize_envelope_for_silver(candidate)
+        silver_feed = resolve_silver_feed(normalized.feed)
+        if silver_feed is None:
+            logger.warning(
+                "silver_schema_unmapped",
+                source_feed=source_envelope.feed,
+                canonical_feed=normalized.feed,
+                event_id=source_envelope.event_id,
+            )
+            raise UnmappedFeedError("unmapped_feed")
+
+        normalized = normalized.model_copy(update={"feed": silver_feed})
+        self._validate_instrument_key(normalized)
+
+        # Build the Silver row and buffer it directly, skipping
+        # SilverWriter._envelope_to_row() which would re-normalize.
+        row = envelope_to_silver_row(normalized)
+        enforce_required_non_null_fields(feed=silver_feed, row=row, event_id=normalized.event_id)
+        partition_key = get_partition_key(
+            feed=normalized.feed,
+            instrument_type=normalized.instrument_type,
+            ts_event=normalized.ts_event,
+        )
+        self.silver_writer.write_row(partition_key, row)
+
     async def run(self):
         """Main consumer loop."""
         await self.connect()
         self.running = True
+        error_streak = 0
 
         logger.info(
             "Starting consumer",
@@ -492,12 +546,37 @@ class EventConsumer:
         while self.running:
             try:
                 await self._consume_iteration()
+                error_streak = 0
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice
             except Exception as e:
-                logger.error("Consumer error", error=str(e), exc_info=True)
-                await asyncio.sleep(1)  # Back off on error
+                error_streak += 1
+                delay = calculate_retry_delay(
+                    attempt=error_streak,
+                    base_seconds=settings.redis_retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                is_transient, error_kind = classify_runtime_error(e)
+                if is_transient:
+                    logger.warning(
+                        "Consumer transient runtime error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                else:
+                    logger.error(
+                        "Consumer error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                        exc_info=True,
+                    )
+                await asyncio.sleep(delay)
 
         self._final_flush()
 
@@ -516,7 +595,7 @@ class EventConsumer:
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
 
-        Flow: read batch → process all → flush to disk → ACK all.
+        Flow: read batch → process all concurrently → flush to disk → ACK all.
         This ensures data is persisted before we acknowledge to Redis,
         preventing data loss on crash.
         """
@@ -524,20 +603,24 @@ class EventConsumer:
             groupname=settings.redis_consumer_group,
             consumername=self.consumer_name,
             streams={settings.redis_stream_name: ">"},
-            count=100,
-            block=1000,
+            count=settings.redis_read_batch_size,
+            block=settings.redis_read_block_ms,
         )
-        # Always check for flush even with no messages (handles idle periods)
-        self._flush_layers()
 
         if not messages:
+            # Flush on idle iterations to respect time-based flush thresholds
+            self._flush_layers()
             return
+
+        t0 = time.monotonic()
 
         # Collect successfully processed message IDs
         processed_ids: list[str] = []
         failed_ids: list[str] = []
+        total_messages = 0
 
         for _stream_name, stream_messages in messages:
+            total_messages += len(stream_messages)
             record_batch_processed(feed="mixed", batch_size=len(stream_messages))
             ack_ids, stream_failed_ids = await self._process_stream_messages(stream_messages)
             processed_ids.extend(ack_ids)
@@ -553,7 +636,18 @@ class EventConsumer:
                 settings.redis_consumer_group,
                 *processed_ids,
             )
-            logger.debug("Acknowledged batch", count=len(processed_ids))
+
+        elapsed = time.monotonic() - t0
+        rate = total_messages / elapsed if elapsed > 0 else 0
+        logger.info(
+            "batch_processed",
+            total=total_messages,
+            acked=len(processed_ids),
+            failed=len(failed_ids),
+            elapsed_seconds=round(elapsed, 3),
+            messages_per_second=round(rate, 1),
+            concurrency=settings.redis_process_concurrency,
+        )
 
         if failed_ids:
             logger.warning(
@@ -577,6 +671,7 @@ class EventConsumer:
 
 async def main():
     """Entry point for the consumer."""
+    configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
     start_metrics_server_from_env(default_port=9090)
     consumer = EventConsumer()
 

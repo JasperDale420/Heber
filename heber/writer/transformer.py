@@ -16,16 +16,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import UnmappedFeedError, resolve_silver_feed
+from heber.writer.ingest_contracts import UnmappedFeedError, is_bronze_only_feed, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
-from heber.writer.normalizer import envelope_to_silver_row
+from heber.writer.normalizer import (
+    MissingRequiredFieldsError,
+    enforce_required_non_null_fields,
+    envelope_to_silver_row,
+)
+from heber.writer.utils import (
+    build_silver_candidates,
+    get_partition_key,
+    write_silver_parquet,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -158,6 +165,14 @@ class BronzeToSilverTransformer:
         dt: str,
     ) -> int:
         """Transform a single date partition."""
+        if is_bronze_only_feed(feed):
+            logger.info(
+                "Backfill skipping Silver write for Bronze-only feed",
+                source_feed=feed,
+                dt=dt,
+            )
+            return 0
+
         silver_feed = resolve_silver_feed(feed)
         if silver_feed is None:
             logger.warning("No schema for feed, skipping", feed=feed)
@@ -167,25 +182,35 @@ class BronzeToSilverTransformer:
         if not dt_dir.exists():
             return 0
 
-        records: list[dict] = []
+        buffers: dict[str, list[dict[str, Any]]] = defaultdict(list)
         files_processed = 0
         total_records = 0
 
         # Process all hour directories and files
         for item in dt_dir.rglob("*.jsonl.gz"):
-            records.extend(self._read_bronze_file(item, feed))
+            for row in self._read_bronze_file(item, feed):
+                # Calculate partition key for each row to match live ingestion layout
+                # (e.g. handle hourly partitioning for quotes/trades)
+                p_key = get_partition_key(
+                    feed=silver_feed,
+                    instrument_type=row.get("instrument_type", "unknown"),
+                    ts_event=row["ts_event"],
+                )
+                buffers[p_key].append(row)
+
+                # Flush specific partition if big enough
+                if len(buffers[p_key]) >= self.batch_size:
+                    self._flush_buffer(buffers[p_key], p_key, silver_feed)
+                    total_records += len(buffers[p_key])
+                    buffers[p_key] = []
+
             files_processed += 1
 
-            # Flush in batches
-            if len(records) >= self.batch_size:
-                self._write_silver_batch(records, silver_feed, dt)
-                total_records += len(records)
-                records = []
-
         # Final flush
-        if records:
-            self._write_silver_batch(records, silver_feed, dt)
-            total_records += len(records)
+        for p_key, rows in buffers.items():
+            if rows:
+                self._flush_buffer(rows, p_key, silver_feed)
+                total_records += len(rows)
 
         logger.info(
             "Transformed partition",
@@ -197,9 +222,9 @@ class BronzeToSilverTransformer:
         )
         return total_records
 
-    def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict]:
+    def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict[str, Any]]:
         """Read and transform a single Bronze JSONL.gz file."""
-        records = []
+        records: list[dict[str, Any]] = []
 
         try:
             with gzip.open(file_path, "rt", encoding="utf-8") as f:
@@ -207,9 +232,12 @@ class BronzeToSilverTransformer:
                     try:
                         event_dict = json.loads(line.strip())
                         envelope = EventEnvelope.model_validate(event_dict)
-                        row = self._envelope_to_silver_row(envelope, feed)
-                        if row:
-                            records.append(row)
+                        # Use shared logic to explode aggregates (bars/trades)
+                        candidates = build_silver_candidates(envelope, feed_override=feed)
+                        for candidate in candidates:
+                            row = self._envelope_to_silver_row(candidate, feed)
+                            if row:
+                                records.append(row)
                     except Exception as e:
                         logger.debug("Failed to parse line", error=str(e))
                         continue
@@ -228,87 +256,50 @@ class BronzeToSilverTransformer:
         try:
             feed_scoped = envelope.model_copy(update={"feed": feed})
             normalized = normalize_envelope_for_silver(feed_scoped)
-            return envelope_to_silver_row(normalized)
+            row = envelope_to_silver_row(normalized)
+            enforce_required_non_null_fields(feed=row["feed"], row=row, event_id=envelope.event_id)
+            return row
+        except MissingRequiredFieldsError as exc:
+            logger.warning(
+                "backfill_row_missing_required_fields",
+                feed=feed,
+                event_id=envelope.event_id,
+                missing_fields=exc.missing_fields,
+            )
+            return None
         except (UnmappedFeedError, ValueError) as exc:
             logger.debug("Failed to normalize Bronze row", feed=feed, error=str(exc))
             return None
 
-    def _coerce_value(self, value: Any, arrow_type: pa.DataType) -> Any:
-        """Coerce a value to match the expected Arrow type."""
-        if value is None:
-            return None
-
-        try:
-            if pa.types.is_floating(arrow_type):
-                return float(value) if value != "" else None
-            if pa.types.is_integer(arrow_type):
-                return int(float(value)) if value != "" else None
-            if pa.types.is_date(arrow_type):
-                return self._coerce_to_date(value)
-            if pa.types.is_timestamp(arrow_type):
-                return self._coerce_to_timestamp(value)
-            if pa.types.is_boolean(arrow_type):
-                return bool(value)
-            if pa.types.is_list(arrow_type):
-                return list(value) if value else []
-            return str(value) if value is not None else None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _coerce_to_date(value: Any) -> Any:
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, str):
-            return datetime.strptime(value[:10], "%Y-%m-%d").date()
-        return value
-
-    @staticmethod
-    def _coerce_to_timestamp(value: Any) -> Any:
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if isinstance(value, int | float):
-            return datetime.fromtimestamp(value)
-        return value
-
-    def _write_silver_batch(
+    def _flush_buffer(
         self,
-        records: list[dict],
-        feed: str,
-        dt: str,
+        rows: list[dict[str, Any]],
+        partition_key: str,
+        dataset: str,
     ) -> None:
-        """Write a batch of records to Silver Parquet."""
-        if not records:
+        """Flush a buffer to Silver Parquet."""
+        if not rows:
             return
 
-        schema = SILVER_SCHEMAS.get(feed)
+        schema = SILVER_SCHEMAS.get(dataset)
         if not schema:
-            logger.warning("No schema for feed", feed=feed)
+            logger.warning("No schema for feed", feed=dataset)
             return
 
-        # Build partition path
-        instrument_type = records[0].get("instrument_type", "unknown")
-        partition_path = self.silver_path / f"feed={feed}" / f"instrument_type={instrument_type}" / f"dt={dt}"
+        # Path management
+        partition_path = self.silver_path / partition_key
         partition_path.mkdir(parents=True, exist_ok=True)
 
-        # Generate unique filename
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         file_path = partition_path / f"part-{ts}.parquet"
 
-        try:
-            table = pa.Table.from_pylist(records, schema=schema)
-            pq.write_table(
-                table,
-                file_path,
-                compression="snappy",
-                row_group_size=100_000,
-            )
-            logger.debug("Wrote Silver batch", path=str(file_path), records=len(records))
-        except Exception as e:
-            logger.error("Failed to write Silver batch", error=str(e), exc_info=True)
-            raise
+        write_silver_parquet(
+            rows=rows,
+            schema=schema,
+            file_path=file_path,
+            partition_key=partition_key,
+            dataset=dataset,
+        )
 
 
 def backfill_silver(

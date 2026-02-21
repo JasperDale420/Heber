@@ -15,7 +15,6 @@ def test_legacy_missing_modules_are_not_referenced() -> None:
         ROOT / "Dockerfile",
         ROOT / "k8s/base/deployments/consumer.yaml",
         ROOT / "k8s/base/deployments/compactor.yaml",
-        ROOT / "k8s/base/deployments/hotloader.yaml",
         ROOT / "k8s/base/deployments/backfill.yaml",
     ]
     contents = "\n".join(path.read_text(encoding="utf-8") for path in files)
@@ -30,7 +29,6 @@ def test_runtime_entrypoint_modules_exist() -> None:
         "heber.catalog.api",
         "heber.writer.consumer",
         "heber.writer.compactor",
-        "heber.writer.hotstore",
         "heber.backfill.__main__",
     ]
 
@@ -43,7 +41,6 @@ def test_base_deployments_reference_valid_python_entrypoints() -> None:
         ROOT / "k8s/base/deployments/catalog.yaml",
         ROOT / "k8s/base/deployments/consumer.yaml",
         ROOT / "k8s/base/deployments/compactor.yaml",
-        ROOT / "k8s/base/deployments/hotloader.yaml",
         ROOT / "k8s/base/deployments/backfill.yaml",
     ]
 

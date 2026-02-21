@@ -13,39 +13,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-heber_catalog}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/postgres/data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     ports:
       - "5433:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U heber -d heber_catalog" ]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-heber} -d $${POSTGRES_DB:-heber_catalog}" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: unless-stopped
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.1
-    container_name: heber-clickhouse
-    user: "101:101" # clickhouse:clickhouse — skips root chown on startup
-    volumes:
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/data:/var/lib/clickhouse
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/clickhouse/logs:/var/log/clickhouse-server
-    ports:
-      - "8124:8123" # HTTP
-      - "9002:9000" # Native
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-    healthcheck:
-      test: [ "CMD", "clickhouse-client", "--query", "SELECT 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      start_period: 120s
     logging:
       driver: json-file
       options:
@@ -75,6 +51,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     logging:
       driver: json-file
       options:
@@ -142,66 +119,6 @@ services:
         max-file: "5"
     restart: unless-stopped
 
-  # OpenMetadata - Data Catalog (Phase 5)
-  openmetadata:
-    image: openmetadata/server:1.4.0
-    container_name: heber-openmetadata
-    environment:
-      OPENMETADATA_CLUSTER_NAME: heber
-      SERVER_HOST_API_URL: http://localhost:8585/api
-      SERVER_ADMIN_PORT: 8586
-      PIPELINE_SERVICE_CLIENT_ENABLED: "false"
-      # Database
-      DB_DRIVER_CLASS: org.postgresql.Driver
-      DB_SCHEME: postgresql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: heber
-      DB_USER_PASSWORD: heber_dev_password # pragma: allowlist secret
-      OM_DATABASE: heber_openmetadata
-      # Elasticsearch (embedded for dev)
-      SEARCH_TYPE: elasticsearch
-      ELASTICSEARCH_HOST: elasticsearch
-      ELASTICSEARCH_PORT: 9200
-    ports:
-      - "8585:8585" # OpenMetadata UI
-      - "8586:8586" # Admin API
-    depends_on:
-      postgres:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: unless-stopped
-
-  # Elasticsearch for OpenMetadata search
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
-    container_name: heber-elasticsearch
-    environment:
-      discovery.type: single-node
-      xpack.security.enabled: "false"
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-    volumes:
-      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/elasticsearch/data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: unless-stopped
-
   # Heber Services
   heber-catalog:
     build:
@@ -213,7 +130,6 @@ services:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
-      - HEBER_CLICKHOUSE_HOST=clickhouse
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -247,11 +163,12 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
-      - HEBER_CLICKHOUSE_HOST=clickhouse
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "9090:9090"
     depends_on:
       postgres:
         condition: service_healthy
@@ -299,15 +216,53 @@ services:
     environment:
       # Uses heber:events stream from Data Gateway's Redis
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
-      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - DATA_GATEWAY_URL=http://host.docker.internal:8081
+      - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
       - HEBER_GOLD_PATH=/data/gold/labels_alert_barriers
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "9091:9090"
     depends_on:
       heber-catalog:
         condition: service_healthy
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    restart: unless-stopped
+
+  heber-dataflow-health:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heber-dataflow-health
+    command: [ "python", "-m", "heber.ops.dataflow_health", "--loop", "--mode", "scheduled" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_STREAM_NAME=heber:events
+      - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_HEALTH_CONSUMER_METRICS_URL=http://heber-consumer:9090/metrics
+      - HEBER_HEALTH_WATCH_METRICS_URL=http://heber-watch:9090/metrics
+      - HEBER_HEALTH_FRESHNESS_SECONDS=900
+      - HEBER_HEALTH_INTERVAL_SECONDS=300
+      - HEBER_HEALTH_REPORT_DIR=/data/ops/dataflow-health
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    depends_on:
+      heber-consumer:
+        condition: service_started
+      heber-watch:
+        condition: service_started
     healthcheck:
       disable: true
     logging:

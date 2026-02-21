@@ -10,7 +10,6 @@ Labels are Gold datasets with special metadata indicating:
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +17,8 @@ from typing import Any, Literal
 
 import pandas as pd
 import structlog
+
+from heber.core.parquet import read_parquet_dataset
 
 logger = structlog.get_logger(__name__)
 
@@ -27,44 +28,8 @@ DEFAULT_VERSION = "v1.0.0"
 DATA_PARQUET = "data.parquet"
 
 
-def parse_duration(duration_str: str) -> timedelta:
-    """Parse duration string like '5d', '1h', '30m', '0s' into timedelta.
-
-    Args:
-        duration_str: Duration string with unit suffix (d=days, h=hours, m=minutes, s=seconds)
-
-    Returns:
-        timedelta object
-
-    Raises:
-        ValueError: If format is invalid
-    """
-    pattern = r"(\d+)([dhms])"
-    match = re.match(pattern, duration_str.lower())
-    if not match:
-        raise ValueError(f"Invalid duration format: {duration_str}")
-
-    value = int(match.group(1))
-    unit = match.group(2)
-
-    if unit == "d":
-        return timedelta(days=value)
-    elif unit == "h":
-        return timedelta(hours=value)
-    elif unit == "m":
-        return timedelta(minutes=value)
-    else:
-        return timedelta(seconds=value)
-
-
-def _version_sort_key(version: str) -> tuple[int, int, int, int, str]:
-    """Sort key for version strings, preferring semantic versions."""
-    clean = version.strip()
-    semver_match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", clean)
-    if semver_match:
-        major, minor, patch = semver_match.groups()
-        return (1, int(major), int(minor), int(patch), clean)
-    return (0, 0, 0, 0, clean)
+from heber.gold.duration import parse_duration
+from heber.utils.versioning import version_sort_key as _version_sort_key
 
 
 @dataclass
@@ -316,9 +281,16 @@ def read_label(
         logger.warning("Label data file not found", path=str(data_path))
         return pd.DataFrame()
 
-    df = pd.read_parquet(data_path)
+    try:
+        df = read_parquet_dataset(
+            path=data_path,
+            asof_time=asof_time,
+        )
+    except Exception as e:
+        logger.error("Failed to read label dataset", dataset=dataset, error=str(e))
+        return pd.DataFrame()
 
-    if "ts_available" not in df.columns:
+    if "ts_available" not in df.columns and not df.empty:
         message = (
             f"Label dataset {dataset} is missing required ts_available column. "
             "Cannot enforce point-in-time correctness."
@@ -326,9 +298,6 @@ def read_label(
         if fail_on_missing_ts_available:
             raise ValueError(message)
         logger.warning("label_missing_ts_available", dataset=dataset, path=str(data_path))
-        return pd.DataFrame()
-
-    df = df[df["ts_available"] <= asof_time]
 
     if instrument_keys and "instrument_key" in df.columns:
         df = df[df["instrument_key"].isin(instrument_keys)]

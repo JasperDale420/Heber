@@ -27,7 +27,8 @@ Local ports from `docker-compose.yml`:
 - Catalog API: `http://localhost:8085`
 - Postgres: `localhost:5433`
 - Redis: `localhost:6380`
-- ClickHouse: `localhost:8124` (HTTP), `localhost:9002` (native)
+- Consumer metrics: `http://localhost:9090/metrics`
+- Watch metrics: `http://localhost:9091/metrics`
 - lakeFS: `http://localhost:8000`
 - MinIO: `http://localhost:19000` (S3), `http://localhost:19001` (console)
 - Apicurio Registry: `http://localhost:18081`
@@ -41,8 +42,6 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
                                     heber-catalog (Postgres)
                                             v
                                       SDK + CLI
-                                            v
-                                Hot Store (ClickHouse)
 ```
 
 ## Storage Layout
@@ -53,7 +52,6 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - `data/silver/` - normalized Parquet (feed/instrument_type/dt[/hour])
 - `data/gold/` - features/labels Parquet (dataset/project/version/dt)
 - `postgres/` - catalog database
-- `clickhouse/` - hot store
 - `redis/` - event bus streams
 
 ## Services
@@ -62,7 +60,7 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - **heber-consumer**: Redis Streams consumer → Bronze/Silver writers
 - **heber-compactor**: Parquet file compaction (Silver/Gold)
 - **heber-watch**: Real-time flow alert tracking → TP/SL labels for ML
-- **Hot Store**: ClickHouse for low-latency reads (sync helpers in `heber/hotstore/`)
+- **heber-dataflow-health**: Scheduled JSON proof-of-flow checks (Gateway → Ingest → Storage)
 
 ### Watch Service
 
@@ -145,21 +143,30 @@ client.write_gold("momentum_features", df=features, project="kairos", version="v
 heber info --verbose
 heber datasets --layer silver
 heber versions momentum_features
+heber health-dataflow --mode manual --window-seconds 900
 ```
 
 ## Documentation
 
-- `docs/architecture.md` - system overview, data flow, and layers
-- `docs/catalog_api.md` - Catalog API reference
-- `docs/data_contract.md` - EventEnvelope + feed schema contract
+- `PRD.md` - product requirements and system scope
+- `docs/ARCHITECTURE.md` - system overview, data flow, and layers
+- `docs/RUNBOOK.md` - operational startup, health checks, and recovery
+- `docs/API_REFERENCE.md` - catalog API endpoint reference
+- `docs/DATA_CONTRACTS.md` - shared envelope/schema contracts
+- `docs/DEPLOYMENT.md` - deployment and rollback procedures
+- `docs/MIGRATION_GUIDE.md` - migration procedures and schema evolution notes
+- `docs/catalog_api.md` - detailed request/response examples for catalog endpoints
+- `docs/data_contract.md` - canonical EventEnvelope and feed schema detail
+- `docs/silver_gold_scope.md` - Silver keep/drop matrix + Gold input plan
 - `docs/schema_registry.md` - schema registry usage
 - `docs/iceberg_migration.md` - Iceberg migration status
-- `docs/hot_store.md` - Hot Store usage and sync notes
 - `docs/configuration.md` - environment variables and local vs container settings
 - `docs/sdk.md` - SDK usage and semantics
 - `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
 - `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
 - `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
+- `TESTING.md` - test layout, commands, and quality gate
+- `.env.example` - required environment variable template
 
 ## Repository Structure
 
@@ -169,7 +176,7 @@ The `heber/` package contains the core logic:
 - **Lake**: `writer`, `storage` (Iceberg), `versioning` (lakeFS)
 - **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
 - **Intelligence**: `ml` (meta-labeling), `backtest`, `firewall` (zero-leakage), `universe`
-- **Serving**: `sdk`, `hotstore` (ClickHouse), `watch` (real-time)
+- **Serving**: `sdk`, `watch` (real-time)
 - **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
 
 ## Development

@@ -11,8 +11,8 @@ CRITICAL RULE: All reads for research/backtest/ML must use ts_available <= T
 """
 
 from heber.firewall.asof import asof_join, read_asof, read_asof_range
+from heber.firewall.monitors import monitor_availability_lag, monitor_late_arrivals
 from heber.firewall.scd import join_with_reference_asof, read_reference_asof
-from heber.firewall.tests import monitor_availability_lag, run_all_leakage_tests
 from heber.firewall.validation import (
     GoldBuildMetadata,
     LeakageError,
@@ -32,6 +32,6 @@ __all__ = [
     "join_with_reference_asof",
     "LeakageError",
     "GoldBuildMetadata",
-    "run_all_leakage_tests",
     "monitor_availability_lag",
+    "monitor_late_arrivals",
 ]

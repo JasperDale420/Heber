@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from heber.catalog.seeds import FEED_MAPPING_SEEDS
 from heber.schemas.silver import SILVER_SCHEMAS
 from heber.writer.ingest_contracts import DATA_GATEWAY_FEEDS, FEED_ALIAS_MAP, resolve_feed_alias
-from scripts.seed_catalog import FEED_MAPPING_SEEDS
 
 
 def test_alias_map_matches_contract() -> None:

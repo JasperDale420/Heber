@@ -28,7 +28,7 @@ class Lineage(BaseModel):
 
 # Instrument key patterns per PRD §6.2
 INSTRUMENT_KEY_PATTERNS = {
-    "equity": re.compile(r"^equity:[A-Z]{1,5}$"),
+    "equity": re.compile(r"^equity:[A-Z0-9]+(?:[.-][A-Z0-9]+)*$"),
     "crypto": re.compile(r"^crypto:[A-Z]{2,10}-[A-Z]{2,10}$"),
     "forex": re.compile(r"^forex:[A-Z]{3}-[A-Z]{3}$"),
     "option": re.compile(r"^option:OCC:[A-Z]{1,6}\d{6}[CP]\d{8}$"),

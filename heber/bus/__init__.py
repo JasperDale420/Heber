@@ -28,29 +28,45 @@ STREAM_NAMESPACE = "heber:events"
 
 
 class StreamName(str, Enum):
-    """Canonical stream names per PRD §12.7.2."""
+    """Canonical stream names.
 
-    # Market data streams
-    MARKET_BARS = f"{STREAM_NAMESPACE}:market.bars"
-    MARKET_QUOTES = f"{STREAM_NAMESPACE}:market.quotes"
-    MARKET_TRADES = f"{STREAM_NAMESPACE}:market.trades"
+    Covers all entries in ``bus.streams.DEFAULT_STREAMS`` plus the DLQ.
+    When adding a new stream to ``DEFAULT_STREAMS``, add a matching member here.
+    """
 
-    # Intel streams
-    INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:intel.flow_alerts"
-    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:intel.darkpool"
+    # Market data (Critical)
+    MARKET_BARS = f"{STREAM_NAMESPACE}:bars"
+    MARKET_QUOTES = f"{STREAM_NAMESPACE}:quotes"
+    MARKET_TRADES = f"{STREAM_NAMESPACE}:trades"
+    MARKET_BARS_DAILY = f"{STREAM_NAMESPACE}:bars_daily"
+
+    # Options (High)
+    OPTIONS_QUOTES = f"{STREAM_NAMESPACE}:option_quotes"
+    OPTIONS_TRADES = f"{STREAM_NAMESPACE}:option_trades"
+
+    # Alternative data (High/Normal)
+    INTEL_FLOW_ALERTS = f"{STREAM_NAMESPACE}:flow_alerts"
+    INTEL_DARKPOOL = f"{STREAM_NAMESPACE}:darkpool"
+    INTEL_CONGRESS_TRADES = f"{STREAM_NAMESPACE}:congress_trades"
+    INTEL_LOBBYING = f"{STREAM_NAMESPACE}:lobbying"
+
+    # Fundamentals (Normal)
+    FUNDAMENTALS_COMPANY_INFO = f"{STREAM_NAMESPACE}:company_info"
+    FUNDAMENTALS_FINANCIALS = f"{STREAM_NAMESPACE}:financials"
+
+    # Economic (Normal)
+    ECONOMIC = f"{STREAM_NAMESPACE}:economic"
+
+    # FX & Crypto (Normal)
+    FOREX = f"{STREAM_NAMESPACE}:forex"
+    CRYPTO = f"{STREAM_NAMESPACE}:crypto"
 
     # System streams
     DLQ = f"{STREAM_NAMESPACE}:dlq"
 
 
-# All canonical streams
-CANONICAL_STREAMS = [
-    StreamName.MARKET_BARS,
-    StreamName.MARKET_QUOTES,
-    StreamName.MARKET_TRADES,
-    StreamName.INTEL_FLOW_ALERTS,
-    StreamName.INTEL_DARKPOOL,
-]
+# All non-DLQ streams for setup_streams().
+CANONICAL_STREAMS = [s for s in StreamName if s is not StreamName.DLQ]
 
 
 # Prometheus metrics

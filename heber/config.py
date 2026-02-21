@@ -71,13 +71,24 @@ class Settings(BaseSettings):
         default=0.25,
         description="Base backoff delay between processing retries",
     )
-
-    # ClickHouse (Hot Store)
-    clickhouse_host: str = Field(default="localhost")
-    clickhouse_port: int = Field(default=9000)
-    clickhouse_user: str = Field(default="default")
-    clickhouse_password: str = Field(default="")
-    clickhouse_database: str = Field(default="heber")
+    redis_read_batch_size: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        description="Max messages per XREADGROUP call (higher = more throughput during backfill)",
+    )
+    redis_read_block_ms: int = Field(
+        default=2000,
+        ge=100,
+        le=10000,
+        description="XREADGROUP block timeout in ms (longer allows larger batches to fill)",
+    )
+    redis_process_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max messages processed concurrently within each XREADGROUP batch",
+    )
 
     # API
     api_host: str = Field(default="0.0.0.0")
@@ -137,8 +148,27 @@ class Settings(BaseSettings):
     # Environment
     environment: Literal["dev", "staging", "prod"] = Field(default="dev")
 
+    # Catalog auto-discovery
+    catalog_auto_discover: bool = Field(
+        default=True,
+        description="Scan Silver directory on startup and auto-register unknown datasets",
+    )
+    catalog_discover_interval_seconds: int = Field(
+        default=300,
+        description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
+    )
+
     # Gold layer paths (used by feature_views/_paths.py)
-    gold_root: Path | None = Field(default=None, description="Override for gold data root (defaults to data_root/gold)")
+    gold_root: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "HEBER_GOLD_ROOT",
+            "HEBER_GOLD_PATH",
+            "GOLD_ROOT",
+            "GOLD_PATH",
+        ),
+        description="Override for gold data root (defaults to data_root/gold)",
+    )
     gold_project: str = Field(default="*", description="Glob pattern for gold project dirs")
     gold_version: str = Field(default="*", description="Glob pattern for gold version dirs")
 
@@ -153,13 +183,6 @@ class Settings(BaseSettings):
     backfill_port: int = Field(default=8080)
     backfill_log_level: str = Field(default="info")
 
-    # Hot store writer
-    hotloader_datasets: str = Field(
-        default="quotes,trades,bars",
-        description="Comma-separated datasets for hot loading",
-    )
-    hotloader_silver_base_path: str | None = Field(default=None, description="Override silver base path for hot loader")
-
     # Watch consumer
     watch_redis_url: str = Field(
         default="redis://localhost:6379",
@@ -169,12 +192,68 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         validation_alias=AliasChoices("HEBER_WATCH_GATEWAY_URL", "DATA_GATEWAY_URL"),
     )
+    watch_gateway_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "HEBER_WATCH_GATEWAY_API_KEY",
+            "DATA_GATEWAY_API_KEY",
+            "GATEWAY_API_KEY",
+        ),
+    )
+    watch_gateway_legacy_fallback_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED",
+            "WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED",
+        ),
+        description="Enable legacy unprefixed gateway route fallback after /api/v1 routes",
+    )
+
+    # Enrichment backfill scanner
+    enrichment_backfill_enabled: bool = Field(
+        default=True,
+        description="Enable periodic re-enrichment of Gold feature rows with null fields",
+    )
+    enrichment_backfill_interval: int = Field(
+        default=3600,
+        description="Seconds between enrichment backfill scans",
+    )
+    enrichment_backfill_lookback_days: int = Field(
+        default=3,
+        description="Number of days back to scan for incomplete feature rows",
+    )
+    enrichment_backfill_batch_size: int = Field(
+        default=50,
+        description="Max rows to re-enrich per scan cycle",
+    )
 
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
 
     # Metrics
     metrics_port: int | None = Field(default=None, description="Prometheus metrics port")
+
+    # Dataflow health verification
+    health_consumer_metrics_url: str = Field(
+        default="http://localhost:9090/metrics",
+        description="Metrics endpoint for heber-consumer dataflow health checks",
+    )
+    health_watch_metrics_url: str = Field(
+        default="http://localhost:9091/metrics",
+        description="Metrics endpoint for heber-watch dataflow health checks",
+    )
+    health_freshness_seconds: int = Field(
+        default=900,
+        description="Maximum allowed freshness window (seconds) for dataflow checks",
+    )
+    health_report_dir: Path = Field(
+        default=Path("/data/ops/dataflow-health"),
+        description="Directory for persisted dataflow health JSON reports",
+    )
+    health_interval_seconds: int = Field(
+        default=300,
+        description="Scheduled interval (seconds) for recurring dataflow checks",
+    )
 
     # Ops
     service_name: str = Field(
@@ -188,6 +267,11 @@ class Settings(BaseSettings):
     service_version: str = Field(
         default="0.1.0",
         validation_alias=AliasChoices("HEBER_SERVICE_VERSION", "SERVICE_VERSION"),
+    )
+    log_level: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("HEBER_LOG_LEVEL", "LOG_LEVEL"),
+        description="Global logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
     shutdown_timeout_seconds: int = Field(default=30)
 

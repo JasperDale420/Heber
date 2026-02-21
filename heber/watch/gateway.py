@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -10,6 +11,40 @@ import httpx
 
 DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
+
+
+def is_retryable_http_status(status_code: int) -> bool:
+    """Return True if the HTTP status code indicates a transient error."""
+    return status_code in {429, 500, 502, 503, 504}
+
+
+def parse_retry_after(headers: Any) -> float | None:
+    """Parse Retry-After header from response headers.
+
+    Handles both integer seconds and HTTP-date formats (though currently
+    only float/int parsing is implemented as that's what we need).
+    Returns None if header is missing or invalid.
+    """
+    if not hasattr(headers, "get"):
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+        return val if val >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def gateway_auth_headers(gateway_api_key: str | None) -> dict[str, str]:
+    """Build HTTP headers for Data Gateway auth when a key is configured."""
+    if gateway_api_key is None:
+        return {}
+    normalized_key = gateway_api_key.strip()
+    if not normalized_key:
+        return {}
+    return {"X-Gateway-Key": normalized_key}
 
 
 def _normalize_gateway_base(raw_base: str) -> str:
@@ -43,6 +78,7 @@ def gateway_url_candidates(
     gateway_url: str,
     route: str,
     api_prefix: str = DEFAULT_GATEWAY_API_PREFIX,
+    include_legacy_fallback: bool = True,
 ) -> list[str]:
     """Return gateway endpoint candidates with API-prefix-first ordering.
 
@@ -75,6 +111,8 @@ def gateway_url_candidates(
     legacy = f"{base_without_prefix}{normalized_route}" if base_has_prefix else f"{base}{normalized_route}"
 
     candidates = [prefixed]
+    if not include_legacy_fallback:
+        return candidates
     if legacy != prefixed:
         candidates.append(legacy)
     return candidates
@@ -107,6 +145,15 @@ def route_failure_for_http_status(route: str, status_code: int) -> dict[str, Any
         "failure": "http_status",
         "status": status_code,
     }
+
+
+def should_try_legacy_fallback_for_status(status_code: int) -> bool:
+    """Return True when trying legacy route fallback can plausibly help.
+
+    Legacy fallback is for route-shape compatibility, so it should only
+    run when the prefixed route is not found.
+    """
+    return status_code == 404
 
 
 def route_failure_for_payload_shape(route: str, failure: str, payload: Any) -> dict[str, Any]:
@@ -170,6 +217,42 @@ def route_failure_for_partial_quotes(
     }
 
 
+def coerce_optional_float(value: Any) -> float | None:
+    """Convert payload values to float when possible, rejecting non-finite results.
+
+    Rejects None, booleans, NaN, and Inf. Used by consumer, poller, and features
+    modules for safe numeric extraction from untrusted payloads.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        return numeric
+    except (TypeError, ValueError):
+        return None
+
+
+def should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
+    """Return True when it is useful to try legacy route fallback URLs.
+
+    Only continues when the latest failure is a 404 (route-shape mismatch);
+    other status codes indicate the route was found but the request itself failed.
+    """
+    if not route_failures:
+        return True
+    latest = route_failures[-1]
+    if latest.get("failure") != "http_status":
+        return True
+    status = latest.get("status")
+    if not isinstance(status, int):
+        return True
+    return should_try_legacy_fallback_for_status(status)
+
+
 def _coerce_numeric_to_utc(value: int | float) -> datetime | None:
     """Convert a numeric epoch (seconds or milliseconds) to a UTC datetime."""
     epoch = value / 1000.0 if abs(value) >= 100_000_000_000 else value
@@ -208,6 +291,8 @@ def _ensure_utc(dt: datetime) -> datetime:
 def coerce_utc_timestamp(value: Any) -> datetime | None:
     """Convert timestamp payload values into UTC-aware datetimes."""
     if value is None:
+        return None
+    if isinstance(value, bool):
         return None
     if isinstance(value, datetime):
         return _ensure_utc(value)

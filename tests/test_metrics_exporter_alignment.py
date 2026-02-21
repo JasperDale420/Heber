@@ -18,7 +18,6 @@ def test_scraped_deployments_map_to_metrics_enabled_entrypoints() -> None:
         "catalog": ROOT / "k8s/base/deployments/catalog.yaml",
         "consumer": ROOT / "k8s/base/deployments/consumer.yaml",
         "compactor": ROOT / "k8s/base/deployments/compactor.yaml",
-        "hotloader": ROOT / "k8s/base/deployments/hotloader.yaml",
         "backfill": ROOT / "k8s/base/deployments/backfill.yaml",
     }
 
@@ -26,7 +25,6 @@ def test_scraped_deployments_map_to_metrics_enabled_entrypoints() -> None:
         "catalog": ROOT / "heber/catalog/api.py",
         "consumer": ROOT / "heber/writer/consumer.py",
         "compactor": ROOT / "heber/writer/compactor.py",
-        "hotloader": ROOT / "heber/writer/hotstore.py",
         "backfill": ROOT / "heber/backfill/__main__.py",
     }
 

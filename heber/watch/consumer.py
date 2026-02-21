@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,9 +22,24 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
-from heber.watch.features import AlertFeatureExtractor, persist_features_to_gold, store_features
+from heber.ops.metrics import (
+    record_watch_alert_parse,
+    record_watch_gateway_request,
+    record_watch_watch_created,
+)
+from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
+from heber.watch.features import (
+    FEATURES_KEY,
+    AlertFeatureExtractor,
+    EnrichmentAuthFailure,
+    persist_features_to_gold,
+    store_features,
+)
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+    coerce_optional_float,
+    coerce_utc_timestamp,
+    gateway_auth_headers,
     gateway_url_candidates,
     quote_age_seconds,
     route_failure_for_exception,
@@ -32,9 +47,10 @@ from heber.watch.gateway import (
     route_failure_for_payload_shape,
     route_failure_for_symbol_missing,
     route_failure_for_symbol_shape,
+    should_continue_route_fallback,
 )
 from heber.watch.manager import WatchManager
-from heber.watch.models import WatchHorizon
+from heber.watch.models import POLL_CONFIG, WatchHorizon
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +60,7 @@ FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
 DATA_GATEWAY_URL = "http://localhost:8000"
+FEATURE_STORAGE_TTL_SECONDS = 86400 * 7
 
 
 def _alert_horizon_to_watch_horizon(horizon: AlertHorizon) -> WatchHorizon:
@@ -69,6 +86,8 @@ class AlertWatchConsumer:
         watch_manager: WatchManager,
         contract_config: ContractBarrierConfig | None = None,
         gateway_url: str = DATA_GATEWAY_URL,
+        gateway_api_key: str | None = None,
+        legacy_route_fallback_enabled: bool | None = None,
         async_redis: redis.asyncio.Redis | None = None,
         stream_name: str | None = None,
         dlq_stream_name: str | None = None,
@@ -93,6 +112,10 @@ class AlertWatchConsumer:
         self.manager = watch_manager
         self.config = contract_config or ContractBarrierConfig.moderate()
         self.gateway_url = gateway_url
+        self.gateway_headers = gateway_auth_headers(gateway_api_key)
+        if legacy_route_fallback_enabled is None:
+            legacy_route_fallback_enabled = settings.watch_gateway_legacy_fallback_enabled
+        self.legacy_route_fallback_enabled = bool(legacy_route_fallback_enabled)
         self.stream_name = stream_name or DEFAULT_EVENTS_STREAM
         self.dlq_stream_name = dlq_stream_name or settings.redis_dlq_stream_name
         configured_retries = settings.redis_process_max_retries if max_process_retries is None else max_process_retries
@@ -107,6 +130,8 @@ class AlertWatchConsumer:
         self.feature_extractor = AlertFeatureExtractor(
             redis=async_redis,
             gateway_url=gateway_url,
+            gateway_api_key=gateway_api_key,
+            legacy_route_fallback_enabled=self.legacy_route_fallback_enabled,
         )
 
     def setup_consumer_group(self) -> None:
@@ -244,6 +269,7 @@ class AlertWatchConsumer:
         """Run the consumer as a continuous service."""
         self._running = True
         await self._setup_consumer_group_async()
+        error_streak = 0
 
         logger.info(
             "Starting alert watch consumer",
@@ -256,9 +282,36 @@ class AlertWatchConsumer:
                 messages = await self._read_messages()
                 if messages:
                     await self._dispatch_messages(messages)
+                error_streak = 0
+            except EnrichmentAuthFailure as auth_error:
+                logger.error("Fatal enrichment auth failure", error=str(auth_error), exc_info=True)
+                raise
             except Exception as e:
-                logger.error("Consumer error", error=str(e))
-                await asyncio.sleep(1)
+                error_streak += 1
+                delay = calculate_retry_delay(
+                    attempt=error_streak,
+                    base_seconds=self.retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                is_transient, error_kind = classify_runtime_error(e)
+                if is_transient:
+                    logger.warning(
+                        "Alert watch transient runtime error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                else:
+                    logger.error(
+                        "Consumer error",
+                        error=str(e),
+                        error_kind=error_kind,
+                        consecutive_errors=error_streak,
+                        retry_delay_seconds=round(delay, 3),
+                    )
+                await asyncio.sleep(delay)
 
     async def _dispatch_messages(self, messages: list) -> None:
         """Dispatch a batch of stream messages."""
@@ -301,105 +354,246 @@ class AlertWatchConsumer:
         return False
 
     async def _process_alert(self, msg_id: str, data: dict) -> tuple[bool, bool, str]:
-        """Process a single alert and create a watch.
+        """Process one stream message that may contain one or many alerts."""
+        alerts = self._parse_alerts(data)
+        if not alerts:
+            # Backward-compatible hook for tests/overrides that monkeypatch _parse_alert.
+            parser_override = self.__dict__.get("_parse_alert")
+            if callable(parser_override):
+                parsed = parser_override(data)
+                if parsed:
+                    alerts = [parsed]
+        if not alerts:
+            logger.warning("Could not parse alert", msg_id=msg_id)
+            return False, False, "alert_parse_failed"
 
-        Args:
-            msg_id: Redis message ID
-            data: Alert data from stream
-        """
-        try:
-            # Parse alert data
-            alert = self._parse_alert(data)
+        created_count = 0
+        skipped_missing_occ = 0
+        skipped_stale_window = 0
+        processing_exceptions = 0
 
-            if not alert:
-                logger.warning("Could not parse alert", msg_id=msg_id)
-                return False, False, "alert_parse_failed"
+        for batch_index, alert in enumerate(alerts):
+            try:
+                processed = await self._process_parsed_alert(alert)
+                if processed == "watch_created":
+                    created_count += 1
+                elif processed == "missing_occ_symbol":
+                    skipped_missing_occ += 1
+                elif processed == "stale_alert_window":
+                    skipped_stale_window += 1
+            except Exception as e:
+                if isinstance(e, EnrichmentAuthFailure):
+                    logger.error(
+                        "Fatal enrichment auth failure while processing parsed alert",
+                        msg_id=msg_id,
+                        alert_id=alert.get("id"),
+                        batch_index=batch_index,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    raise
+                processing_exceptions += 1
+                logger.error(
+                    "Failed to process parsed alert",
+                    msg_id=msg_id,
+                    alert_id=alert.get("id"),
+                    batch_index=batch_index,
+                    error=str(e),
+                )
 
-            # Skip if no OCC symbol
-            if not alert.get("occ_symbol"):
-                logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
-                return True, False, "missing_occ_symbol"
+        if created_count > 0:
+            return True, False, "watch_created"
+        if skipped_stale_window > 0 and skipped_missing_occ == 0 and processing_exceptions == 0:
+            return True, False, "stale_alert_window"
+        if skipped_missing_occ > 0 and processing_exceptions == 0:
+            return True, False, "missing_occ_symbol"
+        if skipped_stale_window > 0 and skipped_missing_occ > 0 and processing_exceptions == 0:
+            return True, False, "stale_or_missing_occ_symbol"
+        if processing_exceptions > 0:
+            return False, True, "processing_exception"
+        return False, False, "alert_parse_failed"
 
-            # Determine horizon based on DTE
-            dte = alert.get("dte", 5)
-            alert_horizon = classify_horizon(dte)
-            watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+    async def _process_parsed_alert(self, alert: dict[str, Any]) -> str:
+        """Process one parsed alert and create its watch."""
+        # Skip if no OCC symbol
+        if not alert.get("occ_symbol"):
+            logger.debug("Alert has no OCC symbol, skipping", alert_id=alert.get("id"))
+            return "missing_occ_symbol"
 
-            # Get entry price (option quote at alert time)
+        # Determine horizon based on DTE
+        dte = alert.get("dte", 5)
+        alert_horizon = classify_horizon(dte)
+        watch_horizon = _alert_horizon_to_watch_horizon(alert_horizon)
+        alert_time = self._normalize_alert_time(alert.get("ts_event"))
+        calendar = getattr(self.manager, "calendar", None)
+        if calendar is not None:
+            window_end = calendar.add_trading_hours(
+                alert_time,
+                POLL_CONFIG[watch_horizon]["max_duration_hours"],
+            )
+            if window_end <= datetime.now(UTC):
+                logger.info(
+                    "Skipping stale alert window",
+                    alert_id=alert.get("id"),
+                    occ_symbol=alert.get("occ_symbol"),
+                    horizon=watch_horizon.value,
+                    alert_time=alert_time.isoformat(),
+                    window_end=window_end.isoformat(),
+                )
+                return "stale_alert_window"
+
+        # Prefer price carried with the alert to avoid stale quote lookups.
+        entry_price = coerce_optional_float(alert.get("contract_px"))
+        if entry_price is None or entry_price <= 0:
             entry_price = await self._get_entry_price(alert["occ_symbol"])
 
-            if not entry_price or entry_price <= 0:
-                logger.warning(
-                    "Could not get entry price",
-                    occ_symbol=alert["occ_symbol"],
-                )
-                # Use contract_px from alert if available
-                fallback_entry = self._coerce_optional_float(alert.get("contract_px"))
-                entry_price = fallback_entry if fallback_entry is not None and fallback_entry > 0 else 1.0
-
-            # Create watch
-            watch = await self.manager.create_watch_async(
-                alert_id=alert["id"],
+        if not entry_price or entry_price <= 0:
+            logger.warning(
+                "Could not get entry price",
                 occ_symbol=alert["occ_symbol"],
-                underlying=alert["underlying"],
-                put_call=alert["put_call"],
-                expiry=alert.get("expiry", ""),
-                strike=alert.get("strike", 0.0),
-                entry_price=entry_price,
-                spot_at_alert=alert.get("spot_px", 0.0),
-                alert_time=alert.get("ts_event", datetime.now(UTC)),
-                horizon=watch_horizon,
-                tp_threshold=self.config.tp_pct,
-                sl_threshold=self.config.sl_pct,
             )
+            entry_price = 1.0
 
-            # Extract and store features for meta-labeling
-            await self._extract_and_store_features(alert, watch.watch_id)
+        # Create watch
+        watch = await self.manager.create_watch_async(
+            alert_id=alert["id"],
+            occ_symbol=alert["occ_symbol"],
+            underlying=alert["underlying"],
+            put_call=alert["put_call"],
+            expiry=alert.get("expiry", ""),
+            strike=alert.get("strike", 0.0),
+            entry_price=entry_price,
+            spot_at_alert=alert.get("spot_px", 0.0),
+            alert_time=alert_time,
+            horizon=watch_horizon,
+            tp_threshold=self.config.tp_pct,
+            sl_threshold=self.config.sl_pct,
+        )
 
-            logger.info(
-                "Created watch from alert",
-                watch_id=watch.watch_id,
-                alert_id=alert["id"],
-                occ_symbol=alert["occ_symbol"],
-                horizon=watch_horizon.value,
-            )
-            return True, False, "watch_created"
+        # Extract and store features for meta-labeling
+        await self._extract_and_store_features(alert, watch.watch_id)
 
-        except Exception as e:
-            logger.error(
-                "Failed to process alert",
-                msg_id=msg_id,
-                error=str(e),
-            )
-            return False, True, "processing_exception"
+        logger.info(
+            "Created watch from alert",
+            watch_id=watch.watch_id,
+            alert_id=alert["id"],
+            occ_symbol=alert["occ_symbol"],
+            horizon=watch_horizon.value,
+        )
+        record_watch_watch_created()
+        return "watch_created"
 
     def _parse_alert(self, data: dict) -> dict | None:
-        """Parse alert data from stream message.
+        """Parse one alert from a stream message for compatibility callers."""
+        parsed_alerts = self._parse_alerts(data)
+        if not parsed_alerts:
+            return None
+        return parsed_alerts[0]
 
-        Args:
-            data: Raw message data (may be bytes or nested JSON)
+    @staticmethod
+    def _normalize_alert_time(raw: Any) -> datetime:
+        return coerce_utc_timestamp(raw) or datetime.now(UTC)
 
-        Returns:
-            Parsed alert dict or None
-        """
+    def _parse_alerts(self, data: dict) -> list[dict[str, Any]]:
+        """Parse alert(s) from stream message supporting single and batched payloads."""
         try:
             parsed = self._decode_stream_data(data)
-            result = self._map_alert_fields(parsed)
-            if not result.get("id") or not result.get("underlying"):
-                logger.warning(
-                    "Alert missing required fields",
-                    has_id=bool(result.get("id")),
-                    has_underlying=bool(result.get("underlying")),
-                    has_occ_symbol=bool(result.get("occ_symbol")),
+            maybe_items = parsed.get("items")
+
+            if maybe_items is None:
+                alert = self._build_alert_record(parsed, batch_index=None)
+                alerts = [alert] if alert else []
+                self._log_parse_summary(
+                    alert_parse_success=len(alerts),
+                    alert_parse_failed=0 if alerts else 1,
+                    batch_items_total=0,
+                    batch_items_failed=0,
                 )
-                return None
-            result["dte"] = self._calculate_dte(result.get("expiry"))
-            result["ts_event"] = self._parse_timestamp(parsed)
-            return result
+                return alerts
+
+            if not isinstance(maybe_items, list):
+                self._log_parse_summary(
+                    alert_parse_success=0,
+                    alert_parse_failed=1,
+                    batch_items_total=0,
+                    batch_items_failed=1,
+                )
+                return []
+
+            parsed_alerts: list[dict[str, Any]] = []
+            batch_items_failed = 0
+            for batch_index, item in enumerate(maybe_items):
+                if not isinstance(item, dict):
+                    batch_items_failed += 1
+                    logger.warning(
+                        "Alert batch item invalid shape",
+                        batch_index=batch_index,
+                        payload_type=type(item).__name__,
+                    )
+                    continue
+                item_payload = {**parsed, **item}
+                nested_payload = item.get("payload")
+                if isinstance(nested_payload, dict):
+                    item_payload = {**item_payload, **nested_payload}
+                alert = self._build_alert_record(item_payload, batch_index=batch_index)
+                if alert is None:
+                    batch_items_failed += 1
+                    continue
+                parsed_alerts.append(alert)
+
+            self._log_parse_summary(
+                alert_parse_success=len(parsed_alerts),
+                alert_parse_failed=batch_items_failed,
+                batch_items_total=len(maybe_items),
+                batch_items_failed=batch_items_failed,
+            )
+            return parsed_alerts
 
         except Exception as e:
             logger.error("Failed to parse alert", error=str(e))
+            self._log_parse_summary(
+                alert_parse_success=0,
+                alert_parse_failed=1,
+                batch_items_total=0,
+                batch_items_failed=0,
+            )
+            return []
+
+    def _build_alert_record(self, parsed: dict[str, Any], batch_index: int | None) -> dict[str, Any] | None:
+        """Build normalized alert record from parsed payload."""
+        result = self._map_alert_fields(parsed)
+        if not result.get("id") or not result.get("underlying"):
+            logger.warning(
+                "Alert missing required fields",
+                has_id=bool(result.get("id")),
+                has_underlying=bool(result.get("underlying")),
+                has_occ_symbol=bool(result.get("occ_symbol")),
+                batch_index=batch_index,
+            )
             return None
+        result["dte"] = self._calculate_dte(result.get("expiry"))
+        result["ts_event"] = self._parse_timestamp(parsed)
+        return result
+
+    @staticmethod
+    def _log_parse_summary(
+        *,
+        alert_parse_success: int,
+        alert_parse_failed: int,
+        batch_items_total: int,
+        batch_items_failed: int,
+    ) -> None:
+        if alert_parse_success > 0:
+            record_watch_alert_parse(status="success", count=alert_parse_success)
+        if alert_parse_failed > 0:
+            record_watch_alert_parse(status="failed", count=alert_parse_failed)
+        logger.info(
+            "Alert parsing summary",
+            alert_parse_success=alert_parse_success,
+            alert_parse_failed=alert_parse_failed,
+            batch_items_total=batch_items_total,
+            batch_items_failed=batch_items_failed,
+        )
 
     def _decode_stream_data(self, data: dict) -> dict:
         """Decode bytes and parse nested JSON from stream message."""
@@ -426,24 +620,96 @@ class AlertWatchConsumer:
 
         return parsed
 
+    @staticmethod
+    def _first_present_value(parsed: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            if key in parsed and parsed[key] is not None:
+                return parsed[key]
+        return None
+
+    @staticmethod
+    def _normalize_optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _normalize_tags(value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                decoded = json.loads(raw)
+                if isinstance(decoded, list):
+                    tags = [str(item).strip() for item in decoded if str(item).strip()]
+                    return tags or None
+            except json.JSONDecodeError:
+                pass
+            tags = [part.strip() for part in raw.replace("|", ",").split(",") if part.strip()]
+            return tags or None
+        if isinstance(value, list | tuple | set):
+            tags = [str(item).strip() for item in value if str(item).strip()]
+            return tags or None
+        return None
+
     def _map_alert_fields(self, parsed: dict) -> dict:
         """Map various field name conventions to standard fields."""
-        put_call = self._normalize_put_call(parsed.get("put_call") or parsed.get("type", "C"))
-        spot_px = parsed.get("spot_px")
-        if spot_px is None:
-            spot_px = parsed.get("underlying_price", 0)
-        contract_px = parsed.get("contract_px")
-        if contract_px is None:
-            contract_px = parsed.get("price", 0)
-        strike = self._coerce_optional_float(parsed.get("strike", 0))
+        put_call_raw = self._first_present_value(parsed, ("put_call", "option_type", "call_put"))
+        type_raw = parsed.get("type")
+        if put_call_raw is None and isinstance(type_raw, str):
+            normalized_type = type_raw.strip().upper()
+            if normalized_type.startswith("C") or normalized_type.startswith("P"):
+                put_call_raw = normalized_type
+        put_call = self._normalize_put_call(put_call_raw or "C")
+
+        strike = coerce_optional_float(self._first_present_value(parsed, ("strike",)))
         if strike is None:
             strike = 0.0
-        normalized_spot_px = self._coerce_optional_float(spot_px)
+
+        spot_px_raw = self._first_present_value(parsed, ("spot_px", "underlying_price", "spot", "underlying_px"))
+        contract_px_raw = self._first_present_value(
+            parsed,
+            ("contract_px", "price", "option_price", "mid", "mid_price"),
+        )
+        premium_raw = self._first_present_value(
+            parsed,
+            ("premium", "total_premium", "premium_amount", "notional_premium", "notional"),
+        )
+        volume_raw = self._first_present_value(parsed, ("volume", "size", "contracts", "contract_volume", "total_size"))
+        open_interest_raw = self._first_present_value(parsed, ("open_interest", "oi", "openInterest"))
+
+        normalized_spot_px = coerce_optional_float(spot_px_raw)
         if normalized_spot_px is None:
             normalized_spot_px = 0.0
-        normalized_contract_px = self._coerce_optional_float(contract_px)
+        normalized_contract_px = coerce_optional_float(contract_px_raw)
         if normalized_contract_px is None:
             normalized_contract_px = 0.0
+        normalized_premium = coerce_optional_float(premium_raw)
+        if normalized_premium is None:
+            normalized_premium = 0.0
+        normalized_volume = coerce_optional_float(volume_raw)
+        if normalized_volume is None:
+            normalized_volume = 0.0
+        normalized_open_interest = coerce_optional_float(open_interest_raw)
+        normalized_volume_oi_ratio = coerce_optional_float(
+            self._first_present_value(parsed, ("volume_oi_ratio", "vol_oi_ratio"))
+        )
+        if normalized_volume_oi_ratio is None and normalized_open_interest is not None and normalized_open_interest > 0:
+            normalized_volume_oi_ratio = normalized_volume / normalized_open_interest
+
+        alert_type = self._normalize_optional_text(
+            self._first_present_value(parsed, ("alert_type", "flow_type", "order_type"))
+        )
+        if alert_type is None and isinstance(type_raw, str):
+            normalized_type = type_raw.strip().upper()
+            if not (normalized_type.startswith("C") or normalized_type.startswith("P")):
+                alert_type = normalized_type
+        if alert_type is None:
+            alert_type = "UNKNOWN"
 
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
@@ -454,6 +720,18 @@ class AlertWatchConsumer:
             "strike": strike,
             "spot_px": normalized_spot_px,
             "contract_px": normalized_contract_px,
+            "premium": normalized_premium,
+            "volume": normalized_volume,
+            "open_interest": normalized_open_interest,
+            "alert_type": alert_type,
+            "side": self._normalize_optional_text(self._first_present_value(parsed, ("side", "execution_side"))),
+            "aggressor": self._normalize_optional_text(self._first_present_value(parsed, ("aggressor",))),
+            "tags": self._normalize_tags(self._first_present_value(parsed, ("tags", "tag_list", "flags"))),
+            "is_sweep": parsed.get("is_sweep"),
+            "is_unusual": parsed.get("is_unusual"),
+            "sentiment": self._normalize_optional_text(parsed.get("sentiment")),
+            "trade_count": parsed.get("trade_count"),
+            "volume_oi_ratio": normalized_volume_oi_ratio,
         }
 
     @staticmethod
@@ -481,50 +759,11 @@ class AlertWatchConsumer:
 
     def _parse_timestamp(self, parsed: dict) -> datetime:
         """Parse timestamp from various field formats."""
-        ts = parsed.get("ts_event") or parsed.get("created_at") or parsed.get("timestamp")
-        if not ts:
-            return datetime.now(UTC)
-
-        if isinstance(ts, str):
-            try:
-                parsed_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
-                numeric = self._coerce_optional_float(ts)
-                if numeric is None:
-                    return datetime.now(UTC)
-                return self._timestamp_from_numeric(numeric)
-            if parsed_ts.tzinfo is None:
-                return parsed_ts.replace(tzinfo=UTC)
-            return parsed_ts.astimezone(UTC)
-        if isinstance(ts, int | float):
-            numeric = self._coerce_optional_float(ts)
-            if numeric is None:
-                return datetime.now(UTC)
-            return self._timestamp_from_numeric(numeric)
+        for key in ("ts_event", "created_at", "timestamp"):
+            result = coerce_utc_timestamp(parsed.get(key))
+            if result is not None:
+                return result
         return datetime.now(UTC)
-
-    @staticmethod
-    def _timestamp_from_numeric(numeric: float) -> datetime:
-        """Parse numeric epoch values (seconds or milliseconds) with fail-soft fallback."""
-        epoch = numeric / 1000.0 if abs(numeric) >= 100_000_000_000 else numeric
-        try:
-            return datetime.fromtimestamp(epoch, tz=UTC)
-        except (OverflowError, OSError, ValueError):
-            return datetime.now(UTC)
-
-    @staticmethod
-    def _coerce_optional_float(value: Any) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return None
-        try:
-            numeric = float(value)
-            if not math.isfinite(numeric):
-                return None
-            return numeric
-        except (TypeError, ValueError):
-            return None
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.
@@ -540,6 +779,7 @@ class AlertWatchConsumer:
                 routes = gateway_url_candidates(
                     self.gateway_url,
                     "/alpaca/options/quotes",
+                    include_legacy_fallback=self.legacy_route_fallback_enabled,
                 )
                 now_utc = datetime.now(UTC)
                 best_stale_price: float | None = None
@@ -555,6 +795,8 @@ class AlertWatchConsumer:
                         route_failures,
                     )
                     if result is None:
+                        if not should_continue_route_fallback(route_failures):
+                            break
                         continue
                     price, is_stale, age = result
                     if not is_stale:
@@ -584,15 +826,34 @@ class AlertWatchConsumer:
         route_failures: list[dict[str, Any]],
     ) -> tuple[float, bool, float] | None:
         """Try a single gateway route. Returns (price, is_stale, age_seconds) or None."""
+        started = time.perf_counter()
         try:
-            response = await client.get(route, params={"symbols": occ_symbol})
+            response = await client.get(
+                route,
+                params={"symbols": occ_symbol},
+                headers=self.gateway_headers or None,
+            )
         except httpx.HTTPError as request_error:
             route_failures.append(route_failure_for_exception(route, request_error))
             logger.warning("Entry price route request failed", route=route, error=str(request_error))
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="transport_error",
+                status_code=None,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         if response.status_code != 200:
             route_failures.append(route_failure_for_http_status(route, response.status_code))
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="http_error",
+                status_code=response.status_code,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
             return None
 
         quote_payload = self._validate_route_response(response, route, occ_symbol, route_failures)
@@ -616,6 +877,13 @@ class AlertWatchConsumer:
             )
             return computed_price, True, age
 
+        record_watch_gateway_request(
+            component="consumer_entry_price",
+            endpoint="alpaca_options_quotes",
+            outcome="success",
+            status_code=200,
+            duration_seconds=max(0.0, time.perf_counter() - started),
+        )
         return computed_price, False, 0.0
 
     def _validate_route_response(
@@ -675,18 +943,18 @@ class AlertWatchConsumer:
         route_failures: list[dict[str, Any]],
     ) -> float | None:
         """Extract mid or last price from a validated quote payload."""
-        bid = self._coerce_optional_float(quote_payload.get("bp"))
+        bid = coerce_optional_float(quote_payload.get("bp"))
         if bid is None:
-            bid = self._coerce_optional_float(quote_payload.get("bid_price"))
+            bid = coerce_optional_float(quote_payload.get("bid_price"))
 
-        ask = self._coerce_optional_float(quote_payload.get("ap"))
+        ask = coerce_optional_float(quote_payload.get("ap"))
         if ask is None:
-            ask = self._coerce_optional_float(quote_payload.get("ask_price"))
+            ask = coerce_optional_float(quote_payload.get("ask_price"))
 
         if bid is not None and ask is not None:
             return (bid + ask) / 2
 
-        last_price = self._coerce_optional_float(quote_payload.get("last_price"))
+        last_price = coerce_optional_float(quote_payload.get("last_price"))
         if last_price is not None:
             return last_price
 
@@ -708,6 +976,13 @@ class AlertWatchConsumer:
                 occ_symbol=occ_symbol,
                 quote_age_seconds=best_stale_age_seconds,
                 max_quote_age_seconds=DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
+            )
+            record_watch_gateway_request(
+                component="consumer_entry_price",
+                endpoint="alpaca_options_quotes",
+                outcome="stale_fallback",
+                status_code=None,
+                duration_seconds=0.0,
             )
             return best_stale_price
         if route_failures:
@@ -763,7 +1038,7 @@ class AlertWatchConsumer:
             # Extract features
             features = await self.feature_extractor.extract(record)
 
-            # Store in Redis if async client available
+            # Store in Redis with async client when available.
             if self.async_redis:
                 await store_features(self.async_redis, features)
                 logger.debug(
@@ -772,15 +1047,40 @@ class AlertWatchConsumer:
                     watch_id=watch_id,
                     feature_count=len(features.numeric_feature_names()),
                 )
+            elif self.redis is not None and hasattr(self.redis, "set"):
+                key = FEATURES_KEY.format(alert_id=features.alert_id)
+                payload = json.dumps(features.to_dict())
+                await asyncio.to_thread(
+                    self.redis.set,
+                    key,
+                    payload,
+                    FEATURE_STORAGE_TTL_SECONDS,
+                )
+                logger.debug(
+                    "Stored alert features",
+                    alert_id=alert["id"],
+                    watch_id=watch_id,
+                    feature_count=len(features.numeric_feature_names()),
+                    storage_mode="sync_fallback",
+                )
             else:
                 logger.debug(
                     "Skipping feature storage (no async redis)",
                     alert_id=alert["id"],
+                    sync_redis_has_set=bool(getattr(self.redis, "set", None)),
                 )
 
             # Persist feature row to Gold dataset for training-set assembly.
             await asyncio.to_thread(persist_features_to_gold, features)
 
+        except EnrichmentAuthFailure:
+            logger.error(
+                "Feature extraction failed due to repeated auth failures",
+                alert_id=alert.get("id"),
+                watch_id=watch_id,
+                exc_info=True,
+            )
+            raise
         except Exception as e:
             # Don't fail watch creation if feature extraction fails
             logger.warning(

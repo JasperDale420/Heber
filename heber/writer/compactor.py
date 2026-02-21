@@ -23,6 +23,21 @@ logger = structlog.get_logger(__name__)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
 
+class SchemaConflictError(RuntimeError):
+    """Raised when files in a partition contain incompatible column types."""
+
+    def __init__(self, column: str, existing_type: pa.DataType, incoming_type: pa.DataType):
+        super().__init__(f"Schema conflict for column '{column}': {existing_type} vs {incoming_type}")
+        self.column = column
+        self.existing_type = existing_type
+        self.incoming_type = incoming_type
+
+
+def _is_temporal_type(dt: pa.DataType) -> bool:
+    """Check if a type is a date, timestamp, time, or duration type."""
+    return pa.types.is_date(dt) or pa.types.is_timestamp(dt) or pa.types.is_time(dt) or pa.types.is_duration(dt)
+
+
 class Compactor:
     """Compacts small Parquet files into larger ones."""
 
@@ -38,6 +53,24 @@ class Compactor:
                 lock_file.write(f"pid={os.getpid()} ts={datetime.now(UTC).isoformat()}\n")
             return lock_path
         except FileExistsError:
+            existing_pid = self._read_lock_pid(lock_path)
+            if existing_pid == os.getpid():
+                logger.warning(
+                    "Removing stale compaction lock created by current process",
+                    partition=str(partition_path),
+                    lock_path=str(lock_path),
+                )
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to remove stale compaction lock",
+                        partition=str(partition_path),
+                        lock_path=str(lock_path),
+                        error=str(e),
+                    )
+                    return None
+                return self._acquire_partition_lock(partition_path)
             logger.info("Skipping partition compaction; lock already present", partition=str(partition_path))
             return None
 
@@ -64,6 +97,21 @@ class Compactor:
         return "unknown"
 
     @staticmethod
+    def _read_lock_pid(lock_path: Path) -> int | None:
+        """Read lock owner PID from lock file."""
+        try:
+            first_line = lock_path.read_text(encoding="utf-8").splitlines()[0]
+        except Exception:
+            return None
+        for token in first_line.split():
+            if token.startswith("pid="):
+                try:
+                    return int(token.split("=", 1)[1])
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
     def _normalize_dict_columns(table: pa.Table) -> pa.Table:
         """Cast dictionary-encoded string columns to plain strings.
 
@@ -83,6 +131,130 @@ class Compactor:
             fields.append(field)
         return pa.table(arrays, schema=pa.schema(fields))
 
+    @staticmethod
+    def _is_temporal(dt: pa.DataType) -> bool:
+        """Check if a type is a date or timestamp type."""
+        return _is_temporal_type(dt)
+
+    @staticmethod
+    def _resolve_column_type(existing_type: pa.DataType, incoming_type: pa.DataType) -> pa.DataType | None:
+        """Resolve a compatible unified type for one column.
+
+        Widening rules (safe casts only):
+        - null + T → T
+        - int + int → int64
+        - int/float + float/int → float64
+        - string + string → string
+        - large_string ↔ string → large_string
+        - temporal (date/timestamp) ↔ string → string
+        - temporal + temporal (different) → string
+        """
+        if existing_type.equals(incoming_type):
+            return existing_type
+        if pa.types.is_null(existing_type):
+            return incoming_type
+        if pa.types.is_null(incoming_type):
+            return existing_type
+        if pa.types.is_integer(existing_type) and pa.types.is_integer(incoming_type):
+            return pa.int64()
+        if (
+            (pa.types.is_integer(existing_type) and pa.types.is_floating(incoming_type))
+            or (pa.types.is_floating(existing_type) and pa.types.is_integer(incoming_type))
+            or (pa.types.is_floating(existing_type) and pa.types.is_floating(incoming_type))
+        ):
+            return pa.float64()
+
+        # String-like unification
+        both_string_like = (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)) and (
+            pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)
+        )
+        if both_string_like:
+            if pa.types.is_large_string(existing_type) or pa.types.is_large_string(incoming_type):
+                return pa.large_string()
+            return pa.string()
+
+        # Temporal ↔ string: widen to string (dates can always be represented as strings)
+        is_existing_temporal = _is_temporal_type(existing_type)
+        is_incoming_temporal = _is_temporal_type(incoming_type)
+        if is_existing_temporal and (pa.types.is_string(incoming_type) or pa.types.is_large_string(incoming_type)):
+            return incoming_type
+        if is_incoming_temporal and (pa.types.is_string(existing_type) or pa.types.is_large_string(existing_type)):
+            return existing_type
+        # Two different temporal types → string as fallback
+        if is_existing_temporal and is_incoming_temporal:
+            return pa.string()
+
+        return None
+
+    def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
+        """Build unified schema across tables, raising on true type conflicts."""
+        ordered_columns: list[str] = []
+        column_types: dict[str, pa.DataType] = {}
+
+        for table in tables:
+            for field in table.schema:
+                column = field.name
+                incoming_type = field.type
+                existing_type = column_types.get(column)
+                if existing_type is None:
+                    ordered_columns.append(column)
+                    column_types[column] = incoming_type
+                    continue
+
+                resolved_type = self._resolve_column_type(existing_type, incoming_type)
+                if resolved_type is None:
+                    raise SchemaConflictError(
+                        column=column,
+                        existing_type=existing_type,
+                        incoming_type=incoming_type,
+                    )
+                column_types[column] = resolved_type
+
+        return pa.schema([pa.field(column, column_types[column]) for column in ordered_columns])
+
+    @staticmethod
+    def _align_table_to_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+        """Project/cast one table to the unified schema, filling missing cols with nulls."""
+        arrays: list[pa.Array | pa.ChunkedArray] = []
+        for field in schema:
+            if field.name in table.schema.names:
+                column = table.column(field.name)
+                if not column.type.equals(field.type):
+                    column = column.cast(field.type)
+            else:
+                column = pa.nulls(table.num_rows, type=field.type)
+            arrays.append(column)
+        return pa.table(arrays, schema=schema)
+
+    @staticmethod
+    def _list_compactable_parquet_files(partition_path: Path) -> list[Path]:
+        """List parquet data files, excluding hidden sidecars."""
+        compactable_files: list[Path] = []
+        for candidate in sorted(partition_path.glob("*.parquet")):
+            if candidate.name.startswith("."):
+                logger.debug(
+                    "Skipping hidden parquet sidecar file",
+                    partition=str(partition_path),
+                    file=str(candidate),
+                )
+                continue
+            compactable_files.append(candidate)
+        return compactable_files
+
+    @staticmethod
+    def _safe_stat_size(path: Path, partition_path: Path) -> int | None:
+        """Return file size, skipping unreadable files."""
+        try:
+            return path.stat().st_size
+        except OSError as e:
+            logger.warning(
+                "Skipping unreadable parquet file",
+                partition=str(partition_path),
+                file=str(path),
+                error=str(e),
+            )
+            return None
+
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
 
@@ -92,46 +264,74 @@ class Compactor:
         if lock_path is None:
             return 0
 
-        parquet_files = sorted(partition_path.glob("*.parquet"))
-
-        if len(parquet_files) <= 1:
-            self._release_partition_lock(lock_path)
-            return 0
-
-        # Check total size
-        total_size = sum(f.stat().st_size for f in parquet_files)
-
-        # Only compact if we have multiple small files
-        small_files = [f for f in parquet_files if f.stat().st_size < TARGET_FILE_SIZE]
-
-        if len(small_files) <= 1:
-            self._release_partition_lock(lock_path)
-            return 0
-
-        logger.info(
-            "Compacting partition",
-            partition=str(partition_path),
-            files=len(small_files),
-            total_bytes=total_size,
-        )
         started_at = datetime.now(UTC)
         dataset = self._dataset_label(partition_path)
-        source_bytes = sum(f.stat().st_size for f in small_files)
 
         try:
+            parquet_files = self._list_compactable_parquet_files(partition_path)
+            if len(parquet_files) <= 1:
+                return 0
+
+            sized_files: list[tuple[Path, int]] = []
+            for file_path in parquet_files:
+                file_size = self._safe_stat_size(file_path, partition_path)
+                if file_size is not None:
+                    sized_files.append((file_path, file_size))
+
+            if len(sized_files) <= 1:
+                return 0
+
+            total_size = sum(size for _, size in sized_files)
+            small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
+            if len(small_files) <= 1:
+                return 0
+
+            logger.info(
+                "Compacting partition",
+                partition=str(partition_path),
+                files=len(small_files),
+                total_bytes=total_size,
+            )
+            size_by_path = {path: size for path, size in sized_files}
+            source_bytes = sum(size_by_path[path] for path in small_files)
+
             # Stream files into a single temp parquet, then atomically promote.
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
             temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
+            source_tables: list[pa.Table] = []
+            for source_file in small_files:
+                source_table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
+                source_tables.append(source_table)
+
+            try:
+                unified_schema = self._build_unified_schema(source_tables)
+            except SchemaConflictError as conflict:
+                record_compaction(
+                    dataset=dataset,
+                    status="error",
+                    files_merged=0,
+                    bytes_reclaimed=0,
+                    duration=(datetime.now(UTC) - started_at).total_seconds(),
+                )
+                logger.error(
+                    "Compaction skipped due schema conflict",
+                    partition=str(partition_path),
+                    column=conflict.column,
+                    existing_type=str(conflict.existing_type),
+                    incoming_type=str(conflict.incoming_type),
+                )
+                return 0
+
             writer = None
             merged_rows = 0
             try:
-                for source_file in small_files:
-                    table = self._normalize_dict_columns(pq.ParquetFile(source_file).read())
+                for source_table in source_tables:
+                    table = self._align_table_to_schema(source_table, unified_schema)
                     if writer is None:
                         writer = pq.ParquetWriter(
                             temp_path,
-                            table.schema,
+                            unified_schema,
                             compression="snappy",
                         )
                     writer.write_table(table, row_group_size=250_000)
@@ -201,7 +401,7 @@ class Compactor:
         # Walk through all partitions (directories containing .parquet files)
         for partition_path in layer_path.rglob("*"):
             if partition_path.is_dir():
-                parquet_files = list(partition_path.glob("*.parquet"))
+                parquet_files = self._list_compactable_parquet_files(partition_path)
                 if parquet_files:
                     partitions_scanned += 1
                     merged = self.compact_partition(partition_path)
@@ -243,6 +443,10 @@ class Compactor:
 
 async def main():
     """Entry point for the compactor."""
+    # Settings are imported at module level, so we can use them
+    from heber.ops.logging import configure_logging
+
+    configure_logging(service_name="heber-compactor", log_level=settings.log_level, json_output=True)
     start_metrics_server_from_env(default_port=9090)
     compactor = Compactor()
 

@@ -17,6 +17,8 @@ from typing import Any
 import structlog
 from prometheus_client import Counter, Histogram
 
+from heber.catalog.access_control import DataLayer
+
 logger = structlog.get_logger(__name__)
 
 # Metrics
@@ -32,14 +34,6 @@ catalog_operation_duration = Histogram(
     ["operation"],
     buckets=[0.1, 0.5, 1, 2, 5, 10],
 )
-
-
-class DataLayer(str, Enum):
-    """Data layer in Medallion architecture."""
-
-    BRONZE = "bronze"
-    SILVER = "silver"
-    GOLD = "gold"
 
 
 class TableType(str, Enum):

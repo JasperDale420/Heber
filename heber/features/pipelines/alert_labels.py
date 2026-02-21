@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -30,6 +31,7 @@ from heber.features.templates.alert_labels import (
     compute_multi_horizon_labels,
 )
 from heber.sdk import HeberClient
+from heber.watch.gateway import gateway_auth_headers
 
 logger = structlog.get_logger(__name__)
 
@@ -57,6 +59,7 @@ class AlertLabelsPipeline:
         project: str = "quant",
         version: str = "v1",
         gateway_url: str = DATA_GATEWAY_URL,
+        gateway_api_key: str | None = None,
     ):
         """Initialize the pipeline.
 
@@ -68,6 +71,7 @@ class AlertLabelsPipeline:
             project: Project name for Gold output
             version: Version string for Gold output
             gateway_url: Data Gateway URL for fetching option bars
+            gateway_api_key: Data Gateway API key for authenticated option-bars fetches
         """
         self.client = client or HeberClient()
         self.slippage_model = slippage_model or SlippageModel()
@@ -76,6 +80,21 @@ class AlertLabelsPipeline:
         self.project = project
         self.version = version
         self.gateway_url = gateway_url
+        self.gateway_api_key = (
+            gateway_api_key
+            or os.getenv("HEBER_WATCH_GATEWAY_API_KEY")
+            or os.getenv("DATA_GATEWAY_API_KEY")
+            or os.getenv("GATEWAY_API_KEY")
+        )
+
+    def _require_gateway_api_key(self) -> str:
+        key = (self.gateway_api_key or "").strip()
+        if not key:
+            raise ValueError(
+                "HEBER_WATCH_GATEWAY_API_KEY (or DATA_GATEWAY_API_KEY/GATEWAY_API_KEY) is required "
+                "when use_contract_labels=True"
+            )
+        return key
 
     @staticmethod
     def _canonical_equity_key(symbol: Any) -> str:
@@ -220,6 +239,7 @@ class AlertLabelsPipeline:
 
         # Step 6: Fetch option bars and compute contract labels
         if use_contract_labels:
+            self._require_gateway_api_key()
             logger.info("Fetching option bars from Data Gateway")
             labels = self._add_contract_labels(labels, flow_alerts, bar_start, bar_end)
 
@@ -348,6 +368,8 @@ class AlertLabelsPipeline:
         end: datetime,
     ) -> pd.DataFrame:
         """Fetch option bars from the Data Gateway API."""
+        gateway_key = self._require_gateway_api_key()
+        auth_headers = gateway_auth_headers(gateway_key)
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 # Batch symbols (API may have limits)
@@ -360,6 +382,7 @@ class AlertLabelsPipeline:
 
                     response = await client.get(
                         f"{self.gateway_url}/api/v1/alpaca/options/bars",
+                        headers=auth_headers,
                         params={
                             "symbols": symbols_param,
                             "timeframe": "1Day",

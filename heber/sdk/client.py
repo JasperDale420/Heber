@@ -9,10 +9,10 @@ from typing import Any
 
 import httpx
 import pandas as pd
-import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.core.parquet import read_parquet_dataset
 from heber.versioning import (
     get_version_manager,
 )
@@ -92,19 +92,19 @@ class HeberClient:
         params = {}
         if layer:
             params["layer"] = layer
-        response = self.http_client.get("/datasets", params=params)
+        response = self.http_client.get("datasets", params=params)
         response.raise_for_status()
         return response.json()["data"]
 
     def get_dataset(self, name: str) -> dict:
         """Get dataset metadata by name."""
-        response = self.http_client.get(f"/datasets/{name}")
+        response = self.http_client.get(f"datasets/{name}")
         response.raise_for_status()
         return response.json()["data"]
 
     def resolve_instrument(self, symbol: str) -> str | None:
         """Resolve symbol to canonical instrument_key."""
-        response = self.http_client.post("/instruments/lookup", json={"symbols": [symbol]})
+        response = self.http_client.post("instruments/lookup", json={"symbols": [symbol]})
         response.raise_for_status()
         data = response.json()["data"]
         if data:
@@ -134,7 +134,7 @@ class HeberClient:
         dataset = self.get_dataset(dataset_name)
 
         # Get schema version
-        response = self.http_client.get(f"/datasets/{dataset_name}/versions")
+        response = self.http_client.get(f"datasets/{dataset_name}/versions")
         response.raise_for_status()
         versions = response.json()["data"]
 
@@ -234,7 +234,6 @@ class HeberClient:
 
         return result
 
-    # Silver layer reads
     def read_silver(
         self,
         dataset: str,
@@ -257,9 +256,6 @@ class HeberClient:
         """
         silver_path = self.data_root / "silver" / f"feed={dataset}"
 
-        if not silver_path.exists():
-            return pd.DataFrame()
-
         # Build filters
         filters = []
         if instrument_keys:
@@ -268,23 +264,12 @@ class HeberClient:
             filters.append(("instrument_type", "==", instrument_type))
 
         try:
-            table = pq.read_table(
-                silver_path,
+            return self._read_parquet_dataset(
+                path=silver_path,
                 columns=columns,
-                filters=filters if filters else None,
+                filters=filters,
+                time_range=time_range,
             )
-            df = table.to_pandas()
-
-            # Apply time range filter
-            if time_range and not df.empty:
-                start, end = time_range
-                if isinstance(start, str):
-                    start = pd.Timestamp(start)
-                if isinstance(end, str):
-                    end = pd.Timestamp(end)
-                df = df[(df["ts_event"] >= start) & (df["ts_event"] <= end)]
-
-            return df
 
         except Exception as e:
             logger.error("Failed to read Silver", dataset=dataset, error=str(e))
@@ -364,6 +349,23 @@ class HeberClient:
             asof_time = pd.Timestamp(asof_time)
         return df[df[available_col] <= asof_time]
 
+    def _read_parquet_dataset(
+        self,
+        path: Path,
+        columns: list[str] | None = None,
+        filters: list[tuple] | None = None,
+        time_range: tuple[datetime | str, datetime | str] | None = None,
+        asof_time: datetime | str | None = None,
+    ) -> pd.DataFrame:
+        """Helper to read parquet dataset with standard filtering."""
+        return read_parquet_dataset(
+            path=path,
+            columns=columns,
+            filters=filters,
+            time_range=time_range,
+            asof_time=asof_time,
+        )
+
     # Gold layer operations
     def read_gold(
         self,
@@ -394,29 +396,18 @@ class HeberClient:
         if version:
             gold_path = gold_path / f"version={version}"
 
-        if not gold_path.exists():
-            return pd.DataFrame()
-
         # Build filters
         filters = []
         if instrument_keys:
             filters.append(("instrument_key", "in", instrument_keys))
 
         try:
-            table = pq.read_table(
-                gold_path,
-                filters=filters if filters else None,
+            return self._read_parquet_dataset(
+                path=gold_path,
+                filters=filters,
+                time_range=time_range,
+                asof_time=asof_time,
             )
-            df = table.to_pandas()
-
-            if time_range and not df.empty:
-                time_col = "ts_event" if "ts_event" in df.columns else "ts_label"
-                df = self._filter_time_range(df, time_range, time_col)
-
-            if asof_time and "ts_available" in df.columns:
-                df = self._filter_asof(df, asof_time)
-
-            return df
 
         except Exception as e:
             logger.error("Failed to read Gold", dataset=dataset, error=str(e))
@@ -476,6 +467,21 @@ class HeberClient:
 
             # Drop temporary dt column
             write_df = group_df.drop(columns=["dt"])
+
+            # Audit for unexpected null values before writing
+            from heber.quality.write_audit import audit_null_fields
+
+            audit_null_fields(
+                write_df,
+                layer="gold",
+                dataset=dataset,
+                context={
+                    "project": project,
+                    "version": version,
+                    "date": str(dt),
+                },
+            )
+
             write_df.to_parquet(file_path, compression="snappy")
 
             total_rows += len(write_df)

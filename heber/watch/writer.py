@@ -18,6 +18,17 @@ logger = structlog.get_logger(__name__)
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
 
 
+def _resolve_gateway_api_key(explicit_gateway_api_key: str | None, settings_gateway_api_key: str | None) -> str:
+    """Resolve and validate the gateway API key used by watch components."""
+    candidate = explicit_gateway_api_key
+    if candidate is None:
+        candidate = settings_gateway_api_key
+    normalized = (candidate or "").strip()
+    if not normalized:
+        raise ValueError("HEBER_WATCH_GATEWAY_API_KEY (or DATA_GATEWAY_API_KEY) must be configured")
+    return normalized
+
+
 class LabelWriter:
     """Writes completed watch outcomes to Gold storage.
 
@@ -126,7 +137,19 @@ class LabelWriter:
                 final_file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
                 current_tmp_file = partition_path / f".{final_file_path.name}.tmp"
 
-                group.drop(columns=["_date"]).to_parquet(current_tmp_file, compression="snappy")
+                write_group = group.drop(columns=["_date"])
+
+                # Audit for unexpected null values before writing
+                from heber.quality.write_audit import audit_null_fields
+
+                audit_null_fields(
+                    write_group,
+                    layer="gold",
+                    dataset=self.dataset,
+                    context={"date": str(dt), "path": str(partition_path)},
+                )
+
+                write_group.to_parquet(current_tmp_file, compression="snappy")
                 staged_files.append((current_tmp_file, final_file_path, len(group)))
                 current_tmp_file = None
 
@@ -159,13 +182,14 @@ class LabelWriter:
 class WatchService:
     """Orchestrates all watch components.
 
-    Runs consumer, poller, checker, and writer together.
+    Runs consumer, poller, checker, writer, and enrichment backfill together.
     """
 
     def __init__(
         self,
         redis_client: Any,
         gateway_url: str = DEFAULT_GATEWAY_URL,
+        gateway_api_key: str | None = None,
         output_path: Path | None = None,
     ):
         """Initialize the watch service.
@@ -173,18 +197,53 @@ class WatchService:
         Args:
             redis_client: Redis client
             gateway_url: Data Gateway URL
+            gateway_api_key: Data Gateway API key for authenticated requests
             output_path: Path for Gold output
         """
+        from heber.config import settings
+        from heber.watch.backfill_scanner import EnrichmentBackfillScanner
         from heber.watch.consumer import AlertWatchConsumer
+        from heber.watch.features import DEFAULT_FEATURES_OUTPUT_PATH, AlertFeatureExtractor
         from heber.watch.manager import WatchManager
         from heber.watch.poller import SnapshotPoller
 
+        resolved_gateway_api_key = _resolve_gateway_api_key(
+            gateway_api_key,
+            settings.watch_gateway_api_key,
+        )
+
         self.redis = redis_client
         self.manager = WatchManager(redis_client)
-        self.consumer = AlertWatchConsumer(redis_client, self.manager, gateway_url=gateway_url)
-        self.poller = SnapshotPoller(self.manager, gateway_url=gateway_url)
+        self.consumer = AlertWatchConsumer(
+            redis_client,
+            self.manager,
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
+        self.poller = SnapshotPoller(
+            self.manager,
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
         self.checker = BarrierChecker(self.manager)
         self.writer = LabelWriter(output_path=output_path)
+
+        # Enrichment backfill scanner
+        backfill_extractor = AlertFeatureExtractor(
+            gateway_url=gateway_url,
+            gateway_api_key=resolved_gateway_api_key,
+            legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+        )
+        self.backfill_scanner = EnrichmentBackfillScanner(
+            feature_extractor=backfill_extractor,
+            features_output_path=DEFAULT_FEATURES_OUTPUT_PATH,
+            interval_seconds=settings.enrichment_backfill_interval,
+            lookback_days=settings.enrichment_backfill_lookback_days,
+            batch_size=settings.enrichment_backfill_batch_size,
+        )
+        self._backfill_enabled = settings.enrichment_backfill_enabled
         self._running = False
 
     async def run(self) -> None:
@@ -193,14 +252,20 @@ class WatchService:
 
         self._running = True
 
-        logger.info("Starting watch service")
+        logger.info(
+            "Starting watch service",
+            enrichment_backfill_enabled=self._backfill_enabled,
+        )
 
-        # Run consumer, poller, and checker loop concurrently
-        await asyncio.gather(
+        coroutines = [
             self.consumer.run(),
             self.poller.run(),
             self._check_and_write_loop(),
-        )
+        ]
+        if self._backfill_enabled:
+            coroutines.append(self.backfill_scanner.run())
+
+        await asyncio.gather(*coroutines)
 
     async def _check_and_write_loop(self) -> None:
         """Periodically check for completed watches and write labels."""
@@ -224,6 +289,7 @@ class WatchService:
         self._running = False
         self.consumer.stop()
         self.poller.stop()
+        self.backfill_scanner.stop()
         self.writer.flush()
         logger.info("Watch service stopped")
 
@@ -238,6 +304,7 @@ class WatchService:
 def run_watch_service(
     redis_url: str = "redis://localhost:6379",
     gateway_url: str = DEFAULT_GATEWAY_URL,
+    gateway_api_key: str | None = None,
     output_path: str | None = None,
 ) -> None:
     """CLI entry point for watch service.
@@ -245,6 +312,7 @@ def run_watch_service(
     Args:
         redis_url: Redis connection URL
         gateway_url: Data Gateway URL
+        gateway_api_key: Data Gateway API key for authenticated requests
         output_path: Path for Gold output
     """
     import asyncio
@@ -254,7 +322,7 @@ def run_watch_service(
     r = redis.from_url(redis_url)
     path = Path(output_path) if output_path else None
 
-    service = WatchService(r, gateway_url=gateway_url, output_path=path)
+    service = WatchService(r, gateway_url=gateway_url, gateway_api_key=gateway_api_key, output_path=path)
     run_error: BaseException | None = None
     run_error_tb = None
 

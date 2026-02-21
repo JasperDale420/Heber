@@ -265,26 +265,6 @@ DEFAULT_EXPERIMENTS: list[ChaosExperiment] = [
         ],
     ),
     ChaosExperiment(
-        name="Network Partition ClickHouse",
-        target="clickhouse",
-        hypothesis="When ClickHouse is unreachable, SDK falls back to Silver layer",
-        expected_outcome="Hot Store fails, Silver fallback works",
-        procedure=[
-            STEP_ESTABLISH_BASELINE,
-            "Block ClickHouse network: kubectl exec -it clickhouse-0 -- iptables -A INPUT -j DROP",
-            "Query via SDK",
-            "Verify fallback to Silver",
-            "Restore network",
-        ],
-        success_criteria=[
-            SuccessCriterion("SDK queries succeed via Silver fallback"),
-            SuccessCriterion("Circuit breaker trips"),
-            SuccessCriterion("Recovery after restore"),
-        ],
-        scope=ExperimentScope.NETWORK,
-        frequency=ExperimentFrequency.MONTHLY,
-    ),
-    ChaosExperiment(
         name="High CPU Stress",
         target="any_service",
         hypothesis="Under CPU stress, services slow down gracefully without OOM",

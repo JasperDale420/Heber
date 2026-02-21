@@ -48,7 +48,12 @@ class _StubAsyncClient:
     async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
         return False
 
-    async def get(self, url: str, params: dict[str, Any] | None = None) -> _StubResponse:
+    async def get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+    ) -> _StubResponse:
         self.calls.append((url, params))
         response = self.responses[url]
         if isinstance(response, Exception):
@@ -112,6 +117,15 @@ def test_gateway_url_candidates_strips_query_from_base_url() -> None:
     ]
 
 
+def test_gateway_url_candidates_can_disable_legacy_fallback() -> None:
+    candidates = gateway_url_candidates(
+        "http://gateway",
+        "/alpaca/options/quotes",
+        include_legacy_fallback=False,
+    )
+    assert candidates == ["http://gateway/api/v1/alpaca/options/quotes"]
+
+
 def test_classify_gateway_http_error_maps_timeout_and_transport() -> None:
     assert classify_gateway_http_error(httpx.ReadTimeout("timeout")) == "timeout"
     assert classify_gateway_http_error(httpx.ConnectError("connect")) == "transport_error"
@@ -141,6 +155,28 @@ async def test_poller_fetch_quotes_falls_back_to_legacy_route(monkeypatch: pytes
     assert "AAPL260220C00100000" in quotes
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_poller_fetch_quotes_does_not_fallback_on_prefixed_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(429, {"error": "rate limited"}),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2}}}},
+        ),
+    }
+    monkeypatch.setattr(poller_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
+    quotes = await poller._fetch_quotes(["AAPL260220C00100000"])
+
+    assert quotes == {}
+    assert len(_StubAsyncClient.calls) == 1
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
 
 
 @pytest.mark.asyncio
@@ -429,6 +465,33 @@ async def test_consumer_entry_price_falls_back_to_legacy_route(monkeypatch: pyte
     assert price == 1.1
     assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
     assert _StubAsyncClient.calls[1][0] == "http://gateway/alpaca/options/quotes"
+
+
+@pytest.mark.asyncio
+async def test_consumer_entry_price_does_not_fallback_on_prefixed_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _StubAsyncClient.calls = []
+    _StubAsyncClient.responses = {
+        "http://gateway/api/v1/alpaca/options/quotes": _StubResponse(429, {"error": "rate limited"}),
+        "http://gateway/alpaca/options/quotes": _StubResponse(
+            200,
+            {"data": {"quotes": {"AAPL260220C00100000": {"bp": 1.0, "ap": 1.2}}}},
+        ),
+    }
+    monkeypatch.setattr(consumer_module.httpx, "AsyncClient", _StubAsyncClient)
+
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+        gateway_url="http://gateway",
+    )
+
+    price = await consumer._get_entry_price("AAPL260220C00100000")
+
+    assert price is None
+    assert len(_StubAsyncClient.calls) == 1
+    assert _StubAsyncClient.calls[0][0] == "http://gateway/api/v1/alpaca/options/quotes"
 
 
 @pytest.mark.asyncio

@@ -887,8 +887,9 @@ def get_silver_alpaca_option_contract_schema() -> Schema:
     )
 
 
-# Schema registry for table creation
-SILVER_SCHEMAS: dict[str, Schema] = {
+# Iceberg schema registry for table creation
+# Named ICEBERG_SILVER_SCHEMAS to avoid collision with schemas/silver.py Arrow schemas
+ICEBERG_SILVER_SCHEMAS: dict[str, Schema] = {
     "bars": get_silver_bars_schema(),
     "quotes": get_silver_quotes_schema(),
     "trades": get_silver_trades_schema(),
@@ -965,10 +966,10 @@ def create_silver_table(
         pass  # Table doesn't exist, create it
 
     # Get schema
-    if table_name not in SILVER_SCHEMAS:
+    if table_name not in ICEBERG_SILVER_SCHEMAS:
         raise ValueError(f"Unknown Silver table: {table_name}")
 
-    schema = SILVER_SCHEMAS[table_name]
+    schema = ICEBERG_SILVER_SCHEMAS[table_name]
 
     logger.info("creating_iceberg_table", table=full_name)
 
@@ -1001,7 +1002,7 @@ def initialize_silver_tables(catalog: Catalog | None = None) -> dict[str, Table]
         catalog = get_iceberg_catalog()
 
     tables = {}
-    for table_name in SILVER_SCHEMAS:
+    for table_name in ICEBERG_SILVER_SCHEMAS:
         tables[table_name] = create_silver_table(catalog, table_name)
         logger.info("silver_table_ready", table=table_name)
 

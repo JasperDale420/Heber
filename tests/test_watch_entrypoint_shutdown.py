@@ -7,6 +7,13 @@ import pytest
 from heber.watch import __main__ as watch_main
 
 
+@pytest.fixture(autouse=True)
+def _disable_metrics_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    from heber.ops import metrics as metrics_module
+
+    monkeypatch.setattr(metrics_module, "start_metrics_server_from_env", lambda default_port=None: default_port)
+
+
 def test_watch_entrypoint_stops_service_on_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeService:
         last_instance: _FakeService | None = None

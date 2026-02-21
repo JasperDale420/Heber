@@ -135,6 +135,23 @@ docker logs heber-compactor --since 1h 2>&1 | grep -E "(compacted|skipped|error)
 docker logs heber-watch --tail 20
 ```
 
+### Dataflow Proof (JSON)
+
+```bash
+# Host/manual
+heber health-dataflow --mode manual --window-seconds 900
+
+# Docker/manual (inside scheduler container)
+docker compose exec heber-dataflow-health \
+  python -m heber.ops.dataflow_health --mode manual --window-seconds 900
+
+# Scheduled service logs (one JSON line per cycle)
+docker compose logs --since 30m heber-dataflow-health
+
+# Latest persisted report
+cat /Volumes/HeberDocker/data/ops/dataflow-health/latest.json
+```
+
 ---
 
 ## Common Operations

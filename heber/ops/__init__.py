@@ -83,7 +83,6 @@ from heber.ops.metrics import (
     record_write,
     record_write_error,
     set_consumer_lag,
-    set_hotstore_lag,
     set_service_info,
     start_metrics_server,
     start_metrics_server_from_env,
@@ -94,8 +93,6 @@ from heber.ops.reliability import (
     DeduplicationResult,
     DLQEvent,
     EventDeduplicator,
-    retry_with_backoff,
-    retry_with_backoff_async,
 )
 from heber.ops.tracing import (
     configure_tracing,
@@ -118,8 +115,6 @@ __all__ = [
     "DeadLetterQueue",
     "DLQEvent",
     "DeduplicationResult",
-    "retry_with_backoff",
-    "retry_with_backoff_async",
     # Logging (§12.3, §12.5.5)
     "configure_logging",
     "get_logger",
@@ -143,7 +138,6 @@ __all__ = [
     "record_api_request",
     "record_dlq_event",
     "set_consumer_lag",
-    "set_hotstore_lag",
     # Alerting (§12.5.4)
     "AlertRule",
     "Severity",

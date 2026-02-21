@@ -9,14 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-
-def _derive_ts_available(df: pd.DataFrame, time_col: str, max_window: int) -> pd.Series:
-    source = df["ts_available"] if "ts_available" in df.columns else df[time_col]
-    source = pd.to_datetime(source, utc=True, errors="coerce")
-    source_naive = source.dt.tz_convert("UTC").dt.tz_localize(None)
-    source_int = source_naive.astype("int64")
-    rolled = pd.Series(source_int, index=df.index).rolling(window=max_window, min_periods=1).max()
-    return pd.to_datetime(rolled, utc=True)
+from heber.features.templates._utils import rolling_max_timestamp
 
 
 def compute_parkinson_vol(high: pd.Series, low: pd.Series, window: int) -> pd.Series:
@@ -68,7 +61,8 @@ def compute_volatility_features(bars_df: pd.DataFrame) -> pd.DataFrame:
         high = df["high"]
         low = df["low"]
         returns = close.pct_change()
-        ts_available = _derive_ts_available(df, "bar_start_ts", max_window=60)
+        source = df["ts_available"] if "ts_available" in df.columns else df["bar_start_ts"]
+        ts_available = rolling_max_timestamp(source, window=60)
 
         return pd.DataFrame(
             {

@@ -143,7 +143,6 @@ DEFAULT_BASELINES: list[BaselineMetric] = [
     BaselineMetric("peak_events_per_sec", 10_000, "events/sec", "Market open"),
     BaselineMetric("silver_storage_per_day", 5, "GB", "Parquet, compressed"),
     BaselineMetric("silver_storage_per_year", 1.8, "TB", ""),
-    BaselineMetric("hotstore_rows_per_day", 50_000_000, "rows", "7-day retention = 350M rows"),
 ]
 
 # Default scaling triggers from PRD §42.2
@@ -154,7 +153,6 @@ DEFAULT_TRIGGERS: list[ScalingTrigger] = [
     ScalingTrigger("compactor_duration", 30, "minutes/partition", 1, "Increase CPU/memory"),
     ScalingTrigger("rds_connections", 80, "% of max", 5, "Increase max_connections or scale"),
     ScalingTrigger("s3_request_rate", 3500, "requests/sec/prefix", 1, "Re-partition prefixes"),
-    ScalingTrigger("clickhouse_query_latency", 1, "seconds p99", 5, "Scale ClickHouse cluster"),
 ]
 
 # Default forecasts from PRD §42.3
@@ -171,7 +169,6 @@ DEFAULT_BOTTLENECKS: list[BottleneckAnalysis] = [
     BottleneckAnalysis("Writer", "Low", "High", "High", "batch buffer, S3 writes"),
     BottleneckAnalysis("Compactor", "High", "Very High", "High", "S3 reads/writes"),
     BottleneckAnalysis("Catalog", "Low", "Low", "Medium", "Postgres queries"),
-    BottleneckAnalysis("Hotloader", "Low", "Medium", "High", "ClickHouse inserts"),
 ]
 
 

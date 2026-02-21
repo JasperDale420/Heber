@@ -430,3 +430,37 @@ def test_checker_uses_window_end_for_expired_outcome_metadata() -> None:
     assert outcome.trading_minutes_to_hit == 240
     assert manager.completed is not None
     assert manager.completed[4] == window_end
+
+
+def test_checker_expires_watch_without_snapshots_after_window_end() -> None:
+    now = datetime.now(UTC)
+    alert_time = now - timedelta(hours=3)
+    window_end = now - timedelta(minutes=10)
+    watch = AlertWatch(
+        watch_id="watch-no-snapshots-expired",
+        alert_id="alert-no-snapshots-expired",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.0,
+        spot_at_alert=200.0,
+        alert_time=alert_time,
+        window_end=window_end,
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+    )
+    manager = _CheckerManagerStub([])
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.EXPIRED
+    assert outcome.outcome_time == window_end
+    assert outcome.outcome_return == 0.0
+    assert manager.completed is not None
+    assert manager.completed[1] == WatchStatus.EXPIRED
+    assert manager.completed[4] == window_end

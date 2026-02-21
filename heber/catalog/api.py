@@ -3,6 +3,7 @@
 See PRD Section 11.7 for API contract.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -13,14 +14,29 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from heber.catalog.db import Base
+from heber.catalog.seeds import (
+    discover_datasets_from_disk,
+    seed_coverage_from_disk,
+    seed_datasets,
+    seed_feed_mappings,
+    seed_schema_versions,
+)
 from heber.catalog.service import CatalogService
 from heber.config import settings
+from heber.ops.logging import configure_logging
 from heber.ops.metrics import start_metrics_server_from_env
 
 logger = structlog.get_logger(__name__)
 
-# Database setup
-engine = create_async_engine(settings.postgres_url, echo=settings.environment == "dev")
+# Database setup — echo=True blocks the async event loop with synchronous logging.
+# Use pool_pre_ping to detect stale connections after container restarts.
+engine = create_async_engine(
+    settings.postgres_url,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=5,
+    pool_recycle=300,
+)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -32,9 +48,36 @@ def _should_auto_create_catalog_tables() -> bool:
     return settings.environment == "dev"
 
 
+async def _periodic_discovery_loop() -> None:
+    """Background loop that periodically re-scans Silver for new datasets and coverage."""
+    interval = settings.catalog_discover_interval_seconds
+
+    # Run an initial scan immediately (non-blocking to startup)
+    try:
+        async with async_session() as session:
+            await seed_coverage_from_disk(session)
+            logger.info("catalog_initial_coverage_scan_done")
+    except Exception:
+        logger.exception("catalog_initial_coverage_scan_error")
+
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with async_session() as session:
+                discovered = await discover_datasets_from_disk(session)
+                if discovered:
+                    logger.info("catalog_periodic_discovery", new_datasets=discovered)
+                await seed_coverage_from_disk(session)
+        except Exception:
+            logger.exception("catalog_periodic_scan_error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    # Initialize logging first
+    configure_logging(service_name="heber-catalog", log_level=settings.log_level, json_output=True)
+
     if settings.metrics_port:
         start_metrics_server_from_env(default_port=9090)
 
@@ -42,9 +85,39 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("catalog_schema_bootstrap_applied", mode="sqlalchemy_create_all", environment=settings.environment)
+
+        async with async_session() as session:
+            await seed_datasets(session)
+            await seed_schema_versions(session)
+            await seed_feed_mappings(session)
+        logger.info("catalog_data_seeded")
     else:
         logger.info("catalog_schema_bootstrap_skipped", reason="non_dev_environment", environment=settings.environment)
+
+    # Auto-discovery runs in all environments (idempotent, fast)
+    discovery_task = None
+    if settings.catalog_auto_discover:
+        async with async_session() as session:
+            discovered = await discover_datasets_from_disk(session)
+            logger.info("catalog_auto_discovery_done", new_datasets=discovered)
+
+        # Background task handles periodic discovery + coverage scanning
+        if settings.catalog_discover_interval_seconds > 0:
+            discovery_task = asyncio.create_task(_periodic_discovery_loop())
+            logger.info(
+                "catalog_periodic_scan_started",
+                interval_seconds=settings.catalog_discover_interval_seconds,
+            )
+
     yield
+
+    if discovery_task is not None:
+        discovery_task.cancel()
+        try:
+            await discovery_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("catalog_periodic_scan_stopped")
 
 
 app = FastAPI(
@@ -116,17 +189,6 @@ class FeedMappingResponse(BaseModel):
     silver_dataset_name: str
 
 
-class ErrorResponse(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class ErrorEnvelope(BaseModel):
-    error: ErrorResponse
-    meta: MetaResponse
-
-
 # Health check
 @app.get("/health")
 async def health():
@@ -134,6 +196,7 @@ async def health():
 
 
 # Dataset endpoints
+@app.get("/datasets", response_model=DatasetListResponse, include_in_schema=False)
 @app.get("/api/v1/datasets", response_model=DatasetListResponse)
 async def list_datasets(
     layer: str | None = Query(None, description="Filter by layer (bronze|silver|gold)"),
@@ -158,6 +221,7 @@ async def list_datasets(
     )
 
 
+@app.get("/datasets/{name}", response_model=DatasetDetailResponse, include_in_schema=False)
 @app.get("/api/v1/datasets/{name}", response_model=DatasetDetailResponse)
 async def get_dataset(name: str, service: CatalogService = Depends(get_service)):
     dataset = await service.get_dataset(name)
@@ -178,6 +242,7 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
     )
 
 
+@app.get("/datasets/{name}/versions", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/versions")
 async def get_dataset_versions(name: str, service: CatalogService = Depends(get_service)):
     versions = await service.get_dataset_versions(name)
@@ -195,6 +260,7 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
     }
 
 
+@app.get("/datasets/{name}/coverage", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/coverage")
 async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_service)):
     coverage = await service.get_coverage(name)
@@ -213,22 +279,27 @@ async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_
 
 
 # Instrument endpoints
+def _instrument_response(inst: Any) -> InstrumentResponse:
+    """Build an InstrumentResponse from a DB model instance."""
+    return InstrumentResponse(
+        instrument_key=inst.instrument_key,
+        instrument_type=inst.instrument_type,
+        canonical_symbol=inst.canonical_symbol,
+        underlying_key=inst.underlying_key,
+        occ_symbol=inst.occ_symbol,
+        expiry=inst.expiry,
+        strike=inst.strike,
+        put_call=inst.put_call,
+    )
+
+
 @app.get("/api/v1/instruments/{key}")
 async def get_instrument(key: str, service: CatalogService = Depends(get_service)):
     instrument = await service.get_instrument(key)
     if not instrument:
         raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
     return {
-        "data": InstrumentResponse(
-            instrument_key=instrument.instrument_key,
-            instrument_type=instrument.instrument_type,
-            canonical_symbol=instrument.canonical_symbol,
-            underlying_key=instrument.underlying_key,
-            occ_symbol=instrument.occ_symbol,
-            expiry=instrument.expiry,
-            strike=instrument.strike,
-            put_call=instrument.put_call,
-        ),
+        "data": _instrument_response(instrument),
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -240,19 +311,7 @@ async def lookup_instruments(
 ):
     instruments = await service.lookup_instruments(request.symbols)
     return {
-        "data": [
-            InstrumentResponse(
-                instrument_key=i.instrument_key,
-                instrument_type=i.instrument_type,
-                canonical_symbol=i.canonical_symbol,
-                underlying_key=i.underlying_key,
-                occ_symbol=i.occ_symbol,
-                expiry=i.expiry,
-                strike=i.strike,
-                put_call=i.put_call,
-            )
-            for i in instruments
-        ],
+        "data": [_instrument_response(i) for i in instruments],
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -270,24 +329,13 @@ async def search_instruments(
         limit=limit,
     )
     return {
-        "data": [
-            InstrumentResponse(
-                instrument_key=i.instrument_key,
-                instrument_type=i.instrument_type,
-                canonical_symbol=i.canonical_symbol,
-                underlying_key=i.underlying_key,
-                occ_symbol=i.occ_symbol,
-                expiry=i.expiry,
-                strike=i.strike,
-                put_call=i.put_call,
-            )
-            for i in instruments
-        ],
+        "data": [_instrument_response(i) for i in instruments],
         "meta": {"ts": datetime.now(UTC)},
     }
 
 
 # Feed mapping endpoints
+@app.get("/feeds", include_in_schema=False)
 @app.get("/api/v1/feeds")
 async def list_feeds(service: CatalogService = Depends(get_service)):
     mappings = await service.list_feed_mappings()
@@ -304,6 +352,7 @@ async def list_feeds(service: CatalogService = Depends(get_service)):
     }
 
 
+@app.get("/feeds/resolve", include_in_schema=False)
 @app.get("/api/v1/feeds/resolve")
 async def resolve_feed(
     provider: str = Query(...),
@@ -323,6 +372,7 @@ async def resolve_feed(
 
 
 # Additional Dataset endpoints (PRD §11.7.3)
+@app.get("/datasets/{name}/versions/{version}", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/versions/{version}")
 async def get_dataset_version(
     name: str,
@@ -361,6 +411,7 @@ class DatasetCreateRequest(BaseModel):
     primary_keys: list | None = None
 
 
+@app.post("/datasets", status_code=201, include_in_schema=False)
 @app.post("/api/v1/datasets", status_code=201)
 async def create_dataset(
     request: DatasetCreateRequest,
@@ -513,53 +564,3 @@ async def http_exception_handler(request, exc: HTTPException):
             "meta": {"ts": datetime.now(UTC).isoformat()},
         },
     )
-
-
-# Rate limiting (PRD §11.7.6)
-# Note: Production should use Redis-backed rate limiter
-import time
-from collections import defaultdict
-
-_rate_limit_store: dict = defaultdict(list)
-RATE_LIMITS = {
-    "read": 1000,  # 1000 req/min
-    "write": 100,  # 100 req/min
-}
-
-
-def check_rate_limit(api_key: str, endpoint_type: str = "read"):
-    """Simple in-memory rate limiter (use Redis in production)."""
-    now = time.time()
-    window = 60  # 1 minute
-
-    key = f"{api_key}:{endpoint_type}"
-    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if now - t < window]
-
-    limit = RATE_LIMITS.get(endpoint_type, 1000)
-    if len(_rate_limit_store[key]) >= limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    _rate_limit_store[key].append(now)
-
-
-# Authentication middleware (PRD §11.7.2)
-from fastapi import Header
-
-
-def verify_api_key(authorization: str | None = Header(None)):
-    """Simple API key verification (MVP)."""
-    if settings.environment == "dev":
-        return "dev-user"
-
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid Authorization format")
-
-    token = authorization[7:]
-    # In production, validate against a key store
-    if not token or len(token) < 10:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    return token

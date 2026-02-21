@@ -7,7 +7,397 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+#### Consumer Concurrent Message Processing
+
+- Refactored `_process_stream_messages()` in `heber/writer/consumer.py` to use `asyncio.gather()` with a configurable semaphore (`redis_process_concurrency`, default 10) instead of serial iteration, enabling up to 10× throughput improvement during backfill bursts.
+- Optimized `_consume_iteration()` to only flush Bronze/Silver on idle iterations (no messages), eliminating a redundant `_flush_layers()` call under load.
+- Added batch throughput logging (`batch_processed` event) with messages/second, elapsed time, and concurrency level for backfill observability.
+- Added `redis_process_concurrency` setting to `heber/config.py` (configurable 1–50, env: `HEBER_REDIS_PROCESS_CONCURRENCY`).
+- Added 5 regression tests in `tests/test_consumer_concurrency.py` covering concurrent execution, error isolation, DLQ routing, semaphore limits, and exception handling.
+
+#### Silver Normalization Throughput
+
+- Eliminated double `normalize_envelope_for_silver()` call per event — consumer now passes pre-normalized rows to `SilverWriter.write_row()`, cutting Silver CPU per event by ~50%.
+- Cached `_target_to_source_map()` with `@lru_cache` in `heber/writer/normalizer.py` — field mapping dicts are now built once per feed instead of per event.
+- Moved `_KNOWN_QUOTES` frozenset to module level in `heber/writer/key_normalization.py` to avoid per-call reconstruction.
+- Downgraded per-event `bronze_write_success` log from INFO to DEBUG to reduce I/O under backfill load.
+
+### Fixed
+
+#### Flow Alerts Payload Schema: Allow `sentiment` Key
+
+- Added `sentiment` to `PAYLOAD_ALLOWED_FIELDS["flow_alerts"]` in `heber/writer/ingest_contracts.py` — the Data Gateway now includes a `sentiment` field in flow alert payloads, which was producing ~9,900 `payload_unexpected_keys` warnings per day.
+
+#### Bronze-Only Policy: `institution_holdings` Feed
+
+- Added `institution_holdings` to `BRONZE_ONLY_SILVER_DATASETS` — this feed has no Silver schema and was incorrectly routing to Silver writes.
+
+#### Silver Writer Metrics Instrumentation
+
+- Wired `record_write` / `record_write_error` from `heber.ops.metrics` into `SilverWriter._flush_partition` for flush duration, rows written, and bytes written tracking.
+
+#### K8s Kustomization: Remove Deleted Hotloader References
+
+- Removed `deployments/hotloader.yaml`, `services/hotloader.yaml`, and `pdb/hotloader.yaml` from `k8s/base/kustomization.yaml` — these manifests were deleted when Hot Store was removed but the references remained, breaking `kubectl kustomize`.
+
+#### Test Suite: Fix 16 Failing Tests (725/725 passing)
+
+- Added `update_watch_prices_bulk_async` to `_AsyncOnlyManager` and `_Manager` test mocks to match the poller's bulk-update API.
+- Added `mget` to `_BytesRedis` test mock for `WatchManager.get_active_watches()` bulk-fetch.
+- Fixed `test_process_event_rejects_invalid_instrument_key` to use a truly non-normalizable key (key normalization was auto-fixing the previous test input).
+- Fixed catalog migration tests to mock `async_session` and seed functions, avoiding `greenlet` dependency.
+- Fixed feast materialization test `MagicMock(name=...)` serialization issue by using `SimpleNamespace`.
+
+#### Heber Watch Port Configuration
+
+- Fixed `DATA_GATEWAY_URL` in `docker-compose.yml` to point to port `8081` for the `heber-watch` service, matching the external port exposed by the Data Gateway container.
+- Resolves `ConnectError: All connection attempts failed` and restores quote fetching for active watches.
+
+#### Backfill Scanner Polars DateTime Parsing
+
+- Fixed `str.to_datetime()` call in `heber/watch/backfill_scanner.py` to pass `time_zone="UTC"`, allowing Polars to parse timezone-aware ISO 8601 `alert_time` strings.
+- Resolves `polars.exceptions.ComputeError` that caused 100% of enrichment backfill attempts to fail.
+
+#### Catalog Event Loop Blocking During Startup
+
+- Refactored `heber/catalog/seeds.py` to offload blocking file I/O (`iterdir`, `rglob`) to threads via `asyncio.to_thread`, preventing the event loop from freezing during data discovery and coverage seeding
+- Extracted `_scan_silver_feeds_blocking()` helper for thread-safe feed directory scanning
+- Fixes `heber-catalog` healthcheck timeouts that prevented dependent services (`consumer`, `watch`, `dataflow-health`) from starting
+
+#### Compactor Schema Conflict on Temporal ↔ String Columns
+
+- Added `_is_temporal()` helper and widening rules to `_resolve_column_type()` in `heber/writer/compactor.py`
+- Temporal types (`date32`, `timestamp`, etc.) now safely widen to `string` instead of raising `SchemaConflictError`
+- Added `large_string` ↔ `string` unification (resolves to `large_string`)
+- Resolves 500+ compaction failures on `greek_exposure` feed where `expiry` column changed from `date32[day]` to `string`
+
+### Changed
+
+#### Structured JSON Logging Across All Services
+
+- Explicitly set `json_output=True` in `configure_logging()` for `catalog`, `consumer`, `watch`, `compactor`, and `dataflow_health`
+- Added `log_level` field to `Settings` in `heber/config.py` (default: `"INFO"`)
+
+### Removed
+
+#### Unused Hot Store (ClickHouse) Functionality
+
+- Deleted `heber/hotstore/` directory (client, sync, tables, init) and `heber/writer/hotstore.py`
+- Removed 7 ClickHouse/hotloader config fields from `heber/config.py`
+- Removed ClickHouse service from `docker-compose.yml` and related env vars from consumer/catalog services
+- Removed `clickhouse-connect` dependency from `pyproject.toml`
+- Removed Hot Store metrics, alerts, dashboard panels from `heber/ops/`
+- Removed Hot Store runbook, SLI, capacity entries, and chaos experiment from `heber/sre/`
+- Removed Hot Store performance SLOs, environment configs, mock strategies, and test specs from `heber/testing/`
+- Deleted `tests/test_hotstore_unification.py`, `tests/test_hotstore_facade_alignment.py`, and hotloader test cases
+- Deleted all `k8s/**/hotloader.yaml` manifests (deployments, PDBs, services)
+- Deleted `docs/hot_store.md` and removed all Hot Store/ClickHouse references from `README.md`
+- Updated 8 test files to adjust assertion counts after removal
+
+### Changed
+
+#### Consumer Bandwidth Tuning
+
+- Increased default consumer batch size from 100 to 500 messages per `XREADGROUP` call via new `redis_read_batch_size` setting (configurable 10–5,000), reducing Redis round trips ~5× during backfill bursts
+- Increased default block timeout from 1,000ms to 2,000ms via new `redis_read_block_ms` setting (configurable 100–10,000), allowing larger batches to fill before returning
+
 ### Added
+
+#### Catalog Coverage Seeding from Disk
+
+- Added `seed_coverage_from_disk()` to `heber/catalog/seeds.py` — scans Silver `feed=` directories for `dt=YYYY-MM-DD` partitions and upserts aggregate `DataCoverage` records with min/max date ranges.
+- Extracted `_scan_partition_dates()` helper for partition directory scanning (no Parquet I/O involved).
+- Coverage seeding runs during catalog startup alongside existing dataset/feed seeds in `heber/catalog/api.py`.
+- Added unit tests in `tests/test_seed_coverage.py` covering partition scanning, empty directories, and file-vs-directory edge cases.
+- Enables Atlas manifest generation to render Heber coverage windows for agent hypothesis generation.
+
+### Added
+
+#### Catalog Feed Mapping Auto-Seed
+
+- Extracted seed data and functions from `scripts/seed_catalog.py` into `heber/catalog/seeds.py` for importability.
+- Auto-seed `feed_mappings`, `datasets`, and `schema_versions` tables on catalog startup via the `lifespan` handler in `heber/catalog/api.py`.
+- Ensures all 55 provider→feed→Silver dataset mappings are present without manual script execution.
+- `scripts/seed_catalog.py` now imports from `heber/catalog/seeds.py`, retaining only coverage scanning and CLI logic.
+
+#### Catalog Auto-Discovery
+
+- Added `discover_datasets_from_disk()` to `heber/catalog/seeds.py` — scans Silver directory for `feed=X` partitions and auto-registers unknown datasets with default identity feed mappings (`provider="discovered"`).
+- New `catalog_auto_discover` config flag (default `True`) gates automatic discovery on catalog startup.
+- Auto-discovery now runs in **all environments**, not just dev (idempotent).
+- Periodic background re-scan every `catalog_discover_interval_seconds` (default 300s, set to 0 to disable).
+- Added `--discover` CLI flag to `scripts/seed_catalog.py` for manual trigger.
+- Skips macOS `._` resource forks and non-`feed=` directories.
+
+#### Enrichment Backfill Scanner
+
+- New `EnrichmentBackfillScanner` in `heber/watch/backfill_scanner.py` — periodic background task that scans recent Gold feature partitions for rows with null enrichment fields (Greeks, GEX, IV rank, max pain, market tide), re-enriches via the Data Gateway, and patches parquet using dedup-on-alert_id
+- Integrated as optional fourth coroutine in `WatchService.run()`, gated by `HEBER_ENRICHMENT_BACKFILL_ENABLED`
+- Config settings: `enrichment_backfill_enabled`, `enrichment_backfill_interval`, `enrichment_backfill_lookback_days`, `enrichment_backfill_batch_size`
+- Prometheus metrics: `heber_enrichment_backfill_{scanned,patched,failed}_total`, `heber_enrichment_backfill_duration_seconds`
+- 12 unit tests covering row detection, partition reading, re-enrichment flow, batch limiting, and market hours gating
+
+#### Write-Time Null Field Audit Logging
+
+- New `audit_null_fields()` in `heber/quality/write_audit.py` — inspects DataFrames at write time for unexpected null values, emitting structured warning logs with per-column null counts and Prometheus counters (`heber_write_null_fields_total`)
+- Hooked into 4 critical write paths: Silver writer (`write_silver_parquet`), Gold feature persistence (`persist_features_to_gold`), Gold label writer (`LabelWriter._write_to_parquet`), and SDK Gold writer (`HeberClient.write_gold`)
+- `EXPECTED_NON_NULL` registry maps `(layer, dataset)` → required non-null columns; unknown datasets get all columns audited
+- Supports pandas, Polars, and PyArrow data types
+- 13 unit tests covering all three data types, Prometheus metrics, and config validation
+
+### Fixed
+
+#### SonarQube Code Quality Remediation
+
+- **`features.py`** — Reduced cognitive complexity of 5 functions by extracting 7 shared helpers:
+  - `_request_json_with_retry` (CC 37→~8): decomposed into `_try_route`, `_send_request`, `_process_response`, `_parse_success`, `_handle_auth_failure`, `_handle_retryable_failure`
+  - `_enrich_gex` (CC 41→~10): extracted `_coalesce_split_or_fallback`, `_unwrap_data_payload`
+  - `_enrich_max_pain` (CC 23→~10): used `_coalesce_first`, `_unwrap_data_payload`
+  - `_enrich_market_tide` (CC 16→~8): used `_classify_direction`, `_coalesce_first`
+  - `_enrich_iv_rank`: used `_build_enrichment_routes` to eliminate duplicated route-building loops
+  - Added `_LOG_ENRICHMENT_FAILED` constant to deduplicate string literal
+- **`ingest_contracts.py`** — Simplified `_AMOUNT_RANGE_RE` regex via `_NUM_PATTERN` constant; extracted `_build_insider_relationships()` from `_normalize_insider_payload`
+- **`trainer.py`** — Added `# NOSONAR python:S930` to suppress false positive on `Path.with_suffix()` calls
+
+#### Data Health Remediation
+
+- Removed dead `sentiment` field from `flow_alerts` Silver schema, Pydantic model, and ingest allowed fields — UW never populates this for flow alerts (it exists only in `market_tide`/`sector_tide`).
+- Aligned `greek_exposure` Silver schema, Pydantic model, ingest contracts, and GEX enrichment with UW API's split call/put fields (`call_gamma`, `put_gamma`, `call_delta`, `put_delta`, `call_vanna`, `put_vanna`, `call_charm`, `put_charm`) plus grouping fields (`strike`, `expiry`, `dte`).
+
+#### News Feed Bronze-Only Policy
+
+- Added `"news"` to `BRONZE_ONLY_SILVER_DATASETS` in `heber/writer/ingest_contracts.py` so news events are persisted in Bronze but skipped for Silver writes.
+- News is free-text content without a structured Silver use-case; this prevents null-heavy Silver rows.
+
+#### Core Parquet Read Helper
+
+- Added `heber/core/parquet.py` with `read_parquet_dataset()` for standardized Parquet reading with time-range and as-of-time filtering.
+- Added `tests/test_core_parquet.py` with 5 unit tests covering basic read, time-range filtering, as-of filtering, column pruning, and filter pushdown.
+
+#### Writer / SDK / Backtest / ML DRY Refactoring
+
+- Extracted `get_partition_key`, `write_silver_parquet`, and `build_silver_candidates` into `heber/writer/utils.py`.
+- Refactored `SilverWriter` and `BronzeToSilverTransformer` to use shared writer utilities.
+- Added `HeberClient._read_parquet_dataset` wrapper delegating to `heber.core.parquet.read_parquet_dataset`.
+- Consolidated `BacktestDataLoader.load_train_data`/`load_test_data` into shared `_load_data_split` helper.
+- Refactored `MetaLabelDatasetBuilder` to use `HeberClient._read_parquet_dataset`, removing legacy path fallbacks.
+
+#### Trades Silver Field Mapping: Dual-Key Support
+
+- Added explicit full-name key aliases (`price`, `size`, `exchange`, `trade_id`, `tape`) to `FIELD_MAPPINGS["trades"]` in `heber/writer/ingest_contracts.py` alongside existing short Alpaca WebSocket keys (`p`, `s`, `x`, `i`, `z`).
+- Removed invalid `taker_side` mapping that doesn't exist in the Silver trades schema.
+- Added 4 regression tests in `tests/test_trades_dual_key_normalization.py` covering short-key mapping, full-name-key mapping, short-key precedence, and empty-payload handling.
+
+#### Docker Startup: Multi-Database Init and Healthcheck Timing
+
+- Created `scripts/init-databases.sh` to provision auxiliary Postgres databases (`heber_lakefs`, `heber_apicurio`, `heber_openmetadata`) at container first-init time via `/docker-entrypoint-initdb.d/`.
+- Root cause: Postgres only creates the database specified by `POSTGRES_DB` (`heber_catalog`); lakeFS, Apicurio Registry, and OpenMetadata each need their own database and were crash-looping with misleading DNS/connection errors.
+- Mounted the init script in `docker-compose.yml` Postgres volumes.
+- Added `start_period` to healthchecks for ClickHouse (30s), MinIO (60s), and Elasticsearch (60s) to prevent false-unhealthy verdicts during slow startup on the external NTFS volume.
+- Enhanced `scripts/init_volume.sh` with explicit `find -delete` cleanup of macOS `._*` resource fork files as a fallback to `dot_clean`.
+- Added contract test in `tests/test_compose_postgres_health_contract.py` to enforce Postgres healthcheck parameters.
+
+### Removed
+
+#### Unused Docker Services: OpenMetadata and Elasticsearch
+
+- Removed `openmetadata` and `elasticsearch` services from `docker-compose.yml` — neither is used by the core Heber pipeline.
+- OpenMetadata client (`heber/catalog/openmetadata_client.py`) already gracefully falls back to `MockOpenMetadataClient` when the server is unavailable.
+- Elasticsearch had zero code references outside the compose file.
+- Removed `heber_openmetadata` database from `scripts/init-databases.sh`.
+- Deleted `tests/test_compose_metadata_contract.py` (tested removed services).
+- Saves ~1GB RAM and significantly speeds up Docker startup.
+
+### Added
+
+#### Alert Feature Enrichment Expansion
+
+- Added `gex`, `vex`, `max_pain_strike`, `max_pain_distance_pct`, `market_tide_net_premium`, `market_tide_direction` fields to `AlertFeatures` dataclass
+- Implemented `_enrich_gex()`, `_enrich_max_pain()`, `_enrich_market_tide()` methods in `AlertFeatureExtractor` using Data Gateway endpoints
+- Fixed `0.0` falsy evaluation bug in all enrichment methods — replaced `or` chains with explicit `None` checks
+- Added 16 unit tests covering new enrichment paths in `test_watch_feature_enrichment_expansion.py`
+
+### Changed
+
+#### Market Data Normalization for Backtesting Accuracy
+
+- Added instrument-type-aware normalization for core market data feeds (bars, quotes, trades) in `heber/writer/key_normalization.py`
+- Added `_normalize_crypto_symbol()` handling `BTC/USD`, `BTC-USD`, `BTCUSD`, `BTC_USD`, `ETHUSDT` crypto formats with known-quote-currency disambiguation
+- Added `_normalize_equity_symbol()` supporting extended tickers like `BRK.B`, `JRI.RT`
+- Added `_normalize_market_data_envelope()` routing normalization by instrument type (equity, crypto, option)
+- Added `validate_market_data_payload()` with quality flags (`high_below_low`, `negative_price`, `negative_volume`, `inverted_spread`, `non_positive_price`, `negative_size`) for suspect market data — flags data rather than rejecting to preserve backtesting completeness
+- Added option trades instrument key preservation through `option:OCC:` prefix detection
+- Previously, bars/quotes/trades feeds fell through to a no-op generic branch with no validation
+- Added 12 new tests to `tests/test_instrument_key_synthesis.py` covering all instrument types and quality validation
+
+#### Catalog Module DRY Refactor
+
+- Deleted ~45 LOC of dead code from `heber/catalog/api.py` (`ErrorResponse`, `ErrorEnvelope`, `check_rate_limit`, `verify_api_key`, and associated imports)
+- Consolidated duplicate `DataLayer` enum from `openmetadata_client.py` to import from `access_control.py`
+- Extracted `_instrument_response()` helper in `api.py`, replacing 3 identical 8-field constructions
+
+#### Ops Module DRY Refactor
+
+- Deleted ~90 LOC of dead `retry_with_backoff` / `retry_with_backoff_async` from `heber/ops/reliability.py` (superseded by `runtime_retry.py`)
+- Removed unused `logger` / `import structlog` from `slices.py` and `gap_resolutions.py`
+- Removed unused `import random` from `reliability.py`
+- Cleaned up stale exports in `heber/ops/__init__.py`
+
+#### Features Module DRY Refactor
+
+- Extracted shared `rolling_max_timestamp` / `rolling_max_timestamp_time` into new `features/templates/_utils.py`
+- Consolidated 4 duplicate `_derive_ts_available` / `_rolling_max_datetime` implementations from `momentum.py`, `volatility.py`, `flow.py`, and `cross_asset.py`
+
+#### Writer Module DRY Refactor
+
+- Deleted 92 LOC of dead coercion code from `heber/writer/silver.py` (`_coerce_value`, `_coerce_to_*`) and `heber/writer/transformer.py` (`_coerce_value`, `_coerce_to_date`, `_coerce_to_timestamp`)
+- Extracted shared `extract_item_event_timestamp()` and `explode_aggregate_payload()` into `heber/writer/normalizer.py`, consolidating ~190 LOC of duplicated logic from `consumer.py` and `transformer.py`
+- Moved payload validation schemas (`PAYLOAD_REQUIRED_FIELDS`, `PAYLOAD_ALLOWED_FIELDS`) from `heber/writer/consumer.py` inline dicts to `heber/writer/ingest_contracts.py` module-level constants
+
+#### Watch Module DRY Refactor
+
+- Extracted `coerce_optional_float` from `consumer.py`, `poller.py`, and `features.py` (3 duplicates) into `heber/watch/gateway.py`
+- Extracted `should_continue_route_fallback` from `consumer.py` and `poller.py` (2 duplicates) into `heber/watch/gateway.py`
+- Rewrote `consumer.py` timestamp helpers (`_normalize_alert_time`, `_parse_timestamp`, `_timestamp_from_numeric`) to delegate to `gateway.coerce_utc_timestamp`
+- Added boolean guard to `coerce_utc_timestamp` (Python `bool` is subclass of `int`)
+- Net reduction of ~80 LOC of duplicated logic
+
+#### Watch Module DRY Refactor (Phase 2)
+
+- Added `is_retryable_http_status` and `parse_retry_after` to `heber/watch/gateway.py`.
+- **Refactoring**:
+  - `watch` module: Consolidated retry logic and data coercion helper functions into `gateway.py` to eliminate DRY violations.
+  - `backtest` module: Extracted shared `_load_split_data` logic in `BacktestDataLoader` to reduce duplication.
+  - `sdk` module: Extracted shared `_read_parquet_dataset` helper in `HeberClient` to consolidate parquet reading and filtering logic.
+  - `ml` module: Refactored `MetaLabelDatasetBuilder` to use `HeberClient` for data loading, removing duplicate parquet reading logic and legacy path support.
+- Consolidated duplicate `_coerce_finite_outcome_return` in `heber/watch/manager.py` to use `gateway.coerce_optional_float`.
+
+### Fixed
+
+#### Docker Startup RCA: Postgres Healthcheck vs Slow Recovery
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/docker-compose.yml` Postgres healthcheck:
+  - now uses container env vars for DB/user (`POSTGRES_DB`, `POSTGRES_USER`) instead of hard-coded values,
+  - added `start_period: 120s` so slow recovery windows on external volumes do not mark Postgres unhealthy too early.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_compose_postgres_health_contract.py` to enforce this startup contract.
+- Operational remediation applied to local volume:
+  - removed `._*` macOS resource-fork sidecar files from `/Volumes/heber/postgres/data` that were inflating Postgres recovery/fsync time and causing dependency startup failures.
+
+#### Watch Consumer Feature-Payload Mapping for Meta-Label Rows
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` so parsed flow alerts now retain feature-critical fields when creating watch feature records:
+  - `premium`, `volume`, `open_interest`
+  - `alert_type`, `side`, `aggressor`, `tags`
+  - `is_sweep`, `is_unusual`, `sentiment`, `trade_count`, `volume_oi_ratio`
+- Added alias support for common payload variants (`total_premium`, `size`, `oi`, etc.) and derived `volume_oi_ratio` when missing.
+- This fixes sparse meta-label feature rows caused by dropping flow payload fields before extraction.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_consumer_reliability.py` to enforce payload preservation and extractor input fidelity.
+
+#### Watch Consumer Stale-Window Guard for Backfilled Alerts
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/consumer.py` to skip watch creation when an alert's computed watch window has already ended at processing time.
+- This prevents stale/backfilled flow alerts from becoming active watches that produce no-snapshot expirations and contaminate training labels.
+- Added normalized alert timestamp handling for robust stale-window evaluation.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_consumer_reliability.py` for stale-window skip behavior.
+
+#### Watch Outcomes for Expired No-Snapshot Windows
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/checker.py` so watches with no snapshots are completed as `EXPIRED` once `window_end` has passed, and now emit `WatchOutcome` records for writer persistence.
+- Preserved existing behavior for active windows with no snapshots (`None` until expiry), avoiding premature outcomes.
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_zero_price_handling.py` for expired no-snapshot watches to prevent stalled unlabeled records.
+
+#### Dataflow Health Market-Closed Passive Check Noise
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/ops/dataflow_health.py` so `gateway_passive_activity` is marked `skipped` (instead of `warn`) when the market is closed and no passive gateway success metric is expected.
+- Kept existing behavior during market-open windows: missing passive gateway success evidence still reports `warn`.
+- Added regression tests in `/Users/jacobmcmillan/Empire/Heber/tests/test_dataflow_health.py` for both market-closed skip behavior and market-open warning behavior.
+
+#### Log RCA Hardening: Watch Enrichment + Catalog Paths + Compactor Noise
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/features.py` so IV-rank enrichment tries both canonical and options-prefixed route shapes, and no longer fails valid mixed-route environments.
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/sdk/client.py` to use relative request paths with `httpx` `base_url`, preventing accidental path resets that produced catalog `404` noise.
+- Added unprefixed route aliases in `/Users/jacobmcmillan/Empire/Heber/heber/catalog/api.py` for `/datasets` and `/feeds` families so existing callers stop generating avoidable 404s.
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/writer/compactor.py` to log hidden macOS parquet sidecars at `debug` level instead of `warning`.
+- Added regression tests:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_feature_enrichment_resilience.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_dataflow_health.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_sdk_catalog_defaults.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_catalog_route_aliases.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_compactor_safety.py`
+
+#### Watch Expiration Log Flood Reduction
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/manager.py` so `EXPIRED` watch completions no longer emit per-watch `Completed alert watch` info logs.
+- Retained completion info logs for terminal outcomes that matter for trading analysis (`HIT_TP`/`HIT_SL`).
+- Added regression coverage in `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_manager_redis_bytes.py` to enforce:
+  - no per-watch completion info log for `EXPIRED`,
+  - completion info log remains for `HIT_TP`.
+
+#### Watch Gateway Auth Fail-Fast Contract
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/watch/writer.py` to enforce a required gateway API key contract during watch-service initialization.
+- Added `_resolve_gateway_api_key()` so watch startup uses explicit CLI key first, then settings key, and raises a clear `ValueError` when neither is configured.
+- This prevents runtime unauthenticated gateway calls that surface as noisy `401` log entries.
+- Added regression coverage:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_gateway_key_contract.py`
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_watch_writer_entrypoint_shutdown.py`
+
+#### Alert Labels Gateway Auth Contract
+
+- Updated `/Users/jacobmcmillan/Empire/Heber/heber/features/pipelines/alert_labels.py` so contract-label option-bars fetches now require a configured gateway API key and send authenticated `X-Gateway-Key` headers.
+- Added fail-fast key validation for `use_contract_labels=True` to prevent unauthenticated background calls and noisy `401` failures when this pipeline runs.
+- Added regression coverage in:
+  - `/Users/jacobmcmillan/Empire/Heber/tests/test_alert_labels_gateway_auth.py`
+
+### Fixed
+
+#### Watch + Consumer Runtime Log RCA Cleanup
+
+- Updated `heber/watch/consumer.py` to prefer alert-carried `contract_px` for watch entry price and only call Data Gateway quote routes when alert price is missing/invalid, removing stale quote fallback noise for normal flow-alert processing.
+- Added sync Redis feature-storage fallback in `heber/watch/consumer.py` (`storage_mode=sync_fallback`) when async Redis client is not configured, replacing repeated `Skipping feature storage (no async redis)` behavior.
+- Updated payload schema allowlists in `heber/writer/consumer.py`:
+  - `market_tide` now allows `call_put_ratio`.
+  - `flow_alerts` now allows `id`, `alert_id`, and `event_id`.
+- Added regression coverage in `tests/test_watch_consumer_reliability.py` and `tests/test_writer_consumer_reliability.py` for:
+  - contract price preference without gateway lookup,
+  - sync Redis feature-storage fallback behavior,
+  - no warning for valid `market_tide.call_put_ratio`,
+  - no warning for valid `flow_alerts.id`.
+
+#### Watch Gateway Fallback Hardening
+
+- Stopped legacy unprefixed route fallback for non-route HTTP statuses in watch polling paths (notably `429`), preventing duplicate failing calls to Data-Gateway.
+- Updated watch feature enrichment retry logic to honor `Retry-After` headers as the minimum backoff when upstream throttles.
+- Added shared fallback policy helper so only true route-miss statuses (`404`) trigger legacy path retries.
+
+### Changed
+
+#### Watch Runtime Defaults
+
+- Added `watch_gateway_legacy_fallback_enabled` setting and wired it through watch poller/consumer/feature enrichment URL candidate generation.
+- Set `HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false` in compose for environments where Data-Gateway serves only `/api/v1/...` routes.
+
+### Added
+
+#### Documentation Standardization Baseline
+
+- Added `AGENTS.md` as the canonical AI-agent instruction file and removed `CLAUDE.md`.
+- Added missing documentation baseline files:
+  - `CONTRIBUTING.md`
+  - `TESTING.md`
+  - `SECURITY.md`
+  - `DEVELOPER_NOTES.md`
+  - `docs/RUNBOOK.md`
+  - `docs/API_REFERENCE.md`
+  - `docs/DATA_CONTRACTS.md`
+  - `docs/DEPLOYMENT.md`
+  - `docs/MIGRATION_GUIDE.md`
+- Normalized canonical naming for required docs:
+  - `prd.md` -> `PRD.md`
+  - `docs/architecture.md` -> `docs/ARCHITECTURE.md`
+- Updated `README.md` documentation index to point to standardized canonical docs and required environment/testing references.
 
 #### Gateway Feed Alias Compatibility
 
@@ -70,6 +460,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Documentation
 
+- Added `docs/silver_gold_scope.md` with a concrete Silver keep/drop matrix and Gold input plan, including `KEEP_CORE`, `KEEP_CONTEXT`, and `BRONZE_ONLY` feed policy decisions tied to current pipelines.
+- Updated `README.md` documentation index to include `docs/silver_gold_scope.md`.
 - Updated `docs/data_contract.md` with:
   - Bronze-first / Silver-strict ingest policy
   - Data Gateway feed coverage matrix and alias routing
@@ -88,10 +480,210 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Compactor Sidecar and Lock Resilience
+
+- Updated `heber/writer/compactor.py` to ignore hidden sidecar parquet files (for example `._*.parquet`) during partition scans and compaction so non-data filesystem artifacts do not break compaction cycles.
+- Added safe file-size probing in compactor to skip unreadable parquet paths with structured warning logs instead of raising `PermissionError` and aborting the whole cycle.
+- Updated compaction lock acquisition to reclaim stale self-owned `.compaction.lock` files (same PID) before retrying so prior crash paths do not permanently block a partition.
+- Ensured partition locks are always released via top-level `finally`, including early-return paths before merge execution.
+- Added regression coverage in `tests/test_compactor_safety.py` for:
+  - hidden sidecar parquet files,
+  - stale self-lock recovery,
+  - unreadable parquet file stat handling without crashes.
+
+#### Dataflow Health Filesystem Scan Race
+
+- Updated `_latest_file_mtime()` in `heber/ops/dataflow_health.py` to:
+  - skip hidden files like `.compaction.lock`,
+  - handle files disappearing between discovery and `stat()` without crashing the health loop.
+- Added warning-level structured logging for filesystem stat failures (`dataflow_health_filesystem_stat_failed`) so scan anomalies are visible but non-fatal.
+- Added regression tests in `tests/test_dataflow_health.py` for hidden-file exclusion and disappearing-file race handling.
+
+#### Silver Normalization For Aggregate REST Payloads
+
+- Updated `heber/writer/consumer.py` to defensively expand aggregate REST payload envelopes for `bars` and `trades` into item-level Silver writes, while preserving Bronze-first durability.
+- Updated `heber/writer/transformer.py` to apply the same aggregate expansion during Bronze→Silver backfill so `payload.bars[]` and `payload.trades[]` are written as typed item rows instead of null-heavy aggregate rows.
+- Added skip behavior for empty aggregate lists so `trades=[]` / `bars=[]` no longer produce null-heavy Silver rows.
+- Added required non-null field enforcement for Silver rows in `heber/writer/normalizer.py` and wired it into both live writes (`heber/writer/silver.py`) and backfill writes (`heber/writer/transformer.py`) so invalid rows are rejected before landing in Silver.
+- Added Bronze-only Silver scope enforcement in `heber/writer/ingest_contracts.py`, `heber/writer/consumer.py`, and `heber/writer/transformer.py` so policy-designated feeds (for example `news`, `ftd`, `congress_trades`, `insider_trades`, `institution_holdings`) continue to persist in Bronze but are skipped for Silver writes by default.
+- Added per-item aggregate failure logging and summary counts in consumer logs (`silver_aggregate_item_failed`, `silver_aggregate_write_summary`) for faster root-cause analysis.
+- Added regression tests in `tests/test_bronze_first_ingestion.py` for:
+  - multi-item `bars[]` fan-out to multiple Silver writes,
+  - empty `trades[]` skip behavior,
+  - mixed valid/invalid aggregate items and missing required-field rejection.
+- Added transformer backfill regression coverage in `tests/test_transformer_aggregate_payloads.py` for bars/trades expansion and mixed valid/invalid aggregate items.
+- Added Silver-scope policy regression coverage in:
+  - `tests/test_bronze_first_ingestion.py` (Bronze-only feeds skip Silver in live consumer path),
+  - `tests/test_transformer_feed_scope.py` (Bronze-only feeds skip Silver in backfill transformer path).
+- Improved field alias handling in `heber/writer/normalizer.py` so one target column can resolve from multiple source keys (instead of first-match only), preventing silent drops when payload variants differ.
+- Added `bars.timestamp -> bar_start_ts` mapping in `heber/writer/ingest_contracts.py` and regression coverage in `tests/test_bars_timestamp_mapping.py`.
+
+#### Metadata Stack Shutdown + Health Contracts
+
+- Added compose contract regression tests in `tests/test_compose_metadata_contract.py` to lock critical metadata infra guarantees:
+  - OpenMetadata healthcheck command must target an unauthenticated endpoint.
+  - OpenMetadata and Elasticsearch must define explicit `stop_grace_period`.
+- Updated `docker-compose.yml` metadata services:
+  - Added OpenMetadata healthcheck using `wget -q --spider http://localhost:8585/api/v1/system/version`.
+  - Added `stop_grace_period: 90s` to both `openmetadata` and `elasticsearch`.
+  - Added OpenMetadata `start_period: 90s` to avoid false-negative health during JVM bootstrap.
+- Root cause addressed:
+  - OpenMetadata/Elasticsearch were being force-killed with exit `137` during recreate/shutdown when default Docker stop timeout was too short.
+  - Initial OpenMetadata healthcheck attempt used an authenticated endpoint and a missing binary (`curl`), which kept container health in `starting`.
+
+#### Redis Runtime Stability (Consumer + Watch)
+
+- Added shared runtime retry helpers in `heber/ops/runtime_retry.py`:
+  - transient Redis/runtime error classification
+  - bounded exponential backoff with jitter for long-running loops
+- Updated `heber/writer/consumer.py` run loop to:
+  - detect transient Redis transport/loading errors,
+  - log them as structured warnings without traceback spam,
+  - apply bounded exponential backoff instead of fixed 1-second retry loops.
+- Updated `heber/watch/consumer.py` run loop with the same transient classification and backoff behavior.
+- Added regression tests to lock behavior:
+  - `tests/test_writer_consumer_reliability.py`
+  - `tests/test_watch_consumer_reliability.py`
+  - verifies transient Redis errors back off and avoid noisy error logging,
+  - verifies unknown runtime errors still emit error logs with traceback context.
+
+#### Dataflow Metrics Foundation (Writer + Watch Startup)
+
+- Added `heber_writer_last_write_unixtime{layer,dataset}` in `heber/ops/metrics.py` and wired it to `record_write()` so every successful write updates a freshness timestamp.
+- Instrumented Bronze flush writes in `heber/writer/bronze.py` with:
+  - `record_write(layer="bronze", ...)` on success
+  - `record_write_error(layer="bronze", ...)` on failure
+- Started metrics server in watch entrypoint `heber/watch/__main__.py` using `start_metrics_server_from_env(default_port=9090)` so watch-service metrics are available at runtime.
+- Added regression tests:
+  - `tests/test_metrics_runtime_wiring.py` (Bronze write metrics + last-write gauge)
+  - `tests/test_watch_metrics_startup.py` (watch metrics server startup)
+
+#### Watch Passive Gateway Evidence Metrics
+
+- Added watch observability metrics in `heber/ops/metrics.py`:
+  - `heber_watch_gateway_requests_total{component,endpoint,outcome,status_code}`
+  - `heber_watch_gateway_request_duration_seconds{component,endpoint,outcome}`
+  - `heber_watch_gateway_last_success_unixtime{component,endpoint}`
+  - `heber_watch_watches_created_total`
+  - `heber_watch_last_watch_created_unixtime`
+  - `heber_watch_poll_cycles_total{status}`
+  - `heber_watch_last_poll_unixtime`
+  - `heber_watch_alert_parse_total{status}`
+- Instrumented watch enrichment/quote paths for passive Data Gateway proof:
+  - `heber/watch/features.py` now records success/failure outcomes, status codes, and latency for enrichment calls.
+  - `heber/watch/poller.py` now records poll cycle status and gateway request outcomes including `partial_coverage` and `stale_fallback`.
+  - `heber/watch/consumer.py` now records alert parse outcomes, watch creation activity, and entry-price gateway request outcomes.
+- Added/extended regression tests:
+  - `tests/test_watch_feature_enrichment_resilience.py`
+  - `tests/test_consumer_parsing.py`
+  - `tests/test_watch_poller_metrics.py`
+
+#### Dataflow Health JSON Command
+
+- Added end-to-end dataflow verification engine in `heber/ops/dataflow_health.py` with JSON report output and status levels (`ok`, `warn`, `fail`).
+- Added new CLI command `heber health-dataflow` in `heber/cli.py` with support for:
+  - `--window-seconds`
+  - `--consumer-metrics-url`
+  - `--watch-metrics-url`
+  - `--report-dir`
+  - `--loop`
+  - `--interval-seconds`
+  - `--mode manual|scheduled`
+- Added health settings to `heber/config.py`:
+  - `HEBER_HEALTH_CONSUMER_METRICS_URL`
+  - `HEBER_HEALTH_WATCH_METRICS_URL`
+  - `HEBER_HEALTH_FRESHNESS_SECONDS`
+  - `HEBER_HEALTH_REPORT_DIR`
+  - `HEBER_HEALTH_INTERVAL_SECONDS`
+- Added regression tests:
+  - `tests/test_dataflow_health.py`
+  - `tests/test_cli_health_dataflow.py`
+- Updated `run_dataflow_health_once()` in `heber/ops/dataflow_health.py` to treat report file write errors as warn-only (no command crash), preserving exit-0 behavior.
+- Added regression guard in `tests/test_dataflow_health.py` for report-write failure handling.
+- Updated `tests/test_watch_entrypoint_shutdown.py` to stub metrics startup during shutdown-path tests, preventing port-bind flakiness in full-suite runs.
+- Reduced noisy import-time tracing logs by downgrading missing OpenTelemetry startup message to debug in `heber/ops/tracing.py`.
+
+#### Scheduled Dataflow Health Runner and Docs
+
+- Added Docker service `heber-dataflow-health` in `docker-compose.yml` to run scheduled checks every interval using `python -m heber.ops.dataflow_health --loop --mode scheduled`.
+- Exposed metrics endpoints on host for manual verification parity:
+  - `heber-consumer`: `localhost:9090`
+  - `heber-watch`: `localhost:9091`
+- Added health config examples in `.env.example` for metrics URLs, freshness window, report path, and interval.
+- Added static coverage tests:
+  - `tests/test_config_health_settings.py`
+  - `tests/test_dataflow_health_compose_contract.py`
+- Updated operator docs:
+  - `README.md` (new service + metrics ports + CLI usage)
+  - `docs/configuration.md` (dataflow health settings table)
+  - `docs/operations/runbook.md` (manual/scheduled JSON proof commands)
+
+#### Dataflow Verification Validation Notes
+
+- Validation completed for this slice:
+  - `pytest -q` passes (571 tests).
+  - `ruff check .` passes.
+  - `mypy .` currently reports existing repo-wide typing/import-stub issues outside this feature slice.
+
+#### Watch Flow Alert Batch Parsing
+
+- Updated `heber/watch/consumer.py` to parse both single alert payloads and batched payloads (`payload.items[]`) from the flow stream.
+- Added per-item batch handling so malformed items are skipped while valid items still create watches.
+- Added structured parse summary logging fields on each message parse:
+  - `alert_parse_success`
+  - `alert_parse_failed`
+  - `batch_items_total`
+  - `batch_items_failed`
+- Added regression tests in `tests/test_consumer_parsing.py` for single payload parsing, batched payload parsing, malformed batch handling, and mixed valid/invalid batch processing.
+
+#### Watch Gold Path Resolution and Startup Preflight
+
+- Updated `heber/config.py` so Gold root path resolution accepts `HEBER_GOLD_PATH` aliases and consistently feeds `settings.gold_path`.
+- Added startup output path preflight in `heber/watch/__main__.py` to create missing directories and verify write access before service startup.
+- Added regression tests:
+  - `tests/test_config_paths.py`
+  - `tests/test_watch_startup_preflight.py`
+
+#### Watch Feature Enrichment Resilience
+
+- Added shared retry/throttle/cache request handling in `heber/watch/features.py` for upstream enrichment calls.
+- Added bounded retries with jitter for retryable statuses (`429`, `5xx`) and structured failure logging fields:
+  - `endpoint`
+  - `status_code`
+  - `symbol`
+  - `alert_id`
+  - `attempt`
+  - `retryable`
+  - `duration_ms`
+- Added rolling-window auth failure tracking with `EnrichmentAuthFailure` fail-fast escalation after repeated `401` responses.
+- Updated watcher flow to propagate fatal enrichment auth failures for restart behavior while still handling non-fatal enrichment errors.
+- Added regression tests in `tests/test_watch_feature_enrichment_resilience.py` for retry success, retry exhaustion logging, auth fail-fast thresholding, and request throttling.
+
+#### Silver Compactor Schema Evolution
+
+- Updated `heber/writer/compactor.py` to build a unified schema per partition before writing merged output.
+- Added table-to-schema alignment during compaction so missing columns in older files are filled with nulls.
+- Added explicit schema conflict detection for incompatible column types; conflicting partitions are skipped with detailed error logs and without deleting source files.
+- Added regression tests in `tests/test_compactor_schema_union.py` for:
+  - mixed old/new schema compaction with null fill,
+  - optional column value preservation across merged files,
+  - incompatible type conflict skip behavior.
+
+#### Stabilization Verification
+
+- Rebuilt `heber-watch` and `heber-compactor` images and recreated both services after the watcher/compactor fixes.
+- Verified startup logs show watcher output path resolved to container storage (`/data/gold/...`) instead of host-only `/Volumes/...`.
+- Verified recent watcher and compactor logs show no recurring permission or schema mismatch failures after rollout.
+
 #### DLQ Timestamp Normalization
 
 - Normalized `EventEnvelope` timestamps (`ts_event`, `ts_ingest`, `ts_available`) to timezone-aware UTC values at validation time in `heber/models/envelope.py`.
 - Added regression tests in `tests/test_event_envelope_timezones.py` to prevent mixed naive/aware timestamp errors during consumer lag calculations.
+
+#### Equity Instrument Key Compatibility
+
+- Expanded equity instrument-key validation in `heber/models/envelope.py` to accept dotted/suffixed symbols emitted by gateway data (for example `BRK.B`, `JRI.RT`, `VAL.WS`).
+- Added regression tests in `tests/test_equity_instrument_key_format.py` covering valid extended tickers and malformed-key rejections.
 
 #### Docker Python 3.14 Builder Compatibility
 

@@ -158,37 +158,13 @@ class BacktestDataLoader:
         Returns:
             Tuple of (features_df, labels_df or None)
         """
-        if asof_time is None:
-            asof_time = train_end
-
-        logger.info(
-            "Loading training data",
-            train_start=str(train_start),
-            train_end=str(train_end),
-            asof_time=str(asof_time),
-        )
-
-        # Load features
-        features = self.client.read_gold(
-            dataset=self.feature_dataset,
-            version=self.feature_version,
-            time_range=(train_start, train_end),
+        return self._load_data_split(
+            start=train_start,
+            end=train_end,
+            split_name="training",
             asof_time=asof_time,
             instrument_keys=instrument_keys,
         )
-
-        # Load labels if configured
-        labels = None
-        if self.label_dataset:
-            labels = self.client.read_gold(
-                dataset=self.label_dataset,
-                version=self.label_version,
-                time_range=(train_start, train_end),
-                asof_time=asof_time,
-                instrument_keys=instrument_keys,
-            )
-
-        return features, labels
 
     def load_test_data(
         self,
@@ -208,13 +184,30 @@ class BacktestDataLoader:
         Returns:
             Tuple of (features_df, labels_df or None)
         """
+        return self._load_data_split(
+            start=test_start,
+            end=test_end,
+            split_name="test",
+            asof_time=asof_time,
+            instrument_keys=instrument_keys,
+        )
+
+    def _load_data_split(
+        self,
+        start: datetime | str,
+        end: datetime | str,
+        split_name: str,
+        asof_time: datetime | str | None = None,
+        instrument_keys: list[str] | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        """Load data for a specific split (internal helper)."""
         if asof_time is None:
-            asof_time = test_end
+            asof_time = end
 
         logger.info(
-            "Loading test data",
-            test_start=str(test_start),
-            test_end=str(test_end),
+            f"Loading {split_name} data",
+            start=str(start),
+            end=str(end),
             asof_time=str(asof_time),
         )
 
@@ -222,7 +215,7 @@ class BacktestDataLoader:
         features = self.client.read_gold(
             dataset=self.feature_dataset,
             version=self.feature_version,
-            time_range=(test_start, test_end),
+            time_range=(start, end),
             asof_time=asof_time,
             instrument_keys=instrument_keys,
         )
@@ -233,7 +226,7 @@ class BacktestDataLoader:
             labels = self.client.read_gold(
                 dataset=self.label_dataset,
                 version=self.label_version,
-                time_range=(test_start, test_end),
+                time_range=(start, end),
                 asof_time=asof_time,
                 instrument_keys=instrument_keys,
             )

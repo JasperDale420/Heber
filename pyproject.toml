@@ -27,9 +27,6 @@ dependencies = [
     # Event bus
     "redis>=5.0",
 
-    # Hot Store
-    "clickhouse-connect>=0.7",
-
     # Feature Store
     "feast>=0.38",
 

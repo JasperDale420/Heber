@@ -71,13 +71,6 @@ DEFAULT_PERFORMANCE_SLOS: list[PerformanceSLO] = [
         unit="minutes/partition",
         test_scenario="Compaction benchmark",
     ),
-    PerformanceSLO(
-        name="Hot Store Query",
-        metric="hotstore_query_latency",
-        target=0.1,
-        unit="seconds",
-        test_scenario="ClickHouse benchmark",
-    ),
 ]
 
 

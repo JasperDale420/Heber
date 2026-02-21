@@ -11,10 +11,17 @@ def test_run_watch_service_stops_service_on_runtime_error(monkeypatch: pytest.Mo
     class _FakeService:
         last_instance: _FakeService | None = None
 
-        def __init__(self, redis_client, gateway_url: str, output_path: Path | None):  # noqa: ANN001
+        def __init__(
+            self,
+            redis_client,
+            gateway_url: str,
+            gateway_api_key: str | None = None,
+            output_path: Path | None = None,
+        ):  # noqa: ANN001
             _FakeService.last_instance = self
             self.redis_client = redis_client
             self.gateway_url = gateway_url
+            self.gateway_api_key = gateway_api_key
             self.output_path = output_path
             self.stopped = False
 
@@ -44,10 +51,17 @@ def test_run_watch_service_stops_service_on_normal_completion(monkeypatch: pytes
     class _FakeService:
         last_instance: _FakeService | None = None
 
-        def __init__(self, redis_client, gateway_url: str, output_path: Path | None):  # noqa: ANN001
+        def __init__(
+            self,
+            redis_client,
+            gateway_url: str,
+            gateway_api_key: str | None = None,
+            output_path: Path | None = None,
+        ):  # noqa: ANN001
             _FakeService.last_instance = self
             self.redis_client = redis_client
             self.gateway_url = gateway_url
+            self.gateway_api_key = gateway_api_key
             self.output_path = output_path
             self.stopped = False
 
@@ -78,10 +92,17 @@ def test_run_watch_service_preserves_run_error_when_stop_fails(
     class _FakeService:
         last_instance: _FakeService | None = None
 
-        def __init__(self, redis_client, gateway_url: str, output_path: Path | None):  # noqa: ANN001
+        def __init__(
+            self,
+            redis_client,
+            gateway_url: str,
+            gateway_api_key: str | None = None,
+            output_path: Path | None = None,
+        ):  # noqa: ANN001
             _FakeService.last_instance = self
             self.redis_client = redis_client
             self.gateway_url = gateway_url
+            self.gateway_api_key = gateway_api_key
             self.output_path = output_path
             self.stopped = False
 
@@ -114,10 +135,17 @@ def test_run_watch_service_ignores_stop_error_on_normal_completion(
     class _FakeService:
         last_instance: _FakeService | None = None
 
-        def __init__(self, redis_client, gateway_url: str, output_path: Path | None):  # noqa: ANN001
+        def __init__(
+            self,
+            redis_client,
+            gateway_url: str,
+            gateway_api_key: str | None = None,
+            output_path: Path | None = None,
+        ):  # noqa: ANN001
             _FakeService.last_instance = self
             self.redis_client = redis_client
             self.gateway_url = gateway_url
+            self.gateway_api_key = gateway_api_key
             self.output_path = output_path
             self.stopped = False
 

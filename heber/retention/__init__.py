@@ -9,7 +9,6 @@ Provides:
 
 import asyncio
 import json
-import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -491,12 +490,9 @@ class ReaperWorker:
 
     @staticmethod
     def _version_sort_key(version: str) -> tuple[int, int, int, int, str]:
-        clean = version.strip()
-        semver_match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", clean)
-        if semver_match:
-            major, minor, patch = semver_match.groups()
-            return (1, int(major), int(minor), int(patch), clean)
-        return (0, 0, 0, 0, clean)
+        from heber.utils.versioning import version_sort_key
+
+        return version_sort_key(version)
 
     def find_expired_partitions(
         self,

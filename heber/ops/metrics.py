@@ -6,6 +6,8 @@ and anti-leakage latency monitoring.
 Naming convention: heber_<service>_<metric_name>{<labels>}
 """
 
+import time
+
 import structlog
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, start_http_server
 
@@ -113,6 +115,72 @@ writer_errors_total = _get_or_create(
     ["layer", "error_type"],
 )
 
+writer_last_write_unixtime = _get_or_create(
+    Gauge,
+    "heber_writer_last_write_unixtime",
+    "Unix timestamp of most recent successful write",
+    ["layer", "dataset"],
+)
+
+
+# =============================================================================
+# Watch Metrics
+# =============================================================================
+
+watch_gateway_requests_total = _get_or_create(
+    Counter,
+    "heber_watch_gateway_requests_total",
+    "Gateway request outcomes from watch-service components",
+    ["component", "endpoint", "outcome", "status_code"],
+)
+
+watch_gateway_request_duration_seconds = _get_or_create(
+    Histogram,
+    "heber_watch_gateway_request_duration_seconds",
+    "Gateway request latency from watch-service components",
+    ["component", "endpoint", "outcome"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+watch_gateway_last_success_unixtime = _get_or_create(
+    Gauge,
+    "heber_watch_gateway_last_success_unixtime",
+    "Unix timestamp of most recent successful gateway response by component/endpoint",
+    ["component", "endpoint"],
+)
+
+watch_watches_created_total = _get_or_create(
+    Counter,
+    "heber_watch_watches_created_total",
+    "Total watches created by watch consumer",
+)
+
+watch_last_watch_created_unixtime = _get_or_create(
+    Gauge,
+    "heber_watch_last_watch_created_unixtime",
+    "Unix timestamp of most recent watch creation",
+)
+
+watch_poll_cycles_total = _get_or_create(
+    Counter,
+    "heber_watch_poll_cycles_total",
+    "Total poll cycles by status",
+    ["status"],
+)
+
+watch_last_poll_unixtime = _get_or_create(
+    Gauge,
+    "heber_watch_last_poll_unixtime",
+    "Unix timestamp of most recent poll cycle completion",
+)
+
+watch_alert_parse_total = _get_or_create(
+    Counter,
+    "heber_watch_alert_parse_total",
+    "Alert parse outcomes in watch consumer",
+    ["status"],
+)
+
 
 # =============================================================================
 # Compactor Metrics (PRD §12.5.2)
@@ -171,32 +239,6 @@ catalog_db_connections_active = _get_or_create(
     Gauge,
     "heber_catalog_db_connections_active",
     "Active database connections",
-)
-
-
-# =============================================================================
-# Hot Store Metrics (PRD §12.5.2)
-# =============================================================================
-
-hotstore_rows_synced_total = _get_or_create(
-    Counter,
-    "heber_hotstore_rows_synced_total",
-    "Rows synced to Hot Store",
-    ["dataset"],
-)
-
-hotstore_lag_seconds = _get_or_create(
-    Gauge,
-    "heber_hotstore_lag_seconds",
-    "Sync lag behind Silver in seconds",
-    ["dataset"],
-)
-
-hotstore_sync_errors_total = _get_or_create(
-    Counter,
-    "heber_hotstore_sync_errors_total",
-    "Sync failures",
-    ["dataset", "error_type"],
 )
 
 
@@ -289,11 +331,66 @@ def record_write(
     writer_bytes_written_total.labels(layer=layer, dataset=dataset).inc(bytes_written)
     writer_files_written_total.labels(layer=layer, dataset=dataset).inc()
     writer_flush_duration_seconds.labels(layer=layer).observe(duration_seconds)
+    writer_last_write_unixtime.labels(layer=layer, dataset=dataset).set(time.time())
 
 
 def record_write_error(layer: str, error_type: str) -> None:
     """Record a write error."""
     writer_errors_total.labels(layer=layer, error_type=error_type).inc()
+
+
+def record_watch_gateway_success(
+    component: str,
+    endpoint: str,
+    timestamp_unixtime: float | None = None,
+) -> None:
+    """Record last successful watch gateway response timestamp."""
+    watch_gateway_last_success_unixtime.labels(component=component, endpoint=endpoint).set(
+        timestamp_unixtime if timestamp_unixtime is not None else time.time()
+    )
+
+
+def record_watch_gateway_request(
+    component: str,
+    endpoint: str,
+    outcome: str,
+    status_code: int | None,
+    duration_seconds: float,
+) -> None:
+    """Record a watch-service gateway request outcome and latency."""
+    status_label = "none" if status_code is None else str(status_code)
+    watch_gateway_requests_total.labels(
+        component=component,
+        endpoint=endpoint,
+        outcome=outcome,
+        status_code=status_label,
+    ).inc()
+    watch_gateway_request_duration_seconds.labels(
+        component=component,
+        endpoint=endpoint,
+        outcome=outcome,
+    ).observe(max(0.0, duration_seconds))
+    if outcome == "success":
+        record_watch_gateway_success(component=component, endpoint=endpoint)
+
+
+def record_watch_watch_created(timestamp_unixtime: float | None = None) -> None:
+    """Record watch creation activity."""
+    watch_watches_created_total.inc()
+    watch_last_watch_created_unixtime.set(timestamp_unixtime if timestamp_unixtime is not None else time.time())
+
+
+def record_watch_poll_cycle(status: str, timestamp_unixtime: float | None = None) -> None:
+    """Record watch poll cycle status and last poll timestamp."""
+    watch_poll_cycles_total.labels(status=status).inc()
+    watch_last_poll_unixtime.set(timestamp_unixtime if timestamp_unixtime is not None else time.time())
+
+
+def record_watch_alert_parse(status: str, count: int = 1) -> None:
+    """Record watch alert parse outcomes."""
+    if count <= 0:
+        return
+    watch_alert_parse_total.labels(status=status).inc(count)
 
 
 def record_ingest_latency(
@@ -336,11 +433,6 @@ def record_dlq_event(feed: str, error_type: str) -> None:
 def set_consumer_lag(stream: str, lag_seconds: float) -> None:
     """Set consumer lag gauge."""
     consumer_lag_seconds.labels(stream=stream).set(lag_seconds)
-
-
-def set_hotstore_lag(dataset: str, lag_seconds: float) -> None:
-    """Set Hot Store sync lag."""
-    hotstore_lag_seconds.labels(dataset=dataset).set(lag_seconds)
 
 
 # =============================================================================

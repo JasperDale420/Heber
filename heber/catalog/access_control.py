@@ -18,12 +18,9 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class DataLayer(str, Enum):
-    """Data layer types."""
-
-    BRONZE = "bronze"
-    SILVER = "silver"
-    GOLD = "gold"
+# DataLayer is the canonical enum from heber.retention (superset with HOT_STORE, DLQ).
+# Access control only uses BRONZE/SILVER/GOLD but importing the canonical avoids duplication.
+from heber.retention import DataLayer  # noqa: E402
 
 
 class AccessLevel(str, Enum):

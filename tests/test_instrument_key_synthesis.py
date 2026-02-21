@@ -152,3 +152,328 @@ def test_congress_insider_and_news_fill_symbol_from_payload_fields() -> None:
     assert news_normalized.symbol == "TSLA"
     assert news_normalized.instrument_key == "equity:TSLA"
     assert news_normalized.is_valid_instrument_key()
+
+
+# ---------------------------------------------------------------------------
+# Market Data Feed Normalization (bars, quotes, trades)
+# ---------------------------------------------------------------------------
+
+
+def test_crypto_bars_normalize_symbol_and_key_slash_format() -> None:
+    """Crypto bars with BTC/USD format should normalize to BTC-USD."""
+    envelope = _build_envelope(
+        "crypto_bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "96000.0",
+            "h": "96250.0",
+            "l": "95800.0",
+            "c": "96100.0",
+            "v": "225",
+        },
+        provider="alpaca",
+        instrument_type="crypto",
+        instrument_key="crypto:BTC-USD",
+        symbol="BTC/USD",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "BTC-USD"
+    assert normalized.instrument_type == "crypto"
+    assert normalized.instrument_key == "crypto:BTC-USD"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_crypto_bars_normalize_symbol_dash_format() -> None:
+    """Crypto bars with BTC-USD format should pass through correctly."""
+    envelope = _build_envelope(
+        "crypto_bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "3400.0",
+            "h": "3420.0",
+            "l": "3380.0",
+            "c": "3410.0",
+            "v": "100",
+        },
+        provider="alpaca",
+        instrument_type="crypto",
+        instrument_key="crypto:ETH-USD",
+        symbol="ETH-USD",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "ETH-USD"
+    assert normalized.instrument_type == "crypto"
+    assert normalized.instrument_key == "crypto:ETH-USD"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_crypto_bars_normalize_concatenated_symbol() -> None:
+    """Crypto bars with BTCUSD concatenated format should normalize to BTC-USD."""
+    envelope = _build_envelope(
+        "crypto_bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "96000.0",
+            "h": "96250.0",
+            "l": "95800.0",
+            "c": "96100.0",
+            "v": "225",
+        },
+        provider="alpaca",
+        instrument_type="crypto",
+        instrument_key="crypto:BTC-USD",
+        symbol="BTCUSD",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "BTC-USD"
+    assert normalized.instrument_key == "crypto:BTC-USD"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_crypto_trades_preserve_instrument_type() -> None:
+    """Crypto trades should normalize to crypto instrument type even through alias."""
+    envelope = _build_envelope(
+        "crypto_trades",
+        {
+            "p": "96110.0",
+            "s": "2",
+            "x": "CBSE",
+            "i": "crypto-trade-1",
+        },
+        provider="alpaca",
+        instrument_type="crypto",
+        instrument_key="crypto:BTC-USD",
+        symbol="BTC-USD",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.feed == "trades"
+    assert normalized.instrument_type == "crypto"
+    assert normalized.instrument_key == "crypto:BTC-USD"
+    assert normalized.symbol == "BTC-USD"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_crypto_bars_ethusdt_four_char_quote() -> None:
+    """Crypto symbol with 4-char quote currency like ETHUSDT should normalize."""
+    envelope = _build_envelope(
+        "crypto_bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "3400.0",
+            "h": "3420.0",
+            "l": "3380.0",
+            "c": "3410.0",
+            "v": "100",
+        },
+        provider="alpaca",
+        instrument_type="crypto",
+        instrument_key="crypto:ETH-USDT",
+        symbol="ETHUSDT",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "ETH-USDT"
+    assert normalized.instrument_key == "crypto:ETH-USDT"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_equity_bars_normalize_symbol() -> None:
+    """Equity bars should normalize symbol and produce valid instrument key."""
+    envelope = _build_envelope(
+        "bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "100.0",
+            "h": "101.0",
+            "l": "99.0",
+            "c": "100.5",
+            "v": "1200",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "AAPL"
+    assert normalized.instrument_type == "equity"
+    assert normalized.instrument_key == "equity:AAPL"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_equity_bars_extended_ticker_brk_b() -> None:
+    """Equity bars with extended tickers like BRK.B should normalize correctly."""
+    envelope = _build_envelope(
+        "bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "400.0",
+            "h": "405.0",
+            "l": "398.0",
+            "c": "403.0",
+            "v": "500",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:BRK.B",
+        symbol="BRK.B",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.symbol == "BRK.B"
+    assert normalized.instrument_type == "equity"
+    assert normalized.instrument_key == "equity:BRK.B"
+    assert normalized.is_valid_instrument_key()
+
+
+def test_option_trades_preserve_occ_key() -> None:
+    """Option trades should preserve the OCC instrument key from Data-Gateway."""
+    envelope = _build_envelope(
+        "option_trades",
+        {
+            "p": "4.2",
+            "s": "10",
+            "x": "OPRA",
+            "i": "opt-trade-1",
+        },
+        provider="alpaca",
+        instrument_type="option",
+        instrument_key="option:OCC:AAPL260320C00200000",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert normalized.feed == "trades"
+    assert normalized.instrument_type == "option"
+    assert normalized.instrument_key == "option:OCC:AAPL260320C00200000"
+    assert normalized.symbol == "AAPL"
+    assert normalized.is_valid_instrument_key()
+
+
+# ---------------------------------------------------------------------------
+# Data Quality Validation
+# ---------------------------------------------------------------------------
+
+
+def test_market_data_validation_flags_suspect_ohlcv() -> None:
+    """Bars with high < low should get quality flag."""
+    envelope = _build_envelope(
+        "bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "100.0",
+            "h": "98.0",  # lower than low
+            "l": "99.0",
+            "c": "100.5",
+            "v": "1200",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert "high_below_low" in normalized.quality_flags
+
+
+def test_market_data_validation_flags_negative_price() -> None:
+    """Bars with negative OHLCV values should get quality flag."""
+    envelope = _build_envelope(
+        "bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "-100.0",
+            "h": "101.0",
+            "l": "99.0",
+            "c": "100.5",
+            "v": "1200",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert "negative_price" in normalized.quality_flags
+
+
+def test_market_data_validation_flags_inverted_spread() -> None:
+    """Quotes with bid > ask should get inverted_spread quality flag."""
+    envelope = _build_envelope(
+        "quotes",
+        {
+            "bp": "101.0",
+            "ap": "100.0",
+            "bs": "10",
+            "as": "12",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert "inverted_spread" in normalized.quality_flags
+
+
+def test_market_data_validation_clean_bars_no_flags() -> None:
+    """Clean bars should not get any suspect quality flags."""
+    envelope = _build_envelope(
+        "bars",
+        {
+            "t": "2026-02-11T14:30:00Z",
+            "o": "100.0",
+            "h": "101.0",
+            "l": "99.0",
+            "c": "100.5",
+            "v": "1200",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    suspect_flags = {"negative_price", "negative_volume", "high_below_low"}
+    assert not suspect_flags.intersection(set(normalized.quality_flags))
+
+
+def test_trade_validation_flags_non_positive_price() -> None:
+    """Trades with zero price should get non_positive_price quality flag."""
+    envelope = _build_envelope(
+        "trades",
+        {
+            "p": "0.0",
+            "s": "50",
+            "x": "XNAS",
+        },
+        provider="alpaca",
+        instrument_type="equity",
+        instrument_key="equity:AAPL",
+        symbol="AAPL",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+
+    assert "non_positive_price" in normalized.quality_flags

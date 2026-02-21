@@ -63,6 +63,82 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
 # Backwards-compatible name used by tests and docs for gateway feed inventory.
 DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
 
+# Feeds to persist in Bronze but skip Silver by default until an active Gold use-case exists.
+# Currently empty — all contracted feeds get Silver normalization. Add canonical Silver
+# dataset names here to gate them out of Silver writes.
+BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset({"news", "institution_holdings"})
+
+# Required and allowed payload keys for schema validation.
+# Required keys trigger a warning when missing; unexpected keys (outside
+# the allowed set) also trigger a warning.
+PAYLOAD_REQUIRED_FIELDS: dict[str, set[str]] = {
+    "flow_alerts": {
+        "timestamp",
+        "symbol",
+        "strike",
+        "expiry",
+        "put_call",
+        "premium",
+        "volume",
+    },
+    "market_tide": {
+        "timestamp",
+        "date",
+        "net_call_premium",
+        "net_put_premium",
+        "net_volume",
+        "sentiment",
+    },
+}
+
+PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
+    "flow_alerts": {
+        "id",
+        "alert_id",
+        "event_id",
+        "timestamp",
+        "symbol",
+        "strike",
+        "expiry",
+        "put_call",
+        "premium",
+        "volume",
+        "open_interest",
+        "side",
+        "is_sweep",
+        "is_unusual",
+        "option_chain",
+        "price",
+        "underlying_price",
+        "alert_rule",
+        "alert_type",
+        "aggressor",
+        "tags",
+        "provider",
+        "trade_count",
+        "volume_oi_ratio",
+        "total_ask_side_prem",
+        "total_bid_side_prem",
+        "has_floor",
+        "has_multileg",
+        "has_singleleg",
+        "all_opening_trades",
+        "total_size",
+        "expiry_count",
+        "sentiment",
+    },
+    "market_tide": {
+        "timestamp",
+        "date",
+        "net_call_premium",
+        "net_put_premium",
+        "net_volume",
+        "sentiment",
+        "call_put_ratio",
+        "provider",
+    },
+}
+
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
@@ -104,6 +180,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     # Core Market Data
     "bars": {
         "t": "bar_start_ts",
+        "timestamp": "bar_start_ts",
         "o": "open",
         "h": "high",
         "l": "low",
@@ -114,18 +191,29 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     },
     "quotes": {
         "bp": "bid_px",
+        "bid_price": "bid_px",
         "bs": "bid_sz",
+        "bid_size": "bid_sz",
         "ap": "ask_px",
+        "ask_price": "ask_px",
         "as": "ask_sz",
+        "ask_size": "ask_sz",
         "bx": "bid_exchange",
         "ax": "ask_exchange",
     },
     "trades": {
+        # Short Alpaca WebSocket keys
         "p": "price",
         "s": "size",
         "x": "exchange",
         "i": "trade_id",
         "z": "tape",
+        # Full-name keys from Alpaca REST / aggregate payloads
+        "price": "price",
+        "size": "size",
+        "exchange": "exchange",
+        "trade_id": "trade_id",
+        "tape": "tape",
     },
     # Options Flow
     "flow_alerts": {
@@ -325,7 +413,7 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "darkpool": {"underlying", "price", "size"},
     "market_tide": {"total_call_premium", "total_put_premium"},
     "sector_tide": {"sector", "net_call_premium", "net_put_premium"},
-    "greek_exposure": {"gamma_exposure"},
+    "greek_exposure": {"call_gamma"},
     "iv_rank": {"iv_rank"},
     "oi_change": {"oi_date", "call_oi", "put_oi"},
     "historic_option_volume": {"hov_date", "expiry", "volume"},
@@ -343,7 +431,8 @@ class UnmappedFeedError(ValueError):
     """Raised when a feed cannot be routed to a known Silver schema."""
 
 
-_AMOUNT_RANGE_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d+)?)\s*(?:-\s*\$?\s*([\d,]+(?:\.\d+)?))?")
+_NUM_PATTERN = r"[\d,]+(?:\.\d+)?"
+_AMOUNT_RANGE_RE = re.compile(rf"\$?\s*({_NUM_PATTERN})\s*(?:-\s*\$?\s*({_NUM_PATTERN}))?")
 
 
 def resolve_silver_feed(feed: str) -> str | None:
@@ -362,6 +451,12 @@ def resolve_feed_alias(feed: str) -> str:
 def is_contracted_feed(feed: str) -> bool:
     """Return True when raw feed is explicitly allowed for Silver routing."""
     return feed in CONTRACTED_RAW_FEEDS
+
+
+def is_bronze_only_feed(feed: str) -> bool:
+    """Return True when feed should be stored in Bronze but skipped for Silver writes."""
+    canonical = resolve_feed_alias(feed)
+    return canonical in BRONZE_ONLY_SILVER_DATASETS
 
 
 def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -439,17 +534,21 @@ def _normalize_insider_payload(payload: dict[str, Any]) -> None:
     if payload.get("shares") is None:
         payload["shares"] = payload.get("amount") or payload.get("size")
 
-    relationships: list[str] = []
-    if payload.get("is_director"):
-        relationships.append("director")
-    if payload.get("is_officer"):
-        relationships.append("officer")
-    if payload.get("is_ten_percent_owner"):
-        relationships.append("ten_percent_owner")
-    if payload.get("is_10b5_1"):
-        relationships.append("10b5-1")
-    if relationships and payload.get("insider_relationship") is None:
-        payload["insider_relationship"] = "|".join(relationships)
+    relationship = _build_insider_relationships(payload)
+    if relationship and payload.get("insider_relationship") is None:
+        payload["insider_relationship"] = relationship
+
+
+def _build_insider_relationships(payload: dict[str, Any]) -> str | None:
+    """Aggregate boolean insider role flags into a pipe-delimited relationship string."""
+    flag_map = {
+        "is_director": "director",
+        "is_officer": "officer",
+        "is_ten_percent_owner": "ten_percent_owner",
+        "is_10b5_1": "10b5-1",
+    }
+    parts = [label for flag, label in flag_map.items() if payload.get(flag)]
+    return "|".join(parts) if parts else None
 
 
 def _normalize_tide_payload(payload: dict[str, Any], call_key: str, put_key: str) -> None:
@@ -495,6 +594,7 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
 
 
 __all__ = [
+    "BRONZE_ONLY_SILVER_DATASETS",
     "CONTRACTED_RAW_FEEDS",
     "DATA_GATEWAY_FEEDS",
     "DLQ_REASON_UNCONTRACTED",
@@ -504,6 +604,7 @@ __all__ = [
     "LEGACY_MAPPABLE_FEEDS",
     "REQUIRED_FIELDS_BY_FEED",
     "REQUIRED_NON_NULL_FIELDS",
+    "is_bronze_only_feed",
     "is_contracted_feed",
     "UnmappedFeedError",
     "normalize_payload_for_feed",

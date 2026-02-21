@@ -9,10 +9,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import structlog
-
-logger = structlog.get_logger(__name__)
-
 # Category constants
 CATEGORY_DATA_MODEL = "Data Model"
 CATEGORY_INFRASTRUCTURE = "Infrastructure"
