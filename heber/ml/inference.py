@@ -36,7 +36,7 @@ class InferenceConfig:
     cache_ttl_seconds: int = 300  # 5 min cache for scores
 
     # Feature extraction
-    gateway_url: str = "http://localhost:8000"
+    gateway_url: str = "http://localhost:8080"
 
 
 class MetaLabelScorer:

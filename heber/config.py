@@ -189,7 +189,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HEBER_WATCH_REDIS_URL", "HEBER_REDIS_URL"),
     )
     watch_gateway_url: str = Field(
-        default="http://localhost:8000",
+        default="http://localhost:8080",
         validation_alias=AliasChoices("HEBER_WATCH_GATEWAY_URL", "DATA_GATEWAY_URL"),
     )
     watch_gateway_api_key: str | None = Field(

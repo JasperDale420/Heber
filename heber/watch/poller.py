@@ -36,7 +36,7 @@ from heber.watch.models import (
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_GATEWAY_URL = "http://localhost:8000"
+DEFAULT_GATEWAY_URL = "http://localhost:8080"
 
 # Max time to sleep when waiting for market open (check hourly)
 MAX_SLEEP_SECONDS = 3600

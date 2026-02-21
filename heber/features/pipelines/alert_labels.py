@@ -39,7 +39,7 @@ logger = structlog.get_logger(__name__)
 MARKET_PROXY = "equity:SPY"
 VIX_PROXY = "equity:UVXY"  # Use UVXY as VIX proxy (Alpaca doesn't have VIX)
 LOOKBACK_DAYS = 30  # Days of bar history needed for ATR
-DATA_GATEWAY_URL = "http://localhost:8000"  # Data Gateway API
+DATA_GATEWAY_URL = "http://localhost:8080"  # Data Gateway API
 
 
 class AlertLabelsPipeline:

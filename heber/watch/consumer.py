@@ -60,7 +60,7 @@ DEFAULT_EVENTS_STREAM = settings.redis_stream_name
 FLOW_ALERTS_FEED = "flow_alerts"  # Filter by this feed type
 CONSUMER_GROUP = "watch-consumer"
 CONSUMER_NAME = "watch-consumer-1"
-DATA_GATEWAY_URL = "http://localhost:8000"
+DATA_GATEWAY_URL = "http://localhost:8080"
 FEATURE_STORAGE_TTL_SECONDS = 86400 * 7
 
 

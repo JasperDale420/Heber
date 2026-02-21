@@ -15,7 +15,7 @@ from heber.watch.models import WatchOutcome
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_GATEWAY_URL = "http://localhost:8000"
+DEFAULT_GATEWAY_URL = "http://localhost:8080"
 
 
 def _resolve_gateway_api_key(explicit_gateway_api_key: str | None, settings_gateway_api_key: str | None) -> str:
