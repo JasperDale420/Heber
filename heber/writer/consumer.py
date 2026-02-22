@@ -452,13 +452,18 @@ class EventConsumer:
         ack_ids, failed_ids = await self._process_stream_messages(claimed)
 
         # Flush to disk before acking claimed messages.
-        self._flush_layers()
+        flush_ok = self._flush_layers()
 
-        if ack_ids:
+        if ack_ids and flush_ok:
             await self.redis.xack(
                 settings.redis_stream_name,
                 settings.redis_consumer_group,
                 *ack_ids,
+            )
+        elif ack_ids and not flush_ok:
+            logger.warning(
+                "Skipping ACK for recovered messages due to flush failure",
+                pending_ack_count=len(ack_ids),
             )
 
         if failed_ids:
@@ -586,17 +591,27 @@ class EventConsumer:
 
         self._final_flush()
 
-    def _flush_layers(self) -> None:
-        """Flush Bronze and Silver independently so one failure doesn't block the other."""
+    def _flush_layers(self) -> bool:
+        """Flush Bronze and Silver independently.
+
+        Returns True if both flushes succeed. On failure the data remains
+        buffered and the caller must NOT acknowledge the messages so that
+        Redis can redeliver them on the next iteration.
+        """
+        ok = True
         try:
             self.bronze_writer.flush_if_needed()
         except Exception as e:
             logger.error("Bronze flush failed", error=str(e), exc_info=True)
+            ok = False
 
         try:
             self.silver_writer.flush_if_needed()
         except Exception as e:
             logger.error("Silver flush failed", error=str(e), exc_info=True)
+            ok = False
+
+        return ok
 
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
@@ -633,14 +648,20 @@ class EventConsumer:
             failed_ids.extend(stream_failed_ids)
 
         # Flush to disk BEFORE acknowledging
-        self._flush_layers()
+        flush_ok = self._flush_layers()
 
-        # Only ACK after successful flush
-        if processed_ids:
+        # Only ACK after successful flush — on failure, messages stay
+        # pending and will be redelivered on the next iteration.
+        if processed_ids and flush_ok:
             await self.redis.xack(
                 settings.redis_stream_name,
                 settings.redis_consumer_group,
                 *processed_ids,
+            )
+        elif processed_ids and not flush_ok:
+            logger.warning(
+                "Skipping ACK due to flush failure — messages will be redelivered",
+                pending_ack_count=len(processed_ids),
             )
 
         elapsed = time.monotonic() - t0

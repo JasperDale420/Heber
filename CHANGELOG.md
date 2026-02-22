@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - chore: workspace sync checkpoint and gitignore audit (2026-02-21)
 
+### Fixed
+
+- **Data Flow Integrity: Flush failure no longer silently drops data** (2026-02-22):
+  - `_flush_layers()` now returns a boolean indicating success. If Bronze or Silver flush raises an exception, `_consume_iteration()` and `_recover_pending_messages()` skip the Redis ACK, leaving messages pending for redelivery on the next iteration instead of silently losing data.
+
 ### Changed
 
 - **Cross-Repo Audit: Schema Version Constant** (2026-02-21):
