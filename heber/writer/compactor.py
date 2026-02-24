@@ -301,21 +301,67 @@ class Compactor:
         source_tables: list[pa.Table],
         unified_schema: pa.Schema,
         temp_path: Path,
+        dataset: str,
     ) -> int:
-        """Write source tables to a temporary parquet file, returning total row count."""
-        writer = None
-        merged_rows = 0
-        try:
-            for source_table in source_tables:
-                table = self._align_table_to_schema(source_table, unified_schema)
-                if writer is None:
-                    writer = pq.ParquetWriter(temp_path, unified_schema, compression="snappy")
-                writer.write_table(table, row_group_size=250_000)
-                merged_rows += table.num_rows
-        finally:
-            if writer is not None:
-                writer.close()
-        return merged_rows
+        """Write source tables to a temporary parquet file, returning total row count.
+
+        Performs exact deduplication on event_id, keeping the earliest ts_ingest.
+        """
+        if not source_tables:
+            return 0
+
+        # 1. Align schemas of all tables
+        aligned_tables = [self._align_table_to_schema(t, unified_schema) for t in source_tables]
+
+        # 2. Combine into a single table
+        combined_table = pa.concat_tables(aligned_tables)
+
+        # 3. Fast path: If empty or no event_id, just write it
+        if combined_table.num_rows == 0:
+            return 0
+
+        has_event_id = "event_id" in combined_table.schema.names
+        has_ts_ingest = "ts_ingest" in combined_table.schema.names
+
+        # 4. Deduplication
+        if has_event_id:
+            df = combined_table.to_pandas()
+            initial_rows = len(df)
+
+            # Sort so we keep the earliest ts_ingest if present
+            if has_ts_ingest:
+                df = df.sort_values("ts_ingest", ascending=True)
+
+            # Drop duplicates keeping the first (earliest)
+            df = df.drop_duplicates(subset=["event_id"], keep="first")
+
+            # Restore original sort if needed (optional, but good for predictable layout)
+            if has_ts_ingest:
+                df = df.sort_index()
+
+            deduped_rows = len(df)
+            duplicates_removed = initial_rows - deduped_rows
+
+            if duplicates_removed > 0:
+                logger.info(
+                    "Compaction deduplication removed records",
+                    removed=duplicates_removed,
+                    initial=initial_rows,
+                    final=deduped_rows,
+                )
+                from heber.ops.metrics import compactor_dedupe_drops_total
+
+                compactor_dedupe_drops_total.labels(dataset=dataset).inc(duplicates_removed)
+
+            final_table = pa.Table.from_pandas(df, schema=unified_schema, preserve_index=False)
+        else:
+            final_table = combined_table
+
+        # 5. Write out
+        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy") as writer:
+            writer.write_table(final_table, row_group_size=250_000)
+
+        return final_table.num_rows
 
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
@@ -359,7 +405,7 @@ class Compactor:
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
             temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
 
-            merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path)
+            merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path, dataset)
 
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0

@@ -330,66 +330,6 @@ def dedupe_batch_at_writer(events: list[dict[str, Any]], event_id_key: str = "ev
     return unique_events
 
 
-def dedupe_at_compaction(
-    records: list[dict[str, Any]],
-    partition: str,
-    event_id_key: str = "event_id",
-    ts_ingest_key: str = "ts_ingest",
-) -> list[dict[str, Any]]:
-    """Compactor-layer exact deduplication.
-
-    Per PRD §12.11.3:
-    1. Sort by event_id
-    2. Drop duplicates, keeping the row with earliest ts_ingest
-    3. Invariant: event_id is unique within a partition after compaction
-
-    Args:
-        records: All records in the partition
-        partition: Partition identifier for metrics
-        event_id_key: Key for event ID
-        ts_ingest_key: Key for ingest timestamp
-
-    Returns:
-        Deduplicated records with earliest ts_ingest per event_id
-    """
-    if not records:
-        return records
-
-    # Group by event_id, keep earliest ts_ingest
-    event_map: dict[str, dict[str, Any]] = {}
-
-    for record in records:
-        event_id = record.get(event_id_key)
-        if not event_id:
-            continue
-
-        if event_id not in event_map:
-            event_map[event_id] = record
-        else:
-            # Keep record with earlier ts_ingest
-            existing_ts = event_map[event_id].get(ts_ingest_key)
-            new_ts = record.get(ts_ingest_key)
-
-            if new_ts and existing_ts and new_ts < existing_ts:
-                event_map[event_id] = record
-
-    # Sort by event_id for consistent output
-    unique_records = sorted(event_map.values(), key=lambda r: r.get(event_id_key, ""))
-
-    dropped = len(records) - len(unique_records)
-    if dropped > 0:
-        dedupe_compaction_removed.labels(partition=partition).inc(dropped)
-        logger.info(
-            "compaction_dedupe",
-            partition=partition,
-            total=len(records),
-            unique=len(unique_records),
-            dropped=dropped,
-        )
-
-    return unique_records
-
-
 # Convenience decorator for consumer dedupe
 def with_consumer_dedupe(stream_name: str):
     """Decorator to add consumer-layer deduplication to a message handler.
