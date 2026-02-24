@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Heber Watch Gateway Connection**:
+  - Reverted the `DATA_GATEWAY_URL` port in `docker-compose.yml` back to `8080`. A recent change incorrectly set it to `8081`, causing `All connection attempts failed` when the watch service tried to fetch quotes.
+
 - **Data Flow Integrity: Flush failure no longer silently drops data** (2026-02-22):
   - `_flush_layers()` now returns a boolean indicating success. If Bronze or Silver flush raises an exception, `_consume_iteration()` and `_recover_pending_messages()` skip the Redis ACK, leaving messages pending for redelivery on the next iteration instead of silently losing data.
 
