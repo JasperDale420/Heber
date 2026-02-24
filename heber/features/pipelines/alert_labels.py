@@ -302,9 +302,46 @@ class AlertLabelsPipeline:
 
         logger.info("Fetched option bars", count=len(option_bars))
 
-        contract_labels = [
-            self._compute_single_contract_label(row, flow_alerts, option_bars) for _, row in labels.iterrows()
-        ]
+        # PERF: pre-index OCC symbols and option bars to avoid per-row lookups and DataFrame filters.
+        occ_symbol_by_event = flow_alerts.dropna(subset=["occ_symbol"]).set_index("event_id")["occ_symbol"].to_dict()
+        option_bars_by_symbol = {symbol: df for symbol, df in option_bars.groupby("symbol", sort=False)}
+        contract_labels = []
+        for row in labels.itertuples(index=False):
+            alert_id = row.alert_id
+            occ_symbol = occ_symbol_by_event.get(alert_id)
+            if not occ_symbol:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            contract_bars = option_bars_by_symbol.get(occ_symbol)
+            if contract_bars is None or contract_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            ts_alert = row.ts_alert
+            entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
+            if entry_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            entry_price = entry_bars.iloc[-1]["close"]
+            future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(
+                self.contract_config.max_window_bars
+            )
+
+            if future_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            price_path = future_bars["close"].values
+            contract_labels.append(
+                _compute_contract_barrier_outcome(
+                    price_path,
+                    entry_price,
+                    self.contract_config,
+                    self.slippage_model,
+                )
+            )
 
         contract_df = pd.DataFrame(contract_labels)
         for col in contract_df.columns:
