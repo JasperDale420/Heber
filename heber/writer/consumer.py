@@ -139,6 +139,15 @@ class EventConsumer:
                 normalized[key_str] = str(value)
         return json.dumps(normalized, default=str)
 
+    @staticmethod
+    def _extract_payload_value(message_data: dict) -> Any | None:
+        return (
+            message_data.get(b"data")
+            or message_data.get("data")
+            or message_data.get(b"payload")
+            or message_data.get("payload")
+        )
+
     async def _send_to_dlq(
         self,
         message_id: str | bytes,
@@ -180,9 +189,7 @@ class EventConsumer:
 
     def _parse_and_validate_envelope(self, event_data: dict) -> EventEnvelope:
         """Parse event data dict into a validated EventEnvelope."""
-        payload_str = (
-            event_data.get(b"data") or event_data.get("data") or event_data.get(b"payload") or event_data.get("payload")
-        )
+        payload_str = self._extract_payload_value(event_data)
         if payload_str is None:
             raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
 
@@ -404,12 +411,7 @@ class EventConsumer:
 
     @staticmethod
     def _extract_feed_from_message(message_data: dict) -> str:
-        payload_str = (
-            message_data.get(b"data")
-            or message_data.get("data")
-            or message_data.get(b"payload")
-            or message_data.get("payload")
-        )
+        payload_str = EventConsumer._extract_payload_value(message_data)
         if payload_str is None:
             return "unknown"
         if isinstance(payload_str, bytes):

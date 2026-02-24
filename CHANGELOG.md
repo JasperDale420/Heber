@@ -177,6 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Cross-Repo Audit: Schema Version Constant** (2026-02-21):
   - Replaced hardcoded `"v1"` with `ENVELOPE_SCHEMA_VERSION` constant in `heber/models/envelope.py` and `heber/catalog/openmetadata_client.py`.
+- Centralized Redis payload field extraction in the writer consumer to avoid drift.
 - **Cross-Repo Audit: HTTP Client Wrapper** (2026-02-21):
   - Replaced raw `httpx.Client` with `create_http_client` in `heber/sdk/client.py`.
 - **Alert Labels: Contract Label Caching** (2026-02-24):

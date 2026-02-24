@@ -39,6 +39,16 @@ class _StubRedis:
         return "9-0"
 
 
+def test_extract_payload_value_prefers_data_over_payload() -> None:
+    consumer = EventConsumer()
+    message_data = {
+        b"data": b"primary",
+        "payload": "secondary",
+    }
+
+    assert consumer._extract_payload_value(message_data) == b"primary"
+
+
 @pytest.mark.asyncio
 async def test_recover_pending_messages_claims_and_acks() -> None:
     consumer = EventConsumer()
