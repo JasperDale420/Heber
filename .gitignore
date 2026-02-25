@@ -36,24 +36,9 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# Aider
-.aider*
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-
 # Sonar scanner output
 .scannerwork/
+sonar_scan.log
+
+# Aider
+.aider*
