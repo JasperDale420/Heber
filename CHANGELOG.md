@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Watch Backfill Crash on Corrupt Feature Partitions** (2026-03-03):
+  - `heber/watch/backfill_scanner.py` now catches Polars/PyO3 panic exceptions while reading partition parquet files, logs full context, and skips only the bad partition instead of crashing the whole watch service.
+  - `heber/ml/datasets.py` now quarantines unreadable existing `data.parquet` files as `data.parquet.corrupt-<timestamp>` before writing fresh data.
+  - Feature partition writes now use an atomic temp-file rename to prevent partial-write reads that can create unreadable parquet artifacts.
+  - Added regression tests in `tests/test_enrichment_backfill_scanner.py` and `tests/test_meta_label_dataset_paths.py`.
+
 - **Heber Watch Gateway Connection**:
   - Reverted the `DATA_GATEWAY_URL` port in `docker-compose.yml` back to `8080`. A recent change incorrectly set it to `8081`, causing `All connection attempts failed` when the watch service tried to fetch quotes.
 

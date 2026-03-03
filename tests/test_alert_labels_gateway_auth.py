@@ -22,7 +22,7 @@ class _StubResponse:
 class _CapturingAsyncClient:
     calls: list[dict[str, Any]] = []
 
-    def __init__(self, timeout: float) -> None:  # noqa: ARG002
+    def __init__(self, **kwargs: Any) -> None:
         pass
 
     async def __aenter__(self) -> _CapturingAsyncClient:
@@ -64,7 +64,7 @@ def test_alert_labels_pipeline_requires_gateway_key_for_contract_labels() -> Non
 
 def test_fetch_option_bars_sends_gateway_auth_header(monkeypatch: pytest.MonkeyPatch) -> None:
     _CapturingAsyncClient.calls = []
-    monkeypatch.setattr("heber.features.pipelines.alert_labels.httpx.AsyncClient", _CapturingAsyncClient)
+    monkeypatch.setattr("httpx.AsyncClient", _CapturingAsyncClient)
 
     pipeline = AlertLabelsPipeline(gateway_url="http://gateway:8080", gateway_api_key="gw_test")
 

@@ -5,10 +5,12 @@ Builds training datasets by joining captured features with outcomes.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import polars as pl
 import structlog
@@ -30,6 +32,53 @@ _VERSION_V1 = "version=v1"
 DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
+
+
+def _is_polars_panic_exception(exc: BaseException) -> bool:
+    """Return True when a BaseException is a polars/pyo3 panic wrapper."""
+    return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
+
+
+def _read_existing_partition_or_quarantine(out_file: Path) -> pl.DataFrame | None:
+    """Read existing parquet partition; quarantine unreadable files and continue."""
+    if not out_file.exists():
+        return None
+
+    try:
+        return pl.read_parquet(out_file)
+    except BaseException as exc:
+        if not isinstance(exc, Exception) and not _is_polars_panic_exception(exc):
+            raise
+
+        quarantine_path = out_file.with_name(f"{out_file.name}.corrupt-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}")
+        try:
+            out_file.replace(quarantine_path)
+            logger.warning(
+                "Unreadable features partition quarantined",
+                path=str(out_file),
+                quarantine_path=str(quarantine_path),
+                error_type=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
+                exc_info=True,
+            )
+        except Exception as move_error:
+            logger.warning(
+                "Failed to quarantine unreadable features partition",
+                path=str(out_file),
+                quarantine_path=str(quarantine_path),
+                error=str(move_error),
+                exc_info=True,
+            )
+        return None
+
+
+def _atomic_write_parquet(df: pl.DataFrame, out_file: Path) -> None:
+    """Write parquet via temp file then atomic rename to avoid partial reads."""
+    temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
+    try:
+        df.write_parquet(temp_path)
+        os.replace(temp_path, out_file)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 @dataclass
@@ -442,15 +491,16 @@ def persist_features_to_gold(
         )
 
         out_file = partition_path / "data.parquet"
-        if out_file.exists():
-            existing = pl.read_parquet(out_file)
+        existing = _read_existing_partition_or_quarantine(out_file)
+        if existing is not None:
             partition_df = pl.concat(
                 [existing, partition_df],
                 how="diagonal_relaxed",
             )
             if "alert_id" in partition_df.columns:
                 partition_df = partition_df.unique(subset=["alert_id"], keep="last")
-        partition_df.write_parquet(out_file)
+
+        _atomic_write_parquet(partition_df, out_file)
 
         logger.info(
             "Persisted features partition",
