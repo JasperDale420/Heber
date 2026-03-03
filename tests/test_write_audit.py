@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pandas as pd
 import polars as pl
 import pyarrow as pa
-
 from heber.quality.write_audit import (
     EXPECTED_NON_NULL,
     audit_null_fields,
@@ -65,6 +64,38 @@ class TestAuditNullFieldsPandas:
         assert result["foo"] == 1
         assert "bar" in result
         assert result["bar"] == 2
+
+    def test_greek_exposure_treats_strike_expiry_dte_as_optional(self):
+        """greek_exposure should not warn on null option-specific fields."""
+        df = pd.DataFrame(
+            {
+                "event_id": ["e1"],
+                "provider": ["uw"],
+                "feed": ["greek_exposure"],
+                "instrument_type": ["equity"],
+                "instrument_key": ["equity:SPY"],
+                "symbol": ["SPY"],
+                "ts_event": pd.to_datetime(["2026-03-03T02:13:58Z"]),
+                "ts_ingest": pd.to_datetime(["2026-03-03T02:13:59Z"]),
+                "ts_available": pd.to_datetime(["2026-03-03T02:13:58Z"]),
+                "source": ["api"],
+                "schema_version": ["v1"],
+                "quality_flags": [[]],
+                "call_gamma": [1.0],
+                "put_gamma": [2.0],
+                "call_delta": [3.0],
+                "put_delta": [4.0],
+                "call_vanna": [5.0],
+                "put_vanna": [6.0],
+                "call_charm": [7.0],
+                "put_charm": [8.0],
+                "strike": [None],
+                "expiry": [None],
+                "dte": [None],
+            }
+        )
+        result = audit_null_fields(df, layer="silver", dataset="greek_exposure")
+        assert result == {}
 
     def test_none_data_returns_empty(self):
         """None data gracefully returns empty dict."""
@@ -189,7 +220,7 @@ class TestExpectedNonNull:
 
     def test_silver_datasets_have_contracts(self):
         """Silver datasets have expected non-null columns defined."""
-        for dataset in ("bars", "quotes", "trades", "flow_alerts"):
+        for dataset in ("bars", "quotes", "trades", "flow_alerts", "greek_exposure"):
             assert ("silver", dataset) in EXPECTED_NON_NULL
 
     def test_gold_datasets_have_contracts(self):

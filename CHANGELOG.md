@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Feature partition writes now use an atomic temp-file rename to prevent partial-write reads that can create unreadable parquet artifacts.
   - Added regression tests in `tests/test_enrichment_backfill_scanner.py` and `tests/test_meta_label_dataset_paths.py`.
 
+- **Noisy `greek_exposure` Null Warnings Reduced** (2026-03-03):
+  - Added `("silver", "greek_exposure")` to write-audit expected non-null contracts so audit checks only truly required fields.
+  - `strike`, `expiry`, and `dte` are now treated as optional for aggregation rows, removing high-volume warning noise from normal ingestion.
+  - Added regression coverage in `tests/test_write_audit.py`.
+
 - **Heber Watch Gateway Connection**:
   - Reverted the `DATA_GATEWAY_URL` port in `docker-compose.yml` back to `8080`. A recent change incorrectly set it to `8081`, causing `All connection attempts failed` when the watch service tried to fetch quotes.
 
