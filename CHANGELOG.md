@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test Warning Cleanup: Catalog Discovery + As-Of Join** (2026-03-04):
+  - Updated catalog auto-discovery tests to use synchronous `session.add()` mocks so async test sessions no longer emit un-awaited coroutine warnings.
+  - Set `check_sortedness=False` in grouped `join_asof` calls to remove known Polars sortedness warnings when `by` keys are provided.
+
 - **Watch Quote Polling Recovery + RCA Hardening** (2026-03-04):
   - Restored async `httpx.AsyncClient` event hooks in `heber/core/http_client.py` so async HTTP requests no longer fail with `NoneType can't be awaited`.
   - Hardened response logging hook elapsed-time handling to avoid `RuntimeError` when elapsed timing is unavailable.
