@@ -91,6 +91,32 @@ async def test_poll_once_records_poll_and_gateway_success_metrics(monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_poll_once_records_error_when_due_watches_have_no_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = _Manager()
+    poller = SnapshotPoller(manager, gateway_url="http://gateway")
+    poll_cycle_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        poller_module,
+        "record_watch_poll_cycle",
+        lambda **kwargs: poll_cycle_calls.append(kwargs),
+    )
+
+    async def _fake_fetch_quotes(symbols: list[str]) -> dict[str, dict]:  # noqa: ARG001
+        return {}
+
+    monkeypatch.setattr(poller, "_fetch_quotes", _fake_fetch_quotes)
+
+    stats = await poller.poll_once()
+
+    assert stats["due_watches"] == 1
+    assert stats["quotes"] == 0
+    assert stats["updated"] == 0
+    assert stats["errors"] == 1
+    assert any(call["status"] == "error" for call in poll_cycle_calls)
+
+
+@pytest.mark.asyncio
 async def test_fetch_batch_records_partial_coverage_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
     poller = SnapshotPoller(SimpleNamespace(), gateway_url="http://gateway")
     gateway_calls: list[dict] = []

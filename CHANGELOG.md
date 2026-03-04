@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Watch Quote Polling Recovery + RCA Hardening** (2026-03-04):
+  - Restored async `httpx.AsyncClient` event hooks in `heber/core/http_client.py` so async HTTP requests no longer fail with `NoneType can't be awaited`.
+  - Hardened response logging hook elapsed-time handling to avoid `RuntimeError` when elapsed timing is unavailable.
+  - Updated `heber/watch/poller.py` to mark poll cycles as `error` when due watches return zero quotes, returning `errors=1` in poll stats for clearer outage visibility.
+  - Added stack traces (`exc_info=True`) to poller error logs for quote-fetch and poll-cycle exceptions.
+  - Added regression coverage in `tests/test_http_client_async_hooks.py` and `tests/test_watch_poller_metrics.py`.
+
 - **Watch Backfill Crash on Corrupt Feature Partitions** (2026-03-03):
   - `heber/watch/backfill_scanner.py` now catches Polars/PyO3 panic exceptions while reading partition parquet files, logs full context, and skips only the bad partition instead of crashing the whole watch service.
   - `heber/ml/datasets.py` now quarantines unreadable existing `data.parquet` files as `data.parquet.corrupt-<timestamp>` before writing fresh data.

@@ -50,7 +50,10 @@ def _log_request(request: httpx.Request) -> None:
 def _log_response(response: httpx.Response) -> None:
     """Event hook: log incoming HTTP responses at DEBUG level."""
     request = response.request
-    elapsed = response.elapsed.total_seconds() if response.elapsed else 0.0
+    try:
+        elapsed = response.elapsed.total_seconds() if response.elapsed else 0.0
+    except RuntimeError:
+        elapsed = 0.0
     logger.debug(
         "http_response",
         method=str(request.method),
@@ -60,13 +63,13 @@ def _log_response(response: httpx.Response) -> None:
     )
 
 
-def _async_log_request(request: httpx.Request) -> None:
-    """Event hook: log outgoing HTTP requests at DEBUG level."""
+async def _async_log_request(request: httpx.Request) -> None:
+    """Async event hook: log outgoing HTTP requests at DEBUG level."""
     _log_request(request)
 
 
-def _async_log_response(response: httpx.Response) -> None:
-    """Event hook: log incoming HTTP responses at DEBUG level."""
+async def _async_log_response(response: httpx.Response) -> None:
+    """Async event hook: log incoming HTTP responses at DEBUG level."""
     _log_response(response)
 
 
