@@ -449,7 +449,7 @@ class MetaLabelDatasetBuilder:
         if feature_cols is None:
             feature_cols = self.get_feature_columns(df)
 
-        X = df.select(feature_cols)
+        X = df.select(feature_cols)  # noqa: N806
         y = df.get_column(target_col)
 
         return X, y

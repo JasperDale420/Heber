@@ -95,16 +95,18 @@ class TestWatchPerformanceVerification(unittest.IsolatedAsyncioTestCase):
             "AAPL": {"bp": 1.1, "ap": 1.2, "t": datetime.now(UTC).timestamp(), "symbol": "AAPL", "last_price": 1.15}
         }
 
-        with patch.object(poller, "_fetch_quotes", new_callable=AsyncMock) as mock_fetch:
-            with patch.object(poller, "_is_watch_due", return_value=True):
-                mock_fetch.return_value = quotes
+        with (
+            patch.object(poller, "_fetch_quotes", new_callable=AsyncMock) as mock_fetch,
+            patch.object(poller, "_is_watch_due", return_value=True),
+        ):
+            mock_fetch.return_value = quotes
 
-                stats = await poller.poll_once()
+            stats = await poller.poll_once()
 
-                self.assertEqual(stats["updated"], 10)
-                manager.update_watch_prices_bulk_async.assert_called_once()
-                call_args = manager.update_watch_prices_bulk_async.call_args[0][0]
-                self.assertEqual(len(call_args), 10)  # 10 watches for AAPL updated
+            self.assertEqual(stats["updated"], 10)
+            manager.update_watch_prices_bulk_async.assert_called_once()
+            call_args = manager.update_watch_prices_bulk_async.call_args[0][0]
+            self.assertEqual(len(call_args), 10)  # 10 watches for AAPL updated
 
     async def test_fetch_quotes_parallelism(self):
         """Verify _fetch_quotes uses asyncio.gather."""
@@ -116,14 +118,16 @@ class TestWatchPerformanceVerification(unittest.IsolatedAsyncioTestCase):
         async def mock_fetch_batch_impl(client, batch):
             return {s: {"price": 1} for s in batch}
 
-        with patch.object(poller, "_fetch_batch", side_effect=mock_fetch_batch_impl) as mock_batch:
-            with patch("asyncio.gather", wraps=asyncio.gather) as spy_gather:
-                with patch("httpx.AsyncClient"):  # Mock client context manager
-                    quotes = await poller._fetch_quotes(symbols)
+        with (
+            patch.object(poller, "_fetch_batch", side_effect=mock_fetch_batch_impl) as mock_batch,
+            patch("asyncio.gather", wraps=asyncio.gather) as spy_gather,
+            patch("httpx.AsyncClient"),
+        ):  # Mock client context manager
+            quotes = await poller._fetch_quotes(symbols)
 
-                # Verify gather was called
-                spy_gather.assert_called_once()
-                # Verify we got all quotes
-                self.assertEqual(len(quotes), 4)
-                # Verify _fetch_batch called twice (4 symbols, batch 2)
-                self.assertEqual(mock_batch.call_count, 2)
+            # Verify gather was called
+            spy_gather.assert_called_once()
+            # Verify we got all quotes
+            self.assertEqual(len(quotes), 4)
+            # Verify _fetch_batch called twice (4 symbols, batch 2)
+            self.assertEqual(mock_batch.call_count, 2)

@@ -1,11 +1,11 @@
-"""
-Standardized Heber Exceptions.
+"""Standardized Heber Exceptions.
 
-Follows Empire Exception Protocol.
+Follows Empire Exception Protocol via empire-core.
 """
 
 from enum import Enum
-from typing import Any
+
+from empire_core.errors import EmpireError
 
 
 class ErrorCode(str, Enum):
@@ -16,21 +16,5 @@ class ErrorCode(str, Enum):
     LAKE_ERROR = "LAKE_ERROR"
 
 
-class HeberError(Exception):
+class HeberError(EmpireError):
     """Base exception for all Heber errors."""
-
-    def __init__(
-        self, message: str, code: str | ErrorCode = ErrorCode.UNKNOWN_ERROR, details: dict[str, Any] | None = None
-    ):
-        super().__init__(message)
-        self.message = message
-        self.code = str(code.value) if isinstance(code, Enum) else str(code)
-        self.details = details or {}
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "error": True,
-            "code": self.code,
-            "message": self.message,
-            "details": self.details,
-        }

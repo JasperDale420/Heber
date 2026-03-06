@@ -23,16 +23,6 @@ logger = structlog.get_logger(__name__)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
 
-class SchemaConflictError(RuntimeError):
-    """Raised when files in a partition contain incompatible column types."""
-
-    def __init__(self, column: str, existing_type: pa.DataType, incoming_type: pa.DataType):
-        super().__init__(f"Schema conflict for column '{column}': {existing_type} vs {incoming_type}")
-        self.column = column
-        self.existing_type = existing_type
-        self.incoming_type = incoming_type
-
-
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
     return pa.types.is_date(dt) or pa.types.is_timestamp(dt) or pa.types.is_time(dt) or pa.types.is_duration(dt)
@@ -182,6 +172,7 @@ class Compactor:
         - large_string ↔ string → large_string
         - temporal (date/timestamp) ↔ string → string
         - temporal + temporal (different) → string
+        - completely incompatible types → string
         """
         if existing_type.equals(incoming_type):
             return existing_type
@@ -194,10 +185,21 @@ class Compactor:
         if numeric is not None:
             return numeric
 
-        return Compactor._resolve_string_or_temporal_type(existing_type, incoming_type)
+        resolved = Compactor._resolve_string_or_temporal_type(existing_type, incoming_type)
+        if resolved is not None:
+            return resolved
+
+        # Ultimate fallback: cast everything to string if we really can't figure it out
+        # This prevents schema conflicts from blocking compaction
+        logger.warning(
+            "Incompatible types encountered during compaction, falling back to string",
+            existing=str(existing_type),
+            incoming=str(incoming_type),
+        )
+        return pa.string()
 
     def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
-        """Build unified schema across tables, raising on true type conflicts."""
+        """Build unified schema across tables."""
         ordered_columns: list[str] = []
         column_types: dict[str, pa.DataType] = {}
 
@@ -212,12 +214,6 @@ class Compactor:
                     continue
 
                 resolved_type = self._resolve_column_type(existing_type, incoming_type)
-                if resolved_type is None:
-                    raise SchemaConflictError(
-                        column=column,
-                        existing_type=existing_type,
-                        incoming_type=incoming_type,
-                    )
                 column_types[column] = resolved_type
 
         return pa.schema([pa.field(column, column_types[column]) for column in ordered_columns])
@@ -382,24 +378,7 @@ class Compactor:
 
             source_tables = [self._normalize_dict_columns(pq.ParquetFile(f).read()) for f in small_files]
 
-            try:
-                unified_schema = self._build_unified_schema(source_tables)
-            except SchemaConflictError as conflict:
-                record_compaction(
-                    dataset=dataset,
-                    status="error",
-                    files_merged=0,
-                    bytes_reclaimed=0,
-                    duration=(datetime.now(UTC) - started_at).total_seconds(),
-                )
-                logger.error(
-                    "Compaction skipped due schema conflict",
-                    partition=str(partition_path),
-                    column=conflict.column,
-                    existing_type=str(conflict.existing_type),
-                    incoming_type=str(conflict.incoming_type),
-                )
-                return 0
+            unified_schema = self._build_unified_schema(source_tables)
 
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"

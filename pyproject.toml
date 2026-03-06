@@ -3,10 +3,14 @@ name = "heber"
 version = "0.2.0"
 description = "Heber Data Lakehouse - Centralized storage for market and intelligence data"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
+    # Empire shared packages
+    "empire-core",
+    "empire-schemas",
+
     # Core
-    "pydantic>=2.0",
+    "pydantic>=2.5",
     "pydantic-settings>=2.0",
 
     # API
@@ -45,11 +49,11 @@ dependencies = [
 
 
     # Observability
-    "structlog>=24.0",
+    "structlog>=24.1.0",
     "prometheus-client>=0.19",
 
     # Utils
-    "httpx>=0.26",
+    "httpx>=0.27",
     "tenacity>=8.2",
     "joblib>=1.3",
 
@@ -142,3 +146,7 @@ plugins = ["pydantic.mypy", "numpy.typing.mypy_plugin"]
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"]  # Skip assert warnings in tests
+
+[tool.uv.sources]
+empire-core = { path = "../empire-core", editable = true }
+empire-schemas = { path = "../empire-schemas", editable = true }

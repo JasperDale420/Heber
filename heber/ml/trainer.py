@@ -148,7 +148,7 @@ class MetaModelTrainer:
 
     def _compute_metrics(
         self,
-        X: np.ndarray,
+        X: np.ndarray,  # noqa: N803
         y: np.ndarray,
         prefix: str = "",
     ) -> dict[str, float]:
@@ -233,7 +233,7 @@ class MetaModelTrainer:
 
             logger.info("Logged run to MLflow")
 
-    def predict_proba(self, X: pl.DataFrame | np.ndarray) -> np.ndarray:
+    def predict_proba(self, X: pl.DataFrame | np.ndarray) -> np.ndarray:  # noqa: N803
         """Predict probability of TP hit.
 
         Args:
@@ -250,7 +250,7 @@ class MetaModelTrainer:
 
     def predict(
         self,
-        X: pl.DataFrame | np.ndarray,
+        X: pl.DataFrame | np.ndarray,  # noqa: N803
         threshold: float = 0.5,
     ) -> np.ndarray:
         """Predict binary outcome.

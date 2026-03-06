@@ -7,6 +7,7 @@ watches for each incoming alert.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import UTC, datetime
@@ -628,10 +629,8 @@ class AlertWatchConsumer:
             val = v.decode(errors="replace") if isinstance(v, bytes) else v
 
             if isinstance(val, str) and val.lstrip().startswith(("{", "[")):
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     val = json.loads(val)
-                except json.JSONDecodeError:
-                    pass
 
             parsed[key] = val
 

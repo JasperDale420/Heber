@@ -26,8 +26,11 @@ FEED_ALIASES: dict[str, str] = {
     "greeks": "greek_exposure",
     "gex": "greek_exposure",
     "option_trades": "trades",
+    "option_bars": "bars",
+    "option_quotes": "quotes",
     "crypto_bars": "bars",
     "crypto_trades": "trades",
+    "crypto_quotes": "quotes",
     "institutions": "institution_holdings",
     "filings": "news",
 }
@@ -52,8 +55,11 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "congress_trades",
     "insider_trades",
     "option_trades",
+    "option_bars",
+    "option_quotes",
     "crypto_bars",
     "crypto_trades",
+    "crypto_quotes",
     "ticker_flow",
     "darkpool_ticker",
     "institutions",
@@ -469,9 +475,7 @@ def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, 
         _normalize_congress_payload(normalized)
     elif feed == "insider_trades":
         _normalize_insider_payload(normalized)
-    elif feed == "market_tide":
-        _normalize_tide_payload(normalized, call_key="net_call_premium", put_key="net_put_premium")
-    elif feed == "sector_tide":
+    elif feed == "market_tide" or feed == "sector_tide":
         _normalize_tide_payload(normalized, call_key="net_call_premium", put_key="net_put_premium")
     elif feed == "flow_alerts":
         _normalize_flow_payload(normalized)

@@ -87,7 +87,7 @@ def _classify_direction(value: float) -> str:
     return "neutral"
 
 
-class EnrichmentAuthFailure(RuntimeError):
+class EnrichmentAuthFailure(RuntimeError):  # noqa: N818
     """Raised when repeated upstream authentication failures require fail-fast behavior."""
 
 
@@ -173,9 +173,7 @@ class AlertFeatures:
         """Convert to dictionary for storage."""
         result = {}
         for k, v in self.__dict__.items():
-            if isinstance(v, datetime):
-                result[k] = v.isoformat()
-            elif isinstance(v, date):
+            if isinstance(v, datetime | date):
                 result[k] = v.isoformat()
             else:
                 result[k] = v
@@ -215,9 +213,7 @@ class AlertFeatures:
             # Convert None to 0 or NaN handling as needed
             if val is None:
                 values.append(0.0)
-            elif isinstance(val, bool):
-                values.append(float(val))
-            elif isinstance(val, int | float):
+            elif isinstance(val, bool | (int | float)):
                 values.append(float(val))
             else:
                 values.append(0.0)
