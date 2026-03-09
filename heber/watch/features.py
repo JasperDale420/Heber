@@ -45,6 +45,21 @@ logger = structlog.get_logger(__name__)
 
 _LOG_ENRICHMENT_FAILED = "Feature enrichment request failed"
 
+# Index symbols that are not tradeable stocks on Alpaca.
+# Alpaca's stock bars API returns 400 for these — skip enrichment.
+INDEX_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "SPX",
+        "SPXW",
+        "NDX",
+        "VIX",
+        "RUT",
+        "DJX",
+        "XSP",
+        "IXIC",
+    }
+)
+
 
 def _unwrap_data_payload(response: dict) -> object:
     """Extract the 'data' value from an API response, unwrapping single-element lists."""
@@ -809,6 +824,7 @@ class AlertFeatureExtractor:
             routes = self._build_enrichment_routes(
                 f"/uw/options/{features.underlying}/max-pain",
                 f"/uw/{features.underlying}/max-pain",
+                f"/uw/max-pain/{features.underlying}",
             )
             data = await self._request_json_with_retry(
                 endpoint="uw_max_pain",
@@ -973,6 +989,11 @@ class AlertFeatureExtractor:
             from datetime import timedelta
 
             symbol = features.underlying
+
+            if symbol in INDEX_SYMBOLS:
+                logger.debug("Skipping Alpaca stock bars for index symbol", symbol=symbol)
+                return features
+
             end_date = features.alert_time.date()
             start_date = end_date - timedelta(days=50)
 

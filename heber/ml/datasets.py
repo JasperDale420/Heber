@@ -491,16 +491,27 @@ def persist_features_to_gold(
         )
 
         out_file = partition_path / "data.parquet"
-        existing = _read_existing_partition_or_quarantine(out_file)
-        if existing is not None:
-            partition_df = pl.concat(
-                [existing, partition_df],
-                how="diagonal_relaxed",
-            )
-            if "alert_id" in partition_df.columns:
-                partition_df = partition_df.unique(subset=["alert_id"], keep="last")
+        lock_file = out_file.with_suffix(".parquet.lock")
+        try:
+            from filelock import FileLock, Timeout
 
-        _atomic_write_parquet(partition_df, out_file)
+            with FileLock(lock_file, timeout=10):
+                existing = _read_existing_partition_or_quarantine(out_file)
+                if existing is not None:
+                    partition_df = pl.concat(
+                        [existing, partition_df],
+                        how="diagonal_relaxed",
+                    )
+                    if "alert_id" in partition_df.columns:
+                        partition_df = partition_df.unique(subset=["alert_id"], keep="last")
+
+                _atomic_write_parquet(partition_df, out_file)
+        except Timeout:
+            logger.warning(
+                "Could not acquire partition lock, skipping write",
+                path=str(out_file),
+                lock_file=str(lock_file),
+            )
 
         logger.info(
             "Persisted features partition",

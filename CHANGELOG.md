@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Watch Enrichment: Index Symbol and Concurrent Write Fixes** (2026-03-09):
+  - Added `INDEX_SYMBOLS` frozenset (`SPX`, `SPXW`, `NDX`, `VIX`, `RUT`, `DJX`, `XSP`, `IXIC`) to skip Alpaca stock bars calls for non-stock underlyings that return 400 errors (4,994 daily occurrences eliminated).
+  - Added `/uw/max-pain/{symbol}` fallback route in `_enrich_max_pain()` to address 3,042 daily 404 errors from route pattern mismatch.
+  - Added `filelock.FileLock` around the read-merge-write cycle in `persist_features_to_gold()` to prevent concurrent writers from corrupting Gold parquet partitions (6 daily quarantined files eliminated).
+  - Added `filelock>=3.13` dependency to `pyproject.toml`.
+  - Added regression tests in `tests/test_watch_index_symbol_skip.py` and `tests/test_features_gold_file_lock.py`.
+
+### Fixed
+
 - **Test Warning Cleanup: Catalog Discovery + As-Of Join** (2026-03-04):
   - Updated catalog auto-discovery tests to use synchronous `session.add()` mocks so async test sessions no longer emit un-awaited coroutine warnings.
   - Set `check_sortedness=False` in grouped `join_asof` calls to remove known Polars sortedness warnings when `by` keys are provided.
