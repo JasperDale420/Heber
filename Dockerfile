@@ -17,14 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+WORKDIR /workspace/Heber
 
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
 # Copy only dependency files first (better layer caching)
-COPY pyproject.toml uv.lock README.md ./
-COPY heber/ ./heber/
+COPY Heber/pyproject.toml Heber/uv.lock Heber/README.md /workspace/Heber/
+COPY Heber/heber/ /workspace/Heber/heber/
+COPY empire-core/ /workspace/empire-core/
+COPY empire-schemas/ /workspace/empire-schemas/
 
 # Install pinned runtime dependencies from lockfile, then install project package
 RUN uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file requirements.txt \
@@ -54,8 +56,8 @@ WORKDIR /app
 COPY --from=builder /build/deps /app/deps
 
 # Copy application code
-COPY heber/ /app/heber/
-COPY features/ /app/features/
+COPY Heber/heber/ /app/heber/
+COPY Heber/features/ /app/features/
 
 # Set Python path to include deps
 ENV PYTHONPATH=/app/deps:/app

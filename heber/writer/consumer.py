@@ -11,6 +11,7 @@ import asyncio
 import json
 import signal
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -41,7 +42,11 @@ from heber.writer.ingest_contracts import (
     resolve_feed_alias,
     resolve_silver_feed,
 )
-from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.key_normalization import (
+    InvalidInstrumentKeyError,
+    SilverNormalizationError,
+    normalize_envelope_for_silver,
+)
 from heber.writer.normalizer import (
     MissingRequiredFieldsError,
     enforce_required_non_null_fields,
@@ -64,6 +69,7 @@ class EventConsumer:
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
+        self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
 
     async def connect(self):
         """Connect to Redis."""
@@ -229,6 +235,7 @@ class EventConsumer:
         feed = "unknown"
         provider = "unknown"
         bronze_written = False
+        envelope: EventEnvelope | None = None
         try:
             envelope = self._parse_and_validate_envelope(event_data)
             feed = envelope.feed
@@ -286,15 +293,29 @@ class EventConsumer:
         except UnmappedFeedError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             return False, str(exc), False
-        except (json.JSONDecodeError, MissingRequiredFieldsError, ValidationError) as exc:
+        except json.JSONDecodeError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
-            if bronze_written:
-                logger.warning(
-                    "silver_normalization_failed",
-                    feed=feed,
-                    provider=provider,
+            logger.error(
+                "Failed to parse event",
+                error=str(exc),
+                event_data=str(event_data)[:200],
+            )
+            return False, str(exc), False
+        except (SilverNormalizationError, MissingRequiredFieldsError) as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            if bronze_written and envelope is not None:
+                self._log_silver_validation_failure(envelope, exc)
+            else:
+                logger.error(
+                    "Failed to parse event",
                     error=str(exc),
+                    event_data=str(event_data)[:200],
                 )
+            return False, str(exc), False
+        except ValidationError as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            if bronze_written and envelope is not None:
+                self._log_silver_validation_failure(envelope, exc)
             else:
                 logger.error(
                     "Failed to parse event",
@@ -505,8 +526,52 @@ class EventConsumer:
         """Enforce canonical instrument-key format before writes."""
         if envelope.is_valid_instrument_key():
             return
-        raise ValueError(
-            f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}"
+        raise InvalidInstrumentKeyError(
+            f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}",
+            details={
+                "feed": envelope.feed,
+                "instrument_type": envelope.instrument_type,
+                "instrument_key": envelope.instrument_key,
+                "symbol": envelope.symbol,
+            },
+        )
+
+    @staticmethod
+    def _should_emit_validation_warning(occurrence_count: int) -> bool:
+        """Emit the first and milestone repeats for a repeated Silver validation failure."""
+        return occurrence_count in {1, 10, 100} or occurrence_count % 1000 == 0
+
+    def _log_silver_validation_failure(self, envelope: EventEnvelope, error: Exception) -> None:
+        """Log a bounded warning for malformed upstream data rejected from Silver."""
+        signature = (
+            envelope.provider,
+            envelope.feed,
+            type(error).__name__,
+            str(error),
+        )
+        occurrence_count = self._silver_validation_warning_counts.get(signature, 0) + 1
+        self._silver_validation_warning_counts[signature] = occurrence_count
+
+        if not self._should_emit_validation_warning(occurrence_count):
+            return
+
+        details = getattr(error, "details", {})
+        if not isinstance(details, Mapping):
+            details = {}
+
+        logger.warning(
+            "silver_validation_failed",
+            event_id=envelope.event_id,
+            provider=envelope.provider,
+            feed=details.get("feed", envelope.feed),
+            error_type=type(error).__name__,
+            error=str(error),
+            occurrence_count=occurrence_count,
+            instrument_type=details.get("instrument_type", envelope.instrument_type),
+            instrument_key=details.get("instrument_key", envelope.instrument_key),
+            symbol=details.get("symbol", envelope.symbol),
+            payload_symbol=details.get("payload_symbol"),
+            payload_ticker=details.get("payload_ticker"),
         )
 
     def _write_silver_candidate(self, source_envelope: EventEnvelope, candidate: EventEnvelope) -> None:

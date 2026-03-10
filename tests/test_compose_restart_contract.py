@@ -55,3 +55,25 @@ def test_healthchecked_services_have_start_period() -> None:
         assert numeric >= min_start_period_seconds, (
             f"Service '{name}' start_period={start_period} is below the minimum {min_start_period_seconds}s"
         )
+
+
+def test_built_services_include_workspace_shared_packages() -> None:
+    """Built services need the monorepo root as context so uv path dependencies
+    like ../empire-core and ../empire-schemas resolve during docker build."""
+    compose = _load_compose()
+
+    built_services = {name: svc["build"] for name, svc in compose["services"].items() if "build" in svc}
+    assert built_services, "Expected Heber services to define docker build settings"
+
+    for name, build in built_services.items():
+        assert build["context"] == "..", (
+            f"Service '{name}' build context must be '..' so sibling workspace packages are available"
+        )
+        assert build["dockerfile"] == "Heber/Dockerfile", (
+            f"Service '{name}' dockerfile must point at 'Heber/Dockerfile' when using workspace context"
+        )
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "WORKDIR /workspace/Heber" in dockerfile
+    assert "COPY empire-core/ /workspace/empire-core/" in dockerfile
+    assert "COPY empire-schemas/ /workspace/empire-schemas/" in dockerfile

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from heber.models.envelope import EventEnvelope
-from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.key_normalization import MissingInstrumentIdentifierError, normalize_envelope_for_silver
 
 NOW = datetime(2026, 2, 11, 16, 0, tzinfo=UTC)
 
@@ -152,6 +154,24 @@ def test_congress_insider_and_news_fill_symbol_from_payload_fields() -> None:
     assert news_normalized.symbol == "TSLA"
     assert news_normalized.instrument_key == "equity:TSLA"
     assert news_normalized.is_valid_instrument_key()
+
+
+def test_insider_trades_require_non_empty_symbol_or_ticker() -> None:
+    envelope = _build_envelope(
+        "insider_trades",
+        {
+            "ticker": "",
+            "owner_name": "John Exec",
+            "transaction_code": "P",
+            "amount": "100",
+            "transaction_date": "2026-02-01",
+        },
+        symbol="",
+        instrument_key="equity:",
+    )
+
+    with pytest.raises(MissingInstrumentIdentifierError, match="Missing symbol/ticker for insider_trades"):
+        normalize_envelope_for_silver(envelope)
 
 
 # ---------------------------------------------------------------------------

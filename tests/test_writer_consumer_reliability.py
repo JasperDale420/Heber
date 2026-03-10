@@ -135,6 +135,51 @@ def test_process_event_rejects_invalid_instrument_key() -> None:
     consumer.silver_writer.write.assert_not_called()
 
 
+def test_process_event_rate_limits_repeated_insider_identifier_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    warning_mock = MagicMock()
+    error_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+    monkeypatch.setattr(consumer_module.logger, "error", error_mock)
+
+    now = datetime(2026, 2, 7, 16, 0, tzinfo=UTC)
+    envelope = {
+        "event_id": "evt-empty-insider",
+        "provider": "unusual_whales",
+        "feed": "insider_trades",
+        "source": "rest",
+        "instrument_type": "equity",
+        "instrument_key": "equity:",
+        "symbol": "",
+        "ts_event": now.isoformat(),
+        "ts_ingest": now.isoformat(),
+        "payload": {
+            "ticker": "",
+            "owner_name": "John Exec",
+            "transaction_date": "2026-02-01",
+        },
+    }
+
+    for _ in range(2):
+        success, error, retryable = consumer._process_event_once({"data": json.dumps(envelope)})
+        assert success is False
+        assert error == "Missing symbol/ticker for insider_trades"
+        assert retryable is False
+
+    consumer.bronze_writer.write.assert_called()
+    consumer.silver_writer.write.assert_not_called()
+    error_mock.assert_not_called()
+
+    silver_validation_logs = [
+        call for call in warning_mock.call_args_list if call.args and call.args[0] == "silver_validation_failed"
+    ]
+    assert len(silver_validation_logs) == 1
+    assert silver_validation_logs[0].kwargs["occurrence_count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_run_transient_redis_errors_backoff_without_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     consumer = EventConsumer()

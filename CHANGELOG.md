@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Consumer RCA: Malformed `insider_trades` Identifiers** (2026-03-09):
+  - Added explicit `MissingInstrumentIdentifierError` and `InvalidInstrumentKeyError` classification in Silver normalization so blank `symbol` / `ticker` values from upstream insider-trade events fail with concrete data-quality context instead of a generic invalid-key error.
+  - Added bounded `silver_validation_failed` warning logging in the consumer so repeated malformed events still write Bronze and route to the DLQ without flooding the error logs with duplicate tracebacks.
+  - Added regression coverage in `tests/test_instrument_key_synthesis.py` and `tests/test_writer_consumer_reliability.py`.
+
+- **Docker Build: Workspace Path Dependencies** (2026-03-09):
+  - Switched Heber service image builds to the monorepo root context and updated `Dockerfile` copy paths so local `uv` dependencies on `../empire-core` and `../empire-schemas` resolve during container builds.
+  - Added a static contract test in `tests/test_compose_restart_contract.py` to keep future Docker changes from reintroducing the same build failure.
+
 - **Watch Enrichment: Index Symbol and Concurrent Write Fixes** (2026-03-09):
   - Added `INDEX_SYMBOLS` frozenset (`SPX`, `SPXW`, `NDX`, `VIX`, `RUT`, `DJX`, `XSP`, `IXIC`) to skip Alpaca stock bars calls for non-stock underlyings that return 400 errors (4,994 daily occurrences eliminated).
   - Added `/uw/max-pain/{symbol}` fallback route in `_enrich_max_pain()` to address 3,042 daily 404 errors from route pattern mismatch.

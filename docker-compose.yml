@@ -124,8 +124,8 @@ services:
   # Heber Services
   heber-catalog:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Heber/Dockerfile
     container_name: heber-catalog
     command: [ "python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080" ]
     environment:
@@ -156,8 +156,8 @@ services:
 
   heber-consumer:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Heber/Dockerfile
     container_name: heber-consumer
     command: [ "python", "-m", "heber.writer.consumer" ]
     environment:
@@ -188,8 +188,8 @@ services:
 
   heber-compactor:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Heber/Dockerfile
     container_name: heber-compactor
     command: [ "python", "-m", "heber.writer.compactor" ]
     environment:
@@ -212,8 +212,8 @@ services:
   # Watch Service - Tracks flow alert outcomes for ML labeling
   heber-watch:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Heber/Dockerfile
     container_name: heber-watch
     command: [ "python", "-m", "heber.watch" ]
     environment:
@@ -243,8 +243,8 @@ services:
 
   heber-dataflow-health:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Heber/Dockerfile
     container_name: heber-dataflow-health
     command: [ "python", "-m", "heber.ops.dataflow_health", "--loop", "--mode", "scheduled" ]
     environment:
