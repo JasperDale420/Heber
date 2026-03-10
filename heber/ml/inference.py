@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from heber.ml.trainer import MetaModelTrainer
     from heber.models.silver import FlowAlertRecord
+    from heber.watch.features import AlertFeatureExtractor
 
 logger = structlog.get_logger(__name__)
 
@@ -62,7 +63,7 @@ class MetaLabelScorer:
         self.config = config or InferenceConfig()
         self.redis = redis
         self._model = model
-        self._feature_extractor = None
+        self._feature_extractor: AlertFeatureExtractor | None = None
 
     def initialize(self) -> None:
         """Load model and feature extractor."""
@@ -103,6 +104,8 @@ class MetaLabelScorer:
                     return cached
 
             # Extract features
+            if self._feature_extractor is None:
+                raise RuntimeError("Feature extractor not initialized. Call initialize() first.")
             features = await self._feature_extractor.extract(alert)
 
             # Get feature vector
@@ -152,12 +155,12 @@ class MetaLabelScorer:
         Returns:
             Dict mapping alert_id to score (or None if failed)
         """
-        results = {}
+        results: dict[str, float | None] = {}
         tasks = [self.score(alert) for alert in alerts]
         scores = await asyncio.gather(*tasks, return_exceptions=True)
 
         for alert, score in zip(alerts, scores, strict=False):
-            if isinstance(score, Exception):
+            if isinstance(score, BaseException):
                 results[alert.event_id] = None
             else:
                 results[alert.event_id] = score

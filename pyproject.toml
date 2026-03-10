@@ -178,6 +178,18 @@ module = [
     "joblib.*",
     "filelock",
     "filelock.*",
+    "lightgbm",
+    "lightgbm.*",
+    "sklearn",
+    "sklearn.*",
+    "mlflow",
+    "mlflow.*",
+    "numpy",
+    "numpy.*",
+    "redis",
+    "redis.*",
+    "yaml",
+    "yaml.*",
 ]
 ignore_missing_imports = true
 

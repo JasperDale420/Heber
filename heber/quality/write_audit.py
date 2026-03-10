@@ -220,5 +220,5 @@ def _row_count(data: Any) -> int:
     if hasattr(data, "__len__"):
         return len(data)
     if hasattr(data, "num_rows"):
-        return data.num_rows
+        return int(data.num_rows)
     return 0

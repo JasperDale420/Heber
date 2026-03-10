@@ -725,6 +725,7 @@ class ReaperScheduler:
     def _log_success(self, result: ReaperResult) -> None:
         """Log successful reaper completion."""
         reaper_runs.labels(status="success").inc()
+        assert result.completed_at is not None
         duration = (result.completed_at - result.started_at).total_seconds()
         reaper_duration_seconds.observe(duration)
         logger.info(
@@ -769,9 +770,11 @@ def create_reaper(
 
 def get_default_retention(layer: DataLayer) -> RetentionPolicy:
     """Get default retention policy for a layer."""
-    config = DEFAULT_RETENTION.get(layer, {})
+    raw = DEFAULT_RETENTION.get(layer)
+    if raw is None or not isinstance(raw, dict):
+        return RetentionPolicy()
     return RetentionPolicy(
-        retention_days=config.get("retention_days"),
-        retention_versions=config.get("retention_versions"),
-        action=config.get("action", LifecycleAction.DELETE),
+        retention_days=raw.get("retention_days"),
+        retention_versions=raw.get("retention_versions"),
+        action=raw.get("action", LifecycleAction.DELETE),
     )

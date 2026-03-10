@@ -246,7 +246,7 @@ class MetaModelTrainer:
             raise ValueError("Model not trained. Call train() first.")
 
         features = X.to_numpy() if hasattr(X, "to_numpy") else X
-        return self._model.predict_proba(features)[:, 1]
+        return self._model.predict_proba(features)[:, 1]  # type: ignore[no-any-return]
 
     def predict(
         self,

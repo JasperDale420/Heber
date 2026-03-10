@@ -228,7 +228,7 @@ class IcebergSilverWriter:
         current = table.current_snapshot()
         return current.snapshot_id if current else None
 
-    def list_snapshots(self, table_name: str) -> list[dict]:
+    def list_snapshots(self, table_name: str) -> list[dict[str, object]]:
         """List all snapshots for a table (time-travel history).
 
         Args:

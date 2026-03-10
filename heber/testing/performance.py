@@ -211,7 +211,7 @@ class PerformanceTester:
             )
 
         if baseline_value == 0:
-            change_percent = 100 if current_value > 0 else 0
+            change_percent = 100.0 if current_value > 0 else 0.0
         else:
             change_percent = ((current_value - baseline_value) / baseline_value) * 100
 

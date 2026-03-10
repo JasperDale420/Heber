@@ -307,7 +307,7 @@ class ChaosRegistry:
 
     def get_schedule(self) -> dict[str, list[str]]:
         """Get experiment schedule by frequency."""
-        schedule = {f.value: [] for f in ExperimentFrequency}
+        schedule: dict[str, list[str]] = {f.value: [] for f in ExperimentFrequency}
         for exp in self.experiments.values():
             schedule[exp.frequency.value].append(exp.name)
         return schedule

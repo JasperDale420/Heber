@@ -473,7 +473,7 @@ class BackfillCoordinator:
     def __init__(
         self,
         storage_root: str = DEFAULT_STORAGE_ROOT,
-        data_fetcher: Callable | None = None,
+        data_fetcher: Callable[..., Any] | None = None,
         writer_factory: Callable[..., BackfillWriter] = BackfillWriter,
         catalog_metadata_updater: Callable[[BackfillJob, list[dict[str, Any]], date, int], Awaitable[None]]
         | None = None,
@@ -823,7 +823,7 @@ class BackfillCoordinator:
 # FastAPI router for backfill API per PRD §11.7
 
 
-def create_backfill_router():
+def create_backfill_router() -> Any:
     """Create FastAPI router for backfill endpoints."""
     from fastapi import APIRouter, HTTPException
     from pydantic import BaseModel
@@ -852,7 +852,7 @@ def create_backfill_router():
         end_date: date
 
     @router.post("")
-    async def create_backfill(request: BackfillRequest) -> dict:
+    async def create_backfill(request: BackfillRequest) -> dict[str, Any]:
         """Create a new backfill job (POST /backfill)."""
         try:
             policy = TsAvailablePolicy(request.ts_available_policy)
@@ -877,7 +877,7 @@ def create_backfill_router():
         return job.to_dict()
 
     @router.get("/{backfill_id}")
-    async def get_backfill(backfill_id: str) -> dict:
+    async def get_backfill(backfill_id: str) -> dict[str, Any]:
         """Get backfill job status (GET /backfill/{id})."""
         job = coordinator.get_job(backfill_id)
         if not job:
@@ -885,14 +885,14 @@ def create_backfill_router():
         return job.to_dict()
 
     @router.get("")
-    async def list_backfills(status: str | None = None) -> list[dict]:
+    async def list_backfills(status: str | None = None) -> list[dict[str, Any]]:
         """List backfill jobs (GET /backfill)."""
         filter_status = BackfillStatus(status) if status else None
         jobs = coordinator.list_jobs(status=filter_status)
         return [j.to_dict() for j in jobs]
 
     @router.delete("/{backfill_id}")
-    async def cancel_backfill(backfill_id: str) -> dict:
+    async def cancel_backfill(backfill_id: str) -> dict[str, Any]:
         """Cancel a backfill job."""
         try:
             job = coordinator.cancel_job(backfill_id)
@@ -901,7 +901,7 @@ def create_backfill_router():
             raise HTTPException(status_code=404, detail=str(e))
 
     @router.post("/gaps")
-    async def detect_gaps(request: GapDetectionRequest) -> dict:
+    async def detect_gaps(request: GapDetectionRequest) -> dict[str, Any]:
         """Detect gaps in data coverage."""
         return gap_detector.get_coverage_summary(
             provider=request.provider,
