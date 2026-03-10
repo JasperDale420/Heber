@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -264,7 +265,7 @@ def _compute_barrier_outcome(
     tp_threshold: float,
     sl_threshold: float,
     slippage_model: SlippageModel | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Compute barrier-based outcome for a price path."""
     if len(price_path) == 0:
         return {
@@ -320,7 +321,7 @@ def _compute_barrier_outcome(
         bars_to_hit = int(sl_first_bar) + 1
     else:
         hit_tp_first = 0
-        bars_to_hit = np.nan
+        bars_to_hit = np.nan  # type: ignore[assignment]
 
     return {
         "hit_tp_first": hit_tp_first,
@@ -337,7 +338,7 @@ def _compute_contract_barrier_outcome(
     entry_price: float,
     config: ContractBarrierConfig,
     slippage_model: SlippageModel | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Compute barrier-based outcome for an option contract price path.
 
     Unlike underlying barriers which use ATR scaling, contract barriers
@@ -400,7 +401,7 @@ def _compute_contract_barrier_outcome(
         bars_to_hit = int(sl_first_bar) + 1
     else:
         hit_tp_first = 0
-        bars_to_hit = np.nan
+        bars_to_hit = np.nan  # type: ignore[assignment]
 
     return {
         "contract_hit_tp_first": hit_tp_first,
@@ -419,7 +420,7 @@ def _process_single_alert(
     vix_data: pd.DataFrame | None,
     config: BarrierConfig,
     slippage_model: SlippageModel | None,
-) -> dict:
+) -> dict[str, Any]:
     """Process a single alert and compute all labels."""
     alert_id = alert["event_id"]
     underlying = alert["underlying"]
@@ -576,7 +577,7 @@ def _empty_result(
     put_call: str,
     horizon: AlertHorizon,
     dte: int,
-) -> dict:
+) -> dict[str, Any]:
     """Create empty result row for alerts with insufficient data."""
     return {
         "alert_id": alert_id,
@@ -730,10 +731,10 @@ def compute_multi_horizon_labels(
     alerts["ts_event"] = pd.to_datetime(alerts["ts_event"], utc=True)
 
     # Classify each alert
-    def get_dte(row):
+    def get_dte(row: pd.Series) -> int:
         alert_date = row["ts_event"].date()
         if isinstance(row["expiry"], date):
-            return (row["expiry"] - alert_date).days
+            return int((row["expiry"] - alert_date).days)
         return 5
 
     alerts["dte"] = alerts.apply(get_dte, axis=1)

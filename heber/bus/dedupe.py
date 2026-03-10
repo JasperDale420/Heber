@@ -11,6 +11,7 @@ additional features for rotating filters and compaction dedupe.
 
 import math
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
@@ -331,7 +332,7 @@ def dedupe_batch_at_writer(events: list[dict[str, Any]], event_id_key: str = "ev
 
 
 # Convenience decorator for consumer dedupe
-def with_consumer_dedupe(stream_name: str):
+def with_consumer_dedupe(stream_name: str) -> Callable[..., Callable[..., Coroutine[Any, Any, Any]]]:
     """Decorator to add consumer-layer deduplication to a message handler.
 
     Usage:
@@ -341,8 +342,8 @@ def with_consumer_dedupe(stream_name: str):
             ...
     """
 
-    def decorator(fn):
-        async def wrapper(message, *args, **kwargs):
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Coroutine[Any, Any, Any]]:
+        async def wrapper(message: Any, *args: Any, **kwargs: Any) -> Any:
             event_id = message.get("event_id") if isinstance(message, dict) else getattr(message, "event_id", None)
 
             if event_id and dedupe_at_consumer(stream_name, event_id):

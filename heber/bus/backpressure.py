@@ -27,7 +27,7 @@ from heber.bus import EventBus, StreamName
 logger = structlog.get_logger(__name__)
 
 
-def _get_or_create(metric_cls, name, *args, **kwargs):
+def _get_or_create(metric_cls: type, name: str, *args: Any, **kwargs: Any) -> Any:
     """Return an existing metric or create a new one to avoid duplicate registration."""
     existing = REGISTRY._names_to_collectors.get(name)
     if existing is not None:
@@ -235,7 +235,7 @@ def calculate_backoff(
     jitter = delay_ms * config.jitter_factor * (2 * random.random() - 1)
     delay_ms = delay_ms + jitter
 
-    return max(delay_ms / 1000.0, 0.001)  # Convert to seconds
+    return float(max(delay_ms / 1000.0, 0.001))  # Convert to seconds
 
 
 class DLQHandler:
@@ -380,12 +380,12 @@ class RetryExecutor:
 
     async def execute_with_retry(
         self,
-        operation: Callable,
+        operation: Callable[..., Any],
         envelope: dict[str, Any],
         stream: str,
         message_id: str | None = None,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ) -> Any:
         """Execute an operation with retry policy.
 

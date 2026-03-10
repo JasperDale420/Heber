@@ -110,6 +110,7 @@ class AlertLabelsPipeline:
         expanded: list[str] = []
         for symbol in symbols:
             raw = str(symbol).strip()
+            candidates: tuple[str, ...]
             if raw.lower().startswith("equity:"):
                 candidates = (raw.split(":", 1)[1], raw)
             elif ":" in raw:
@@ -329,7 +330,7 @@ class AlertLabelsPipeline:
         row: pd.Series,
         flow_alerts: pd.DataFrame,
         option_bars: pd.DataFrame,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Compute contract barrier label for a single alert."""
         alert_id = row["alert_id"]
         occ_symbol = self._get_occ_symbol_for_alert(alert_id, flow_alerts)
@@ -359,7 +360,8 @@ class AlertLabelsPipeline:
         """Look up OCC symbol for an alert ID."""
         if alert_id not in flow_alerts["event_id"].values:
             return None
-        return flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
+        result: str | None = flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
+        return result
 
     async def _fetch_option_bars(
         self,
@@ -413,7 +415,7 @@ class AlertLabelsPipeline:
             logger.error("Failed to fetch option bars", error=str(e))
             return pd.DataFrame()
 
-    def _empty_contract_result(self) -> dict:
+    def _empty_contract_result(self) -> dict[str, Any]:
         """Return empty contract label result."""
         return {
             "contract_hit_tp_first": pd.NA,
@@ -529,14 +531,14 @@ class AlertLabelsPipeline:
 
     def _compute_stats(self, labels: pd.DataFrame) -> dict[str, Any]:
         """Compute summary statistics from labels."""
-        stats = {}
+        stats: dict[str, Any] = {}
 
         # Underlying stats
         if "hit_tp_first" in labels.columns:
             valid = labels.dropna(subset=["hit_tp_first"])
             if not valid.empty:
                 stats["underlying_win_rate"] = float(valid["hit_tp_first"].mean())
-                stats["avg_mfe"] = float(valid["mfe"].mean()) if "mfe" in valid else None
+                stats["avg_mfe"] = float(valid["mfe"].mean()) if "mfe" in valid.columns else None
                 stats["by_horizon"] = valid.groupby("horizon")["hit_tp_first"].mean().to_dict()
 
         # Contract stats
@@ -544,12 +546,15 @@ class AlertLabelsPipeline:
             valid = labels.dropna(subset=["contract_hit_tp_first"])
             if not valid.empty:
                 stats["contract_win_rate"] = float(valid["contract_hit_tp_first"].mean())
-                stats["contract_avg_mfe"] = float(valid["contract_mfe"].mean()) if "contract_mfe" in valid else None
+                if "contract_mfe" in valid.columns:
+                    stats["contract_avg_mfe"] = float(valid["contract_mfe"].mean())
+                else:
+                    stats["contract_avg_mfe"] = None
 
         return stats
 
 
-def main():
+def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="Compute alert barrier labels")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
