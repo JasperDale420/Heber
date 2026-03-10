@@ -98,6 +98,7 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "alpaca", "gateway_feed": "trades", "silver_dataset_name": "trades"},
     {"provider": "alpaca", "gateway_feed": "news", "silver_dataset_name": "news"},
     {"provider": "alpaca", "gateway_feed": "option_trades", "silver_dataset_name": "trades"},
+    {"provider": "alpaca", "gateway_feed": "option_chain_snapshot", "silver_dataset_name": "option_chain_snapshot"},
     {"provider": "alpaca", "gateway_feed": "crypto_bars", "silver_dataset_name": "bars"},
     {"provider": "alpaca", "gateway_feed": "crypto_trades", "silver_dataset_name": "trades"},
     # Unusual Whales — Options flow

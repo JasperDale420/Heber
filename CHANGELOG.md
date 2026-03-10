@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- feat: accept raw `alpaca/option_chain_snapshot` feed contracts and route them into the existing `option_chain_snapshot` silver dataset
+- docs: clarify that the canonical option chain snapshot dataset stores one row per underlying snapshot with `chain_json`
+- test: extend cross-repo parity and ingest contract coverage for the new Alpaca chain snapshot feed
+
 - chore: workspace sync checkpoint and gitignore audit (2026-02-21)
 
 ### Fixed

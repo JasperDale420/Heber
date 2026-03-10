@@ -258,10 +258,11 @@ class GreeksRecord(SilverBase):
 
 
 class ChainSnapshotRecord(SilverBase):
-    """Silver option_chain_snapshots schema (PRD §8.7.8, snapshot stream).
+    """Legacy contract-level chain slice retained for older consumers.
 
-    One row per contract per snapshot. Snapshot cadence is typically 5-15 minutes.
-    Primary key: (snapshot_id, instrument_key) or (underlying, snapshot_id, occ_symbol)
+    The canonical Heber `option_chain_snapshot` dataset is represented by
+    `OptionChainSnapshotRecord` below and stores one row per underlying snapshot
+    with the full chain serialized in `chain_json`.
     """
 
     # Snapshot identification
@@ -760,7 +761,7 @@ class OptionHistoryRecord(SilverBase):
 
 
 class OptionChainSnapshotRecord(SilverBase):
-    """Point-in-time snapshot of option chain."""
+    """One row per underlying snapshot with the full chain stored in `chain_json`."""
 
     snapshot_ts: datetime
     underlying: str

@@ -105,6 +105,51 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
             ),
         ),
         (
+            "option_chain_snapshot",
+            "option_chain_snapshot",
+            _envelope(
+                feed="option_chain_snapshot",
+                provider="alpaca",
+                instrument_type="equity",
+                instrument_key="equity:SPY",
+                symbol="SPY",
+                payload={
+                    "timestamp": "2026-02-11T14:30:00Z",
+                    "underlying": "SPY",
+                    "expiry": "2026-02-11",
+                    "chain_json": {
+                        "data": {
+                            "contracts": [
+                                {
+                                    "contract_symbol": "SPY260211C00600000",
+                                    "underlying": "SPY",
+                                    "expiration": "2026-02-11",
+                                    "strike": 600.0,
+                                    "option_type": "call",
+                                    "bid": 2.0,
+                                    "ask": 2.1,
+                                    "last": 2.05,
+                                    "volume": 1000,
+                                    "open_interest": 2500,
+                                    "delta": 0.51,
+                                    "gamma": 0.09,
+                                    "theta": -0.02,
+                                    "vega": 0.04,
+                                    "iv": 0.24,
+                                    "timestamp": "2026-02-11T14:30:00Z",
+                                }
+                            ]
+                        }
+                    },
+                    "total_call_volume": 1000.0,
+                    "total_put_volume": 500.0,
+                    "total_call_oi": 2500.0,
+                    "total_put_oi": 1750.0,
+                    "atm_iv": 0.24,
+                },
+            ),
+        ),
+        (
             "crypto_bars",
             "bars",
             _envelope(

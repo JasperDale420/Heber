@@ -40,6 +40,7 @@ def test_seed_catalog_includes_data_gateway_alias_mappings() -> None:
     assert seed_lookup[("unusual_whales", "gex")] == "greek_exposure"
     assert seed_lookup[("unusual_whales", "darkpool_ticker")] == "darkpool"
     assert seed_lookup[("alpaca", "option_trades")] == "trades"
+    assert seed_lookup[("alpaca", "option_chain_snapshot")] == "option_chain_snapshot"
     assert seed_lookup[("alpaca", "crypto_bars")] == "bars"
     assert seed_lookup[("alpaca", "crypto_trades")] == "trades"
     assert seed_lookup[("unusual_whales", "institutions")] == "institution_holdings"
