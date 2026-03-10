@@ -497,3 +497,124 @@ class TestContextManager:
     def test_enter_exit(self, tmp_path: Path) -> None:
         with HeberReader(tmp_path) as reader:
             assert reader._root == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# P2 coverage — semver ordering, multi-date write, combined filters, multi-instrument join
+# ---------------------------------------------------------------------------
+
+
+class TestSemverOrdering:
+    def test_v10_after_v2(self, tmp_path: Path) -> None:
+        """Versions v10 and v2 must sort by semantic version, not lexicographic."""
+        for v in ("v1.0.0", "v2.0.0", "v10.0.0"):
+            _write_gold_parquet(
+                tmp_path,
+                "feat",
+                "proj",
+                v,
+                [
+                    {
+                        "ts_event": _ts(0),
+                        "ts_available": _ts(1),
+                        "instrument_key": "equity:AAPL",
+                        "val": 1.0,
+                    }
+                ],
+            )
+        reader = HeberReader(tmp_path)
+        versions = reader.list_gold_versions("feat", project="proj")
+        assert versions[0] == "v10.0.0"
+        assert versions[-1] == "v1.0.0"
+
+    def test_latest_version_is_semver_latest(self, tmp_path: Path) -> None:
+        """read_gold(version=None) should pick v10.0.0 over v2.0.0."""
+        _write_gold_parquet(
+            tmp_path,
+            "feat",
+            "proj",
+            "v2.0.0",
+            [
+                {
+                    "ts_event": _ts(0),
+                    "ts_available": _ts(1),
+                    "instrument_key": "equity:AAPL",
+                    "val": 2.0,
+                }
+            ],
+        )
+        _write_gold_parquet(
+            tmp_path,
+            "feat",
+            "proj",
+            "v10.0.0",
+            [
+                {
+                    "ts_event": _ts(0),
+                    "ts_available": _ts(1),
+                    "instrument_key": "equity:AAPL",
+                    "val": 10.0,
+                }
+            ],
+        )
+        reader = HeberReader(tmp_path)
+        df = reader.read_gold("feat", project="proj")
+        assert df["val"].iloc[0] == pytest.approx(10.0)
+
+
+class TestMultiDatePartitioning:
+    def test_write_creates_per_date_dirs(self, tmp_path: Path) -> None:
+        reader = HeberReader(tmp_path)
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL", "equity:AAPL"],
+                "ts_event": [_ts(0), _ts(24)],  # 24hrs apart → 2 dates
+                "ts_available": [_ts(1), _ts(25)],
+                "val": [1.0, 2.0],
+            }
+        )
+        out = reader.write_gold("ds", df, project="p", version="v1")
+        assert out is not None
+        # Read back should return both rows
+        read_back = reader.read_gold("ds", project="p", version="v1")
+        assert len(read_back) == 2
+
+
+class TestCombinedSilverFilters:
+    def test_time_range_plus_keys_plus_asof(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df = reader.read_silver(
+            "bars",
+            time_range=(_ts(0), _ts(3)),
+            instrument_keys=["equity:AAPL"],
+            asof_time=_ts(1),
+        )
+        # AAPL rows where ts_event ∈ [0,3] and ts_available ≤ _ts(1) → only the first row
+        assert len(df) == 1
+        assert (df["instrument_key"] == "equity:AAPL").all()
+
+
+class TestMultiInstrumentAsofJoin:
+    def test_groups_by_instrument(self) -> None:
+        reader = HeberReader(Path("/tmp/unused"))
+        left = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL", "equity:TSLA"],
+                "ts_event": pd.to_datetime([_ts(2), _ts(2)]),
+            }
+        )
+        right = pd.DataFrame(
+            {
+                "instrument_key": ["equity:AAPL", "equity:TSLA"],
+                "ts_event": pd.to_datetime([_ts(0), _ts(0)]),
+                "ts_available": pd.to_datetime([_ts(1), _ts(1)]),
+                "feature": [10.0, 20.0],
+            }
+        )
+        result = reader.asof_join(left, right)
+        assert len(result) == 2
+        aapl_row = result[result["instrument_key"] == "equity:AAPL"]
+        tsla_row = result[result["instrument_key"] == "equity:TSLA"]
+        assert aapl_row["feature"].iloc[0] == pytest.approx(10.0)
+        assert tsla_row["feature"].iloc[0] == pytest.approx(20.0)
