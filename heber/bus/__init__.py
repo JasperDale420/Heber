@@ -14,11 +14,12 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
+from redis.exceptions import RedisError, ResponseError
 
 logger = structlog.get_logger(__name__)
 
@@ -27,7 +28,7 @@ logger = structlog.get_logger(__name__)
 STREAM_NAMESPACE = "heber:events"
 
 
-class StreamName(str, Enum):
+class StreamName(StrEnum):
     """Canonical stream names.
 
     Covers all entries in ``bus.streams.DEFAULT_STREAMS`` plus the DLQ.
@@ -279,7 +280,7 @@ class RedisEventBus(EventBus):
                 stream=stream.value,
                 group=group_name,
             )
-        except Exception as e:
+        except ResponseError as e:
             # Group already exists is OK
             if "BUSYGROUP" in str(e):
                 logger.debug("consumer_group_exists", stream=stream.value, group=group_name)
@@ -334,7 +335,7 @@ class RedisEventBus(EventBus):
             except asyncio.CancelledError:
                 logger.info("consumer_cancelled", stream=config.stream.value)
                 raise  # Re-raise per Python best practice
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — top-level consume loop must not crash
                 logger.error("consume_error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)
 
@@ -411,7 +412,7 @@ class RedisEventBus(EventBus):
                             )
 
             return claimed_messages
-        except Exception as e:
+        except RedisError as e:
             logger.debug("claim_error", error=str(e))
             return []
 
@@ -432,7 +433,7 @@ class RedisEventBus(EventBus):
                 count = 0
             consumer_lag.labels(stream=stream.value, group=group_name).set(count)
             return count
-        except Exception:
+        except RedisError:
             return 0
 
 

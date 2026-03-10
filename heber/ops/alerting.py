@@ -4,10 +4,10 @@ Provides Prometheus alerting rules as YAML and Python config.
 """
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """Alert severity levels."""
 
     WARNING = "warning"

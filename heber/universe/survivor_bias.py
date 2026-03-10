@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import pandas as pd
@@ -17,7 +17,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class DelistReason(str, Enum):
+class DelistReason(StrEnum):
     """Reason for instrument delisting (PRD §35.2)."""
 
     BANKRUPTCY = "bankruptcy"

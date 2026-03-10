@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -17,7 +17,7 @@ from heber.sre.runbooks import IncidentSeverity
 logger = structlog.get_logger(__name__)
 
 
-class OnCallRole(str, Enum):
+class OnCallRole(StrEnum):
     """On-call roles (PRD §40.1)."""
 
     PRIMARY = "primary"  # 24/7 weekly rotation
@@ -101,7 +101,7 @@ DEFAULT_ESCALATION_POLICIES: list[EscalationPolicy] = [
 ]
 
 
-class CommunicationChannel(str, Enum):
+class CommunicationChannel(StrEnum):
     """Communication channels (PRD §40.4)."""
 
     PAGERDUTY = "pagerduty"

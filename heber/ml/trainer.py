@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pl
+import pandas as pd
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -71,10 +71,10 @@ class MetaModelTrainer:
 
     def train(
         self,
-        x_train: pl.DataFrame | np.ndarray,
-        y_train: pl.Series | np.ndarray,
-        x_val: pl.DataFrame | np.ndarray | None = None,
-        y_val: pl.Series | np.ndarray | None = None,
+        x_train: pd.DataFrame | np.ndarray,
+        y_train: pd.Series | np.ndarray,
+        x_val: pd.DataFrame | np.ndarray | None = None,
+        y_val: pd.Series | np.ndarray | None = None,
         feature_names: list[str] | None = None,
     ) -> dict[str, float]:
         """Train the meta-model.
@@ -95,7 +95,7 @@ class MetaModelTrainer:
             logger.error("LightGBM not installed. Run: pip install lightgbm")
             raise
 
-        # Convert to numpy if polars
+        # Convert to numpy if pandas
         train_features = x_train.to_numpy() if hasattr(x_train, "to_numpy") else x_train
         train_labels = y_train.to_numpy() if hasattr(y_train, "to_numpy") else y_train
 
@@ -233,7 +233,7 @@ class MetaModelTrainer:
 
             logger.info("Logged run to MLflow")
 
-    def predict_proba(self, X: pl.DataFrame | np.ndarray) -> np.ndarray:  # noqa: N803
+    def predict_proba(self, X: pd.DataFrame | np.ndarray) -> np.ndarray:  # noqa: N803
         """Predict probability of TP hit.
 
         Args:
@@ -250,7 +250,7 @@ class MetaModelTrainer:
 
     def predict(
         self,
-        X: pl.DataFrame | np.ndarray,  # noqa: N803
+        X: pd.DataFrame | np.ndarray,  # noqa: N803
         threshold: float = 0.5,
     ) -> np.ndarray:
         """Predict binary outcome.
@@ -363,7 +363,7 @@ def train_meta_model(
     builder = MetaLabelDatasetBuilder()
     df = builder.build_from_parquet(start_date, end_date)
 
-    if df.is_empty():
+    if df.empty:
         raise ValueError("No data found in date range")
 
     # Split

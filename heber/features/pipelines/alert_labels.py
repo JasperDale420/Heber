@@ -30,7 +30,7 @@ from heber.features.templates.alert_labels import (
     compute_barrier_labels,
     compute_multi_horizon_labels,
 )
-from heber.sdk import HeberClient
+from heber.reader import HeberReader
 from heber.watch.gateway import gateway_auth_headers
 
 logger = structlog.get_logger(__name__)
@@ -52,7 +52,7 @@ class AlertLabelsPipeline:
 
     def __init__(
         self,
-        client: HeberClient | None = None,
+        client: HeberReader | None = None,
         slippage_model: SlippageModel | None = None,
         contract_config: ContractBarrierConfig | None = None,
         output_dataset: str = "labels_alert_barriers",
@@ -64,7 +64,7 @@ class AlertLabelsPipeline:
         """Initialize the pipeline.
 
         Args:
-            client: HeberClient instance (created if None)
+            client: HeberReader instance (created if None)
             slippage_model: Execution cost model
             contract_config: Contract barrier config (TP/SL percentages)
             output_dataset: Name for output Gold dataset
@@ -73,7 +73,7 @@ class AlertLabelsPipeline:
             gateway_url: Data Gateway URL for fetching option bars
             gateway_api_key: Data Gateway API key for authenticated option-bars fetches
         """
-        self.client = client or HeberClient()
+        self.client = client or HeberReader()
         self.slippage_model = slippage_model or SlippageModel()
         self.contract_config = contract_config or ContractBarrierConfig.moderate()
         self.output_dataset = output_dataset

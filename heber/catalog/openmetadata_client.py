@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
@@ -37,7 +37,7 @@ catalog_operation_duration = Histogram(
 )
 
 
-class TableType(str, Enum):
+class TableType(StrEnum):
     """Table type classification."""
 
     REGULAR = "Regular"

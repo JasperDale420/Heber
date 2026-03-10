@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import polars as pl
+import numpy as np
+import pandas as pd
 import structlog
 
 from heber.config import settings
-from heber.sdk.client import HeberClient
+from heber.reader import HeberReader
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -34,22 +35,14 @@ DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PRO
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
 
 
-def _is_polars_panic_exception(exc: BaseException) -> bool:
-    """Return True when a BaseException is a polars/pyo3 panic wrapper."""
-    return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
-
-
-def _read_existing_partition_or_quarantine(out_file: Path) -> pl.DataFrame | None:
+def _read_existing_partition_or_quarantine(out_file: Path) -> pd.DataFrame | None:
     """Read existing parquet partition; quarantine unreadable files and continue."""
     if not out_file.exists():
         return None
 
     try:
-        return pl.read_parquet(out_file)
-    except BaseException as exc:
-        if not isinstance(exc, Exception) and not _is_polars_panic_exception(exc):
-            raise
-
+        return pd.read_parquet(out_file)
+    except Exception as exc:
         quarantine_path = out_file.with_name(f"{out_file.name}.corrupt-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}")
         try:
             out_file.replace(quarantine_path)
@@ -71,11 +64,11 @@ def _read_existing_partition_or_quarantine(out_file: Path) -> pl.DataFrame | Non
         return None
 
 
-def _atomic_write_parquet(df: pl.DataFrame, out_file: Path) -> None:
+def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
     """Write parquet via temp file then atomic rename to avoid partial reads."""
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
-        df.write_parquet(temp_path)
+        df.to_parquet(temp_path, index=False)
         os.replace(temp_path, out_file)
     finally:
         temp_path.unlink(missing_ok=True)
@@ -119,13 +112,13 @@ class MetaLabelDatasetBuilder:
         """
         self.config = config or DatasetConfig()
         self.redis = redis
-        self.client = HeberClient()
+        self.client = HeberReader()
 
     def build_from_parquet(
         self,
         start_date: date,
         end_date: date,
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """Build dataset from Parquet files.
 
         Args:
@@ -137,15 +130,15 @@ class MetaLabelDatasetBuilder:
         """
         # Load outcomes
         outcomes = self._load_outcomes(start_date, end_date)
-        if outcomes.is_empty():
+        if outcomes.empty:
             logger.warning("No outcomes found in date range")
-            return pl.DataFrame()
+            return pd.DataFrame()
 
         # Load features
         features = self._load_features(start_date, end_date)
-        if features.is_empty():
+        if features.empty:
             logger.warning("No features found in date range")
-            return pl.DataFrame()
+            return pd.DataFrame()
 
         # Join on alert_id
         dataset = self._join_features_outcomes(features, outcomes)
@@ -168,7 +161,7 @@ class MetaLabelDatasetBuilder:
     async def build_from_redis(
         self,
         alert_ids: list[str],
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """Build dataset from Redis feature cache and outcome lookups.
 
         Args:
@@ -189,11 +182,11 @@ class MetaLabelDatasetBuilder:
                 rows.append(features.to_dict())
 
         if not rows:
-            return pl.DataFrame()
+            return pd.DataFrame()
 
-        return pl.DataFrame(rows)
+        return pd.DataFrame(rows)
 
-    def _load_outcomes(self, start_date: date, end_date: date) -> pl.DataFrame:
+    def _load_outcomes(self, start_date: date, end_date: date) -> pd.DataFrame:
         """Load outcomes from Gold layer."""
         # Partition filter
         filters = [
@@ -203,25 +196,25 @@ class MetaLabelDatasetBuilder:
 
         try:
             # Use internal _read_parquet_dataset to support arbitrary path config
-            df_pd = self.client._read_parquet_dataset(
+            df = self.client._read_parquet_dataset(
                 path=self.config.outcomes_path,
                 filters=filters,
             )
 
-            if df_pd.empty:
+            if df.empty:
                 logger.warning(
                     "Outcomes path does not exist or contains no data",
                     configured_path=str(self.config.outcomes_path),
                 )
-                return pl.DataFrame()
+                return pd.DataFrame()
 
-            return pl.from_pandas(df_pd)
+            return df
 
         except Exception as e:
             logger.error("Failed to load outcomes", path=str(self.config.outcomes_path), error=str(e))
-            return pl.DataFrame()
+            return pd.DataFrame()
 
-    def _load_features(self, start_date: date, end_date: date) -> pl.DataFrame:
+    def _load_features(self, start_date: date, end_date: date) -> pd.DataFrame:
         """Load features from Gold layer."""
         # Partition filter
         filters = [
@@ -231,116 +224,116 @@ class MetaLabelDatasetBuilder:
 
         try:
             # Use internal _read_parquet_dataset to support arbitrary path config
-            df_pd = self.client._read_parquet_dataset(
+            df = self.client._read_parquet_dataset(
                 path=self.config.features_path,
                 filters=filters,
             )
 
-            if df_pd.empty:
+            if df.empty:
                 logger.warning(
                     "Features path does not exist or contains no data",
                     configured_path=str(self.config.features_path),
                 )
-                return pl.DataFrame()
+                return pd.DataFrame()
 
-            return pl.from_pandas(df_pd)
+            return df
 
         except Exception as e:
             logger.error("Failed to load features", path=str(self.config.features_path), error=str(e))
-            return pl.DataFrame()
+            return pd.DataFrame()
 
     def _join_features_outcomes(
         self,
-        features: pl.DataFrame,
-        outcomes: pl.DataFrame,
-    ) -> pl.DataFrame:
+        features: pd.DataFrame,
+        outcomes: pd.DataFrame,
+    ) -> pd.DataFrame:
         """Join features with outcomes on alert_id."""
         outcomes = self._normalize_outcomes(outcomes)
 
         # Ensure alert_id column exists in both
         if "alert_id" not in features.columns:
             logger.error("Features missing alert_id column")
-            return pl.DataFrame()
+            return pd.DataFrame()
 
         if "alert_id" not in outcomes.columns:
             logger.error("Outcomes missing alert_id column")
-            return pl.DataFrame()
+            return pd.DataFrame()
+
+        # Select outcome columns for join
+        outcome_cols = [
+            "alert_id",
+            "outcome",
+            "outcome_return",
+            "mfe",
+            "mae",
+            "bars_to_hit",
+            "trading_minutes_to_hit",
+            "hit_tp_first",
+        ]
+        available_outcome_cols = [c for c in outcome_cols if c in outcomes.columns]
 
         # Inner join - only keep alerts with both features and outcomes
-        return features.join(
-            outcomes.select(
-                [
-                    "alert_id",
-                    "outcome",
-                    "outcome_return",
-                    "mfe",
-                    "mae",
-                    "bars_to_hit",
-                    "trading_minutes_to_hit",
-                    "hit_tp_first",
-                ]
-            ),
+        return pd.merge(
+            features,
+            outcomes[available_outcome_cols],
             on="alert_id",
             how="inner",
         )
 
-    def _normalize_outcomes(self, outcomes: pl.DataFrame) -> pl.DataFrame:
+    def _normalize_outcomes(self, outcomes: pd.DataFrame) -> pd.DataFrame:
         """Normalize outcome columns for backward compatibility."""
-        df = outcomes
+        df = outcomes.copy()
 
         if "outcome" not in df.columns and "outcome_reason" in df.columns:
-            df = df.with_columns(pl.col("outcome_reason").alias("outcome"))
+            df["outcome"] = df["outcome_reason"]
 
         if "hit_tp_first" not in df.columns and "contract_hit_tp_first" in df.columns:
-            df = df.with_columns(pl.col("contract_hit_tp_first").alias("hit_tp_first"))
+            df["hit_tp_first"] = df["contract_hit_tp_first"]
 
         if "mfe" not in df.columns and "contract_mfe" in df.columns:
-            df = df.with_columns(pl.col("contract_mfe").alias("mfe"))
+            df["mfe"] = df["contract_mfe"]
 
         if "mae" not in df.columns and "contract_mae" in df.columns:
-            df = df.with_columns(pl.col("contract_mae").alias("mae"))
+            df["mae"] = df["contract_mae"]
 
         if "bars_to_hit" not in df.columns and "contract_bars_to_hit" in df.columns:
-            df = df.with_columns(pl.col("contract_bars_to_hit").alias("bars_to_hit"))
+            df["bars_to_hit"] = df["contract_bars_to_hit"]
 
         return df
 
-    def _add_meta_label(self, df: pl.DataFrame) -> pl.DataFrame:
+    def _add_meta_label(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add meta-label column (1 if TP hit, 0 otherwise)."""
         if "outcome" not in df.columns:
             return df
 
-        return df.with_columns(
-            pl.when(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() == "hit_tp")
-            .then(1)
-            .otherwise(0)
-            .alias("meta_label")
+        df = df.copy()
+        df["meta_label"] = np.where(
+            df["outcome"].astype(str).str.lower() == "hit_tp", 1, 0
         )
+        return df
 
-    def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
+    def _apply_filters(self, df: pd.DataFrame) -> pd.DataFrame:
         """Apply configured filters to dataset."""
-        if df.is_empty():
+        if df.empty:
             return df
 
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
-            df = df.filter(pl.col("outcome").cast(pl.Utf8).str.to_lowercase() != "expired")
+            df = df[df["outcome"].astype(str).str.lower() != "expired"].reset_index(drop=True)
 
         # Min samples per symbol
         if "symbol" in df.columns and self.config.min_outcomes_per_symbol > 1:
-            symbol_counts = df.group_by("symbol").count()
-            valid_symbols = symbol_counts.filter(pl.col("count") >= self.config.min_outcomes_per_symbol).select(
-                "symbol"
-            )
-            df = df.join(valid_symbols, on="symbol", how="inner")
+            symbol_counts = df.groupby("symbol").size()
+            valid_symbols = symbol_counts[symbol_counts >= self.config.min_outcomes_per_symbol].index
+            df = df[df["symbol"].isin(valid_symbols)].reset_index(drop=True)
 
         return df
 
     def train_test_split(
         self,
-        df: pl.DataFrame,
+        df: pd.DataFrame,
         split_date: date | None = None,
-    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Split dataset into train and test with purge/embargo.
 
         Uses temporal split to avoid leakage.
@@ -353,21 +346,22 @@ class MetaLabelDatasetBuilder:
         Returns:
             (train_df, test_df) tuple
         """
-        if df.is_empty():
-            return pl.DataFrame(), pl.DataFrame()
+        if df.empty:
+            return pd.DataFrame(), pd.DataFrame()
 
         if "alert_time" not in df.columns:
             logger.error("Cannot split: missing alert_time column")
-            return df, pl.DataFrame()
+            return df, pd.DataFrame()
 
         # Ensure datetime type
-        df = df.with_columns(pl.col("alert_time").cast(pl.Datetime).alias("alert_time"))
+        df = df.copy()
+        df["alert_time"] = pd.to_datetime(df["alert_time"])
 
         # Determine split date
         if split_date is None:
-            sorted_df = df.sort("alert_time")
+            sorted_df = df.sort_values("alert_time").reset_index(drop=True)
             split_idx = int(len(sorted_df) * self.config.train_ratio)
-            split_date = sorted_df.row(split_idx)[sorted_df.columns.index("alert_time")].date()
+            split_date = sorted_df.iloc[split_idx]["alert_time"].date()
 
         # Calculate purge and embargo boundaries
         from datetime import timedelta
@@ -376,10 +370,10 @@ class MetaLabelDatasetBuilder:
         embargo_end = split_date + timedelta(days=self.config.embargo_days)
 
         # Train: before purge_start
-        train_df = df.filter(pl.col("alert_time") < datetime.combine(purge_start, datetime.min.time()))
+        train_df = df[df["alert_time"] < datetime.combine(purge_start, datetime.min.time())].reset_index(drop=True)
 
         # Test: after embargo_end
-        test_df = df.filter(pl.col("alert_time") >= datetime.combine(embargo_end, datetime.min.time()))
+        test_df = df[df["alert_time"] >= datetime.combine(embargo_end, datetime.min.time())].reset_index(drop=True)
 
         logger.info(
             "Train/test split completed",
@@ -392,7 +386,7 @@ class MetaLabelDatasetBuilder:
 
         return train_df, test_df
 
-    def get_feature_columns(self, df: pl.DataFrame) -> list[str]:
+    def get_feature_columns(self, df: pd.DataFrame) -> list[str]:
         """Get list of feature columns (excluding identifiers and targets).
 
         Args:
@@ -432,10 +426,10 @@ class MetaLabelDatasetBuilder:
 
     def to_xy(
         self,
-        df: pl.DataFrame,
+        df: pd.DataFrame,
         feature_cols: list[str] | None = None,
         target_col: str = "meta_label",
-    ) -> tuple[pl.DataFrame, pl.Series]:
+    ) -> tuple[pd.DataFrame, pd.Series]:
         """Convert to X (features) and y (target) for model training.
 
         Args:
@@ -444,19 +438,19 @@ class MetaLabelDatasetBuilder:
             target_col: Target column name
 
         Returns:
-            (X, y) tuple as polars DataFrame/Series
+            (X, y) tuple as pandas DataFrame/Series
         """
         if feature_cols is None:
             feature_cols = self.get_feature_columns(df)
 
-        X = df.select(feature_cols)  # noqa: N806
-        y = df.get_column(target_col)
+        X = df[feature_cols]  # noqa: N806
+        y = df[target_col]
 
         return X, y
 
 
 def persist_features_to_gold(
-    features_df: pl.DataFrame,
+    features_df: pd.DataFrame,
     output_path: Path,
     partition_col: str = "alert_time",
 ) -> None:
@@ -467,16 +461,17 @@ def persist_features_to_gold(
         output_path: Base path for features
         partition_col: Column to partition by (must be datetime)
     """
-    if features_df.is_empty():
+    if features_df.empty:
         return
 
     # Add date partition column
-    df = features_df.with_columns(pl.col(partition_col).dt.date().alias("dt"))
+    df = features_df.copy()
+    df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date
-    for dt_val in df.get_column("dt").unique():
-        partition_df = df.filter(pl.col("dt") == dt_val).drop("dt")
-        dt_str = dt_val.strftime("%Y-%m-%d")
+    for dt_val in df["dt"].unique():
+        partition_df = df[df["dt"] == dt_val].drop(columns=["dt"]).reset_index(drop=True)
+        dt_str = pd.Timestamp(dt_val).strftime("%Y-%m-%d")
         partition_path = output_path / f"dt={dt_str}"
         partition_path.mkdir(parents=True, exist_ok=True)
 
@@ -498,12 +493,14 @@ def persist_features_to_gold(
             with FileLock(lock_file, timeout=10):
                 existing = _read_existing_partition_or_quarantine(out_file)
                 if existing is not None:
-                    partition_df = pl.concat(
+                    partition_df = pd.concat(
                         [existing, partition_df],
-                        how="diagonal_relaxed",
+                        ignore_index=True,
                     )
                     if "alert_id" in partition_df.columns:
-                        partition_df = partition_df.unique(subset=["alert_id"], keep="last")
+                        partition_df = partition_df.drop_duplicates(subset=["alert_id"], keep="last").reset_index(
+                            drop=True
+                        )
 
                 _atomic_write_parquet(partition_df, out_file)
         except Timeout:

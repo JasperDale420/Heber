@@ -9,7 +9,7 @@ This module is the single source of truth for:
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from heber.schemas.silver import SILVER_SCHEMAS
@@ -595,7 +595,7 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
         return None
     try:
         return Decimal(str(value))
-    except Exception:
+    except (TypeError, ValueError, InvalidOperation):
         return None
 
 

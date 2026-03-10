@@ -66,6 +66,14 @@ Note: `.env.example` sets `HEBER_VOLUME_ROOT=/Volumes/HeberDocker` to avoid clas
 | `HEBER_HEALTH_REPORT_DIR` | `/data/ops/dataflow-health` | JSON report output directory |
 | `HEBER_HEALTH_INTERVAL_SECONDS` | `300` | Scheduled run interval |
 
+## Daily Health Report Settings
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEBER_DAILY_HEALTH_REPORT_DIR` | `/Volumes/heber/data/ops/daily-health` | JSON report output directory |
+| `HEBER_DAILY_HEALTH_EXPECTED_SYMBOL_COUNT` | `500` | Minimum distinct symbols expected in bars partition |
+| `HEBER_DAILY_HEALTH_EXPECTED_FEEDS` | `["bars","quotes","trades","flow_alerts"]` | Feeds expected to have partitions each trading day |
+
 ## API Keys
 
 Add API keys in `/Users/jacobmcmillan/Empire/Heber/.env` (local) or as environment variables in your deploy system.

@@ -104,7 +104,7 @@ def audit_null_fields(
 ) -> dict[str, int]:
     """Inspect a DataFrame for null values and log warnings.
 
-    Supports pandas DataFrames, Polars DataFrames, and PyArrow Tables.
+    Supports pandas DataFrames and PyArrow Tables.
     Does not raise — this is observe-and-continue.
 
     Args:
@@ -165,20 +165,12 @@ def _compute_null_counts(
 ) -> dict[str, int]:
     """Compute null counts for columns in the data.
 
-    Works with pandas, Polars, and PyArrow.
+    Works with pandas and PyArrow.
     """
     import pandas as pd
 
     if isinstance(data, pd.DataFrame):
         return _pandas_null_counts(data, columns)
-
-    try:
-        import polars as pl
-
-        if isinstance(data, pl.DataFrame):
-            return _polars_null_counts(data, columns)
-    except ImportError:
-        pass
 
     try:
         import pyarrow as pa
@@ -201,21 +193,6 @@ def _pandas_null_counts(
     report: dict[str, int] = {}
     for col in existing:
         null_count = int(df[col].isna().sum())
-        if null_count > 0:
-            report[col] = null_count
-    return report
-
-
-def _polars_null_counts(
-    df: Any,
-    columns: list[str] | None,
-) -> dict[str, int]:
-    """Compute null counts for a Polars DataFrame."""
-    cols = columns if columns else df.columns
-    existing = [c for c in cols if c in df.columns]
-    report: dict[str, int] = {}
-    for col in existing:
-        null_count = df[col].null_count()
         if null_count > 0:
             report[col] = null_count
     return report

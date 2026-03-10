@@ -152,6 +152,24 @@ docker compose logs --since 30m heber-dataflow-health
 cat /Volumes/HeberDocker/data/ops/dataflow-health/latest.json
 ```
 
+### Daily Health Report
+
+Runs 7 end-of-day checks: partition freshness, cross-feed completeness, Soda quality, fill rate, zero-leakage audit, DLQ status, and Gold freshness. Skips non-trading days unless `--force` is passed.
+
+```bash
+# Today's report
+heber health-daily
+
+# Specific date with full JSON
+heber health-daily --date 2026-03-09 --verbose
+
+# Run on weekends/holidays
+heber health-daily --force
+
+# Reports saved to:
+cat /Volumes/heber/data/ops/daily-health/2026-03-09.json
+```
+
 ---
 
 ## Common Operations
@@ -204,18 +222,15 @@ docker exec data-gateway-redis redis-cli XRANGE heber:events:dlq - + COUNT 5
 docker exec data-gateway-redis redis-cli XTRIM heber:events:dlq MAXLEN 0
 ```
 
-### SDK Usage
+### Reader Usage
 
 ```python
-from heber.sdk.client import HeberClient
+from heber.reader import HeberReader
 
-client = HeberClient()
+reader = HeberReader()
 
 # Read Silver data as-of a point in time
-df = client.read_asof("bars", as_of="2026-02-01T09:30:00Z")
-
-# List datasets
-datasets = client.list_datasets(layer="silver")
+df = reader.read_asof("bars", asof_time="2026-02-01T09:30:00Z")
 
 # Read Gold with version pinning
 df = client.read_gold("features", version="v3")

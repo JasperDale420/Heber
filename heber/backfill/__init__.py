@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +66,7 @@ backfill_duration_seconds = Histogram(
 )
 
 
-class BackfillStatus(str, Enum):
+class BackfillStatus(StrEnum):
     """Backfill job status."""
 
     PENDING = "pending"
@@ -77,7 +77,7 @@ class BackfillStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class TsAvailablePolicy(str, Enum):
+class TsAvailablePolicy(StrEnum):
     """Policy for setting ts_available on backfill data per PRD §13.3."""
 
     COMMIT = "commit"  # Default: use commit timestamp for ts_available

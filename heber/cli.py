@@ -22,12 +22,16 @@ def _cmd_info(args: argparse.Namespace) -> int:
 def _cmd_datasets(args: argparse.Namespace) -> int:
     """Handle the 'datasets' subcommand."""
     try:
-        from heber.sdk.client import HeberClient
+        from heber.config import settings
 
-        client = HeberClient()
-        datasets = client.list_datasets(layer=args.layer)
-        for ds in datasets:
-            print(f"  {ds.get('name', ds)}")
+        layer = args.layer or "silver"
+        base = settings.data_root / layer
+        if not base.exists():
+            print(f"No {layer} data found at {base}", file=sys.stderr)
+            return 1
+        feeds = sorted({p.name.split("=")[1] for p in base.glob("feed=*") if p.is_dir()})
+        for feed in feeds:
+            print(f"  {feed}")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -37,10 +41,10 @@ def _cmd_datasets(args: argparse.Namespace) -> int:
 def _cmd_versions(args: argparse.Namespace) -> int:
     """Handle the 'versions' subcommand."""
     try:
-        from heber.sdk.client import HeberClient
+        from heber.reader import HeberReader
 
-        client = HeberClient()
-        versions = client.list_gold_versions(args.dataset)
+        reader = HeberReader()
+        versions = reader.list_gold_versions(args.dataset)
         for v in versions:
             print(f"  {v}")
     except Exception as e:
@@ -104,12 +108,42 @@ def _cmd_health_dataflow(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_health_daily(args: argparse.Namespace) -> int:
+    """Handle the 'health-daily' subcommand."""
+    from datetime import datetime
+
+    from heber.ops.daily_health import run_daily_health
+
+    try:
+        report_date = datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else None
+        report = run_daily_health(
+            report_date=report_date,
+            force=args.force,
+            verbose=args.verbose,
+        )
+        if args.verbose:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            status = report["overall_status"]
+            rd = report.get("report_date", "unknown")
+            summary = report.get("summary", {})
+            ok, w, f = summary.get("ok", 0), summary.get("warn", 0), summary.get("fail", 0)
+            print(f"{rd}: {status} (ok={ok} warn={w} fail={f})")
+        return 0 if report["overall_status"] in ("ok", "skipped") else 1
+    except KeyboardInterrupt:
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
     "versions": _cmd_versions,
     "backfill": _cmd_backfill,
     "health-dataflow": _cmd_health_dataflow,
+    "health-daily": _cmd_health_daily,
 }
 
 
@@ -157,6 +191,12 @@ def main() -> int:
     health_dataflow_parser.add_argument("--loop", action="store_true")
     health_dataflow_parser.add_argument("--interval-seconds", type=int, default=s.health_interval_seconds)
     health_dataflow_parser.add_argument("--mode", choices=["manual", "scheduled"], default="manual")
+
+    # Daily health report
+    health_daily_parser = subparsers.add_parser("health-daily", help="Run daily end-of-day health report")
+    health_daily_parser.add_argument("--date", help="Report date (YYYY-MM-DD, default: today)")
+    health_daily_parser.add_argument("--force", action="store_true", help="Run even on non-trading days")
+    health_daily_parser.add_argument("--verbose", "-v", action="store_true", help="Print full JSON report")
 
     args = parser.parse_args()
 

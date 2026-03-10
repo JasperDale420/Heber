@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from datetime import date as date_type
 from pathlib import Path
 
+import pyarrow as pa
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -175,12 +176,12 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
 ]
 
 
-def _arrow_type_to_str(arrow_type) -> str:
+def _arrow_type_to_str(arrow_type: pa.DataType) -> str:
     """Convert Arrow type to human-readable string for schema JSON."""
     return str(arrow_type)
 
 
-def _schema_to_json(schema) -> dict:
+def _schema_to_json(schema: pa.Schema) -> dict[str, list[dict[str, str | bool]]]:
     """Serialize an Arrow schema to a JSON-friendly dict."""
     return {
         "fields": [
@@ -383,9 +384,34 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
     return count
 
 
-def _scan_partition_dates(feed_dir: Path) -> tuple[str, str, int] | None:
-    """Scan a feed directory for dt= partitions and return (min_date, max_date, count)."""
-    dates: list[str] = []
+def _count_parquet_rows(dt_dir: Path) -> int:
+    """Sum row counts from Parquet file metadata in a date partition.
+
+    Reads only footer metadata — never loads actual data.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        # Fallback: count files if pyarrow not available
+        return sum(1 for f in dt_dir.glob("*.parquet"))
+
+    total = 0
+    for pf in dt_dir.glob("*.parquet"):
+        try:
+            meta = pq.read_metadata(pf)
+            total += meta.num_rows
+        except Exception:
+            continue
+    return total
+
+
+def _scan_partition_dates(feed_dir: Path) -> list[tuple[str, int]] | None:
+    """Scan a feed directory for dt= partitions and return per-date row counts.
+
+    Returns a list of (date_str, row_count) tuples — one per date partition found.
+    Row counts are read from Parquet file metadata (footer only, no data loaded).
+    """
+    results: list[tuple[str, int]] = []
     # rglob is blocking and can be slow on large trees
     try:
         for sub in feed_dir.rglob("dt=*"):
@@ -393,22 +419,29 @@ def _scan_partition_dates(feed_dir: Path) -> tuple[str, str, int] | None:
                 continue
             match = _DATE_PARTITION_RE.match(sub.name)
             if match:
-                dates.append(match.group(1))
+                date_str = match.group(1)
+                row_count = _count_parquet_rows(sub)
+                if row_count > 0:
+                    results.append((date_str, row_count))
     except OSError:
         pass
 
-    if not dates:
+    if not results:
         return None
-    return min(dates), max(dates), len(dates)
+    return results
 
 
 async def seed_coverage_from_disk(session: AsyncSession) -> int:
-    """Scan Silver partition directories and populate data_coverage with date ranges.
+    """Scan Silver partition directories and populate data_coverage with accurate row counts.
 
     Walks ``settings.silver_path`` for ``feed={name}`` directories, then scans
     each for ``dt=YYYY-MM-DD`` subdirectories (at any nesting depth below the feed).
-    For each feed, upserts a single aggregate DataCoverage record with
-    ``instrument_key="__all__"`` containing the observed min/max dates.
+
+    For each feed, creates:
+    - One aggregate ``__all__`` record with dt_min, dt_max, and total row count
+    - One per-date ``dt:YYYY-MM-DD`` record so coverage queries return individual dates
+
+    Row counts are read from Parquet file metadata (footer only, no data loaded).
 
     Returns the number of coverage records upserted.
     """
@@ -427,20 +460,34 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
 
         feed_name = entry.name.split("=", 1)[1]
 
-        # Run blocking rglob scan in thread
-        scan = await asyncio.to_thread(_scan_partition_dates, entry)
+        # Run blocking rglob scan in thread — returns per-date row counts
+        scan_results = await asyncio.to_thread(_scan_partition_dates, entry)
 
-        if scan is None:
+        if scan_results is None:
             continue
 
-        dt_min_str, dt_max_str, partition_count = scan
+        # Upsert aggregate record (dt_min → dt_max, total rows)
+        all_dates = [d for d, _ in scan_results]
+        total_rows = sum(r for _, r in scan_results)
         upserted += await _upsert_coverage(
             session,
             feed_name,
-            dt_min_str,
-            dt_max_str,
-            partition_count,
+            instrument_key="__all__",
+            dt_min_str=min(all_dates),
+            dt_max_str=max(all_dates),
+            row_count=total_rows,
         )
+
+        # Upsert per-date records so coverage API returns individual dates
+        for date_str, row_count in scan_results:
+            upserted += await _upsert_coverage(
+                session,
+                feed_name,
+                instrument_key=f"dt:{date_str}",
+                dt_min_str=date_str,
+                dt_max_str=date_str,
+                row_count=row_count,
+            )
 
     if upserted:
         await session.commit()
@@ -452,41 +499,43 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
 async def _upsert_coverage(
     session: AsyncSession,
     feed_name: str,
+    instrument_key: str,
     dt_min_str: str,
     dt_max_str: str,
-    partition_count: int,
+    row_count: int,
 ) -> int:
-    """Upsert a single aggregate DataCoverage record for a feed."""
+    """Upsert a DataCoverage record for a feed."""
     dt_min = date_type.fromisoformat(dt_min_str)
     dt_max = date_type.fromisoformat(dt_max_str)
 
     existing = await session.execute(
         select(DataCoverage)
         .where(DataCoverage.dataset_name == feed_name)
-        .where(DataCoverage.instrument_key == "__all__")
+        .where(DataCoverage.instrument_key == instrument_key)
     )
     coverage = existing.scalar_one_or_none()
 
     if coverage:
         coverage.dt_min = dt_min
         coverage.dt_max = dt_max
-        coverage.approx_row_count = partition_count
+        coverage.approx_row_count = row_count
         coverage.last_updated_ts = datetime.now(UTC)
     else:
         coverage = DataCoverage(
             dataset_name=feed_name,
-            instrument_key="__all__",
+            instrument_key=instrument_key,
             dt_min=dt_min,
             dt_max=dt_max,
-            approx_row_count=partition_count,
+            approx_row_count=row_count,
         )
         session.add(coverage)
 
     logger.debug(
         "coverage_upserted",
         dataset=feed_name,
+        instrument_key=instrument_key,
         dt_min=dt_min_str,
         dt_max=dt_max_str,
-        partitions=partition_count,
+        rows=row_count,
     )
     return 1

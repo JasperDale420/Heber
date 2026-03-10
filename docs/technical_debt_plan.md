@@ -391,7 +391,7 @@ Description: SDK defaults to port 8080, while docker-compose exposes 8085 on hos
 
 Scope:
 - `heber/config.py`
-- `heber/sdk/client.py`
+- `heber/reader/core.py`
 - `README.md` or `docs/sdk.md`
 
 Acceptance Criteria:
@@ -782,7 +782,7 @@ Description: Data contract documentation still points Silver schema ownership at
 Scope:
 - `docs/data_contract.md`
 - `heber/schemas/silver.py`
-- `heber/sdk/client.py`
+- `heber/reader/core.py`
 - `heber/watch/writer.py`
 
 Acceptance Criteria:

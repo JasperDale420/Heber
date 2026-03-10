@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import polars as pl
+import pandas as pd
 import pytest
 
 from heber.watch import consumer as consumer_module
@@ -42,8 +42,8 @@ def test_persist_features_to_gold_writes_partitioned_file(tmp_path) -> None:  # 
 
     out_file = tmp_path / "dt=2026-02-07" / "data.parquet"
     assert out_file.exists()
-    df = pl.read_parquet(out_file)
-    assert df.get_column("alert_id").to_list() == ["a1"]
+    df = pd.read_parquet(out_file)
+    assert df["alert_id"].tolist() == ["a1"]
 
 
 @pytest.mark.asyncio

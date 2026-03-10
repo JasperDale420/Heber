@@ -1,6 +1,6 @@
-# Heber SDK
+# Heber Reader
 
-The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to Silver/Gold data and Catalog metadata.
+The `HeberReader` is the canonical thin filesystem reader for the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to Silver and Gold data via direct pyarrow.dataset reads with predicate pushdown — no HTTP, no lakeFS, no Catalog API required.
 
 ## Installation
 
@@ -8,52 +8,48 @@ The Heber SDK is the main Python client for accessing the Heber Data Lakehouse. 
 # Full installation (all dependencies)
 pip install heber
 
-# Lightweight SDK-only (minimal dependencies)
-pip install heber[sdk]
-```
-
-### From Source
-
-```python
-from heber.sdk.client import HeberClient
+# Or from source
+uv sync
 ```
 
 ## Quick Start
 
 ```python
-from datetime import datetime
-from heber.sdk.client import HeberClient
+from heber.reader import HeberReader
 
-client = HeberClient()
+reader = HeberReader()
 
 # Read market data with zero-leakage guarantee
-bars = client.read_asof(
-    dataset="bars",
-    asof_time=datetime(2025, 1, 15),
+bars = reader.read_asof(
+    "bars",
+    asof_time="2025-01-15",
     instrument_keys=["equity:AAPL"],
 )
 ```
 
-### Local Docker Compose Note
+### Data Root
 
-By default, `HeberClient()` now uses `http://localhost:8085/api/v1`, which matches the host port exposed by `docker compose`.
+By default, `HeberReader()` uses `settings.data_root` (`/Volumes/heber/data`), which is the mounted Heber volume.
 
-If you need a different endpoint:
+To override:
 
-- Set `HEBER_CATALOG_URL`, or
-- Pass `catalog_url="http://<host>:<port>/api/v1"` when constructing `HeberClient`.
+```python
+from pathlib import Path
+
+reader = HeberReader(data_root=Path("/custom/data/path"))
+```
 
 ## Core Features
 
 ### Zero-Leakage Data Access
 
-The `read_asof()` method ensures you only get data that was **available** at the specified time:
+The `read_asof()` method ensures you only get data that was **available** at the specified time. The `ts_available <= asof_time` predicate is pushed into the pyarrow dataset scan — not applied as a post-filter — so Parquet row-group pruning eliminates unnecessary I/O before data reaches memory.
 
 ```python
 # Only returns data where ts_available <= asof_time
-bars = client.read_asof(
-    dataset="bars",
-    asof_time=datetime(2025, 1, 15),
+bars = reader.read_asof(
+    "bars",
+    asof_time="2025-01-15",
     instrument_keys=["equity:AAPL", "equity:TSLA"],
     time_range=("2025-01-01", "2025-01-15"),
 )
@@ -62,53 +58,53 @@ bars = client.read_asof(
 ### Silver Layer (Market Data)
 
 ```python
-# Read market data from local Parquet partitions
-quotes = client.read_silver(
-    dataset="quotes",
+# Read market data from Parquet partitions
+quotes = reader.read_silver(
+    "quotes",
     time_range=("2025-01-01", "2025-01-15"),
     instrument_keys=["equity:TSLA"],
     columns=["ts_event", "bid_px", "ask_px", "bid_sz", "ask_sz"],
 )
 ```
 
+Path layout: `silver/feed={dataset}/instrument_type={type}/dt={date}/`
+
 ### Gold Layer (Features & Labels)
 
 ```python
 # Write computed features
-client.write_gold(
-    dataset="momentum_features",
+reader.write_gold(
+    "momentum_features",
     df=features,  # Must include: instrument_key, ts_event, ts_available
     project="kairos",
     version="v1",
 )
 
-# Read with version resolution
-features = client.read_gold_versioned(
-    dataset="momentum_features",
-    version="v3.*",  # Latest v3.x version
+# Read Gold features (latest version auto-resolved)
+features = reader.read_gold(
+    "momentum_features",
+    project="kairos",
+)
+
+# Read a specific version
+features = reader.read_gold(
+    "momentum_features",
+    project="kairos",
+    version="v3",
 )
 ```
 
-### Version Management
+Path layout: `gold/dataset={dataset}/project={project}/version={version}/dt={date}/`
 
-If lakeFS is configured, the SDK uses it for Git-like data versioning. If lakeFS is not reachable, it falls back to filesystem discovery.
+### Version Discovery
 
 ```python
-# List all versions
-versions = client.list_gold_versions("momentum_features")
-# ["v3.5.0", "v3.2.1", "v1.0.0"]
+# List all versions for a Gold dataset
+versions = reader.list_gold_versions("momentum_features")
+# ["v3", "v2", "v1"]
 
-# Check compatibility between versions
-compat = client.check_version_compatibility(
-    dataset="momentum_features",
-    from_version="v3.2.1",
-    to_version="v3.5.0",
-)
-# {"compatible": True, "breaking": [], "changes": ["added momentum_20d"]}
-
-# Get version lineage (commit metadata)
-lineage = client.get_version_lineage("momentum_features", "v3.5.0")
-# {"commit_id": "abc123", "created_at": "2025-01-15T...", "parents": [...]}
+# Filter by project
+versions = reader.list_gold_versions("momentum_features", project="kairos")
 ```
 
 ### As-Of Joins
@@ -117,7 +113,7 @@ Point-in-time correct joins that prevent lookahead bias:
 
 ```python
 # Join trades with earnings, ensuring no future data leaks
-result = client.asof_join(
+result = reader.asof_join(
     left=trades,
     right=earnings,
     on_keys=["instrument_key"],
@@ -128,26 +124,19 @@ result = client.asof_join(
 )
 ```
 
-### Dataset Discovery
+### Context Manager
 
 ```python
-# List available datasets
-datasets = client.list_datasets(layer="silver")
-
-# Get dataset metadata
-info = client.get_dataset("bars")
-
-# Discover partitions and schema
-discovery = client.discover("bars", layer="silver")
+with HeberReader() as reader:
+    bars = reader.read_asof("bars", asof_time="2025-01-15")
 ```
 
-## When to Update the SDK
+## When to Update the Reader
 
 ### Updates Required
 
 - Adding new dataset types (options, crypto, etc.)
 - New read patterns (streaming, incremental)
-- Catalog API changes
 - Schema contract changes
 - New helper methods
 
@@ -155,19 +144,18 @@ discovery = client.discover("bars", layer="silver")
 
 - Adding new instruments (just data)
 - New Gold datasets (existing `write_gold()` works)
-- Version changes (lakeFS tags resolve automatically)
 - New data sources (Bronze -> Silver pipeline handles it)
 
 ## Architecture
 
-The SDK is a thin wrapper over:
+The reader is a thin wrapper over pyarrow.dataset:
 
 | Layer | Implementation |
 |-------|----------------|
-| Silver reads | Parquet partitions on local filesystem |
-| Gold reads/writes | Parquet partitions on local filesystem |
-| Catalog API | HTTP client to `heber-catalog` |
-| Versioning | lakeFS API (optional; fallback to filesystem) |
-| Schema registry | Confluent-compatible registry (optional, via `heber.schema`) |
+| Silver reads | pyarrow.dataset with hive partitioning + predicate pushdown |
+| Gold reads/writes | pyarrow.dataset with hive partitioning + predicate pushdown |
+| Versioning | Filesystem discovery (sorted `version=*` directories) |
 
-Iceberg and other OSS migration components live in `heber/storage/` and are not yet wired into `HeberClient`.
+All time and availability predicates are pushed into `ds.dataset(...).to_table(filter=...)` via `ds.Expression`, enabling Parquet row-group pruning before data reaches memory.
+
+Iceberg and other OSS migration components live in `heber/storage/` and are not yet wired into `HeberReader`.

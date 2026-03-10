@@ -25,7 +25,6 @@ dependencies = [
     # Data processing
     "pandas>=2.0",
     "pyarrow>=15.0",
-    "polars>=0.20",
     "duckdb>=1.1.0",
 
     # Event bus
@@ -75,13 +74,13 @@ dev = [
 ]
 
 
-# Lightweight SDK-only install: pip install heber[sdk]
-# For external consumers who only need the client
-sdk = [
+# Lightweight reader-only install: pip install heber[reader]
+# For external consumers who only need the filesystem reader
+reader = [
     "pandas>=2.0",
     "pyarrow>=15.0",
-    "httpx>=0.26",
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "structlog>=24.0",
 ]
 
@@ -95,7 +94,7 @@ build-backend = "hatchling.build"
 [tool.ruff]
 extend = "ruff-base.toml"
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -138,11 +137,20 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
-strict = true
+python_version = "3.12"
+strict = false
 warn_unused_configs = true
 warn_redundant_casts = true
-plugins = ["pydantic.mypy", "numpy.typing.mypy_plugin"]
+warn_return_any = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["heber.reader.*", "heber.config"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

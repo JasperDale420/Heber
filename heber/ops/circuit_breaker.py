@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -28,14 +28,14 @@ degraded_mode = Gauge(
 )
 
 
-class DependencyType(str, Enum):
+class DependencyType(StrEnum):
     """Dependency classification per PRD §12.13.1."""
 
     HARD = "hard"  # Service cannot function without it
     SOFT = "soft"  # Service can continue with reduced functionality
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """Circuit breaker states per PRD §12.13.3."""
 
     CLOSED = "closed"  # Normal operation

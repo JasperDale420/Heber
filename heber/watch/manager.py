@@ -384,6 +384,7 @@ class WatchManager:
         """Add a price snapshot for a watch."""
         key = WatchKeys.snapshots_key(snapshot.watch_id)
         self.redis.rpush(key, snapshot.model_dump_json())
+        self.redis.expire(key, 86400 * 7)  # 7-day TTL prevents unbounded Redis growth
 
     async def add_snapshot_async(self, snapshot: WatchSnapshot) -> None:
         """Async wrapper for add_snapshot."""

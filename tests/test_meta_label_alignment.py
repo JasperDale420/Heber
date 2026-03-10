@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-import polars as pl
+import pandas as pd
 
 from heber.ml.datasets import MetaLabelDatasetBuilder
 from heber.watch.checker import outcome_to_label_row
@@ -47,14 +47,14 @@ def test_outcome_to_label_row_columns():
 def test_meta_label_builder_normalizes_legacy_columns():
     builder = MetaLabelDatasetBuilder()
 
-    features = pl.DataFrame(
+    features = pd.DataFrame(
         {
             "alert_id": ["a1"],
             "feature_x": [1.0],
         }
     )
 
-    legacy_outcomes = pl.DataFrame(
+    legacy_outcomes = pd.DataFrame(
         {
             "alert_id": ["a1"],
             "outcome_reason": ["hit_tp"],
@@ -71,5 +71,5 @@ def test_meta_label_builder_normalizes_legacy_columns():
     labeled = builder._add_meta_label(joined)
 
     assert labeled.shape[0] == 1
-    assert labeled.get_column("hit_tp_first")[0] == 1
-    assert labeled.get_column("meta_label")[0] == 1
+    assert labeled["hit_tp_first"].iloc[0] == 1
+    assert labeled["meta_label"].iloc[0] == 1

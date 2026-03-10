@@ -249,15 +249,3 @@ data_source heber_silver:
             results[dataset] = self.scan(dataset)
 
         return results
-
-
-# Singleton
-_scanner: SodaQualityScanner | None = None
-
-
-def get_quality_scanner() -> SodaQualityScanner:
-    """Get the singleton quality scanner instance."""
-    global _scanner
-    if _scanner is None:
-        _scanner = SodaQualityScanner()
-    return _scanner

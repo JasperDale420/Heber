@@ -145,7 +145,7 @@ def write_silver_parquet(
             try:
                 pa.Table.from_pylist([row], schema=schema)
                 valid_rows.append(row)
-            except Exception:
+            except (pa.ArrowTypeError, pa.ArrowInvalid):
                 logger.debug("Skipping bad Silver row", index=i, feed=dataset)
 
         if valid_rows:
@@ -173,7 +173,7 @@ def write_silver_parquet(
         else:
             record_write_error(layer="silver", error_type=type(e).__name__)
             logger.error("All Silver rows invalid, partition skipped", partition=partition_key)
-    except Exception as e:
+    except OSError as e:
         record_write_error(layer="silver", error_type=type(e).__name__)
         logger.error(
             "Failed to flush Silver partition",

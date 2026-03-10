@@ -52,7 +52,7 @@ class Compactor:
                 )
                 try:
                     lock_path.unlink(missing_ok=True)
-                except Exception as e:
+                except OSError as e:
                     logger.warning(
                         "Failed to remove stale compaction lock",
                         partition=str(partition_path),
@@ -70,7 +70,7 @@ class Compactor:
             return
         try:
             lock_path.unlink(missing_ok=True)
-        except Exception as e:
+        except OSError as e:
             logger.warning("Failed to release compaction lock", lock_path=str(lock_path), error=str(e))
 
     def _dataset_label(self, partition_path: Path) -> str:
@@ -82,7 +82,7 @@ class Compactor:
                     return part.split("=", 1)[1]
             if rel.parts:
                 return rel.parts[0]
-        except Exception:
+        except ValueError:
             pass
         return "unknown"
 
@@ -91,7 +91,7 @@ class Compactor:
         """Read lock owner PID from lock file."""
         try:
             first_line = lock_path.read_text(encoding="utf-8").splitlines()[0]
-        except Exception:
+        except (OSError, IndexError, UnicodeDecodeError):
             return None
         for token in first_line.split():
             if token.startswith("pid="):
@@ -319,23 +319,24 @@ class Compactor:
         has_event_id = "event_id" in combined_table.schema.names
         has_ts_ingest = "ts_ingest" in combined_table.schema.names
 
-        # 4. Deduplication
+        # 4. Deduplication — pure PyArrow, no Pandas roundtrip
         if has_event_id:
-            df = combined_table.to_pandas()
-            initial_rows = len(df)
+            initial_rows = combined_table.num_rows
 
-            # Sort so we keep the earliest ts_ingest if present
+            # Sort by ts_ingest ascending so take(keep_indices) preserves earliest duplicate
             if has_ts_ingest:
-                df = df.sort_values("ts_ingest", ascending=True)
+                combined_table = combined_table.sort_by([("ts_ingest", "ascending")])
 
-            # Drop duplicates keeping the first (earliest)
-            df = df.drop_duplicates(subset=["event_id"], keep="first")
+            event_ids = combined_table.column("event_id").to_pylist()
+            seen: set[str] = set()
+            keep_indices: list[int] = []
+            for i, eid in enumerate(event_ids):
+                if eid not in seen:
+                    seen.add(eid)
+                    keep_indices.append(i)
 
-            # Restore original sort if needed (optional, but good for predictable layout)
-            if has_ts_ingest:
-                df = df.sort_index()
-
-            deduped_rows = len(df)
+            final_table = combined_table.take(keep_indices)
+            deduped_rows = final_table.num_rows
             duplicates_removed = initial_rows - deduped_rows
 
             if duplicates_removed > 0:
@@ -348,8 +349,6 @@ class Compactor:
                 from heber.ops.metrics import compactor_dedupe_drops_total
 
                 compactor_dedupe_drops_total.labels(dataset=dataset).inc(duplicates_removed)
-
-            final_table = pa.Table.from_pandas(df, schema=unified_schema, preserve_index=False)
         else:
             final_table = combined_table
 
@@ -410,7 +409,7 @@ class Compactor:
             )
             return len(small_files)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — multi-step compaction must preserve sources on any failure
             record_compaction(
                 dataset=dataset,
                 status="error",
@@ -472,7 +471,7 @@ class Compactor:
             except asyncio.CancelledError:
                 logger.info("Compactor cancelled")
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — top-level event loop must not crash
                 logger.error("Compactor error", error=str(e), exc_info=True)
                 await asyncio.sleep(60)  # Back off on error
 

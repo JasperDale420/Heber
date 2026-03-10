@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from enum import Enum
-from functools import lru_cache
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -27,7 +26,7 @@ schema_operations = Counter(
 )
 
 
-class CompatibilityLevel(str, Enum):
+class CompatibilityLevel(StrEnum):
     """Schema compatibility levels for evolution."""
 
     BACKWARD = "BACKWARD"  # New schema can read old data
@@ -39,7 +38,7 @@ class CompatibilityLevel(str, Enum):
     NONE = "NONE"  # No compatibility checking
 
 
-class SchemaType(str, Enum):
+class SchemaType(StrEnum):
     """Supported schema types."""
 
     AVRO = "AVRO"
@@ -331,19 +330,6 @@ class SchemaRegistryClient:
         """
         client = self._get_client()
         return client.delete_subject(subject)
-
-
-# Singleton
-_client: SchemaRegistryClient | None = None
-
-
-@lru_cache(maxsize=1)
-def get_schema_registry() -> SchemaRegistryClient:
-    """Get the singleton schema registry client."""
-    global _client
-    if _client is None:
-        _client = SchemaRegistryClient()
-    return _client
 
 
 # =============================================================================

@@ -12,7 +12,7 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +69,7 @@ pending_deletions = Gauge(
 )
 
 
-class DataLayer(str, Enum):
+class DataLayer(StrEnum):
     """Data layers per PRD §15.1."""
 
     BRONZE = "bronze"
@@ -79,7 +79,7 @@ class DataLayer(str, Enum):
     DLQ = "dlq"
 
 
-class LifecycleAction(str, Enum):
+class LifecycleAction(StrEnum):
     """Lifecycle actions per PRD §15.3."""
 
     DELETE = "delete"  # Permanently remove files

@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +80,7 @@ retry_backoff_seconds = _get_or_create(
 )
 
 
-class ErrorType(str, Enum):
+class ErrorType(StrEnum):
     """Error classification per PRD §12.8.2."""
 
     # Retryable errors
@@ -408,7 +408,7 @@ class RetryExecutor:
             try:
                 return await operation(*args, **kwargs)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — generic retry executor must catch all exceptions
                 last_error = e
                 error_type = classify_error(e)
 
@@ -522,7 +522,7 @@ class BackpressureMonitor:
             for stream, group in streams:
                 try:
                     await self.check_lag(stream, group)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — monitoring loop must not crash
                     logger.error("lag_check_failed", stream=stream.value, error=str(e))
 
             await asyncio.sleep(self.check_interval)

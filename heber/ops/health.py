@@ -10,7 +10,7 @@ Provides:
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -25,7 +25,7 @@ _start_time = time.time()
 _startup_complete = False
 
 
-class HealthStatus(str, Enum):
+class HealthStatus(StrEnum):
     """Health check status."""
 
     OK = "ok"
@@ -33,7 +33,7 @@ class HealthStatus(str, Enum):
     ERROR = "error"
 
 
-class ReadinessStatus(str, Enum):
+class ReadinessStatus(StrEnum):
     """Readiness status."""
 
     READY = "ready"

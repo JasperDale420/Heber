@@ -233,6 +233,20 @@ class Settings(BaseSettings):
     # Metrics
     metrics_port: int | None = Field(default=None, description="Prometheus metrics port")
 
+    # Daily health report
+    daily_health_report_dir: Path = Field(
+        default=Path("/Volumes/heber/data/ops/daily-health"),
+        description="Directory for daily health JSON reports",
+    )
+    daily_health_expected_symbol_count: int = Field(
+        default=500,
+        description="Expected minimum distinct symbols in bars partition",
+    )
+    daily_health_expected_feeds: list[str] = Field(
+        default=["bars", "quotes", "trades", "flow_alerts"],
+        description="Feeds expected to have partitions each trading day",
+    )
+
     # Dataflow health verification
     health_consumer_metrics_url: str = Field(
         default="http://localhost:9090/metrics",

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import ValidationError
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
@@ -238,11 +239,11 @@ class BronzeToSilverTransformer:
                             row = self._envelope_to_silver_row(candidate, feed)
                             if row:
                                 records.append(row)
-                    except Exception as e:
+                    except (json.JSONDecodeError, ValidationError, ValueError, KeyError) as e:
                         logger.debug("Failed to parse line", error=str(e))
                         continue
 
-        except Exception as e:
+        except OSError as e:
             logger.error("Failed to read Bronze file", path=str(file_path), error=str(e))
 
         return records

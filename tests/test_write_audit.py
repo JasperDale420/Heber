@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pandas as pd
-import polars as pl
 import pyarrow as pa
 
 from heber.quality.write_audit import (
@@ -118,38 +117,6 @@ class TestAuditNullFieldsPandas:
             assert len(calls) >= 1
             for call in calls:
                 assert call.kwargs["partition"] == "feed=bars/dt=2025-01-01"
-
-
-class TestAuditNullFieldsPolars:
-    """Test audit with Polars DataFrames."""
-
-    def test_no_nulls_no_warnings(self):
-        """Clean Polars data produces no warnings."""
-        df = pl.DataFrame(
-            {
-                "price": [1.0, 2.0],
-                "size": [100, 200],
-                "ts_event": ["2025-01-01", "2025-01-02"],
-            }
-        )
-        result = audit_null_fields(df, layer="silver", dataset="trades")
-        assert result == {}
-
-    def test_nulls_detected(self):
-        """Null values detected in Polars DataFrame."""
-        df = pl.DataFrame(
-            {
-                "price": [1.0, None],
-                "size": [100, 200],
-                "ts_event": ["2025-01-01", None],
-            }
-        )
-        result = audit_null_fields(df, layer="silver", dataset="trades")
-        assert "price" in result
-        assert result["price"] == 1
-        assert "ts_event" in result
-        assert result["ts_event"] == 1
-        assert "size" not in result
 
 
 class TestAuditNullFieldsArrow:

@@ -131,7 +131,7 @@ watch_gateway_requests_total = _get_or_create(
     Counter,
     "heber_watch_gateway_requests_total",
     "Gateway request outcomes from watch-service components",
-    ["component", "endpoint", "outcome", "status_code"],
+    ["component", "endpoint", "outcome", "status_class"],
 )
 
 watch_gateway_request_duration_seconds = _get_or_create(
@@ -231,7 +231,7 @@ catalog_requests_total = _get_or_create(
     Counter,
     "heber_catalog_requests_total",
     "Total API requests",
-    ["endpoint", "status_code"],
+    ["endpoint", "status_class"],
 )
 
 catalog_request_duration_seconds = _get_or_create(
@@ -357,6 +357,21 @@ def record_watch_gateway_success(
     )
 
 
+def _status_class(status_code: int | None) -> str:
+    """Bucket an HTTP status code into a low-cardinality label."""
+    if status_code is None:
+        return "error"
+    if 200 <= status_code < 300:
+        return "2xx"
+    if 300 <= status_code < 400:
+        return "3xx"
+    if 400 <= status_code < 500:
+        return "4xx"
+    if 500 <= status_code < 600:
+        return "5xx"
+    return f"{status_code // 100}xx"
+
+
 def record_watch_gateway_request(
     component: str,
     endpoint: str,
@@ -365,12 +380,11 @@ def record_watch_gateway_request(
     duration_seconds: float,
 ) -> None:
     """Record a watch-service gateway request outcome and latency."""
-    status_label = "none" if status_code is None else str(status_code)
     watch_gateway_requests_total.labels(
         component=component,
         endpoint=endpoint,
         outcome=outcome,
-        status_code=status_label,
+        status_class=_status_class(status_code),
     ).inc()
     watch_gateway_request_duration_seconds.labels(
         component=component,
@@ -428,7 +442,7 @@ def record_compaction(
 
 def record_api_request(endpoint: str, status_code: int, duration: float) -> None:
     """Record a catalog API request."""
-    catalog_requests_total.labels(endpoint=endpoint, status_code=str(status_code)).inc()
+    catalog_requests_total.labels(endpoint=endpoint, status_class=_status_class(status_code)).inc()
     catalog_request_duration_seconds.labels(endpoint=endpoint).observe(duration)
 
 

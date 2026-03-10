@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class SliceStatus(str, Enum):
+class SliceStatus(StrEnum):
     """Implementation slice status."""
 
     NOT_STARTED = "not_started"

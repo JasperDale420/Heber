@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum
+from enum import StrEnum
 
 import numpy as np
 import pandas as pd
@@ -42,7 +42,7 @@ VIX_LOW = 15.0
 VIX_HIGH = 25.0
 
 
-class AlertHorizon(str, Enum):
+class AlertHorizon(StrEnum):
     """DTE-based horizon classification."""
 
     INTRADAY = "intraday"  # 0-2 DTE: 30min - 2h window
@@ -50,7 +50,7 @@ class AlertHorizon(str, Enum):
     LEAP = "leap"  # 22+ DTE: 5-30 day window
 
 
-class VixRegime(str, Enum):
+class VixRegime(StrEnum):
     """VIX-based market regime."""
 
     LOW = "low"  # VIX < 15: calm markets
@@ -773,56 +773,3 @@ def compute_multi_horizon_labels(
     if results:
         return pd.concat(results, ignore_index=True)
     return pd.DataFrame()
-
-
-# =============================================================================
-# Auxiliary: Analysis Functions
-# =============================================================================
-
-
-def compute_win_rate_by_feature(
-    labeled_df: pd.DataFrame,
-    feature_col: str,
-    bins: int = 10,
-) -> pd.DataFrame:
-    """Analyze win rate stratified by a feature."""
-    df = labeled_df.dropna(subset=["hit_tp_first", feature_col])
-
-    if df[feature_col].dtype in [np.float64, np.float32, np.int64, np.int32]:
-        df = df.copy()
-        df["bin"] = pd.qcut(df[feature_col], q=bins, duplicates="drop")
-    else:
-        df = df.copy()
-        df["bin"] = df[feature_col]
-
-    stats = (
-        df.groupby("bin")
-        .agg(
-            count=("hit_tp_first", "count"),
-            wins=("hit_tp_first", "sum"),
-            win_rate=("hit_tp_first", "mean"),
-        )
-        .reset_index()
-    )
-
-    return stats
-
-
-def compute_regime_analysis(labeled_df: pd.DataFrame) -> pd.DataFrame:
-    """Analyze win rates by VIX regime."""
-    df = labeled_df.dropna(subset=["hit_tp_first", "vix_regime"])
-
-    stats = (
-        df.groupby("vix_regime")
-        .agg(
-            count=("hit_tp_first", "count"),
-            wins=("hit_tp_first", "sum"),
-            win_rate=("hit_tp_first", "mean"),
-            avg_mfe=("mfe", "mean"),
-            avg_mae=("mae", "mean"),
-            avg_beta_neutral=("beta_neutral_return", "mean"),
-        )
-        .reset_index()
-    )
-
-    return stats

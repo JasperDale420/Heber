@@ -18,7 +18,7 @@ from typing import Any, Literal
 import pandas as pd
 import structlog
 
-from heber.core.parquet import read_parquet_dataset
+from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
@@ -282,7 +282,8 @@ def read_label(
         return pd.DataFrame()
 
     try:
-        df = read_parquet_dataset(
+        reader = HeberReader()
+        df = reader._read_parquet_dataset(
             path=data_path,
             asof_time=asof_time,
         )

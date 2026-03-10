@@ -157,6 +157,6 @@ class SilverWriter:
             record_write(
                 layer="silver", dataset=feed, rows=len(rows), bytes_written=bytes_written, duration_seconds=duration
             )
-        except Exception:
+        except (OSError, pa.ArrowTypeError, pa.ArrowInvalid):
             record_write_error(layer="silver", error_type="flush_failed")
             raise

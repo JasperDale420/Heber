@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class StreamPriority(str, Enum):
+class StreamPriority(StrEnum):
     """Stream processing priority."""
 
     CRITICAL = "critical"  # Real-time market data

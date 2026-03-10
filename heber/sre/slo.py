@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class SLOWindow(str, Enum):
+class SLOWindow(StrEnum):
     """SLO measurement windows."""
 
     WINDOW_1H = "1h"
@@ -37,7 +37,7 @@ class SLOWindow(str, Enum):
         return mapping[self.value]
 
 
-class AlertSeverity(str, Enum):
+class AlertSeverity(StrEnum):
     """Alert severity levels."""
 
     CRITICAL = "critical"

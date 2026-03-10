@@ -1,13 +1,13 @@
 # Iceberg Migration
 
-Iceberg support is present but not wired into the default writer/SDK paths.
+Iceberg support is present but not wired into the default writer/reader paths.
 
 ## Current State
 
 - Iceberg catalog + schemas live in `heber/storage/iceberg_catalog.py`.
 - Iceberg write/read helper lives in `heber/storage/iceberg_writer.py`.
 - `heber/writer/silver.py` still writes Parquet directly.
-- `HeberClient` reads from local Parquet partitions.
+- `HeberReader` reads from local Parquet partitions via pyarrow.dataset.
 
 ## Configuration
 

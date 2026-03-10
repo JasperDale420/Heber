@@ -105,7 +105,7 @@ class BronzeWriter:
                 events=len(events),
                 file=str(file_path),
             )
-        except Exception as e:
+        except OSError as e:
             record_write_error(layer="bronze", error_type=type(e).__name__)
             logger.error(
                 "Failed to flush Bronze partition",

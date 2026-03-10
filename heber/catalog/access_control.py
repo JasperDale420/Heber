@@ -10,7 +10,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -23,7 +23,7 @@ logger = structlog.get_logger(__name__)
 from heber.retention import DataLayer  # noqa: E402
 
 
-class AccessLevel(str, Enum):
+class AccessLevel(StrEnum):
     """Access permission levels."""
 
     NONE = "none"
@@ -115,13 +115,13 @@ class AccessControlManager:
     - SDK tokens enforce access policies
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.projects: dict[str, Project] = {}
         self.permissions: dict[str, list[DatasetPermission]] = {}  # project_id -> permissions
         self.tokens: dict[str, SDKToken] = {}  # token_id -> token
 
         # Default: Silver is shared
-        self.shared_layers = {DataLayer.SILVER}
+        self.shared_layers: set[DataLayer] = {DataLayer.SILVER}
 
     def create_project(self, project_id: str, name: str, owner: str = "") -> Project:
         """Create a new project."""

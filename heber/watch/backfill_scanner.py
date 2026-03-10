@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import polars as pl
+import pandas as pd
 import structlog
 from prometheus_client import Counter, Histogram
 
@@ -57,11 +57,6 @@ backfill_duration_seconds = Histogram(
     "Duration of a backfill scan cycle",
     buckets=[10, 30, 60, 120, 300, 600, 1800],
 )
-
-
-def _is_polars_panic_exception(exc: BaseException) -> bool:
-    """Return True when a BaseException is a polars/pyo3 panic wrapper."""
-    return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
 
 
 class EnrichmentBackfillScanner:
@@ -131,7 +126,7 @@ class EnrichmentBackfillScanner:
         summary = {"scanned": 0, "patched": 0, "failed": 0}
 
         df = await asyncio.to_thread(self._read_recent_partitions)
-        if df is None or df.is_empty():
+        if df is None or df.empty:
             logger.debug("Enrichment backfill: no partitions found")
             return summary
 
@@ -139,7 +134,7 @@ class EnrichmentBackfillScanner:
         summary["scanned"] = len(df)
         backfill_scanned_total.inc(len(df))
 
-        if incomplete.is_empty():
+        if incomplete.empty:
             logger.info(
                 "Enrichment backfill: all rows complete",
                 scanned=len(df),
@@ -155,7 +150,7 @@ class EnrichmentBackfillScanner:
         # Limit to batch_size
         batch = incomplete.head(self.batch_size)
 
-        for row in batch.iter_rows(named=True):
+        for row in batch.to_dict(orient="records"):
             try:
                 updated = await self._re_enrich_row(row)
                 if updated is not None:
@@ -187,10 +182,10 @@ class EnrichmentBackfillScanner:
         )
         return summary
 
-    def _read_recent_partitions(self) -> pl.DataFrame | None:
+    def _read_recent_partitions(self) -> pd.DataFrame | None:
         """Read Gold feature parquet for the last N days."""
         today = date.today()
-        frames: list[pl.DataFrame] = []
+        frames: list[pd.DataFrame] = []
 
         for offset in range(self.lookback_days):
             dt = today - timedelta(days=offset)
@@ -201,35 +196,28 @@ class EnrichmentBackfillScanner:
                 continue
 
             try:
-                frame = pl.read_parquet(partition_path)
+                frame = pd.read_parquet(partition_path)
                 frames.append(frame)
-            except BaseException as exc:
-                if not isinstance(exc, Exception) and not _is_polars_panic_exception(exc):
-                    raise
+            except Exception:
                 logger.warning(
                     "Failed to read feature partition",
                     path=str(partition_path),
-                    error_type=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
                     exc_info=True,
                 )
 
         if not frames:
             return None
-        return pl.concat(frames, how="diagonal_relaxed")
+        return pd.concat(frames, ignore_index=True)
 
     @staticmethod
-    def _find_incomplete_rows(df: pl.DataFrame) -> pl.DataFrame:
+    def _find_incomplete_rows(df: pd.DataFrame) -> pd.DataFrame:
         """Return rows where at least one enrichable field is null."""
         available_fields = [f for f in ENRICHABLE_FIELDS if f in df.columns]
         if not available_fields:
-            return df.clear()
+            return df.iloc[0:0]
 
-        null_conditions = [pl.col(f).is_null() for f in available_fields]
-        combined = null_conditions[0]
-        for cond in null_conditions[1:]:
-            combined = combined | cond
-
-        return df.filter(combined)
+        mask = df[available_fields].isna().any(axis=1)
+        return df[mask].reset_index(drop=True)
 
     async def _re_enrich_row(self, row: dict) -> dict | None:
         """Reconstruct a FlowAlertRecord and re-run enrichment.
@@ -295,15 +283,11 @@ class EnrichmentBackfillScanner:
         """Write updated feature row back to parquet using dedup-on-alert_id."""
         from heber.ml.datasets import persist_features_to_gold
 
-        features_df = pl.DataFrame([updated_row])
+        features_df = pd.DataFrame([updated_row])
 
         # Coerce alert_time to datetime if needed
         if "alert_time" in features_df.columns:
-            col = features_df["alert_time"]
-            if col.dtype == pl.Utf8:
-                features_df = features_df.with_columns(
-                    pl.col("alert_time").str.to_datetime(time_zone="UTC").alias("alert_time")
-                )
+            features_df["alert_time"] = pd.to_datetime(features_df["alert_time"], utc=True)
 
         persist_features_to_gold(
             features_df=features_df,

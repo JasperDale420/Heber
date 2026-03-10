@@ -153,7 +153,7 @@ class EventConsumer:
             error_type = error.split(":", 1)[0] if error else "unknown_error"
             record_dlq_event(feed=feed, error_type=error_type)
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — DLQ write failure must not crash consumer
             logger.error(
                 "Failed to write message to DLQ",
                 source_message_id=self._decode_string(message_id),
@@ -323,7 +323,7 @@ class EventConsumer:
                     event_data=str(event_data)[:200],
                 )
             return False, str(exc), False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — catch-all after specific handlers for unexpected errors
             record_event_processed(feed=feed, provider=provider, status="error")
             logger.error(
                 "Failed to process event",
@@ -379,7 +379,7 @@ class EventConsumer:
             return str(payload_str.get("feed") or "unknown")
         try:
             event_dict = json.loads(payload_str)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return "unknown"
         return str(event_dict.get("feed") or "unknown")
 
@@ -626,7 +626,7 @@ class EventConsumer:
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — top-level consumer loop must not crash
                 error_streak += 1
                 delay = calculate_retry_delay(
                     attempt=error_streak,
@@ -666,13 +666,13 @@ class EventConsumer:
         ok = True
         try:
             self.bronze_writer.flush_if_needed()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Bronze flush failed", error=str(e), exc_info=True)
             ok = False
 
         try:
             self.silver_writer.flush_if_needed()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Silver flush failed", error=str(e), exc_info=True)
             ok = False
 

@@ -41,7 +41,7 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
                                             v
                                     heber-catalog (Postgres)
                                             v
-                                      SDK + CLI
+                                  HeberReader + CLI
 ```
 
 ## Storage Layout
@@ -61,6 +61,7 @@ All data is stored on the external volume (default: `/Volumes/heber`):
 - **heber-compactor**: Parquet file compaction (Silver/Gold)
 - **heber-watch**: Real-time flow alert tracking → TP/SL labels for ML
 - **heber-dataflow-health**: Scheduled JSON proof-of-flow checks (Gateway → Ingest → Storage)
+- **health-daily**: End-of-day report (partition freshness, cross-feed completeness, Soda quality, fill rate, zero-leakage, DLQ, Gold freshness)
 
 ### Watch Service
 
@@ -123,18 +124,18 @@ score = await scorer.score(alert)  # 0.0 - 1.0
 | Model training | ❌ No | Run manually, logs to MLflow |
 | Inference scoring | ⚙️ Optional | Enable `AlertGate` in consumer |
 
-## SDK Usage
+## Reader Usage
 
 ```python
-from heber.sdk.client import HeberClient
+from heber.reader import HeberReader
 
-client = HeberClient()
+reader = HeberReader()
 
-# Read Silver data (point-in-time correct)
-bars = client.read_asof("bars", asof_time="2025-01-15", instrument_keys=["equity:AAPL"])
+# Read Silver data (point-in-time correct, predicate pushdown)
+bars = reader.read_asof("bars", asof_time="2025-01-15", instrument_keys=["equity:AAPL"])
 
 # Write Gold features
-client.write_gold("momentum_features", df=features, project="kairos", version="v1")
+reader.write_gold("momentum_features", df=features, project="kairos", version="v1")
 ```
 
 ## CLI Usage
@@ -144,6 +145,8 @@ heber info --verbose
 heber datasets --layer silver
 heber versions momentum_features
 heber health-dataflow --mode manual --window-seconds 900
+heber health-daily                           # today's end-of-day report
+heber health-daily --date 2026-03-09 --verbose  # specific date, full JSON
 ```
 
 ## Documentation
@@ -161,7 +164,7 @@ heber health-dataflow --mode manual --window-seconds 900
 - `docs/schema_registry.md` - schema registry usage
 - `docs/iceberg_migration.md` - Iceberg migration status
 - `docs/configuration.md` - environment variables and local vs container settings
-- `docs/sdk.md` - SDK usage and semantics
+- `docs/sdk.md` - HeberReader usage and semantics
 - `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
 - `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
 - `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
@@ -173,10 +176,10 @@ heber health-dataflow --mode manual --window-seconds 900
 The `heber/` package contains the core logic:
 
 - **Core**: `catalog`, `bus`, `models`, `config`
-- **Lake**: `writer`, `storage` (Iceberg), `versioning` (lakeFS)
+- **Lake**: `writer`, `storage` (Iceberg)
 - **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
-- **Intelligence**: `ml` (meta-labeling), `backtest`, `firewall` (zero-leakage), `universe`
-- **Serving**: `sdk`, `watch` (real-time)
+- **Intelligence**: `ml` (meta-labeling), `backtest`, `universe`
+- **Serving**: `reader`, `watch` (real-time)
 - **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
 
 ## Development

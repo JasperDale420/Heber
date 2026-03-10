@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-import polars as pl
+import pandas as pd
 import structlog
 
 from heber.config import settings
@@ -1121,7 +1121,7 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
 def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
     """Persist one feature row into Gold meta-label feature partitions."""
     row = dict(features.__dict__)
-    features_df = pl.DataFrame([row])
+    features_df = pd.DataFrame([row])
     persist_features_frame_to_gold(
         features_df=features_df,
         output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,

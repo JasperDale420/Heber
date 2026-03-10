@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -32,7 +32,7 @@ logger = structlog.get_logger(__name__)
 DEFAULT_SHUTDOWN_TIMEOUT = 30
 
 
-class LifecycleState(str, Enum):
+class LifecycleState(StrEnum):
     """Service lifecycle states."""
 
     STARTING = "starting"

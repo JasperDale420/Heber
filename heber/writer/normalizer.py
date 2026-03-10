@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
-from functools import lru_cache
 from typing import Any
 
 import pyarrow as pa
@@ -105,14 +104,22 @@ def missing_required_non_null_fields(feed: str, row: Mapping[str, Any]) -> list[
     return sorted(missing)
 
 
-@lru_cache(maxsize=64)
-def _target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
+def _build_target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
     mapping = FIELD_MAPPINGS.get(feed, {})
     target_to_source: dict[str, list[str]] = {}
     for source_name, target_name in mapping.items():
         target_to_source.setdefault(target_name, []).append(source_name)
-    # Return tuples so the result is hashable/cacheable
     return {k: tuple(v) for k, v in target_to_source.items()}
+
+
+# Pre-compute at module load — FIELD_MAPPINGS is static so lru_cache adds no value
+_TARGET_TO_SOURCE_MAPS: dict[str, dict[str, tuple[str, ...]]] = {
+    feed: _build_target_to_source_map(feed) for feed in FIELD_MAPPINGS
+}
+
+
+def _target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
+    return _TARGET_TO_SOURCE_MAPS.get(feed, {})
 
 
 def _coerce_value(value: Any, arrow_type: pa.DataType) -> Any:
@@ -135,7 +142,7 @@ def _coerce_value(value: Any, arrow_type: pa.DataType) -> Any:
         if pa.types.is_string(arrow_type):
             return _coerce_string(value)
         return value
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

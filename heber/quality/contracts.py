@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -17,7 +17,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class QualityMetric(str, Enum):
+class QualityMetric(StrEnum):
     """Quality metric types."""
 
     FILL_RATE = "fill_rate"
