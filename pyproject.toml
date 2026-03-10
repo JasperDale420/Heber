@@ -149,6 +149,39 @@ module = ["heber.reader.*", "heber.config"]
 strict = true
 
 [[tool.mypy.overrides]]
+module = [
+    "heber.core.*",
+    "heber.versioning.*",
+    "heber.backtest.*",
+    "heber.universe.*",
+    "heber.utils.*",
+]
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pandas",
+    "pandas.*",
+    "pyarrow",
+    "pyarrow.*",
+    "soda.*",
+    "lakefs",
+    "lakefs.*",
+    "schema_registry.*",
+    "exchange_calendars",
+    "exchange_calendars.*",
+    "feast",
+    "feast.*",
+    "pyiceberg",
+    "pyiceberg.*",
+    "joblib",
+    "joblib.*",
+    "filelock",
+    "filelock.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
 

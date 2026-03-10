@@ -144,7 +144,7 @@ class LakeFSVersionManager:
         if self._client is None:
             import lakefs
 
-            self._client = lakefs.Client(
+            self._client = lakefs.Client(  # type: ignore[no-untyped-call]
                 host=self.config.endpoint,
                 username=self.config.access_key,
                 password=self.config.secret_key,
