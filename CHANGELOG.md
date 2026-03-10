@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pre-commit** (`detect-secrets`): ignore `logs/` directories in secret scans to avoid false-positive detections from generated log files.
+
 - **Consumer RCA: Malformed `insider_trades` Identifiers** (2026-03-09):
   - Added explicit `MissingInstrumentIdentifierError` and `InvalidInstrumentKeyError` classification in Silver normalization so blank `symbol` / `ticker` values from upstream insider-trade events fail with concrete data-quality context instead of a generic invalid-key error.
   - Added bounded `silver_validation_failed` warning logging in the consumer so repeated malformed events still write Bronze and route to the DLQ without flooding the error logs with duplicate tracebacks.
