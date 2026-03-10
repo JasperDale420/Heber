@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Option chain snapshot spot persistence** (2026-03-10):
+  - Added optional `underlying_price` to the canonical `option_chain_snapshot` silver schema and `OptionChainSnapshotRecord`.
+  - Extended ingest-contract coverage so Gateway snapshots carrying a top-level spot price survive normalization into Silver rows unchanged.
+
 - **HeberReader Code Quality Review** (2026-03-10):
   - Fixed `read_gold` version resolution bug: when `version=None`, the reader now correctly filters to only the latest version instead of scanning all versions.
   - Promoted `_read_parquet_dataset` to public `read_parquet_dataset` API and updated all callers (`ml/datasets.py`, `gold/labels.py`).

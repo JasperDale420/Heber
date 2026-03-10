@@ -53,6 +53,8 @@ SILVER_SCHEMAS = {
             ("ask_sz", pa.float64()),
             ("bid_exchange", pa.string()),
             ("ask_exchange", pa.string()),
+            ("conditions", pa.list_(pa.string())),
+            ("tape", pa.string()),
         ]
     ),
     "trades": pa.schema(
@@ -75,6 +77,8 @@ SILVER_SCHEMAS = {
             ("size", pa.float64()),
             ("exchange", pa.string()),
             ("tape", pa.string()),
+            ("conditions", pa.list_(pa.string())),
+            ("taker_side", pa.string()),
         ]
     ),
     "flow_alerts": pa.schema(
@@ -996,6 +1000,7 @@ SILVER_SCHEMAS = {
             ("quality_flags", pa.list_(pa.string())),
             ("snapshot_ts", pa.timestamp("us", tz="UTC")),
             ("underlying", pa.string()),
+            ("underlying_price", pa.float64()),
             ("expiry", pa.date32()),
             ("chain_json", pa.string()),
             ("total_call_volume", pa.float64()),

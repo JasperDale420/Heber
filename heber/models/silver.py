@@ -767,6 +767,7 @@ class OptionChainSnapshotRecord(SilverBase):
 
     snapshot_ts: datetime
     underlying: str
+    underlying_price: float | None = None
     expiry: date
     chain_json: str = Field(..., description="JSON of full chain data")
     total_call_volume: float | None = None

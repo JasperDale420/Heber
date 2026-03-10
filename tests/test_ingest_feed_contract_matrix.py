@@ -116,6 +116,7 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                 payload={
                     "timestamp": "2026-02-11T14:30:00Z",
                     "underlying": "SPY",
+                    "underlying_price": 600.5,
                     "expiry": "2026-02-11",
                     "chain_json": {
                         "data": {
@@ -552,3 +553,12 @@ def test_live_and_backfill_paths_produce_equivalent_rows_for_shared_feeds() -> N
 
         for required_field in REQUIRED_NON_NULL_FIELDS[live_row["feed"]]:
             assert backfill_row[required_field] == live_row[required_field]
+
+
+def test_option_chain_snapshot_preserves_underlying_price() -> None:
+    _, _, envelope = next(case for case in _cases() if case[0] == "option_chain_snapshot")
+
+    normalized = normalize_envelope_for_silver(envelope)
+    row = envelope_to_silver_row(normalized)
+
+    assert row["underlying_price"] == 600.5
