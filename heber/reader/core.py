@@ -41,8 +41,11 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.utils.versioning import version_sort_key as _version_sort_key
 
 logger = structlog.get_logger(__name__)
+
+_VERSION_PREFIX = "version="
 
 
 def _to_utc(ts: Any) -> pa.Scalar:
@@ -97,6 +100,16 @@ def _tuple_filters_to_exprs(
         elif method:
             exprs.append(getattr(field, method)(pa.scalar(val)))
     return exprs
+
+
+def _discover_version_dirs(base_path: Path) -> list[Path]:
+    """Return version= directories under *base_path*, sorted newest-first by semver."""
+    dirs = [d for d in base_path.glob("**/version=*") if d.is_dir()]
+    return sorted(
+        dirs,
+        key=lambda d: _version_sort_key(d.name.removeprefix(_VERSION_PREFIX)),
+        reverse=True,
+    )
 
 
 class HeberReader:
@@ -186,7 +199,7 @@ class HeberReader:
                 format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_open_failed", path=str(base_path), exc_info=True)
             return pd.DataFrame()
 
@@ -216,7 +229,7 @@ class HeberReader:
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=projection)
             df = table.to_pandas()
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_read_failed", path=str(base_path), exc_info=True)
             return pd.DataFrame()
 
@@ -396,7 +409,7 @@ class HeberReader:
                 format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_gold_open_failed", path=str(scan_path), exc_info=True)
             return pd.DataFrame()
 
@@ -424,7 +437,7 @@ class HeberReader:
         try:
             table = dataset_obj.to_table(filter=scan_filter)
             df = table.to_pandas()
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_gold_read_failed", path=str(scan_path), exc_info=True)
             return pd.DataFrame()
 
@@ -448,15 +461,13 @@ class HeberReader:
         version directories exist.
         """
         if version:
-            return gold_path / f"version={version}", version
-        version_dirs = sorted(
-            [d for d in gold_path.glob("**/version=*") if d.is_dir()],
-        )
+            return gold_path / f"{_VERSION_PREFIX}{version}", version
+        version_dirs = _discover_version_dirs(gold_path)
         if not version_dirs:
             logger.warning("heber_reader_gold_no_versions", path=str(gold_path))
             return None
-        latest_dir = version_dirs[-1]
-        resolved = latest_dir.name.replace("version=", "")
+        latest_dir = version_dirs[0]
+        resolved = latest_dir.name.removeprefix(_VERSION_PREFIX)
         # Scan from parent so hive partitioning exposes the version= column.
         return latest_dir.parent, resolved
 
@@ -518,7 +529,12 @@ class HeberReader:
 
         for dt, group in df.groupby("dt"):
             partition_dir = (
-                self._root / "gold" / f"dataset={dataset}" / f"project={project}" / f"version={version}" / f"dt={dt}"
+                self._root
+                / "gold"
+                / f"dataset={dataset}"
+                / f"project={project}"
+                / f"{_VERSION_PREFIX}{version}"
+                / f"dt={dt}"
             )
             partition_dir.mkdir(parents=True, exist_ok=True)
 
@@ -573,7 +589,7 @@ class HeberReader:
                 format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
             return pd.DataFrame()
 
@@ -598,7 +614,7 @@ class HeberReader:
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=columns)
             return table.to_pandas()
-        except Exception:
+        except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
             return pd.DataFrame()
 
@@ -628,8 +644,4 @@ class HeberReader:
         if not base.exists():
             return []
 
-        version_tags = sorted(
-            {d.name.replace("version=", "") for d in base.glob("**/version=*") if d.is_dir()},
-            reverse=True,
-        )
-        return version_tags
+        return [d.name.replace("version=", "") for d in _discover_version_dirs(base)]
