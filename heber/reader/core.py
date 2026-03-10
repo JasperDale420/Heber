@@ -644,4 +644,4 @@ class HeberReader:
         if not base.exists():
             return []
 
-        return [d.name.replace("version=", "") for d in _discover_version_dirs(base)]
+        return [d.name.removeprefix(_VERSION_PREFIX) for d in _discover_version_dirs(base)]
