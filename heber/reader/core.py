@@ -53,6 +53,52 @@ def _to_utc(ts: Any) -> pa.Scalar:
     return pa.scalar(t.to_pydatetime(), type=pa.timestamp("us", tz="UTC"))
 
 
+def _build_scan_filter(exprs: list[ds.Expression]) -> ds.Expression | None:
+    """Combine a list of PyArrow expressions into a single AND filter."""
+    result: ds.Expression | None = None
+    for expr in exprs:
+        result = expr if result is None else result & expr
+    return result
+
+
+def _detect_time_col(schema_names: set[str]) -> str | None:
+    """Return the canonical time column present in the schema, if any."""
+    for candidate in ("ts_event", "ts_label"):
+        if candidate in schema_names:
+            return candidate
+    return None
+
+
+_OP_MAP: dict[str, str] = {
+    "==": "__eq__",
+    "=": "__eq__",
+    "!=": "__ne__",
+    "<": "__lt__",
+    "<=": "__le__",
+    ">": "__gt__",
+    ">=": "__ge__",
+    "in": "isin",
+}
+
+
+def _tuple_filters_to_exprs(
+    filters: list[tuple[str, str, Any]],
+    schema_names: set[str],
+) -> list[ds.Expression]:
+    """Convert old-style (col, op, value) tuple filters to PyArrow expressions."""
+    exprs: list[ds.Expression] = []
+    for col, op, val in filters:
+        if col not in schema_names:
+            continue
+        field = ds.field(col)
+        method = _OP_MAP.get(op)
+        if method == "isin":
+            exprs.append(field.isin(val))
+        elif method:
+            exprs.append(getattr(field, method)(pa.scalar(val)))
+    return exprs
+
+
 class HeberReader:
     """Thin filesystem reader for the Heber Bronze/Silver/Gold lakehouse.
 
@@ -165,9 +211,7 @@ class HeberReader:
         if instrument_keys and "instrument_key" in schema_names:
             exprs.append(ds.field("instrument_key").isin(instrument_keys))
 
-        scan_filter: ds.Expression | None = None
-        for expr in exprs:
-            scan_filter = expr if scan_filter is None else scan_filter & expr
+        scan_filter = _build_scan_filter(exprs)
 
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=projection)
@@ -341,19 +385,10 @@ class HeberReader:
             logger.warning("heber_reader_gold_not_found", path=str(gold_path))
             return pd.DataFrame()
 
-        if version:
-            scan_path = gold_path / f"version={version}"
-        else:
-            version_dirs = sorted(
-                [d for d in gold_path.glob("**/version=*") if d.is_dir()],
-            )
-            if not version_dirs:
-                logger.warning("heber_reader_gold_no_versions", path=str(gold_path))
-                return pd.DataFrame()
-            scan_path = version_dirs[-1].parent  # scan from project= level down
-            # Re-scope: glob the latest version= only across all projects
-            # Scan all project dirs — filter expression handles version selection
-            scan_path = gold_path  # scan everything; filter expression handles it
+        scan_result = self._resolve_gold_scan_path(gold_path, version)
+        if scan_result is None:
+            return pd.DataFrame()
+        scan_path, resolved_version = scan_result
 
         try:
             dataset_obj = ds.dataset(
@@ -367,8 +402,7 @@ class HeberReader:
 
         schema_names = set(dataset_obj.schema.names)
 
-        # Detect time column (Gold uses ts_event or ts_label)
-        time_col = "ts_event" if "ts_event" in schema_names else ("ts_label" if "ts_label" in schema_names else None)
+        time_col = _detect_time_col(schema_names)
 
         exprs: list[ds.Expression] = []
 
@@ -382,12 +416,10 @@ class HeberReader:
         if instrument_keys and "instrument_key" in schema_names:
             exprs.append(ds.field("instrument_key").isin(instrument_keys))
 
-        if version and "version" in schema_names:
-            exprs.append(ds.field("version") == pa.scalar(version))
+        if resolved_version and "version" in schema_names:
+            exprs.append(ds.field("version") == pa.scalar(resolved_version))
 
-        scan_filter: ds.Expression | None = None
-        for expr in exprs:
-            scan_filter = expr if scan_filter is None else scan_filter & expr
+        scan_filter = _build_scan_filter(exprs)
 
         try:
             table = dataset_obj.to_table(filter=scan_filter)
@@ -405,6 +437,29 @@ class HeberReader:
         )
         return df
 
+    def _resolve_gold_scan_path(
+        self,
+        gold_path: Path,
+        version: str | None,
+    ) -> tuple[Path, str] | None:
+        """Determine the filesystem scan path for a Gold read.
+
+        Returns ``(scan_path, resolved_version)`` or ``None`` when no
+        version directories exist.
+        """
+        if version:
+            return gold_path / f"version={version}", version
+        version_dirs = sorted(
+            [d for d in gold_path.glob("**/version=*") if d.is_dir()],
+        )
+        if not version_dirs:
+            logger.warning("heber_reader_gold_no_versions", path=str(gold_path))
+            return None
+        latest_dir = version_dirs[-1]
+        resolved = latest_dir.name.replace("version=", "")
+        # Scan from parent so hive partitioning exposes the version= column.
+        return latest_dir.parent, resolved
+
     # ------------------------------------------------------------------
     # Gold writes
     # ------------------------------------------------------------------
@@ -416,7 +471,7 @@ class HeberReader:
         project: str,
         version: str,
         metadata: dict[str, Any] | None = None,
-    ) -> Path:
+    ) -> Path | None:
         """Write a DataFrame to the Gold layer.
 
         Enforces the zero-leakage invariant (``ts_available >= ts_event``)
@@ -444,6 +499,10 @@ class HeberReader:
             Path to the first written parquet file (for compatibility with callers
             that expect a single path back).
         """
+        if df.empty:
+            logger.warning("heber_reader_gold_write_empty", dataset=dataset)
+            return None
+
         required_cols = {"instrument_key", "ts_event", "ts_available"}
         missing = required_cols - set(df.columns)
         if missing:
@@ -459,11 +518,7 @@ class HeberReader:
 
         for dt, group in df.groupby("dt"):
             partition_dir = (
-                self._root / "gold"
-                / f"dataset={dataset}"
-                / f"project={project}"
-                / f"version={version}"
-                / f"dt={dt}"
+                self._root / "gold" / f"dataset={dataset}" / f"project={project}" / f"version={version}" / f"dt={dt}"
             )
             partition_dir.mkdir(parents=True, exist_ok=True)
 
@@ -489,21 +544,17 @@ class HeberReader:
             rows=len(df),
             files=len(output_paths),
         )
-        return output_paths[0] if output_paths else Path()
-
-    # ------------------------------------------------------------------
-    # Gold version discovery
-    # ------------------------------------------------------------------
+        return output_paths[0]
 
     # ------------------------------------------------------------------
     # Arbitrary-path read (for callers with configured paths)
     # ------------------------------------------------------------------
 
-    def _read_parquet_dataset(
+    def read_parquet_dataset(
         self,
         path: Path,
         columns: list[str] | None = None,
-        filters: list[tuple] | None = None,
+        filters: list[tuple[str, str, Any]] | None = None,
         time_range: tuple[str | datetime, str | datetime] | None = None,
         asof_time: str | datetime | None = None,
     ) -> pd.DataFrame:
@@ -528,34 +579,13 @@ class HeberReader:
 
         schema_names = set(dataset_obj.schema.names)
 
-        # Convert old-style tuple filters to PyArrow expressions
         exprs: list[ds.Expression] = []
 
         if filters:
-            _op_map = {
-                "==": "__eq__",
-                "=": "__eq__",
-                "!=": "__ne__",
-                "<": "__lt__",
-                "<=": "__le__",
-                ">": "__gt__",
-                ">=": "__ge__",
-                "in": "isin",
-            }
-            for col, op, val in filters:
-                if col not in schema_names:
-                    continue
-                field = ds.field(col)
-                method = _op_map.get(op)
-                if method == "isin":
-                    exprs.append(field.isin(val))
-                elif method:
-                    exprs.append(getattr(field, method)(pa.scalar(val)))
+            exprs.extend(_tuple_filters_to_exprs(filters, schema_names))
 
         if time_range:
-            time_col = (
-                "ts_event" if "ts_event" in schema_names else ("ts_label" if "ts_label" in schema_names else None)
-            )
+            time_col = _detect_time_col(schema_names)
             if time_col:
                 exprs.append(ds.field(time_col) >= _to_utc(time_range[0]))
                 exprs.append(ds.field(time_col) <= _to_utc(time_range[1]))
@@ -563,9 +593,7 @@ class HeberReader:
         if asof_time and "ts_available" in schema_names:
             exprs.append(ds.field("ts_available") <= _to_utc(asof_time))
 
-        scan_filter: ds.Expression | None = None
-        for expr in exprs:
-            scan_filter = expr if scan_filter is None else scan_filter & expr
+        scan_filter = _build_scan_filter(exprs)
 
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=columns)

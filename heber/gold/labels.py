@@ -283,7 +283,7 @@ def read_label(
 
     try:
         reader = HeberReader()
-        df = reader._read_parquet_dataset(
+        df = reader.read_parquet_dataset(
             path=data_path,
             asof_time=asof_time,
         )

@@ -195,8 +195,8 @@ class MetaLabelDatasetBuilder:
         ]
 
         try:
-            # Use internal _read_parquet_dataset to support arbitrary path config
-            df = self.client._read_parquet_dataset(
+            # Support arbitrary path config via read_parquet_dataset
+            df = self.client.read_parquet_dataset(
                 path=self.config.outcomes_path,
                 filters=filters,
             )
@@ -223,8 +223,8 @@ class MetaLabelDatasetBuilder:
         ]
 
         try:
-            # Use internal _read_parquet_dataset to support arbitrary path config
-            df = self.client._read_parquet_dataset(
+            # Support arbitrary path config via read_parquet_dataset
+            df = self.client.read_parquet_dataset(
                 path=self.config.features_path,
                 filters=filters,
             )
@@ -307,9 +307,7 @@ class MetaLabelDatasetBuilder:
             return df
 
         df = df.copy()
-        df["meta_label"] = np.where(
-            df["outcome"].astype(str).str.lower() == "hit_tp", 1, 0
-        )
+        df["meta_label"] = np.where(df["outcome"].astype(str).str.lower() == "hit_tp", 1, 0)
         return df
 
     def _apply_filters(self, df: pd.DataFrame) -> pd.DataFrame:

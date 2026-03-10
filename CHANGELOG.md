@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **HeberReader Code Quality Review** (2026-03-10):
+  - Fixed `read_gold` version resolution bug: when `version=None`, the reader now correctly filters to only the latest version instead of scanning all versions.
+  - Promoted `_read_parquet_dataset` to public `read_parquet_dataset` API and updated all callers (`ml/datasets.py`, `gold/labels.py`).
+  - Changed `write_gold` to return `None` for empty DataFrames instead of `Path()` (meaningless sentinel).
+  - Extracted `_build_scan_filter`, `_detect_time_col`, `_tuple_filters_to_exprs`, `_resolve_gold_scan_path` helpers to reduce cognitive complexity and eliminate duplicated filter-building logic.
+  - Fixed unparameterized `tuple` type annotation and removed orphaned section comment.
+  - Added 40 new tests in `tests/test_heber_reader.py` covering Silver/Gold reads, writes, asof_join, read_parquet_dataset, list_gold_versions, and all module-level helpers.
+
 - feat: accept raw `alpaca/option_chain_snapshot` feed contracts and route them into the existing `option_chain_snapshot` silver dataset
 - docs: clarify that the canonical option chain snapshot dataset stores one row per underlying snapshot with `chain_json`
 - test: extend cross-repo parity and ingest contract coverage for the new Alpaca chain snapshot feed
