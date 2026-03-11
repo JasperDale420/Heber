@@ -24,12 +24,14 @@ from heber.models.envelope import EventEnvelope
 from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
     record_batch_processed,
+    record_dedupe_drop,
     record_dlq_event,
     record_event_processed,
     record_event_received,
     record_ingest_latency,
     start_metrics_server_from_env,
 )
+from heber.ops.reliability import EventDeduplicator
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
 from heber.writer.ingest_contracts import (
@@ -67,9 +69,23 @@ class EventConsumer:
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        self.event_deduplicator = EventDeduplicator()
+        self._inflight_event_ids: set[str] = set()
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
+
+    def _claim_event_id(self, event_id: str) -> str | None:
+        """Claim an event_id for processing or return a duplicate reason."""
+        if event_id in self._inflight_event_ids:
+            return "inflight_duplicate"
+
+        dedupe_result = self.event_deduplicator.check(event_id)
+        if dedupe_result.is_duplicate:
+            return dedupe_result.reason
+
+        self._inflight_event_ids.add(event_id)
+        return None
 
     async def connect(self):
         """Connect to Redis."""
@@ -236,6 +252,8 @@ class EventConsumer:
         provider = "unknown"
         bronze_written = False
         envelope: EventEnvelope | None = None
+        claimed_event_id = False
+        register_success = False
         try:
             envelope = self._parse_and_validate_envelope(event_data)
             feed = envelope.feed
@@ -252,6 +270,20 @@ class EventConsumer:
             )
 
             self._validate_payload_schema(envelope)
+
+            dedupe_reason = self._claim_event_id(envelope.event_id)
+            if dedupe_reason is not None:
+                record_dedupe_drop(feed=feed)
+                logger.info(
+                    "consumer_dedupe_dropped",
+                    event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    provider=envelope.provider,
+                    reason=dedupe_reason,
+                )
+                record_event_processed(feed=feed, provider=provider, status="dropped")
+                return True, None, True
+            claimed_event_id = True
 
             self.bronze_writer.write(envelope)
             bronze_written = True
@@ -279,6 +311,7 @@ class EventConsumer:
                     reason="bronze_only_feed_policy",
                 )
                 record_event_processed(feed=feed, provider=provider, status="success")
+                register_success = True
                 return True, None, True
 
             self._write_silver_candidates(envelope)
@@ -289,6 +322,7 @@ class EventConsumer:
                 feed=envelope.feed,
             )
             record_event_processed(feed=feed, provider=provider, status="success")
+            register_success = True
             return True, None, True
         except UnmappedFeedError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
@@ -332,6 +366,11 @@ class EventConsumer:
                 exc_info=True,
             )
             return False, str(exc), not bronze_written
+        finally:
+            if envelope is not None and claimed_event_id:
+                self._inflight_event_ids.discard(envelope.event_id)
+                if register_success:
+                    self.event_deduplicator.register(envelope.event_id)
 
     def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.

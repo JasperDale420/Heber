@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Writer Consumer Early Dedupe + Fallback Drain Guard** (2026-03-11):
+  - Added consumer-side `event_id` dedupe in `heber/writer/consumer.py` so duplicate events are dropped before Bronze/Silver writes, while still being acknowledged as handled.
+  - Recorded duplicate drops through `heber_consumer_dedupe_drops_total` and structured `consumer_dedupe_dropped` logs for easier RCA.
+  - Added regression coverage in `tests/test_writer_consumer_dedupe.py` to lock the duplicate-drop behavior in place.
+
 - **Option chain snapshot spot persistence** (2026-03-10):
   - Added optional `underlying_price` to the canonical `option_chain_snapshot` silver schema and `OptionChainSnapshotRecord`.
   - Extended ingest-contract coverage so Gateway snapshots carrying a top-level spot price survive normalization into Silver rows unchanged.
