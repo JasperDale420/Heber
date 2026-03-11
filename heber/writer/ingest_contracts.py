@@ -9,6 +9,7 @@ This module is the single source of truth for:
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -65,6 +66,7 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "darkpool_ticker",
     "institutions",
     "earnings",
+    "treasury_yields",
 )
 
 # Backwards-compatible name used by tests and docs for gateway feed inventory.
@@ -149,11 +151,13 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
+    "borrow_cost",
     "flow",
     "greeks",
     "gex",
     "stock_fundamentals",
     "option_contract",
+    "option_trades",
     "screener_result",
     "institution_holdings",
     "politician_trades",
@@ -207,6 +211,10 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "ask_size": "ask_sz",
         "bx": "bid_exchange",
         "ax": "ask_exchange",
+        "c": "conditions",
+        "conditions": "conditions",
+        "z": "tape",
+        "tape": "tape",
     },
     "trades": {
         # Short Alpaca WebSocket keys
@@ -215,12 +223,19 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "x": "exchange",
         "i": "trade_id",
         "z": "tape",
+        "c": "conditions",
+        "tks": "taker_side",
         # Full-name keys from Alpaca REST / aggregate payloads
         "price": "price",
         "size": "size",
         "exchange": "exchange",
         "trade_id": "trade_id",
         "tape": "tape",
+        "conditions": "conditions",
+        "taker_side": "taker_side",
+        # Code-table disambiguation (SIP vs OPRA)
+        "exchange_type": "exchange_type",
+        "condition_type": "condition_type",
     },
     # Options Flow
     "flow_alerts": {
@@ -239,6 +254,8 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "tracking_id": "print_id",
         "ask": "nbbo_ask",
         "bid": "nbbo_bid",
+        "nbbo_bid_quantity": "nbbo_bid_size",
+        "nbbo_ask_quantity": "nbbo_ask_size",
         "ext_hour_sold_codes": "ext_hours",
     },
     # Sentiment
@@ -246,16 +263,21 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "market_tide": {
         "net_call_premium": "total_call_premium",
         "net_put_premium": "total_put_premium",
+        "date": "tide_date",
     },
     # Core Analytics
     "greek_exposure": {},
     "max_pain": {},
     "net_premium_tick": {},
-    "hottest_chain": {},
+    "hottest_chain": {
+        "option_type": "put_call",
+    },
     # Reference Data
     "earnings": {
         "report_date": "earnings_date",
         "date": "earnings_date",
+        "expected_move_perc": "expected_move_pct",
+        "pre_earnings_close": "prior_close",
     },
     "corporate_action": {},
     # Screeners
@@ -264,10 +286,13 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "screener_result": {},
     # Advanced Analytics
     "iv_rank": {},
-    "iv_term_structure": {},
+    "iv_term_structure": {
+        "days_to_expiry": "dte",
+    },
     "volatility_stats": {},
     "oi_change": {
         "date": "oi_date",
+        "last_oi": "prev_oi",
     },
     # ETF Feeds
     "etf_holding": {},
@@ -299,7 +324,9 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "id": "news_id",
         "published_at": "ts_published",
         "created_at": "ts_published",
+        "updated_at": "ts_updated",
         "source": "source_name",
+        "content": "body",
     },
     "orderbook": {
         "bids": "bids_json",
@@ -320,6 +347,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "transaction_date": "trade_date",
         "date": "trade_date",
         "filed_at_date": "disclosure_date",
+        "description": "asset_description",
     },
     "insider_trades": {
         "id": "filing_id",
@@ -331,6 +359,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "transaction_date": "trade_date",
         "amount": "shares",
         "is_10b5_1": "insider_relationship",
+        "shares_owned": "shares_owned_after",
     },
     "insider_flow": {},
     "institution_holdings": {
@@ -376,6 +405,11 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "date": "indicator_date",
         "time": "indicator_time",
     },
+    "treasury_yields": {
+        "date": "date",
+        "maturity": "maturity",
+        "yield_pct": "yield_pct",
+    },
     # Options Deep Data
     "option_history": {
         "contract_symbol": "occ_symbol",
@@ -383,6 +417,9 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     },
     "option_chain_snapshot": {
         "timestamp": "snapshot_ts",
+        "contract_symbol": "occ_symbol",
+        "expiration": "expiry",
+        "option_type": "put_call",
     },
     "volume_profile": {
         "contract_symbol": "occ_symbol",
@@ -408,6 +445,15 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "forex": {
         "currency_pair": "pair",
     },
+    # Borrow Cost
+    "borrow_cost": {
+        "available_shares": "short_shares_available",
+    },
+    # Option Trades (dedicated schema)
+    "option_trades": {
+        "option_chain_id": "option_symbol",
+        "flow_alert_id": "trade_id",
+    },
 }
 
 # ML-facing required fields for emitted Data-Gateway feeds.
@@ -423,7 +469,7 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "greek_exposure": {"call_gamma"},
     "iv_rank": {"iv_rank"},
     "oi_change": {"oi_date", "call_oi", "put_oi"},
-    "historic_option_volume": {"hov_date", "expiry", "volume"},
+    "historic_option_volume": {"hov_date", "volume"},
     "option_chain_snapshot": {"snapshot_ts", "underlying", "chain_json"},
     "short_data": {"short_date", "short_interest"},
     "ftd": {"ftd_date", "quantity"},
@@ -431,6 +477,7 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "insider_trades": {"insider_name", "trade_type", "trade_date"},
     "earnings": {"earnings_date"},
     "institution_holdings": {"institution_name", "value", "quarter_end"},
+    "treasury_yields": {"date", "maturity", "yield_pct"},
 }
 REQUIRED_NON_NULL_FIELDS = REQUIRED_FIELDS_BY_FEED
 
@@ -467,8 +514,22 @@ def is_bronze_only_feed(feed: str) -> bool:
     return canonical in BRONZE_ONLY_SILVER_DATASETS
 
 
-def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Apply feed-specific payload normalization before column mapping."""
+def normalize_payload_for_feed(
+    feed: str, payload: dict[str, Any], *, ts_event: datetime | None = None
+) -> dict[str, Any]:
+    """Apply feed-specific payload normalization before column mapping.
+
+    Parameters
+    ----------
+    feed:
+        Canonical Silver feed name.
+    payload:
+        Raw provider payload dict.
+    ts_event:
+        Event timestamp from the envelope.  Used to derive missing date
+        fields when the upstream provider sends empty strings (common for
+        UnusualWhales per-symbol aggregate endpoints).
+    """
     normalized = dict(payload)
 
     if feed == "news":
@@ -482,10 +543,11 @@ def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, 
     elif feed == "flow_alerts":
         _normalize_flow_payload(normalized)
     elif feed == "short_data":
-        if "short_interest" not in normalized and "short_volume" in normalized:
-            normalized["short_interest"] = normalized.get("short_volume")
-        if "short_percent_float" not in normalized and "short_ratio" in normalized:
-            normalized["short_percent_float"] = normalized.get("short_ratio")
+        _normalize_short_data_payload(normalized, ts_event=ts_event)
+    elif feed == "oi_change":
+        _normalize_oi_change_payload(normalized, ts_event=ts_event)
+    elif feed == "historic_option_volume":
+        _normalize_hov_payload(normalized, ts_event=ts_event)
 
     return normalized
 
@@ -561,7 +623,7 @@ def _normalize_tide_payload(payload: dict[str, Any], call_key: str, put_key: str
     call_premium = _to_decimal_or_none(payload.get(call_key))
     put_premium = _to_decimal_or_none(payload.get(put_key))
     if payload.get("call_put_ratio") is None and call_premium is not None and put_premium not in (None, Decimal("0")):
-        payload["call_put_ratio"] = float(call_premium / put_premium)
+        payload["call_put_ratio"] = float(call_premium / put_premium)  # type: ignore[operator]
 
 
 def _normalize_flow_payload(payload: dict[str, Any]) -> None:
@@ -572,6 +634,52 @@ def _normalize_flow_payload(payload: dict[str, Any]) -> None:
             payload["put_call"] = "C"
         elif lowered.startswith("p"):
             payload["put_call"] = "P"
+
+
+def _normalize_short_data_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize short_data / short_interest payload.
+
+    UW sends ``short_volume`` and ``short_ratio`` as the provider field names;
+    remap to the canonical Silver names.  When the ``date`` field is empty
+    (common for UW per-symbol endpoints), derive it from ``ts_event``.
+    """
+    if "short_interest" not in payload and "short_volume" in payload:
+        payload["short_interest"] = payload.get("short_volume")
+    if "short_percent_float" not in payload and "short_ratio" in payload:
+        payload["short_percent_float"] = payload.get("short_ratio")
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _normalize_oi_change_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize oi_change payload.
+
+    When the ``date`` field is empty (common for UW aggregate endpoints),
+    derive it from ``ts_event`` so that the ``oi_date`` Silver field is populated.
+    """
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _normalize_hov_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize historic_option_volume payload.
+
+    When the ``date`` field is empty, derive it from ``ts_event`` so the
+    ``hov_date`` Silver field is populated.
+    """
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _backfill_empty_date(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Set ``payload["date"]`` from *ts_event* when the field is missing or blank.
+
+    Many UnusualWhales per-symbol aggregate endpoints omit the ``date`` field
+    (sending ``""``).  Deriving the date from the event timestamp keeps the
+    Silver pipeline from rejecting otherwise valid rows.
+    """
+    date_val = payload.get("date")
+    if date_val is not None and str(date_val).strip():
+        return  # Already has a real date — nothing to do
+    if ts_event is not None:
+        payload["date"] = ts_event.strftime("%Y-%m-%d")
 
 
 def _parse_amount_range(raw: Any) -> tuple[float, float] | None:

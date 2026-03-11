@@ -320,7 +320,7 @@ def explode_aggregate_payload(
         return [envelope]
 
     match_feed = feed_override or envelope.feed
-    config = _AGGREGATE_FEED_CONFIG.get(match_feed)  # type: ignore[arg-type]
+    config = _AGGREGATE_FEED_CONFIG.get(match_feed)
     if config is None:
         return [envelope]
 

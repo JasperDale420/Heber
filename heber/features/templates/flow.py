@@ -55,7 +55,7 @@ def compute_flow_features(
             {
                 "instrument_key": f"equity:{underlying}",
                 "ts_event": df.index,
-                "ts_available": ts_available.to_numpy(),
+                "ts_available": ts_available,
                 # Premium aggregates
                 "total_premium_24h": total_premium,
                 "call_premium_24h": call_premium,

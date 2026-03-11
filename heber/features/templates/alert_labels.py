@@ -265,8 +265,22 @@ def _compute_barrier_outcome(
     tp_threshold: float,
     sl_threshold: float,
     slippage_model: SlippageModel | None = None,
+    max_window_bars: int = 0,
 ) -> dict[str, Any]:
-    """Compute barrier-based outcome for a price path."""
+    """Compute barrier-based outcome for a price path.
+
+    Args:
+        price_path: Forward price array after entry.
+        entry_price: Price at alert time.
+        is_call: True for calls (favorable=up), False for puts.
+        tp_threshold: Take-profit threshold as decimal return.
+        sl_threshold: Stop-loss threshold as decimal return (positive).
+        slippage_model: Optional execution cost model.
+        max_window_bars: Maximum bars in the forward window (for time_efficiency).
+
+    Returns:
+        Dict with barrier outcome labels including edge_ratio and time_efficiency.
+    """
     if len(price_path) == 0:
         return {
             "hit_tp_first": np.nan,
@@ -275,6 +289,8 @@ def _compute_barrier_outcome(
             "mfe_adj": np.nan,
             "mae_adj": np.nan,
             "bars_to_hit": np.nan,
+            "edge_ratio": np.nan,
+            "time_efficiency": np.nan,
         }
 
     returns = (price_path - entry_price) / entry_price
@@ -323,6 +339,20 @@ def _compute_barrier_outcome(
         hit_tp_first = 0
         bars_to_hit = np.nan  # type: ignore[assignment]
 
+    # Edge ratio: quality of entry (MFE / |MAE|), capped at 10.0
+    if mfe == 0 and mae == 0:
+        edge_ratio = 1.0
+    elif abs(mae) < 1e-10:
+        edge_ratio = min(mfe / 1e-10, 10.0) if mfe > 0 else 1.0
+    else:
+        edge_ratio = min(mfe / abs(mae), 10.0)
+
+    # Time efficiency: how quickly TP was hit [0, 1], NaN if not hit
+    if hit_tp_first == 1 and not np.isnan(bars_to_hit) and max_window_bars > 0:
+        time_efficiency = 1.0 - (bars_to_hit / max_window_bars)
+    else:
+        time_efficiency = np.nan
+
     return {
         "hit_tp_first": hit_tp_first,
         "mfe": mfe,
@@ -330,6 +360,8 @@ def _compute_barrier_outcome(
         "mfe_adj": mfe_adj,
         "mae_adj": mae_adj,
         "bars_to_hit": bars_to_hit,
+        "edge_ratio": edge_ratio,
+        "time_efficiency": time_efficiency,
     }
 
 
@@ -458,7 +490,9 @@ def _process_single_alert(
     is_call = put_call.upper() == "C"
 
     # Compute barrier outcome
-    outcome = _compute_barrier_outcome(price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model)
+    outcome = _compute_barrier_outcome(
+        price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model, config.max_window_bars
+    )
 
     # Get VIX at alert time
     vix_at_alert = _get_vix_at_alert(vix_data, ts_alert)
@@ -485,6 +519,8 @@ def _process_single_alert(
         "mfe_adj": outcome["mfe_adj"],
         "mae_adj": outcome["mae_adj"],
         "bars_to_hit": outcome["bars_to_hit"],
+        "edge_ratio": outcome["edge_ratio"],
+        "time_efficiency": outcome["time_efficiency"],
         "beta_neutral_return": beta_neutral_return,
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
@@ -597,6 +633,8 @@ def _empty_result(
         "mfe_adj": np.nan,
         "mae_adj": np.nan,
         "bars_to_hit": np.nan,
+        "edge_ratio": np.nan,
+        "time_efficiency": np.nan,
         "beta_neutral_return": np.nan,
         "vix_at_alert": np.nan,
         "vix_regime": VixRegime.NORMAL.value,

@@ -258,7 +258,7 @@ def _check_dlq_status(settings: Settings) -> dict[str, Any]:
             decode_responses=False,
         )
         try:
-            length = client.xlen(settings.redis_dlq_stream_name)
+            length = int(client.xlen(settings.redis_dlq_stream_name))  # type: ignore[arg-type]
         except redis.ResponseError:
             length = 0
         finally:
