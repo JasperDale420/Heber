@@ -5,6 +5,10 @@ typed Parquet to Silver layer. This enables:
 - Backfill Silver from historical Bronze data
 - Reprocess after schema changes
 - Fix Silver bugs without re-ingestion from source
+
+Deduplication: Before writing, the transformer reads existing event_ids
+from Silver partition files and skips events that are already present.
+This prevents duplicates when re-running backfills over the same data.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
 import structlog
 from pydantic import ValidationError
 
@@ -159,6 +164,32 @@ class BronzeToSilverTransformer:
 
         return total
 
+    def _collect_existing_event_ids(self, partition_key: str) -> set[str]:
+        """Read all event_ids already present in a Silver partition.
+
+        Scans existing Parquet files in the target partition and returns
+        a set of event_ids, enabling deduplication during backfill.
+        """
+        partition_path = self.silver_path / partition_key
+        if not partition_path.exists():
+            return set()
+
+        existing_ids: set[str] = set()
+        for parquet_file in partition_path.glob("*.parquet"):
+            if parquet_file.name.startswith("."):
+                continue
+            try:
+                pf = pq.ParquetFile(parquet_file)
+                table = pf.read(columns=["event_id"])
+                existing_ids.update(table.column("event_id").to_pylist())
+            except Exception as exc:  # noqa: BLE001 — skip unreadable files
+                logger.warning(
+                    "backfill_dedup_read_failed",
+                    file=str(parquet_file),
+                    error=str(exc),
+                )
+        return existing_ids
+
     def _transform_date_partition(
         self,
         feed_dir: Path,
@@ -186,6 +217,11 @@ class BronzeToSilverTransformer:
         buffers: dict[str, list[dict[str, Any]]] = defaultdict(list)
         files_processed = 0
         total_records = 0
+        skipped_duplicates = 0
+
+        # Collect existing event_ids per partition for deduplication.
+        # Lazily populated as new partition keys are encountered.
+        existing_ids_cache: dict[str, set[str]] = {}
 
         # Process all hour directories and files
         for item in dt_dir.rglob("*.jsonl.gz"):
@@ -197,6 +233,21 @@ class BronzeToSilverTransformer:
                     instrument_type=row.get("instrument_type", "unknown"),
                     ts_event=row["ts_event"],
                 )
+
+                # Lazy-load existing event_ids for this partition
+                if p_key not in existing_ids_cache:
+                    existing_ids_cache[p_key] = self._collect_existing_event_ids(p_key)
+
+                # Skip events that already exist in Silver
+                event_id = row.get("event_id")
+                if event_id and event_id in existing_ids_cache[p_key]:
+                    skipped_duplicates += 1
+                    continue
+
+                # Track newly written event_ids to deduplicate within the same batch
+                if event_id:
+                    existing_ids_cache[p_key].add(event_id)
+
                 buffers[p_key].append(row)
 
                 # Flush specific partition if big enough
@@ -220,6 +271,7 @@ class BronzeToSilverTransformer:
             dt=dt,
             files=files_processed,
             records=total_records,
+            skipped_duplicates=skipped_duplicates,
         )
         return total_records
 
