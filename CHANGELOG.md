@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bronze-to-Silver Transformer Deduplication** (2026-03-12):
+  - Added `_collect_existing_event_ids()` to `heber/writer/transformer.py` that reads existing `event_id`s from Silver partition files before writing, preventing duplicates during backfill reruns.
+  - Also deduplicates within the same batch run via an in-memory set cache.
+  - Root cause: March 11 flow_alerts had 229,600 duplicate rows (200 events × 341 copies) from a backfill that re-wrote events already in the compacted partition. Compactor cleaned the existing duplicates; transformer now prevents recurrence.
+  - Added 7 regression tests in `tests/test_transformer_dedup.py` covering existing-event skipping, within-batch dedup, empty Silver writes, and idempotent rerun behavior.
+
 - **Writer Consumer Early Dedupe + Fallback Drain Guard** (2026-03-11):
   - Added consumer-side `event_id` dedupe in `heber/writer/consumer.py` so duplicate events are dropped before Bronze/Silver writes, while still being acknowledged as handled.
   - Recorded duplicate drops through `heber_consumer_dedupe_drops_total` and structured `consumer_dedupe_dropped` logs for easier RCA.
