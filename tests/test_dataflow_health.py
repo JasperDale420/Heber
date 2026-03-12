@@ -26,10 +26,22 @@ def _signals(now: datetime) -> dict:
     }
 
 
+def _ok_dlq_check(*_args, **_kwargs) -> dict:
+    return {
+        "id": "dlq_queue_size",
+        "status": "ok",
+        "severity": "warning",
+        "observed": {"dlq_stream": "heber:dlq", "length": 0},
+        "threshold": {"max_length": 10_000},
+        "message": "DLQ has 0 entries.",
+    }
+
+
 def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -88,6 +100,7 @@ def test_dataflow_health_market_closed_skips_gateway_passive_check_when_metric_m
     signals["gateway_last_success"] = None
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: False)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -122,6 +135,7 @@ def test_dataflow_health_uses_filesystem_fallback_when_metrics_unavailable(monke
     }
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -155,6 +169,7 @@ def test_dataflow_health_report_write_failure_is_warn_only(monkeypatch) -> None:
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
     monkeypatch.setattr(dataflow_health_module, "_utc_now", lambda: now)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     def _raise_write_error(*_args, **_kwargs) -> None:  # noqa: ANN002, ANN003
         raise OSError("read-only path")

@@ -367,6 +367,17 @@ def _build_gateway_check(
     }
 
 
+def _collect_dlq_size_check(active_settings: Settings, threshold: int = 10_000) -> dict[str, Any]:
+    """Check DLQ stream length and return a health check dict."""
+    from heber.writer.dlq_reprocessor import check_dlq_size
+
+    return check_dlq_size(
+        redis_url=active_settings.redis_url,
+        dlq_stream_name=active_settings.redis_dlq_stream_name,
+        threshold=threshold,
+    )
+
+
 def generate_dataflow_report(
     *,
     window_seconds: int,
@@ -442,6 +453,10 @@ def generate_dataflow_report(
                 now_unixtime=now_unixtime,
             )
         )
+
+    # DLQ size check
+    dlq_check = _collect_dlq_size_check(active_settings)
+    checks.append(dlq_check)
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "skipped": 0}
     for check in checks:
