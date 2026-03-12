@@ -1254,7 +1254,7 @@ class TestCoerceList:
         assert set(result) == {1, 2}
 
     def test_json_string_list(self):
-        assert _coerce_list('[1, 2, 3]') == [1, 2, 3]
+        assert _coerce_list("[1, 2, 3]") == [1, 2, 3]
 
     def test_empty_string(self):
         assert _coerce_list("") == []

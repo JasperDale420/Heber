@@ -68,7 +68,9 @@ class TestPartitionFreshness:
     def test_partition_exists(self, settings: Settings) -> None:
         dt = date(2026, 3, 9)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
+            settings.data_root,
+            "bars",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [150.0]}),
         )
         checks = _check_partition_freshness(dt, settings)
@@ -107,7 +109,9 @@ class TestCrossFeedCompleteness:
         dt = date(2026, 3, 9)
         for feed in ("bars", "quotes"):
             _write_silver_partition(
-                settings.data_root, feed, dt,
+                settings.data_root,
+                feed,
+                dt,
                 pd.DataFrame({"instrument_key": ["equity:AAPL", "equity:MSFT"]}),
             )
         result = _check_cross_feed_completeness(dt, settings)
@@ -117,11 +121,15 @@ class TestCrossFeedCompleteness:
     def test_partial_overlap(self, settings: Settings) -> None:
         dt = date(2026, 3, 9)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
+            settings.data_root,
+            "bars",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL", "equity:MSFT"]}),
         )
         _write_silver_partition(
-            settings.data_root, "quotes", dt,
+            settings.data_root,
+            "quotes",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL"]}),
         )
         result = _check_cross_feed_completeness(dt, settings)
@@ -130,7 +138,9 @@ class TestCrossFeedCompleteness:
     def test_single_feed_warns(self, settings: Settings) -> None:
         dt = date(2026, 3, 9)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
+            settings.data_root,
+            "bars",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL"]}),
         )
         result = _check_cross_feed_completeness(dt, settings)
@@ -146,7 +156,9 @@ class TestFillRate:
     def test_meets_threshold(self, settings: Settings) -> None:
         dt = date(2026, 3, 9)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
+            settings.data_root,
+            "bars",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL", "equity:MSFT", "equity:GOOG"]}),
         )
         result = _check_fill_rate(dt, settings)
@@ -156,7 +168,9 @@ class TestFillRate:
     def test_below_threshold(self, settings: Settings) -> None:
         dt = date(2026, 3, 9)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
+            settings.data_root,
+            "bars",
+            dt,
             pd.DataFrame({"instrument_key": ["equity:AAPL"]}),
         )
         result = _check_fill_rate(dt, settings)
@@ -177,12 +191,16 @@ class TestZeroLeakage:
         dt = date(2026, 3, 9)
         now = datetime(2026, 3, 9, 20, 0, tzinfo=UTC)
         _write_silver_partition(
-            settings.data_root, "bars", dt,
-            pd.DataFrame({
-                "instrument_key": ["equity:AAPL"],
-                "ts_event": [now],
-                "ts_available": [now],
-            }),
+            settings.data_root,
+            "bars",
+            dt,
+            pd.DataFrame(
+                {
+                    "instrument_key": ["equity:AAPL"],
+                    "ts_event": [now],
+                    "ts_available": [now],
+                }
+            ),
         )
         result = _check_zero_leakage(dt, settings)
         assert result["status"] == "ok"
@@ -193,12 +211,16 @@ class TestZeroLeakage:
         event_time = datetime(2026, 3, 9, 20, 0, tzinfo=UTC)
         early_available = datetime(2026, 3, 9, 19, 0, tzinfo=UTC)  # Before event!
         _write_silver_partition(
-            settings.data_root, "bars", dt,
-            pd.DataFrame({
-                "instrument_key": ["equity:AAPL"],
-                "ts_event": [event_time],
-                "ts_available": [early_available],
-            }),
+            settings.data_root,
+            "bars",
+            dt,
+            pd.DataFrame(
+                {
+                    "instrument_key": ["equity:AAPL"],
+                    "ts_event": [event_time],
+                    "ts_available": [early_available],
+                }
+            ),
         )
         result = _check_zero_leakage(dt, settings)
         assert result["status"] == "fail"
@@ -246,7 +268,9 @@ class TestGoldFreshness:
         dt = date(2026, 3, 9)
         for ds in ("meta_label_features", "labels_alert_barriers"):
             _write_gold_partition(
-                settings.data_root, ds, dt,
+                settings.data_root,
+                ds,
+                dt,
                 pd.DataFrame({"alert_id": ["a1"]}),
             )
         result = _check_gold_freshness(dt, settings)
@@ -295,12 +319,16 @@ class TestGenerateReport:
 
         for feed in ("bars", "quotes"):
             _write_silver_partition(
-                settings.data_root, feed, dt,
-                pd.DataFrame({
-                    "instrument_key": ["equity:AAPL", "equity:MSFT", "equity:GOOG"],
-                    "ts_event": [now, now, now],
-                    "ts_available": [now, now, now],
-                }),
+                settings.data_root,
+                feed,
+                dt,
+                pd.DataFrame(
+                    {
+                        "instrument_key": ["equity:AAPL", "equity:MSFT", "equity:GOOG"],
+                        "ts_event": [now, now, now],
+                        "ts_available": [now, now, now],
+                    }
+                ),
             )
 
         for ds in ("meta_label_features", "labels_alert_barriers"):

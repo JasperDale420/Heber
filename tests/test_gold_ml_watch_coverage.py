@@ -59,6 +59,7 @@ from heber.watch.models import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_watch(
     watch_id: str = "w1",
     alert_id: str = "a1",
@@ -231,9 +232,7 @@ class TestReadLabelEdgeCases:
         """Line 267: explicit version specified but data file missing."""
         version_dir = tmp_path / "dataset=test" / "type=label" / "version=v2.0.0"
         version_dir.mkdir(parents=True)
-        result = read_label(
-            tmp_path, "test", datetime(2025, 1, 15, tzinfo=UTC), version="v2.0.0"
-        )
+        result = read_label(tmp_path, "test", datetime(2025, 1, 15, tzinfo=UTC), version="v2.0.0")
         assert result.empty
 
     def test_read_label_parquet_read_error(self, tmp_path: Path):
@@ -249,11 +248,13 @@ class TestReadLabelEdgeCases:
         """Line 301: warn but continue when fail_on_missing_ts_available=False."""
         version_dir = tmp_path / "dataset=test" / "type=label" / "version=v1.0.0"
         version_dir.mkdir(parents=True)
-        df = pd.DataFrame({
-            "instrument_key": ["AAPL"],
-            "ts_label": [datetime(2025, 1, 5, 9, 30, tzinfo=UTC)],
-            "label": [0.02],
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["AAPL"],
+                "ts_label": [datetime(2025, 1, 5, 9, 30, tzinfo=UTC)],
+                "label": [0.02],
+            }
+        )
         df.to_parquet(version_dir / "data.parquet")
         result = read_label(
             tmp_path,
@@ -321,11 +322,13 @@ class TestMetaLabelDatasetBuilderBuildFromParquet:
         # Set up outcomes
         outcomes_path = tmp_path / "outcomes" / "dt=2025-01-15"
         outcomes_path.mkdir(parents=True)
-        pd.DataFrame({
-            "alert_id": ["a1"],
-            "outcome": ["hit_tp"],
-            "outcome_return": [0.25],
-        }).to_parquet(outcomes_path / "data.parquet")
+        pd.DataFrame(
+            {
+                "alert_id": ["a1"],
+                "outcome": ["hit_tp"],
+                "outcome_return": [0.25],
+            }
+        ).to_parquet(outcomes_path / "data.parquet")
 
         config = DatasetConfig(
             outcomes_path=tmp_path / "outcomes",
@@ -343,22 +346,26 @@ class TestMetaLabelDatasetBuilderBuildFromParquet:
         """
         builder = MetaLabelDatasetBuilder(config=DatasetConfig(min_outcomes_per_symbol=1))
 
-        features = pd.DataFrame({
-            "alert_id": ["a1", "a2", "a3"],
-            "symbol": ["AAPL", "AAPL", "MSFT"],
-            "feature_x": [1.0, 2.0, 3.0],
-        })
+        features = pd.DataFrame(
+            {
+                "alert_id": ["a1", "a2", "a3"],
+                "symbol": ["AAPL", "AAPL", "MSFT"],
+                "feature_x": [1.0, 2.0, 3.0],
+            }
+        )
 
-        outcomes = pd.DataFrame({
-            "alert_id": ["a1", "a2", "a3"],
-            "outcome": ["hit_tp", "hit_sl", "expired"],
-            "outcome_return": [0.25, -0.15, 0.0],
-            "mfe": [0.30, 0.05, 0.02],
-            "mae": [-0.05, -0.15, -0.08],
-            "bars_to_hit": [3, 5, None],
-            "trading_minutes_to_hit": [30, 60, None],
-            "hit_tp_first": [1, 0, 0],
-        })
+        outcomes = pd.DataFrame(
+            {
+                "alert_id": ["a1", "a2", "a3"],
+                "outcome": ["hit_tp", "hit_sl", "expired"],
+                "outcome_return": [0.25, -0.15, 0.0],
+                "mfe": [0.30, 0.05, 0.02],
+                "mae": [-0.05, -0.15, -0.08],
+                "bars_to_hit": [3, 5, None],
+                "trading_minutes_to_hit": [30, 60, None],
+                "hit_tp_first": [1, 0, 0],
+            }
+        )
 
         joined = builder._join_features_outcomes(features, outcomes)
         labeled = builder._add_meta_label(joined)
@@ -437,14 +444,16 @@ class TestNormalizeOutcomes:
 
     def test_all_legacy_columns(self):
         builder = MetaLabelDatasetBuilder()
-        df = pd.DataFrame({
-            "alert_id": ["a1"],
-            "outcome_reason": ["hit_tp"],
-            "contract_hit_tp_first": [1],
-            "contract_mfe": [0.30],
-            "contract_mae": [-0.10],
-            "contract_bars_to_hit": [3],
-        })
+        df = pd.DataFrame(
+            {
+                "alert_id": ["a1"],
+                "outcome_reason": ["hit_tp"],
+                "contract_hit_tp_first": [1],
+                "contract_mfe": [0.30],
+                "contract_mae": [-0.10],
+                "contract_bars_to_hit": [3],
+            }
+        )
         result = builder._normalize_outcomes(df)
         assert "outcome" in result.columns
         assert "hit_tp_first" in result.columns
@@ -480,10 +489,12 @@ class TestApplyFilters:
     def test_exclude_expired(self):
         config = DatasetConfig(exclude_expired=True, min_outcomes_per_symbol=1)
         builder = MetaLabelDatasetBuilder(config=config)
-        df = pd.DataFrame({
-            "outcome": ["hit_tp", "expired", "hit_sl"],
-            "symbol": ["AAPL", "AAPL", "AAPL"],
-        })
+        df = pd.DataFrame(
+            {
+                "outcome": ["hit_tp", "expired", "hit_sl"],
+                "symbol": ["AAPL", "AAPL", "AAPL"],
+            }
+        )
         result = builder._apply_filters(df)
         assert len(result) == 2
         assert "expired" not in result["outcome"].values
@@ -491,10 +502,12 @@ class TestApplyFilters:
     def test_min_outcomes_per_symbol(self):
         config = DatasetConfig(min_outcomes_per_symbol=3)
         builder = MetaLabelDatasetBuilder(config=config)
-        df = pd.DataFrame({
-            "symbol": ["AAPL"] * 5 + ["MSFT"] * 2,
-            "outcome": ["hit_tp"] * 7,
-        })
+        df = pd.DataFrame(
+            {
+                "symbol": ["AAPL"] * 5 + ["MSFT"] * 2,
+                "outcome": ["hit_tp"] * 7,
+            }
+        )
         result = builder._apply_filters(df)
         assert set(result["symbol"].unique()) == {"AAPL"}
 
@@ -517,14 +530,14 @@ class TestTrainTestSplit:
         assert test.empty
 
     def test_split_with_purge_embargo(self):
-        builder = MetaLabelDatasetBuilder(config=DatasetConfig(
-            purge_days=2, embargo_days=1, train_ratio=0.5
-        ))
+        builder = MetaLabelDatasetBuilder(config=DatasetConfig(purge_days=2, embargo_days=1, train_ratio=0.5))
         base = datetime(2025, 1, 1)
-        df = pd.DataFrame({
-            "alert_time": [base + timedelta(days=i) for i in range(20)],
-            "x": range(20),
-        })
+        df = pd.DataFrame(
+            {
+                "alert_time": [base + timedelta(days=i) for i in range(20)],
+                "x": range(20),
+            }
+        )
         train, test = builder.train_test_split(df)
         # Both should have data, with purge gap between them
         assert len(train) >= 1
@@ -533,10 +546,12 @@ class TestTrainTestSplit:
     def test_split_with_explicit_date(self):
         builder = MetaLabelDatasetBuilder(config=DatasetConfig(purge_days=1, embargo_days=1))
         base = datetime(2025, 1, 1)
-        df = pd.DataFrame({
-            "alert_time": [base + timedelta(days=i) for i in range(30)],
-            "x": range(30),
-        })
+        df = pd.DataFrame(
+            {
+                "alert_time": [base + timedelta(days=i) for i in range(30)],
+                "x": range(30),
+            }
+        )
         train, test = builder.train_test_split(df, split_date=date(2025, 1, 15))
         assert len(train) >= 1
         assert len(test) >= 1
@@ -547,13 +562,15 @@ class TestGetFeatureColumnsAndToXY:
 
     def test_get_feature_columns_excludes_identifiers(self):
         builder = MetaLabelDatasetBuilder()
-        df = pd.DataFrame({
-            "alert_id": ["a1"],
-            "symbol": ["AAPL"],
-            "meta_label": [1],
-            "feature_x": [1.0],
-            "feature_y": [2.0],
-        })
+        df = pd.DataFrame(
+            {
+                "alert_id": ["a1"],
+                "symbol": ["AAPL"],
+                "meta_label": [1],
+                "feature_x": [1.0],
+                "feature_y": [2.0],
+            }
+        )
         cols = builder.get_feature_columns(df)
         assert "feature_x" in cols
         assert "feature_y" in cols
@@ -563,21 +580,25 @@ class TestGetFeatureColumnsAndToXY:
 
     def test_to_xy(self):
         builder = MetaLabelDatasetBuilder()
-        df = pd.DataFrame({
-            "feature_x": [1.0, 2.0],
-            "feature_y": [3.0, 4.0],
-            "meta_label": [1, 0],
-        })
+        df = pd.DataFrame(
+            {
+                "feature_x": [1.0, 2.0],
+                "feature_y": [3.0, 4.0],
+                "meta_label": [1, 0],
+            }
+        )
         X, y = builder.to_xy(df, feature_cols=["feature_x", "feature_y"])
         assert X.shape == (2, 2)
         assert len(y) == 2
 
     def test_to_xy_auto_detect(self):
         builder = MetaLabelDatasetBuilder()
-        df = pd.DataFrame({
-            "feature_x": [1.0, 2.0],
-            "meta_label": [1, 0],
-        })
+        df = pd.DataFrame(
+            {
+                "feature_x": [1.0, 2.0],
+                "meta_label": [1, 0],
+            }
+        )
         X, y = builder.to_xy(df)
         assert "feature_x" in X.columns
 
@@ -592,14 +613,16 @@ class TestPersistFeaturesToGold:
 
     def test_persist_multiple_dates(self, tmp_path: Path):
         """Lines 472-518: partitioned write."""
-        df = pd.DataFrame({
-            "alert_id": ["a1", "a2"],
-            "alert_time": [
-                datetime(2025, 1, 10, 10, 0, tzinfo=UTC),
-                datetime(2025, 1, 11, 10, 0, tzinfo=UTC),
-            ],
-            "feature_x": [1.0, 2.0],
-        })
+        df = pd.DataFrame(
+            {
+                "alert_id": ["a1", "a2"],
+                "alert_time": [
+                    datetime(2025, 1, 10, 10, 0, tzinfo=UTC),
+                    datetime(2025, 1, 11, 10, 0, tzinfo=UTC),
+                ],
+                "feature_x": [1.0, 2.0],
+            }
+        )
         persist_features_to_gold(df, tmp_path)
         assert (tmp_path / "dt=2025-01-10" / "data.parquet").exists()
         assert (tmp_path / "dt=2025-01-11" / "data.parquet").exists()
@@ -614,6 +637,7 @@ _HAS_LIGHTGBM = pytest.importorskip is not None  # placeholder
 
 try:
     import lightgbm  # noqa: F401
+
     _HAS_LIGHTGBM = True
 except ModuleNotFoundError:
     _HAS_LIGHTGBM = False
@@ -1151,27 +1175,21 @@ class TestResolveOutcomeReturn:
 
     def test_bars_within_range(self):
         returns = [0.01, 0.05, 0.10]
-        timestamps = [
-            datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(3)
-        ]
+        timestamps = [datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(3)]
         ret, ts = BarrierChecker._resolve_outcome_return(returns, timestamps, 2)
         assert ret == pytest.approx(0.05)
         assert ts == timestamps[1]
 
     def test_bars_beyond_range(self):
         returns = [0.01, 0.05]
-        timestamps = [
-            datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(2)
-        ]
+        timestamps = [datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(2)]
         ret, ts = BarrierChecker._resolve_outcome_return(returns, timestamps, 10)
         assert ret == pytest.approx(0.05)
         assert ts == timestamps[-1]
 
     def test_bars_none(self):
         returns = [0.01, 0.05, 0.10]
-        timestamps = [
-            datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(3)
-        ]
+        timestamps = [datetime(2025, 6, 10, 10, i * 5, tzinfo=UTC) for i in range(3)]
         ret, ts = BarrierChecker._resolve_outcome_return(returns, timestamps, None)
         assert ret == pytest.approx(0.10)
 
@@ -1229,23 +1247,17 @@ class TestFeatureHelpers:
 
     def test_coalesce_split_or_fallback_split(self):
         data = {"call_gamma": "100", "put_gamma": "50"}
-        result = _coalesce_split_or_fallback(
-            data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",)
-        )
+        result = _coalesce_split_or_fallback(data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",))
         assert result == 150.0
 
     def test_coalesce_split_or_fallback_partial(self):
         data = {"call_gamma": "100"}
-        result = _coalesce_split_or_fallback(
-            data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",)
-        )
+        result = _coalesce_split_or_fallback(data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",))
         assert result == 100.0
 
     def test_coalesce_split_or_fallback_uses_fallback(self):
         data = {"gex": "200"}
-        result = _coalesce_split_or_fallback(
-            data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",)
-        )
+        result = _coalesce_split_or_fallback(data, call_key="call_gamma", put_key="put_gamma", fallbacks=("gex",))
         assert result == 200.0
 
     def test_classify_direction(self):

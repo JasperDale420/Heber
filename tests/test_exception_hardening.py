@@ -24,6 +24,7 @@ from heber.models.envelope import EventEnvelope
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_envelope(**overrides: Any) -> EventEnvelope:
     """Build a minimal valid EventEnvelope for testing."""
     defaults: dict[str, Any] = {
@@ -332,10 +333,12 @@ class TestWriteSilverParquet:
         """ArrowTypeError triggers row-by-row salvage path."""
         from heber.writer.utils import write_silver_parquet
 
-        schema = pa.schema([
-            pa.field("event_id", pa.string()),
-            pa.field("value", pa.float64()),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("event_id", pa.string()),
+                pa.field("value", pa.float64()),
+            ]
+        )
 
         # Mix of valid and invalid rows
         rows = [
@@ -375,10 +378,12 @@ class TestWriteSilverParquet:
         """ArrowInvalid per-row validation catches bad rows during salvage."""
         from heber.writer.utils import write_silver_parquet
 
-        schema = pa.schema([
-            pa.field("event_id", pa.string()),
-            pa.field("ts", pa.timestamp("us", tz="UTC")),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("event_id", pa.string()),
+                pa.field("ts", pa.timestamp("us", tz="UTC")),
+            ]
+        )
 
         # Force a batch-level failure by mixing types, then salvage
         rows = [
@@ -608,9 +613,7 @@ class TestBusCreateConsumerGroup:
 
         bus = RedisEventBus()
         bus._redis = AsyncMock()
-        bus._redis.xgroup_create = AsyncMock(
-            side_effect=redis_async.ResponseError("ERR some other error")
-        )
+        bus._redis.xgroup_create = AsyncMock(side_effect=redis_async.ResponseError("ERR some other error"))
 
         with pytest.raises(redis_async.ResponseError, match="some other error"):
             await bus.create_consumer_group(StreamName.MARKET_BARS, "test-group")
@@ -632,9 +635,7 @@ class TestBusClaimIdleMessages:
 
         bus = RedisEventBus()
         bus._redis = AsyncMock()
-        bus._redis.xpending_range = AsyncMock(
-            side_effect=redis_async.RedisError("connection error")
-        )
+        bus._redis.xpending_range = AsyncMock(side_effect=redis_async.RedisError("connection error"))
 
         config = ConsumerConfig(
             group_name="test-group",
@@ -661,9 +662,7 @@ class TestBusGetPendingCount:
 
         bus = RedisEventBus()
         bus._redis = AsyncMock()
-        bus._redis.xpending = AsyncMock(
-            side_effect=redis_async.RedisError("connection lost")
-        )
+        bus._redis.xpending = AsyncMock(side_effect=redis_async.RedisError("connection lost"))
 
         count = await bus.get_pending_count(StreamName.MARKET_BARS, "test-group")
         assert count == 0
@@ -717,9 +716,7 @@ class TestBackpressureMonitorLoop:
 
         # Run for a short time -- should not crash
         async def run_briefly():
-            task = asyncio.create_task(
-                monitor.monitor_loop([(StreamName.MARKET_BARS, "test-group")])
-            )
+            task = asyncio.create_task(monitor.monitor_loop([(StreamName.MARKET_BARS, "test-group")]))
             await asyncio.sleep(0.05)
             monitor.stop()
             task.cancel()
