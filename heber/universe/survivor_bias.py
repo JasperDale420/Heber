@@ -48,9 +48,7 @@ class InstrumentLifecycle:
         """Check if instrument was active on given date."""
         if asof_date < self.list_date:
             return False
-        if self.delist_date and asof_date >= self.delist_date:
-            return False
-        return True
+        return not (self.delist_date and asof_date >= self.delist_date)
 
     def will_delist_within(self, asof_date: date, days: int) -> bool:
         """Check if instrument will delist within N days of asof_date."""

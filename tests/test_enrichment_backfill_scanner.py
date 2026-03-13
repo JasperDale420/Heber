@@ -208,6 +208,39 @@ class TestReadRecentPartitions:
         df = scanner._read_recent_partitions()
         assert df is None
 
+    def test_skips_partition_when_polars_panics(
+        self, tmp_features_dir: Path, mock_extractor: AsyncMock, mock_calendar: MagicMock
+    ) -> None:
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        _write_partition(tmp_features_dir, today, [_make_feature_row("today_row")])
+        _write_partition(tmp_features_dir, yesterday, [_make_feature_row("yesterday_row")])
+
+        scanner = EnrichmentBackfillScanner(
+            feature_extractor=mock_extractor,
+            features_output_path=tmp_features_dir,
+            lookback_days=3,
+            calendar=mock_calendar,
+        )
+
+        class PanicException(BaseException):
+            pass
+
+        real_read_parquet = pl.read_parquet
+        panic_path_suffix = str((tmp_features_dir / f"dt={today}" / "data.parquet").resolve())
+
+        def _read_parquet_with_panic(path: Path) -> pl.DataFrame:
+            if str(Path(path).resolve()) == panic_path_suffix:
+                raise PanicException("simulated rust panic")
+            return real_read_parquet(path)
+
+        with patch("heber.watch.backfill_scanner.pl.read_parquet", side_effect=_read_parquet_with_panic):
+            df = scanner._read_recent_partitions()
+
+        assert df is not None
+        assert len(df) == 1
+        assert df.get_column("alert_id").to_list() == ["yesterday_row"]
+
 
 class TestScanAndBackfill:
     """Test the full scan_and_backfill flow."""

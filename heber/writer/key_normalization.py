@@ -50,16 +50,18 @@ MARKET_DATA_FEEDS: frozenset[str] = frozenset({"bars", "quotes", "trades"})
 _OPTION_OCC_PREFIX = "OPTION:OCC:"
 
 SECTOR_ETF_MAP: dict[str, str] = {
-    "TECHNOLOGY": "XLK",
-    "FINANCIALS": "XLF",
-    "CONSUMER DISCRETIONARY": "XLY",
+    # Keys must match UW SDK Sector enum values (uppercased by _sector_to_etf).
+    # See: vendor/unusualwhales_sdk/unusualwhales/models/sector.py
+    "BASIC MATERIALS": "XLB",
     "COMMUNICATION SERVICES": "XLC",
-    "HEALTH CARE": "XLV",
-    "INDUSTRIALS": "XLI",
-    "CONSUMER STAPLES": "XLP",
+    "CONSUMER CYCLICAL": "XLY",
+    "CONSUMER DEFENSIVE": "XLP",
     "ENERGY": "XLE",
-    "MATERIALS": "XLB",
+    "FINANCIAL SERVICES": "XLF",
+    "HEALTHCARE": "XLV",
+    "INDUSTRIALS": "XLI",
     "REAL ESTATE": "XLRE",
+    "TECHNOLOGY": "XLK",
     "UTILITIES": "XLU",
 }
 

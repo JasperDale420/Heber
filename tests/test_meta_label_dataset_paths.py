@@ -96,3 +96,27 @@ def test_persist_features_to_gold_handles_column_order_mismatch(tmp_path: Path) 
     assert len(persisted) == 1
     assert persisted.get_column("alert_id").to_list() == ["a1"]
     assert persisted.get_column("feature_x").to_list() == [2.0]
+
+
+def test_persist_features_to_gold_quarantines_unreadable_existing_partition(tmp_path: Path) -> None:
+    dt_dir = tmp_path / "dt=2026-02-07"
+    dt_dir.mkdir(parents=True, exist_ok=True)
+    unreadable_file = dt_dir / "data.parquet"
+    unreadable_file.write_text("not a parquet file", encoding="utf-8")
+
+    incoming = pl.DataFrame(
+        {
+            "alert_id": ["a1"],
+            "alert_time": [datetime(2026, 2, 7, 15, 0, tzinfo=UTC)],
+            "feature_x": [1.0],
+        }
+    )
+
+    persist_features_to_gold(incoming, output_path=tmp_path, partition_col="alert_time")
+
+    assert unreadable_file.exists()
+    persisted = pl.read_parquet(unreadable_file)
+    assert persisted.get_column("alert_id").to_list() == ["a1"]
+
+    quarantined = list(dt_dir.glob("data.parquet.corrupt-*"))
+    assert len(quarantined) == 1

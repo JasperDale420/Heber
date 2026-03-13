@@ -42,7 +42,7 @@ def get_partition_key(
     """Generate partition key for an event.
 
     Args:
-        feed: Feed name (e.g., "quotes", "bars_1m")
+        feed: Feed name (e.g., "quotes", "bars")
         instrument_type: Instrument type (e.g., "equity")
         ts_event: Event timestamp
 

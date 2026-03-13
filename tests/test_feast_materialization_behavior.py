@@ -45,7 +45,7 @@ def test_materialize_uses_settings_default_repo_path(monkeypatch) -> None:
     results = materialize_features(repo_path=None, feature_views=["flow_features"], mode="incremental")
 
     assert mock_store._repo_path == str(DEFAULT_REPO_PATH)
-    assert DEFAULT_REPO_PATH == settings.feast_repo_path
+    assert settings.feast_repo_path == DEFAULT_REPO_PATH
     assert results["flow_features"] == 3
 
 

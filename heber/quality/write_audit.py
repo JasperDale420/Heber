@@ -50,6 +50,19 @@ EXPECTED_NON_NULL: dict[tuple[str, str], list[str]] = {
         "volume",
         "ts_event",
     ],
+    # strike/expiry/dte can be null for non-option aggregation rows
+    ("silver", "greek_exposure"): [
+        "symbol",
+        "ts_event",
+        "call_gamma",
+        "put_gamma",
+        "call_delta",
+        "put_delta",
+        "call_vanna",
+        "put_vanna",
+        "call_charm",
+        "put_charm",
+    ],
     # Gold feature datasets
     ("gold", "meta_label_features"): [
         "alert_id",

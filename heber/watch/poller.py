@@ -129,6 +129,22 @@ class SnapshotPoller:
         logger.info("Polling quotes", symbols=len(symbols), watches=len(active), due_watches=len(due_watches))
 
         quotes = await self._fetch_quotes(symbols)
+        if not quotes:
+            logger.error(
+                "Poll cycle quote fetch returned no data",
+                watches=len(active),
+                due_watches=len(due_watches),
+                symbols=len(symbols),
+            )
+            record_watch_poll_cycle(status="error")
+            return {
+                "watches": len(active),
+                "due_watches": len(due_watches),
+                "quotes": 0,
+                "updated": 0,
+                "errors": 1,
+            }
+
         if quotes:
             record_watch_gateway_request(
                 component="poller",
@@ -154,6 +170,7 @@ class SnapshotPoller:
             "due_watches": len(due_watches),
             "quotes": len(quotes),
             "updated": updated,
+            "errors": 0,
         }
 
     async def run(self) -> None:
@@ -193,7 +210,7 @@ class SnapshotPoller:
                     logger.info("Expired watches cleaned", count=expired)
 
             except Exception as e:
-                logger.error("Poll cycle failed", error=str(e))
+                logger.error("Poll cycle failed", error=str(e), exc_info=True)
                 record_watch_poll_cycle(status="error")
 
             await asyncio.sleep(min_interval)
@@ -305,7 +322,7 @@ class SnapshotPoller:
             )
 
         except Exception as e:
-            logger.error("Quote fetch error", error=str(e), batch_size=len(batch), routes=routes)
+            logger.error("Quote fetch error", error=str(e), batch_size=len(batch), routes=routes, exc_info=True)
             return {}
 
     async def _try_route_for_batch(

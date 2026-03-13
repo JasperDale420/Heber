@@ -59,6 +59,11 @@ backfill_duration_seconds = Histogram(
 )
 
 
+def _is_polars_panic_exception(exc: BaseException) -> bool:
+    """Return True when a BaseException is a polars/pyo3 panic wrapper."""
+    return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
+
+
 class EnrichmentBackfillScanner:
     """Scans Gold feature partitions for null enrichment fields and re-enriches."""
 
@@ -198,10 +203,13 @@ class EnrichmentBackfillScanner:
             try:
                 frame = pl.read_parquet(partition_path)
                 frames.append(frame)
-            except Exception:
+            except BaseException as exc:
+                if not isinstance(exc, Exception) and not _is_polars_panic_exception(exc):
+                    raise
                 logger.warning(
                     "Failed to read feature partition",
                     path=str(partition_path),
+                    error_type=f"{exc.__class__.__module__}.{exc.__class__.__name__}",
                     exc_info=True,
                 )
 

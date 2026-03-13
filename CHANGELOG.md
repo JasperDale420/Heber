@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test Warning Cleanup: Catalog Discovery + As-Of Join** (2026-03-04):
+  - Updated catalog auto-discovery tests to use synchronous `session.add()` mocks so async test sessions no longer emit un-awaited coroutine warnings.
+  - Set `check_sortedness=False` in grouped `join_asof` calls to remove known Polars sortedness warnings when `by` keys are provided.
+
+- **Watch Quote Polling Recovery + RCA Hardening** (2026-03-04):
+  - Restored async `httpx.AsyncClient` event hooks in `heber/core/http_client.py` so async HTTP requests no longer fail with `NoneType can't be awaited`.
+  - Hardened response logging hook elapsed-time handling to avoid `RuntimeError` when elapsed timing is unavailable.
+  - Updated `heber/watch/poller.py` to mark poll cycles as `error` when due watches return zero quotes, returning `errors=1` in poll stats for clearer outage visibility.
+  - Added stack traces (`exc_info=True`) to poller error logs for quote-fetch and poll-cycle exceptions.
+  - Added regression coverage in `tests/test_http_client_async_hooks.py` and `tests/test_watch_poller_metrics.py`.
+
+- **Watch Backfill Crash on Corrupt Feature Partitions** (2026-03-03):
+  - `heber/watch/backfill_scanner.py` now catches Polars/PyO3 panic exceptions while reading partition parquet files, logs full context, and skips only the bad partition instead of crashing the whole watch service.
+  - `heber/ml/datasets.py` now quarantines unreadable existing `data.parquet` files as `data.parquet.corrupt-<timestamp>` before writing fresh data.
+  - Feature partition writes now use an atomic temp-file rename to prevent partial-write reads that can create unreadable parquet artifacts.
+  - Added regression tests in `tests/test_enrichment_backfill_scanner.py` and `tests/test_meta_label_dataset_paths.py`.
+
+- **Noisy `greek_exposure` Null Warnings Reduced** (2026-03-03):
+  - Added `("silver", "greek_exposure")` to write-audit expected non-null contracts so audit checks only truly required fields.
+  - `strike`, `expiry`, and `dte` are now treated as optional for aggregation rows, removing high-volume warning noise from normal ingestion.
+  - Added regression coverage in `tests/test_write_audit.py`.
+
+- **Heber Watch Gateway Connection**:
+  - Reverted the `DATA_GATEWAY_URL` port in `docker-compose.yml` back to `8080`. A recent change incorrectly set it to `8081`, causing `All connection attempts failed` when the watch service tried to fetch quotes.
+
 - **Data Flow Integrity: Flush failure no longer silently drops data** (2026-02-22):
   - `_flush_layers()` now returns a boolean indicating success. If Bronze or Silver flush raises an exception, `_consume_iteration()` and `_recover_pending_messages()` skip the Redis ACK, leaving messages pending for redelivery on the next iteration instead of silently losing data.
 

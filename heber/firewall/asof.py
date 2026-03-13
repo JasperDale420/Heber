@@ -3,6 +3,7 @@
 CRITICAL: All reads for research/backtest/ML must use ts_available <= T
 """
 
+import contextlib
 from datetime import datetime
 from typing import Any
 
@@ -133,13 +134,12 @@ def asof_join(
         tolerance=tolerance,
         suffix=suffix,
         strategy="backward",  # Use most recent prior row
+        check_sortedness=False,
     )
 
     # Drop the helper column if it exists (Polars version dependent)
-    try:
+    with contextlib.suppress(Exception):
         result = result.drop("_asof_safe_time")
-    except Exception:
-        pass  # Column may not exist in newer Polars versions
 
     logger.debug(
         "asof_join",

@@ -27,7 +27,7 @@ class TestWriterRefactor(unittest.TestCase):
         self.sample_envelope = EventEnvelope(
             event_id="evt_123",
             provider="alpaca",
-            feed="bars",  # Maps to bars_1m
+            feed="bars",
             instrument_type="equity",
             instrument_key="SPY",
             symbol="SPY",
@@ -66,7 +66,7 @@ class TestWriterRefactor(unittest.TestCase):
                 }
             ]
 
-            partition_key = "feed=bars_1m/instrument_type=equity/dt=2025-01-01"
+            partition_key = "feed=bars/instrument_type=equity/dt=2025-01-01"
             writer._flush_partition(partition_key, rows)
 
             # Verify file exists

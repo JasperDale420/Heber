@@ -13,7 +13,7 @@ Usage:
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -41,7 +41,7 @@ NUMERIC_TYPES = {
 
 
 def log(msg: str) -> None:
-    line = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+    line = f"[{datetime.now(UTC).strftime('%H:%M:%S')}] {msg}"
     print(line, flush=True)
     with open(REPORT_PATH, "a") as f:
         f.write(line + "\n")
@@ -157,7 +157,7 @@ def main() -> None:
 
     log("=" * 60)
     log("  HEBER DATA HEALTH AUDIT")
-    log(f"  Started: {datetime.now().isoformat()}")
+    log(f"  Started: {datetime.now(UTC).isoformat()}")
     log(f"  Data root: {DATA_ROOT}")
     log("=" * 60)
 

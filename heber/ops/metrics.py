@@ -215,6 +215,13 @@ compactor_duration_seconds = _get_or_create(
     buckets=[1, 5, 10, 30, 60, 120, 300, 600],
 )
 
+compactor_dedupe_drops_total = _get_or_create(
+    Counter,
+    "heber_compactor_dedupe_drops_total",
+    "Events dropped by deduplication during compaction",
+    ["dataset"],
+)
+
 
 # =============================================================================
 # Catalog Metrics (PRD §12.5.2)

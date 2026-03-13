@@ -9,6 +9,7 @@ Phase 1 of OSS Migration Roadmap.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
@@ -974,10 +975,8 @@ def create_silver_table(
     logger.info("creating_iceberg_table", table=full_name)
 
     # Create namespace if needed
-    try:
+    with contextlib.suppress(Exception):
         catalog.create_namespace(namespace)
-    except Exception:
-        pass  # Namespace already exists
 
     partition_spec = _build_daily_partition_spec(schema)
 

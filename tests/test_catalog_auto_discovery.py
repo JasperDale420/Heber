@@ -47,6 +47,14 @@ def _patch_data_root(monkeypatch: pytest.MonkeyPatch, data_root: Path) -> None:
     monkeypatch.setattr(seeds.settings, "data_root", data_root)
 
 
+def _build_session(mock_result: MagicMock | None = None) -> AsyncMock:
+    """Build an async session mock with sync add() semantics."""
+    session = AsyncMock()
+    session.execute = AsyncMock() if mock_result is None else AsyncMock(return_value=mock_result)
+    session.add = MagicMock()
+    return session
+
+
 class TestDiscoverDatasetsFromDisk:
     """Tests for the discover_datasets_from_disk function."""
 
@@ -61,8 +69,7 @@ class TestDiscoverDatasetsFromDisk:
         mock_result = MagicMock()
         mock_result.all.return_value = [("bars",)]
 
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=mock_result)
+        session = _build_session(mock_result)
 
         count = await seeds.discover_datasets_from_disk(session)
 
@@ -95,8 +102,7 @@ class TestDiscoverDatasetsFromDisk:
         mock_result = MagicMock()
         mock_result.all.return_value = [("bars",), ("custom_alpha",)]
 
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=mock_result)
+        session = _build_session(mock_result)
 
         count = await seeds.discover_datasets_from_disk(session)
 
@@ -114,7 +120,7 @@ class TestDiscoverDatasetsFromDisk:
         nonexistent.mkdir()
         _patch_data_root(monkeypatch, nonexistent)
 
-        session = AsyncMock()
+        session = _build_session()
         count = await seeds.discover_datasets_from_disk(session)
 
         assert count == 0
@@ -131,8 +137,7 @@ class TestDiscoverDatasetsFromDisk:
         mock_result = MagicMock()
         mock_result.all.return_value = [("bars",), ("custom_alpha",)]
 
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=mock_result)
+        session = _build_session(mock_result)
 
         count = await seeds.discover_datasets_from_disk(session)
 
@@ -149,8 +154,7 @@ class TestDiscoverDatasetsFromDisk:
         mock_result = MagicMock()
         mock_result.all.return_value = [("bars",), ("custom_alpha",)]
 
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=mock_result)
+        session = _build_session(mock_result)
 
         count = await seeds.discover_datasets_from_disk(session)
 
@@ -166,7 +170,7 @@ class TestDiscoverDatasetsFromDisk:
         (data_root / "silver").mkdir(parents=True)
         _patch_data_root(monkeypatch, data_root)
 
-        session = AsyncMock()
+        session = _build_session()
         count = await seeds.discover_datasets_from_disk(session)
 
         assert count == 0

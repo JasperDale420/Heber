@@ -23,16 +23,6 @@ logger = structlog.get_logger(__name__)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
 
-class SchemaConflictError(RuntimeError):
-    """Raised when files in a partition contain incompatible column types."""
-
-    def __init__(self, column: str, existing_type: pa.DataType, incoming_type: pa.DataType):
-        super().__init__(f"Schema conflict for column '{column}': {existing_type} vs {incoming_type}")
-        self.column = column
-        self.existing_type = existing_type
-        self.incoming_type = incoming_type
-
-
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
     return pa.types.is_date(dt) or pa.types.is_timestamp(dt) or pa.types.is_time(dt) or pa.types.is_duration(dt)
@@ -182,6 +172,7 @@ class Compactor:
         - large_string ↔ string → large_string
         - temporal (date/timestamp) ↔ string → string
         - temporal + temporal (different) → string
+        - completely incompatible types → string
         """
         if existing_type.equals(incoming_type):
             return existing_type
@@ -194,10 +185,21 @@ class Compactor:
         if numeric is not None:
             return numeric
 
-        return Compactor._resolve_string_or_temporal_type(existing_type, incoming_type)
+        resolved = Compactor._resolve_string_or_temporal_type(existing_type, incoming_type)
+        if resolved is not None:
+            return resolved
+
+        # Ultimate fallback: cast everything to string if we really can't figure it out
+        # This prevents schema conflicts from blocking compaction
+        logger.warning(
+            "Incompatible types encountered during compaction, falling back to string",
+            existing=str(existing_type),
+            incoming=str(incoming_type),
+        )
+        return pa.string()
 
     def _build_unified_schema(self, tables: list[pa.Table]) -> pa.Schema:
-        """Build unified schema across tables, raising on true type conflicts."""
+        """Build unified schema across tables."""
         ordered_columns: list[str] = []
         column_types: dict[str, pa.DataType] = {}
 
@@ -212,12 +214,6 @@ class Compactor:
                     continue
 
                 resolved_type = self._resolve_column_type(existing_type, incoming_type)
-                if resolved_type is None:
-                    raise SchemaConflictError(
-                        column=column,
-                        existing_type=existing_type,
-                        incoming_type=incoming_type,
-                    )
                 column_types[column] = resolved_type
 
         return pa.schema([pa.field(column, column_types[column]) for column in ordered_columns])
@@ -301,21 +297,67 @@ class Compactor:
         source_tables: list[pa.Table],
         unified_schema: pa.Schema,
         temp_path: Path,
+        dataset: str,
     ) -> int:
-        """Write source tables to a temporary parquet file, returning total row count."""
-        writer = None
-        merged_rows = 0
-        try:
-            for source_table in source_tables:
-                table = self._align_table_to_schema(source_table, unified_schema)
-                if writer is None:
-                    writer = pq.ParquetWriter(temp_path, unified_schema, compression="snappy")
-                writer.write_table(table, row_group_size=250_000)
-                merged_rows += table.num_rows
-        finally:
-            if writer is not None:
-                writer.close()
-        return merged_rows
+        """Write source tables to a temporary parquet file, returning total row count.
+
+        Performs exact deduplication on event_id, keeping the earliest ts_ingest.
+        """
+        if not source_tables:
+            return 0
+
+        # 1. Align schemas of all tables
+        aligned_tables = [self._align_table_to_schema(t, unified_schema) for t in source_tables]
+
+        # 2. Combine into a single table
+        combined_table = pa.concat_tables(aligned_tables)
+
+        # 3. Fast path: If empty or no event_id, just write it
+        if combined_table.num_rows == 0:
+            return 0
+
+        has_event_id = "event_id" in combined_table.schema.names
+        has_ts_ingest = "ts_ingest" in combined_table.schema.names
+
+        # 4. Deduplication
+        if has_event_id:
+            df = combined_table.to_pandas()
+            initial_rows = len(df)
+
+            # Sort so we keep the earliest ts_ingest if present
+            if has_ts_ingest:
+                df = df.sort_values("ts_ingest", ascending=True)
+
+            # Drop duplicates keeping the first (earliest)
+            df = df.drop_duplicates(subset=["event_id"], keep="first")
+
+            # Restore original sort if needed (optional, but good for predictable layout)
+            if has_ts_ingest:
+                df = df.sort_index()
+
+            deduped_rows = len(df)
+            duplicates_removed = initial_rows - deduped_rows
+
+            if duplicates_removed > 0:
+                logger.info(
+                    "Compaction deduplication removed records",
+                    removed=duplicates_removed,
+                    initial=initial_rows,
+                    final=deduped_rows,
+                )
+                from heber.ops.metrics import compactor_dedupe_drops_total
+
+                compactor_dedupe_drops_total.labels(dataset=dataset).inc(duplicates_removed)
+
+            final_table = pa.Table.from_pandas(df, schema=unified_schema, preserve_index=False)
+        else:
+            final_table = combined_table
+
+        # 5. Write out
+        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy") as writer:
+            writer.write_table(final_table, row_group_size=250_000)
+
+        return final_table.num_rows
 
     def compact_partition(self, partition_path: Path) -> int:
         """Compact all small files in a partition.
@@ -336,30 +378,13 @@ class Compactor:
 
             source_tables = [self._normalize_dict_columns(pq.ParquetFile(f).read()) for f in small_files]
 
-            try:
-                unified_schema = self._build_unified_schema(source_tables)
-            except SchemaConflictError as conflict:
-                record_compaction(
-                    dataset=dataset,
-                    status="error",
-                    files_merged=0,
-                    bytes_reclaimed=0,
-                    duration=(datetime.now(UTC) - started_at).total_seconds(),
-                )
-                logger.error(
-                    "Compaction skipped due schema conflict",
-                    partition=str(partition_path),
-                    column=conflict.column,
-                    existing_type=str(conflict.existing_type),
-                    incoming_type=str(conflict.incoming_type),
-                )
-                return 0
+            unified_schema = self._build_unified_schema(source_tables)
 
             ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             merged_path = partition_path / f"compacted-{ts}-{os.getpid()}.parquet"
             temp_path = partition_path / f".compacted-{ts}-{os.getpid()}.tmp"
 
-            merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path)
+            merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path, dataset)
 
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0

@@ -112,7 +112,7 @@ def test_compactor_preserves_values_across_multiple_optional_columns(tmp_path: P
     assert data["e3"]["expiry_count"] == 1
 
 
-def test_compactor_skips_partition_when_types_conflict(tmp_path: Path, monkeypatch) -> None:
+def test_compactor_casts_incompatible_types_to_string(tmp_path: Path, monkeypatch) -> None:
     partition = tmp_path / "silver" / "feed=flow_alerts" / "instrument_type=option" / "dt=2026-02-09"
     partition.mkdir(parents=True, exist_ok=True)
 
@@ -138,18 +138,33 @@ def test_compactor_skips_partition_when_types_conflict(tmp_path: Path, monkeypat
         ),
     )
 
-    error_calls: list[tuple[str, dict]] = []
+    warning_calls: list[tuple[str, dict]] = []
 
-    def _capture_error(message: str, **kwargs) -> None:  # noqa: ANN003
-        error_calls.append((message, kwargs))
+    def _capture_warning(message: str, **kwargs) -> None:  # noqa: ANN003
+        warning_calls.append((message, kwargs))
 
-    monkeypatch.setattr(compactor_module.logger, "error", _capture_error)
+    monkeypatch.setattr(compactor_module.logger, "warning", _capture_warning)
 
     compactor = Compactor()
     merged = compactor.compact_partition(partition)
 
-    assert merged == 0
-    assert source_a.exists()
-    assert source_b.exists()
-    assert list(partition.glob("compacted-*.parquet")) == []
-    assert any(call[0] == "Compaction skipped due schema conflict" for call in error_calls)
+    assert merged == 2
+    assert not source_a.exists()
+    assert not source_b.exists()
+
+    compacted_files = list(partition.glob("compacted-*.parquet"))
+    assert len(compacted_files) == 1
+
+    merged_table = pq.read_table(compacted_files[0])
+
+    # Assert that the type was cast to string
+    assert pa.types.is_string(merged_table.schema.field("total_size").type)
+
+    data = merged_table.to_pylist()
+    row_by_event = {row["event_id"]: row for row in data}
+    assert row_by_event["e1"]["total_size"] == "11"
+    assert row_by_event["e2"]["total_size"] == "bad-type"
+
+    assert any(
+        call[0] == "Incompatible types encountered during compaction, falling back to string" for call in warning_calls
+    )

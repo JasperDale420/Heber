@@ -87,9 +87,7 @@ class SDKToken:
         """Check if token is valid."""
         if self.revoked:
             return False
-        if self.expires_at and datetime.now(UTC) > self.expires_at:
-            return False
-        return True
+        return not (self.expires_at and datetime.now(UTC) > self.expires_at)
 
     def has_scope(self, scope: str) -> bool:
         """Check if token has a scope."""

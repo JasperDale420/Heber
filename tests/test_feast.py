@@ -1,7 +1,7 @@
 """Tests for Feast Integration (PRD §31)."""
 
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -57,7 +57,7 @@ class TestHistoricalFeatures:
         entity_df = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"],
-                "event_timestamp": [datetime.now()],
+                "event_timestamp": [datetime.now(UTC)],
             }
         )
 

@@ -36,24 +36,13 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+# Sonar scanner output
+.scannerwork/
+sonar_scan.log
+
 # Aider
 .aider*
 .env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
-.env
 
-# Sonar scanner output
-.scannerwork/
+# Axon knowledge graph cache
+.axon/
