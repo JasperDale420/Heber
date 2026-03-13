@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Health-check: dev deps installed and test suite fully passing** (2026-03-13):
+  - Installed `dev` optional-dependencies (`pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `bandit`, etc.) into the Heber venv via `uv sync --all-extras`. Previously `uv run pytest` resolved to the system conda pytest, which ran outside the venv and could not find `empire_core`, causing all 52 test modules that import any `heber.ops.*` symbol to fail at collection with `ModuleNotFoundError: No module named 'empire_core'`.
+  - Added input validation to `configure_logging()` in `heber/ops/logging.py`: passing an unrecognised log level (e.g. `"TRACE"`) now raises `ValueError("Invalid log level: …")` instead of silently falling back to INFO. Fixes `test_invalid_level_raises_value_error`.
+  - Added `bind_context`, `clear_context`, and `unbind_context` to `heber/ops/__init__.__all__` — they were imported for re-export but omitted from `__all__`, causing three `F401` ruff violations.
+  - Removed unused `typing.Any` import and fixed import block ordering in `heber/ops/logging.py` (ruff `F401`, `I001`).
+
 - **Bronze-to-Silver Transformer Deduplication** (2026-03-12):
   - Added `_collect_existing_event_ids()` to `heber/writer/transformer.py` that reads existing `event_id`s from Silver partition files before writing, preventing duplicates during backfill reruns.
   - Also deduplicates within the same batch run via an in-memory set cache.
