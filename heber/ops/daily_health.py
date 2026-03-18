@@ -209,7 +209,7 @@ def _check_zero_leakage(
     settings: Settings,
     sample_size: int = 1000,
 ) -> dict[str, Any]:
-    """Sample rows and verify ts_available <= ts_event for all."""
+    """Sample rows and verify ts_available >= ts_event for all."""
     dt_str = report_date.isoformat()
     violations = 0
     sampled = 0

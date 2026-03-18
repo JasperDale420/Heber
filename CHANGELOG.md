@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added null field audit to Silver salvage write path (`writer/utils.py`)
   - Added LabelWriter buffer overflow cap at 10,000 entries (`watch/writer.py`)
   - Added debug logging to silent Feast resolution fallbacks (`feast/materialization.py`)
+  - Fixed misleading docstring in zero-leakage health check (said `<=` but contract is `>=`) (`ops/daily_health.py`)
+  - Removed dead `if quotes:` conditional in SnapshotPoller (always true after early return) (`watch/poller.py`)
 
 - **Health-check: dev deps installed and test suite fully passing** (2026-03-13):
   - Installed `dev` optional-dependencies (`pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `bandit`, etc.) into the Heber venv via `uv sync --all-extras`. Previously `uv run pytest` resolved to the system conda pytest, which ran outside the venv and could not find `empire_core`, causing all 52 test modules that import any `heber.ops.*` symbol to fail at collection with `ModuleNotFoundError: No module named 'empire_core'`.
