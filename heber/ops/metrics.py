@@ -471,7 +471,7 @@ def start_metrics_server(port: int = METRICS_PORT) -> None:
         start_http_server(port)
         logger.info("metrics_server_started", port=port)
     except Exception as e:
-        logger.error("metrics_server_failed", port=port, error=str(e))
+        logger.error("metrics_server_failed", port=port, error=str(e), exc_info=True)
         raise
 
 

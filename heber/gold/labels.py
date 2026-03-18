@@ -220,7 +220,7 @@ def write_label(
     output_path.mkdir(parents=True, exist_ok=True)
 
     parquet_path = output_path / DATA_PARQUET
-    df.to_parquet(parquet_path, compression="snappy")
+    df.to_parquet(parquet_path, index=False, compression="snappy")
 
     logger.info(
         "Wrote label dataset",
@@ -288,7 +288,7 @@ def read_label(
             asof_time=asof_time,
         )
     except Exception as e:
-        logger.error("Failed to read label dataset", dataset=dataset, error=str(e))
+        logger.error("Failed to read label dataset", dataset=dataset, error=str(e), exc_info=True)
         return pd.DataFrame()
 
     if "ts_available" not in df.columns and not df.empty:

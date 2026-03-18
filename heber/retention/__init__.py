@@ -253,7 +253,6 @@ class Archiver:
         try:
             if self.compress_on_archive:
                 # Create compressed archive
-                archive_path / f"{archive_name}.tar.gz"
                 shutil.make_archive(
                     str(archive_path / archive_name),
                     "gztar",

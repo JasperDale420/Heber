@@ -582,11 +582,13 @@ class EventConsumer:
 
     def _log_silver_validation_failure(self, envelope: EventEnvelope, error: Exception) -> None:
         """Log a bounded warning for malformed upstream data rejected from Silver."""
+        if len(self._silver_validation_warning_counts) > 10000:
+            self._silver_validation_warning_counts.clear()
         signature = (
             envelope.provider,
             envelope.feed,
             type(error).__name__,
-            str(error),
+            type(error).__name__,
         )
         occurrence_count = self._silver_validation_warning_counts.get(signature, 0) + 1
         self._silver_validation_warning_counts[signature] = occurrence_count

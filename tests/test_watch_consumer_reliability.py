@@ -462,7 +462,7 @@ def test_map_alert_fields_normalizes_non_string_put_call() -> None:
         }
     )
 
-    assert mapped["put_call"] == "C"
+    assert mapped["put_call"] is None
 
     mapped = consumer._map_alert_fields(
         {

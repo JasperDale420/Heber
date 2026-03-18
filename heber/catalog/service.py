@@ -119,6 +119,8 @@ class CatalogService:
         """Create or update instrument."""
         existing = await self.get_instrument(instrument_key)
         if existing:
+            existing.instrument_type = instrument_type
+            existing.canonical_symbol = canonical_symbol
             for key, value in kwargs.items():
                 if hasattr(existing, key) and value is not None:
                     setattr(existing, key, value)
@@ -177,7 +179,7 @@ class CatalogService:
         if coverage:
             coverage.dt_min = min(coverage.dt_min, dt_min)
             coverage.dt_max = max(coverage.dt_max, dt_max)
-            if approx_row_count:
+            if approx_row_count is not None:
                 coverage.approx_row_count = (coverage.approx_row_count or 0) + approx_row_count
             coverage.last_updated_ts = datetime.now(UTC)
         else:

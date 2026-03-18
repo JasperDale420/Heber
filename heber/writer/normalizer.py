@@ -178,6 +178,13 @@ def _coerce_timestamp(value: Any) -> datetime | None:
         return datetime.fromtimestamp(epoch, tz=UTC)
     if isinstance(value, str):
         stripped = value.strip()
+        # Try float-epoch (handles "1710000000.5")
+        try:
+            numeric = float(stripped)
+            if numeric > 1e9:
+                return datetime.fromtimestamp(numeric, tz=UTC)
+        except (ValueError, OverflowError, OSError):
+            pass
         if stripped.isdigit():
             return _coerce_timestamp(int(stripped))
         return datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))

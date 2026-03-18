@@ -38,7 +38,7 @@ class InvalidInstrumentKeyError(SilverNormalizationError):
 
 
 OCC_PATTERN = re.compile(r"([A-Z]{1,6}\d{6}[CP]\d{8})")
-SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}$")
+SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 EQUITY_EXTENDED_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$")
 UNDERLYING_PATTERN = re.compile(r"^[A-Z]{1,6}$")
 CRYPTO_SYMBOL_PATTERN = re.compile(r"^[A-Z]{2,10}-[A-Z]{2,10}$")
@@ -114,22 +114,31 @@ def _normalize_congress_insider(
     symbol: str | None,
     payload: dict[str, Any],
 ) -> tuple[str, str, str]:
-    """Normalize symbol for congress_trades/insider_trades feeds."""
+    """Normalize symbol for congress_trades/insider_trades feeds.
+
+    When the upstream provider sends an empty ticker (common with
+    UnusualWhales bulk insider-trades endpoints), falls back to
+    ``"UNKNOWN"`` so the record can proceed through Silver normalization
+    rather than being rejected at the instrument-key stage.  Records
+    with genuinely missing required fields will still be caught by
+    ``enforce_required_non_null_fields`` downstream.
+    """
     if symbol is None:
         symbol = _normalize_symbol(payload.get("ticker")) or _normalize_symbol(payload.get("symbol"))
     if symbol is not None:
         return symbol, "equity", f"equity:{symbol}"
-    raise MissingInstrumentIdentifierError(
-        f"Missing symbol/ticker for {feed}",
-        details={
-            "feed": feed,
-            "instrument_type": "equity",
-            "instrument_key": "equity:",
-            "payload_symbol": payload.get("symbol"),
-            "payload_ticker": payload.get("ticker"),
-            "symbol": symbol,
-        },
+
+    # Fallback: use UNKNOWN sentinel so record is not rejected here.
+    # The required-field check (insider_name, trade_type, trade_date) will
+    # still reject truly empty records, but records with partial data can
+    # proceed to Silver.
+    logger.debug(
+        "congress_insider_missing_symbol_fallback",
+        feed=feed,
+        payload_ticker=payload.get("ticker"),
+        payload_symbol=payload.get("symbol"),
     )
+    return "UNKNOWN", "equity", "equity:UNKNOWN"
 
 
 def _normalize_news(
@@ -228,7 +237,7 @@ def _collect_quality_flags(
 def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
     """Normalize feed alias, payload, symbol, and instrument key for Silver writes."""
     canonical_feed = resolve_feed_alias(envelope.feed)
-    payload = normalize_payload_for_feed(canonical_feed, envelope.payload)
+    payload = normalize_payload_for_feed(canonical_feed, envelope.payload, ts_event=envelope.ts_event)
 
     symbol = _normalize_symbol(envelope.symbol)
     instrument_type = envelope.instrument_type.lower().strip()

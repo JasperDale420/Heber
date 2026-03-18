@@ -45,7 +45,7 @@ def _resolve_feature_view(store: object, view_name: str) -> object | None:
         try:
             return getter(view_name)  # type: ignore[no-any-return]
         except Exception:
-            pass
+            logger.debug("feast_resolve_fallback", exc_info=True)
 
     lister = getattr(store, "list_feature_views", None)
     if callable(lister):
@@ -54,7 +54,7 @@ def _resolve_feature_view(store: object, view_name: str) -> object | None:
                 if getattr(feature_view, "name", None) == view_name:
                     return feature_view  # type: ignore[no-any-return]
         except Exception:
-            pass
+            logger.debug("feast_resolve_fallback", exc_info=True)
 
     return None
 

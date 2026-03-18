@@ -439,6 +439,7 @@ class RetryExecutor:
                         "max_retries_exceeded",
                         attempts=attempt + 1,
                         error=str(e),
+                        exc_info=True,
                     )
                     await self.dlq_handler.send_to_dlq(
                         envelope=envelope,
@@ -523,7 +524,7 @@ class BackpressureMonitor:
                 try:
                     await self.check_lag(stream, group)
                 except Exception as e:  # noqa: BLE001 — monitoring loop must not crash
-                    logger.error("lag_check_failed", stream=stream.value, error=str(e))
+                    logger.error("lag_check_failed", stream=stream.value, error=str(e), exc_info=True)
 
             await asyncio.sleep(self.check_interval)
 

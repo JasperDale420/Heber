@@ -48,6 +48,108 @@ logger = structlog.get_logger(__name__)
 _VERSION_PREFIX = "version="
 
 
+def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
+    """Cast dictionary-encoded string columns to plain ``pa.string()``.
+
+    When Silver files are written by different code paths (real-time writer vs
+    compactor) their Parquet encoding for low-cardinality string columns may
+    differ — one path writes ``string``, the other ``dictionary<string, int32>``.
+    ``pyarrow.dataset`` refuses to merge these schemas.
+
+    Applying this coercion after ``to_table()`` ensures downstream consumers
+    always see plain string columns regardless of on-disk encoding.
+    """
+    needs_cast = False
+    for field in table.schema:
+        if pa.types.is_dictionary(field.type):
+            needs_cast = True
+            break
+    if not needs_cast:
+        return table
+
+    arrays: list[pa.ChunkedArray] = []
+    fields: list[pa.Field] = []
+    for i, field in enumerate(table.schema):
+        col = table.column(i)
+        if pa.types.is_dictionary(field.type) and (
+            pa.types.is_string(field.type.value_type) or pa.types.is_large_string(field.type.value_type)
+        ):
+            col = col.cast(pa.string())
+            field = field.with_type(pa.string())
+        arrays.append(col)
+        fields.append(field)
+    return pa.table(arrays, schema=pa.schema(fields))
+
+
+def _open_dataset_safe(
+    path: str,
+    partitioning: ds.Partitioning | None = None,
+) -> ds.Dataset | None:
+    """Open a Parquet dataset, recovering from dictionary/string schema conflicts.
+
+    On the first attempt we let ``pyarrow.dataset`` infer the unified schema.
+    If that fails with ``ArrowInvalid`` (the dictionary-vs-string mismatch),
+    we manually read the schemas of individual files, unify them with
+    dictionary types coerced to plain string, and re-open the dataset with
+    the explicit schema.
+    """
+    try:
+        return ds.dataset(path, format="parquet", partitioning=partitioning)
+    except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError):
+        logger.info("heber_reader_schema_conflict_detected", path=path)
+
+    # Fallback: build a unified schema with dictionary types coerced to string
+    try:
+        file_dataset = ds.dataset(path, format="parquet", partitioning=partitioning, schema=None)
+        # If we got here without error, return it
+        return file_dataset
+    except Exception:
+        logger.debug("dataset_open_fallback", path=str(path), exc_info=True)
+
+    # Manual schema unification from individual fragment metadata
+    try:
+        raw = ds.dataset(path, format="parquet")
+        schemas: list[pa.Schema] = []
+        for fragment in raw.get_fragments():
+            try:
+                schemas.append(fragment.physical_schema)
+            except Exception:
+                logger.debug("fragment_schema_read_failed", path=str(path), exc_info=True)
+                continue
+        if not schemas:
+            return None
+
+        # Build unified schema, coercing dictionary types to plain string
+        field_map: dict[str, pa.DataType] = {}
+        field_order: list[str] = []
+        for schema in schemas:
+            for field in schema:
+                if field.name not in field_map:
+                    field_order.append(field.name)
+                    dt = field.type
+                    if pa.types.is_dictionary(dt):
+                        dt = pa.string()
+                    field_map[field.name] = dt
+                else:
+                    existing = field_map[field.name]
+                    incoming = field.type
+                    if pa.types.is_dictionary(incoming):
+                        incoming = pa.string()
+                    if pa.types.is_dictionary(existing):
+                        existing = pa.string()
+                    if not existing.equals(incoming):
+                        # Widen to string as a safe fallback
+                        field_map[field.name] = pa.string()
+                    else:
+                        field_map[field.name] = existing
+
+        unified = pa.schema([pa.field(name, field_map[name]) for name in field_order])
+        return ds.dataset(path, format="parquet", partitioning=partitioning, schema=unified)
+    except Exception:
+        logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
+        return None
+
+
 def _to_utc(ts: Any) -> pa.Scalar:
     """Coerce a timestamp-like value to a UTC-aware PyArrow scalar."""
     t = pd.Timestamp(ts)
@@ -194,13 +296,16 @@ class HeberReader:
             return pd.DataFrame()
 
         try:
-            dataset_obj = ds.dataset(
+            dataset_obj = _open_dataset_safe(
                 str(base_path),
-                format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except (pa.lib.ArrowInvalid, OSError):
+        except OSError:
             logger.warning("heber_reader_open_failed", path=str(base_path), exc_info=True)
+            return pd.DataFrame()
+
+        if dataset_obj is None:
+            logger.warning("heber_reader_open_failed", path=str(base_path))
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
@@ -228,6 +333,7 @@ class HeberReader:
 
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=projection)
+            table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_read_failed", path=str(base_path), exc_info=True)
@@ -404,13 +510,16 @@ class HeberReader:
         scan_path, resolved_version = scan_result
 
         try:
-            dataset_obj = ds.dataset(
+            dataset_obj = _open_dataset_safe(
                 str(scan_path),
-                format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except (pa.lib.ArrowInvalid, OSError):
+        except OSError:
             logger.warning("heber_reader_gold_open_failed", path=str(scan_path), exc_info=True)
+            return pd.DataFrame()
+
+        if dataset_obj is None:
+            logger.warning("heber_reader_gold_open_failed", path=str(scan_path))
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
@@ -436,6 +545,7 @@ class HeberReader:
 
         try:
             table = dataset_obj.to_table(filter=scan_filter)
+            table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_gold_read_failed", path=str(scan_path), exc_info=True)
@@ -541,15 +651,15 @@ class HeberReader:
             ts_str = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
             out_path = partition_dir / f"part-{ts_str}-{uuid.uuid4().hex[:8]}.parquet"
 
-            write_df = group.drop(columns=["dt"])
-            table = pa.Table.from_pandas(write_df)
+            write_df = group.drop(columns=["dt"]).reset_index(drop=True)
+            table = pa.Table.from_pandas(write_df, preserve_index=False)
 
             if metadata:
                 existing = table.schema.metadata or {}
                 encoded = {k.encode(): json.dumps(v).encode() for k, v in metadata.items()}
                 table = table.replace_schema_metadata({**existing, **encoded})
 
-            pq.write_table(table, str(out_path), compression="snappy")
+            pq.write_table(table, str(out_path), compression="snappy", use_dictionary=False)
             output_paths.append(out_path)
 
         logger.info(
@@ -584,13 +694,16 @@ class HeberReader:
             return pd.DataFrame()
 
         try:
-            dataset_obj = ds.dataset(
+            dataset_obj = _open_dataset_safe(
                 str(path),
-                format="parquet",
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except (pa.lib.ArrowInvalid, OSError):
+        except OSError:
             logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
+            return pd.DataFrame()
+
+        if dataset_obj is None:
+            logger.warning("heber_reader_arbitrary_open_failed", path=str(path))
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
@@ -613,6 +726,7 @@ class HeberReader:
 
         try:
             table = dataset_obj.to_table(filter=scan_filter, columns=columns)
+            table = _coerce_dict_columns_to_string(table)
             return table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
             logger.warning("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)

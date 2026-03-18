@@ -162,15 +162,16 @@ class LakeFSVersionManager:
         client = self._get_client()
         repo_name = repo_name or self.config.default_repo
 
+        repo = lakefs.Repository(repo_name, client=client)
         try:
-            return lakefs.Repository(repo_name, client=client)
+            repo.metadata  # noqa: B018 — Force existence check
         except Exception:
-            # Repository doesn't exist, create it
             logger.info("creating_lakefs_repository", repo=repo_name)
-            return lakefs.Repository(repo_name, client=client).create(
+            repo = lakefs.Repository(repo_name, client=client).create(
                 storage_namespace=self.config.resolve_storage_namespace(repo_name),
                 default_branch="main",
             )
+        return repo
 
     def list_branches(self, repo: str | None = None) -> list[str]:
         """List all branches in the repository.

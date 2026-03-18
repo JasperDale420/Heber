@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **27-bug sweep across Heber codebase** (2026-03-18):
+  - **[HIGH]** Fixed `POST /api/v1/datasets` endpoint crash — `dataset_name=` keyword didn't match service's `name=` parameter (`catalog/api.py`)
+  - **[HIGH]** Fixed `_normalize_symbol` rejecting dot-class equity tickers like BRK.B, BF.A (`writer/key_normalization.py`)
+  - Fixed Gold Poller hardcoded EDT offset (wrong during EST Nov-Mar) — now uses `ZoneInfo("America/New_York")` (`gold_poller/service.py`)
+  - Fixed naive datetimes passed to Gold pipeline.run() — now UTC-aware (`gold_poller/service.py`)
+  - Fixed `upsert_instrument` silently ignoring `instrument_type`/`canonical_symbol` on updates (`catalog/service.py`)
+  - Fixed `CancelledError` re-raised during catalog API lifespan shutdown (`catalog/api.py`)
+  - Fixed unbounded `_silver_validation_warning_counts` dict growth in consumer (`writer/consumer.py`)
+  - Fixed float-epoch timestamp strings (e.g. "1710000000.5") silently becoming None (`writer/normalizer.py`)
+  - Fixed non-atomic Bronze gzip and Silver Parquet writes — now use temp-file-then-rename (`writer/bronze.py`, `writer/utils.py`)
+  - Fixed `asyncio.gather` not cancelling siblings on failure in WatchService — now uses `TaskGroup` (`watch/writer.py`)
+  - Fixed WatchService.stop() not closing Redis connection (`watch/writer.py`)
+  - Fixed compactor blocking event loop during entire compaction cycle — now uses `asyncio.to_thread` (`writer/compactor.py`)
+  - Fixed division by zero in `SliceTracker.generate_report()` when no slices exist (`ops/slices.py`)
+  - Fixed `_normalize_put_call` silently defaulting unknown values to "C" (Call) — now returns None (`watch/consumer.py`)
+  - Fixed `_open_dataset_safe` silently swallowing exceptions — now logs on fallback paths (`reader/core.py`)
+  - Fixed LakeFS `_get_repo` auto-create fallback that could never fire (`versioning/__init__.py`)
+  - Fixed `update_coverage` falsy check treating `approx_row_count=0` as missing (`catalog/service.py`)
+  - Removed dead `buffer_counts` field from BronzeWriter (`writer/bronze.py`)
+  - Removed dead expression in Archiver (`retention/__init__.py`)
+  - Fixed naive `datetime.now()` in ml/datasets.py — now uses UTC (`ml/datasets.py`)
+  - Added `exc_info=True` to 12+ `logger.error()` calls missing tracebacks across ops, bus, quality, catalog, gold modules
+  - Added null field audit to Silver salvage write path (`writer/utils.py`)
+  - Added LabelWriter buffer overflow cap at 10,000 entries (`watch/writer.py`)
+  - Added debug logging to silent Feast resolution fallbacks (`feast/materialization.py`)
+
 - **Health-check: dev deps installed and test suite fully passing** (2026-03-13):
   - Installed `dev` optional-dependencies (`pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `bandit`, etc.) into the Heber venv via `uv sync --all-extras`. Previously `uv run pytest` resolved to the system conda pytest, which ran outside the venv and could not find `empire_core`, causing all 52 test modules that import any `heber.ops.*` symbol to fail at collection with `ModuleNotFoundError: No module named 'empire_core'`.
   - Added input validation to `configure_logging()` in `heber/ops/logging.py`: passing an unrecognised log level (e.g. `"TRACE"`) now raises `ValueError("Invalid log level: …")` instead of silently falling back to INFO. Fixes `test_invalid_level_raises_value_error`.

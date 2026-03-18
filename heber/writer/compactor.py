@@ -352,8 +352,14 @@ class Compactor:
         else:
             final_table = combined_table
 
-        # 5. Write out
-        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy") as writer:
+        # 5. Write out.
+        # use_dictionary=False ensures compacted files use plain string types
+        # for low-cardinality columns (feed, instrument_type, provider, source).
+        # This prevents schema merge failures when pyarrow.dataset reads a
+        # directory containing files from both the real-time writer and the
+        # compactor — mixed string vs dictionary<string, int32> encoding is
+        # otherwise incompatible.
+        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy", use_dictionary=False) as writer:
             writer.write_table(final_table, row_group_size=250_000)
 
         return final_table.num_rows
@@ -462,7 +468,7 @@ class Compactor:
         while self.running:
             try:
                 # Compact Silver layer
-                result = self.scan_and_compact("silver")
+                result = await asyncio.to_thread(self.scan_and_compact, "silver")
                 logger.info("Compaction cycle complete", **result)
 
                 # Wait for next cycle

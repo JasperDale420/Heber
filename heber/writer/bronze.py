@@ -27,7 +27,6 @@ class BronzeWriter:
 
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
-        self.buffer_counts: dict[str, int] = defaultdict(int)
         self.last_flush: datetime = datetime.now(UTC)
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
@@ -50,7 +49,6 @@ class BronzeWriter:
         # Store the full envelope (including raw if present)
         event_dict = envelope.model_dump(mode="json")
         self.buffers[partition_key].append(event_dict)
-        self.buffer_counts[partition_key] += 1
 
     def flush_if_needed(self) -> None:
         """Flush buffers if conditions are met."""
@@ -84,10 +82,12 @@ class BronzeWriter:
         dataset = self._dataset_from_partition(partition_key)
 
         try:
-            # Write as gzipped JSONL
-            with gzip.open(file_path, "wt", encoding="utf-8") as f:
+            # Write as gzipped JSONL (atomic: write to tmp, then rename)
+            tmp_path = file_path.with_suffix(".tmp")
+            with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
                 for event in events:
                     f.write(json.dumps(event, default=str) + "\n")
+            tmp_path.rename(file_path)
 
             duration_seconds = max(0.0, time.perf_counter() - started)
             bytes_written = file_path.stat().st_size if file_path.exists() else 0

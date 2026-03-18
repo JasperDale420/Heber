@@ -212,7 +212,7 @@ data_source heber_silver:
         except Exception as e:
             duration = (datetime.now(UTC) - start_time).total_seconds()
             quality_scans.labels(dataset=dataset, status="error").inc()
-            logger.error("soda_scan_failed", dataset=dataset, error=str(e))
+            logger.error("soda_scan_failed", dataset=dataset, error=str(e), exc_info=True)
 
             return ScanResult(
                 dataset=dataset,

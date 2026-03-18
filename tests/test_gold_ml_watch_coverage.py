@@ -1670,8 +1670,8 @@ class TestConsumerNormalizePutCall:
         assert AlertWatchConsumer._normalize_put_call("PUT") == "P"
 
     def test_default(self):
-        assert AlertWatchConsumer._normalize_put_call(None) == "C"
-        assert AlertWatchConsumer._normalize_put_call(123) == "C"
+        assert AlertWatchConsumer._normalize_put_call(None) is None
+        assert AlertWatchConsumer._normalize_put_call(123) is None
 
 
 class TestConsumerNormalizeTags:

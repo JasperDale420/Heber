@@ -120,7 +120,6 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("catalog_periodic_scan_stopped")
-            raise
 
 
 app = FastAPI(
@@ -427,7 +426,7 @@ async def create_dataset(
 ) -> dict[str, Any]:
     """Create a new dataset in the catalog."""
     dataset = await service.create_dataset(
-        dataset_name=request.dataset_name,
+        name=request.dataset_name,
         layer=request.layer,
         owner=request.owner,
         description=request.description,

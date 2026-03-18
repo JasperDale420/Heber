@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -43,7 +43,7 @@ def _read_existing_partition_or_quarantine(out_file: Path) -> pd.DataFrame | Non
     try:
         return pd.read_parquet(out_file)
     except Exception as exc:
-        quarantine_path = out_file.with_name(f"{out_file.name}.corrupt-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}")
+        quarantine_path = out_file.with_name(f"{out_file.name}.corrupt-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}")
         try:
             out_file.replace(quarantine_path)
             logger.warning(

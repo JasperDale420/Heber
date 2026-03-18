@@ -231,7 +231,7 @@ class OpenMetadataCatalog:
 
         except Exception as e:
             catalog_operations.labels(operation="register_table", status="error").inc()
-            logger.error("table_registration_failed", error=str(e))
+            logger.error("table_registration_failed", error=str(e), exc_info=True)
             raise
 
     def get_table(self, fqn: str) -> TableMetadata | None:
@@ -329,7 +329,7 @@ class OpenMetadataCatalog:
 
         except Exception as e:
             catalog_operations.labels(operation="add_lineage", status="error").inc()
-            logger.error("lineage_add_failed", error=str(e))
+            logger.error("lineage_add_failed", error=str(e), exc_info=True)
             raise
 
     def get_lineage(self, table_fqn: str, direction: str = "both") -> list[LineageEdge]:

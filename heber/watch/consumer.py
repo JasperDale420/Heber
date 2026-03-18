@@ -763,15 +763,17 @@ class AlertWatchConsumer:
         }
 
     @staticmethod
-    def _normalize_put_call(value: Any) -> str:
-        """Normalize put/call values to C/P with a stable default."""
+    def _normalize_put_call(value: Any) -> str | None:
+        """Normalize put/call values to C/P."""
         if isinstance(value, str):
             normalized = value.strip().upper()
             if normalized.startswith("P"):
                 return "P"
             if normalized.startswith("C"):
                 return "C"
-        return "C"
+        if value is not None:
+            logger.warning("unrecognized_put_call", value=value)
+        return None
 
     def _calculate_dte(self, expiry: str | None) -> int:
         """Calculate days to expiry from expiry string."""

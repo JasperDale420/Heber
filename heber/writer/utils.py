@@ -94,13 +94,11 @@ def write_silver_parquet(
         return
 
     started_at = datetime.now(UTC)
+    from heber.quality.write_audit import audit_null_fields
 
     try:
         # Create Arrow table
         table = pa.Table.from_pylist(rows, schema=schema)
-
-        # Audit for unexpected null values before writing
-        from heber.quality.write_audit import audit_null_fields
 
         audit_null_fields(
             table,
@@ -109,13 +107,22 @@ def write_silver_parquet(
             context={"partition": partition_key, "file": str(file_path)},
         )
 
-        # Write Parquet with compression
+        # Write Parquet with compression.
+        # use_dictionary=False prevents dictionary encoding of low-cardinality
+        # string columns (feed, instrument_type, provider, source) so that all
+        # Silver files use plain string types.  Mixed encoding (plain vs
+        # dictionary<string, int32>) causes pyarrow.dataset schema merge to
+        # fail with "incompatible types" when reading a directory containing
+        # files from both the real-time writer and the compactor.
+        tmp_path = file_path.with_suffix(".parquet.tmp")
         pq.write_table(
             table,
-            file_path,
+            tmp_path,
             compression="snappy",
             row_group_size=100_000,
+            use_dictionary=False,
         )
+        tmp_path.rename(file_path)
         elapsed = (datetime.now(UTC) - started_at).total_seconds()
         bytes_written = file_path.stat().st_size if file_path.exists() else 0
         record_write(
@@ -150,10 +157,13 @@ def write_silver_parquet(
 
         if valid_rows:
             table = pa.Table.from_pylist(valid_rows, schema=schema)
-            # Ensure parent exists just in case (caller should handle, but write_table needs it)
-            # Actually caller usually creates mkdir.
-            # But let's assume caller did it.
-            pq.write_table(table, file_path, compression="snappy", row_group_size=100_000)
+            audit_null_fields(
+                table,
+                layer="silver",
+                dataset=dataset,
+                context={"path": str(file_path), "salvage": "true"},
+            )
+            pq.write_table(table, file_path, compression="snappy", row_group_size=100_000, use_dictionary=False)
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             bytes_written = file_path.stat().st_size if file_path.exists() else 0
             record_write(

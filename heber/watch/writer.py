@@ -69,6 +69,11 @@ class LabelWriter:
         row = outcome_to_label_row(outcome)
         self._buffer.append(row)
 
+        MAX_BUFFER_SIZE = 10000
+        if len(self._buffer) > MAX_BUFFER_SIZE:
+            logger.warning("label_buffer_overflow", size=len(self._buffer), max=MAX_BUFFER_SIZE)
+            self._buffer = self._buffer[-MAX_BUFFER_SIZE:]
+
         if len(self._buffer) >= self._buffer_size:
             self.flush()
 
@@ -149,7 +154,7 @@ class LabelWriter:
                     context={"date": str(dt), "path": str(partition_path)},
                 )
 
-                write_group.to_parquet(current_tmp_file, compression="snappy")
+                write_group.to_parquet(current_tmp_file, index=False, compression="snappy")
                 staged_files.append((current_tmp_file, final_file_path, len(group)))
                 current_tmp_file = None
 
@@ -265,7 +270,13 @@ class WatchService:
         if self._backfill_enabled:
             coroutines.append(self.backfill_scanner.run())
 
-        await asyncio.gather(*coroutines)
+        try:
+            async with asyncio.TaskGroup() as tg:
+                for coro in coroutines:
+                    tg.create_task(coro)
+        except ExceptionGroup as eg:
+            # Re-raise the first exception for backward-compatible error handling
+            raise eg.exceptions[0] from eg
 
     async def _check_and_write_loop(self) -> None:
         """Periodically check for completed watches and write labels."""
@@ -280,7 +291,7 @@ class WatchService:
                     logger.info("Wrote outcomes", count=len(outcomes))
 
             except Exception as e:
-                logger.error("Check/write error", error=str(e))
+                logger.error("Check/write error", error=str(e), exc_info=True)
 
             await asyncio.sleep(60)  # Check every minute
 
@@ -291,6 +302,7 @@ class WatchService:
         self.poller.stop()
         self.backfill_scanner.stop()
         self.writer.flush()
+        self.redis.close()
         logger.info("Watch service stopped")
 
     def get_stats(self) -> dict[str, Any]:
