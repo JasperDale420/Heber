@@ -50,7 +50,7 @@ class HealthCheck:
     latency_ms: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        result = {"status": self.status.value}
+        result: dict[str, Any] = {"status": self.status.value}
         if self.message:
             result["message"] = self.message
         if self.latency_ms is not None:

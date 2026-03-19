@@ -686,7 +686,7 @@ class AlertWatchConsumer:
         result = coerce_optional_float(value)
         return result if result is not None else default
 
-    def _resolve_put_call(self, parsed: dict) -> str:
+    def _resolve_put_call(self, parsed: dict) -> str | None:
         """Resolve put/call from available parsed fields."""
         put_call_raw = self._first_present_value(parsed, ("put_call", "option_type", "call_put"))
         type_raw = parsed.get("type")

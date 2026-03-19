@@ -108,9 +108,9 @@ Environment variables:
     start_metrics_server_from_env(default_port=9090)
 
     r = redis.from_url(args.redis)
-    output_path = _ensure_writable_output_path(args.output)
+    resolved_output_path: Path | None = _ensure_writable_output_path(args.output)
 
-    service = WatchService(r, gateway_url=args.gateway, output_path=output_path)
+    service = WatchService(r, gateway_url=args.gateway, output_path=resolved_output_path)
     run_error: BaseException | None = None
     run_error_tb = None
 

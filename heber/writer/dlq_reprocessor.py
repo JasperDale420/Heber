@@ -216,7 +216,7 @@ async def reprocess_dlq(
     feed_filter: str | None = None,
     batch_size: int = 1000,
     max_retries: int = 1,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Re-attempt processing of DLQ events through the standard pipeline.
 
     Successfully reprocessed entries are deleted from the DLQ stream.
