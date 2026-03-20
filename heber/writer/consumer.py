@@ -451,7 +451,7 @@ class EventConsumer:
                     "Unexpected error processing message",
                     message_id=mid_str,
                     error=str(result),
-                    exc_info=True,
+                    exc_info=result,
                 )
                 failed_ids.append(mid_str)
                 continue

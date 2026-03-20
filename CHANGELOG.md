@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Maintenance 2026-03-20**: Fixed `exc_info=True` in `EventConsumer._process_stream_messages` producing `"exception": "MISSING"` in logs — exceptions caught via `asyncio.gather(return_exceptions=True)` are not in the active exception context, so structlog captured nothing. Now passes `exc_info=result` to include the actual exception traceback (`writer/consumer.py`).
+
 - **27-bug sweep across Heber codebase** (2026-03-18):
   - **[HIGH]** Fixed `POST /api/v1/datasets` endpoint crash — `dataset_name=` keyword didn't match service's `name=` parameter (`catalog/api.py`)
   - **[HIGH]** Fixed `_normalize_symbol` rejecting dot-class equity tickers like BRK.B, BF.A (`writer/key_normalization.py`)
