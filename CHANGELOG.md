@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ticker base rates label leakage**: Fixed `compute_ticker_base_rates` including the current alert's own outcome in its `ticker_win_rate_90d` feature — textbook label leakage that causes meta-model overfit. Rolling window now uses strictly-before comparison (`< current_ts`). First alerts with no prior history emit NaN features instead of being silently dropped.
 - **Misleading Gold write success log**: Fixed `persist_features_to_gold` logging "Persisted features partition" even when the write was skipped due to file lock timeout. Now skips the success log on lock contention.
 
+- **Label instrument_key was alert UUID**: Fixed `outcome_to_label_row` setting `instrument_key` to the alert UUID instead of the actual instrument key (e.g., `option:OCC:AAPL260116C00200000`). Downstream `ticker_base_rates` grouped by UUID instead of ticker, producing garbage base rate features (`watch/checker.py`).
+- **Daily label availability_lag silently erased**: Fixed `compute_availability_time` applying `availability_lag` before snapping to market close time for daily labels — the snap overwrote the lag, making labels available earlier than intended (`gold/labels.py`).
+- **Walk-forward splits infinite loop on zero step**: Fixed `walk_forward_splits` hanging forever when `step="0d"` or `step="0s"` — now raises `ValueError` for zero-step inputs (`gold/splits.py`).
 - **Silver writer salvage non-atomic write**: Fixed `write_silver_parquet` salvage code path (row-by-row fallback after type errors) writing directly to the final file path instead of using atomic temp-then-rename. Crash during salvage write could leave corrupt Parquet files (`writer/utils.py`).
 - **Duration parser accepts trailing garbage**: Fixed `parse_duration` regex not being anchored — strings like "5dGARBAGE" silently parsed as 5 days. Now rejects malformed input with `ValueError` (`gold/duration.py`).
 

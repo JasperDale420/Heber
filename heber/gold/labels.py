@@ -150,11 +150,13 @@ def compute_availability_time(
     forward_delta = parse_duration(forward_window)
     lag_delta = parse_duration(availability_lag)
 
-    availability = label_time + forward_delta + lag_delta
+    availability = label_time + forward_delta
 
     if "d" in forward_window:
         close_h, close_m, close_s = map(int, market_close_time.split(":"))
         availability = availability.replace(hour=close_h, minute=close_m, second=close_s, microsecond=0)
+
+    availability += lag_delta
 
     return availability
 

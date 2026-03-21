@@ -131,3 +131,21 @@
 
 ### Key normalization OCC symbol extraction errors
 - **Result:** Disproven. Comprehensive regex patterns for all instrument types. Feed-specific normalizers handle all known payload formats with proper fallback to None on failure.
+
+### _coalesce_split_or_fallback None vs 0.0 handling
+- **Result:** Disproven. The function correctly distinguishes None (missing) from 0.0 (valid zero) using `is not None` checks.
+
+### embargo_days sub-day misreporting
+- **Result:** Noted but acceptable. `embargo_days = embargo_delta.days` truncates sub-day embargo to 0 for metadata, but the actual `embargo_delta` timedelta is used correctly for split computation. The field is informational only.
+
+### expanding_window_splits zero test period
+- **Result:** Disproven. Zero test period would produce `test_start == test_end`, and the DateRange validation catches this.
+
+### Bloom filter hash randomization across restarts
+- **Result:** Disproven (by design). The bloom filter is in-process and ephemeral — it's reconstructed on restart. Hash randomization doesn't matter since the filter lifetime matches the process lifetime.
+
+### Backpressure lag estimation accuracy
+- **Result:** Noted but acceptable. The lag estimation in `bus/backpressure.py` uses a documented heuristic. It's a best-effort metric for monitoring, not a correctness-critical calculation.
+
+### backfill_scanner date.today() timezone
+- **Result:** Noted but acceptable. `date.today()` used for partition directory scanning — the partition date granularity (YYYY-MM-DD) makes timezone off-by-one irrelevant for the scanning use case.

@@ -63,6 +63,33 @@
 - **Root cause:** Regex used `re.match` without `$` anchor, which only checks the start of the string
 - **Fix:** Changed to `r"^(\d+)([Mwdhms])$"` with `.strip()` on input.
 
+### [MEDIUM] outcome_to_label_row sets instrument_key to alert_id (UUID)
+- **Location:** `heber/watch/checker.py:328`
+- **Hypothesis:** `instrument_key` in Gold labels contains alert UUID instead of actual instrument key
+- **Evidence:** Line 328 set `"instrument_key": outcome.alert_id` — `alert_id` is a UUID string (e.g., "abc-123-def"), not an instrument key. Every downstream consumer expecting `instrument_key` format like `option:OCC:AAPL260116C00200000` gets a UUID instead.
+- **Reproduction:** Call `outcome_to_label_row()` on any WatchOutcome → inspect `instrument_key` field → UUID, not instrument key.
+- **Impact:** `ticker_base_rates` pipeline groups by alert UUID instead of ticker symbol, producing one-row "tickers" with garbage base rates. Any Gold-layer join on `instrument_key` between labels and other datasets produces zero matches.
+- **Root cause:** Copy-paste error — `alert_id` used where instrument key construction was needed
+- **Fix:** Changed to `f"option:OCC:{outcome.occ_symbol}" if outcome.occ_symbol else f"equity:{outcome.underlying}"`, matching the instrument key format used everywhere else.
+
+### [MEDIUM] compute_availability_time silently erases availability_lag for daily labels
+- **Location:** `heber/gold/labels.py:153-157`
+- **Hypothesis:** For daily forward windows, the availability_lag is added before market close snap, which then replaces the time — erasing the lag
+- **Evidence:** Code adds `forward_delta + lag_delta` first, then `.replace(hour=close_h, ...)` overwrites the time component. A 5-minute lag becomes zero.
+- **Reproduction:** `compute_availability_time(label_time, "1d", availability_lag="5m")` → availability time at exactly 16:05 instead of 16:10.
+- **Impact:** Labels for daily forward windows become queryable earlier than intended, potentially before all data is settled. Violates the zero-leakage contract for any non-zero availability_lag with daily labels.
+- **Root cause:** Lag applied before the market close snap instead of after
+- **Fix:** Apply `forward_delta` first, snap to market close for daily windows, then add `lag_delta` after the snap.
+
+### [LOW] walk_forward_splits infinite loop with zero step
+- **Location:** `heber/gold/splits.py:113-137`
+- **Hypothesis:** Passing `step="0d"` or `step="0s"` causes `step_delta = timedelta(0)`, `current_start` never advances, infinite loop → OOM
+- **Evidence:** `current_start += step_delta` with `step_delta == timedelta(0)` is a no-op. The `while True` loop only breaks when `test_end > end`, which never happens because the same split is recomputed forever.
+- **Reproduction:** `walk_forward_splits("2020-01-01", "2025-01-01", "12M", "3M", step="0d")` → hangs forever.
+- **Impact:** Memory exhaustion and process hang on misconfigured split parameters.
+- **Root cause:** No validation that step is non-zero
+- **Fix:** Added `if step_delta == timedelta(0): raise ValueError(...)` before the loop.
+
 ### [LOW] Backfill cancel_job doesn't stop running job
 - **Location:** `heber/backfill/__init__.py` lines 721, 759, 809-818
 - **Hypothesis:** `cancel_job` sets status=CANCELLED but running job ignores it and overwrites to COMPLETED

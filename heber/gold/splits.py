@@ -114,6 +114,9 @@ def walk_forward_splits(
     embargo_delta = parse_duration(embargo)
     embargo_days = embargo_delta.days
 
+    if step_delta == timedelta(0):
+        raise ValueError(f"step must be non-zero, got {step!r}")
+
     splits: list[TrainTestSplit] = []
     current_start = start
 

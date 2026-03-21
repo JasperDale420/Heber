@@ -325,7 +325,7 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         # Identifiers
         "alert_id": outcome.alert_id,
         "watch_id": outcome.watch_id,
-        "instrument_key": outcome.alert_id,  # For Feast entity
+        "instrument_key": f"option:OCC:{outcome.occ_symbol}" if outcome.occ_symbol else f"equity:{outcome.underlying}",
         # Contract info
         "occ_symbol": outcome.occ_symbol,
         "underlying": outcome.underlying,

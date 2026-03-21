@@ -8,9 +8,9 @@
 
 | Metric | Value |
 |--------|-------|
-| Bugs found | 8 (1 HIGH, 3 MEDIUM, 4 LOW) |
-| Bugs fixed | 8 |
-| Hypotheses tested | 49 (8 confirmed, 41 disproven/noted) |
+| Bugs found | 11 (1 HIGH, 5 MEDIUM, 5 LOW) |
+| Bugs fixed | 11 |
+| Hypotheses tested | 56 (11 confirmed, 45 disproven/noted) |
 | Files investigated | ~95 source files + docker-compose.yml |
 | Techniques used | Direct inspection, git bisect, pattern search, differential debugging, cross-file consistency analysis, label leakage analysis |
 | Tests before | 1665 passed, 2 failed |
@@ -26,6 +26,9 @@
 6. **heber/ml/datasets.py** — Fixed misleading success log after lock timeout in `persist_features_to_gold`: added `continue` so "Persisted features partition" log only appears when write actually succeeds.
 7. **heber/writer/utils.py** — Fixed Silver writer salvage path writing directly to final path instead of atomic temp-then-rename. Crash during salvage would leave corrupt Parquet.
 8. **heber/gold/duration.py** — Anchored `parse_duration` regex with `^...$` so strings like "5dGARBAGE" raise ValueError instead of silently parsing as 5 days.
+9. **heber/watch/checker.py** — Fixed `outcome_to_label_row` setting `instrument_key` to `alert_id` (UUID) instead of actual instrument key. Poisoned the `labels_alert_barriers` Gold dataset and broke `ticker_base_rates` groupby.
+10. **heber/gold/labels.py** — Fixed `compute_availability_time` applying `availability_lag` before market close snap for daily labels, which erased the lag entirely.
+11. **heber/gold/splits.py** — Added zero-step guard to `walk_forward_splits` to prevent infinite loop when `step="0d"` or `step="0s"`.
 
 ### Codebase Health Assessment
 
