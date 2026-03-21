@@ -134,16 +134,17 @@ def compute_ticker_base_rates(
             current_ts = row["ts_event"]
             window_start = current_ts - timedelta(days=window_days)
 
-            # All alerts for this ticker within the window (inclusive of current)
-            mask = (group["ts_event"] >= window_start) & (group["ts_event"] <= current_ts)
+            # All alerts for this ticker strictly before the current alert (no self-leakage)
+            mask = (group["ts_event"] >= window_start) & (group["ts_event"] < current_ts)
             window_data = group[mask]
 
             count = len(window_data)
             if count == 0:
-                continue
-
-            win_rate = window_data["hit_tp_first"].mean()
-            predictability = abs(win_rate - 0.5) * 2
+                win_rate = np.nan
+                predictability = np.nan
+            else:
+                win_rate = window_data["hit_tp_first"].mean()
+                predictability = abs(win_rate - 0.5) * 2
 
             results.append(
                 {

@@ -50,3 +50,24 @@
 
 ### Backfill writer non-atomic Bronze writes
 - **Result:** Noted but acceptable. Backfill Bronze writes go directly to final path (not temp-then-rename like the main BronzeWriter). This is intentional for backfill use case — data is idempotent and re-runnable.
+
+### Feature pipeline symbol column bugs in non-equity pipelines
+- **Result:** Disproven. Grep for `["symbol"] =` across all feature pipelines confirmed only `equity_features.py` had the `instrument_key` copy-paste bug (already fixed). `darkpool_features.py` correctly uses `result["underlying"]`. Other pipelines (`flow_context`, `flow_toxicity`, `flow_normalization`, `oi_momentum`, `sector_flow`, etc.) use `underlying` directly or have no symbol column.
+
+### Division-by-zero in market sentiment computation
+- **Result:** Disproven. `market_tide_context_features.py` handles zero total premium with explicit guard: `daily.loc[total == 0, "market_sentiment_score"] = 0.0`.
+
+### OLS regression degenerate case in trend_scan_features
+- **Result:** Disproven. `compute_ols_t_stat` has thorough guards: checks for `n < 2`, all-NaN, zero std, `ss_tt == 0`, `mse <= 0`, and `se_beta == 0`. All edge cases return `(NaN, NaN)`.
+
+### Market intel pipeline missing symbol column
+- **Result:** Disproven (not a bug). `compute_darkpool_features`, `compute_greek_exposure_features`, `compute_options_sentiment_features` keep `instrument_key` as their primary key. They don't need a separate `symbol` column since they operate at the instrument_key level.
+
+### Watch consumer alert processing concurrency bugs
+- **Result:** Disproven. `_dispatch_messages` processes messages sequentially within a batch. Retry logic correctly uses `_normalize_process_result` to handle both bool and tuple returns. DLQ write failures are caught and logged without crashing the consumer.
+
+### Runtime retry exponential backoff overflow
+- **Result:** Disproven. `calculate_retry_delay` has `min()` cap at `max_seconds` (default 30s), and `normalized_attempt = max(1, attempt)` prevents zero/negative exponents. Jitter is additive-only (never negative).
+
+### Normalizer type coercion edge cases
+- **Result:** Disproven. `_coerce_value` wraps all coercion in try/except returning None on any error. Each type handler (`_coerce_float`, `_coerce_int`, `_coerce_date`, etc.) handles empty strings and invalid formats. No unguarded conversions.

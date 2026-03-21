@@ -27,6 +27,15 @@
 - **Root cause:** Copy-paste from `instrument_key` without stripping the `equity:` prefix
 - **Fix:** Changed all 4 locations to use `.str.replace(r"^equity:", "", regex=True)` consistent with `_resample_bars_to_daily`.
 
+### [MEDIUM] Label leakage in ticker_base_rates — current alert's outcome in own feature
+- **Location:** `heber/features/pipelines/ticker_base_rates.py:138`
+- **Hypothesis:** `ticker_win_rate_90d` includes the current alert's own `hit_tp_first` outcome in the rolling window
+- **Evidence:** Line 138 used `<= current_ts` (inclusive), which includes the current alert row in its own feature computation. The comment even said "inclusive of current." For a batch pipeline computing historical features, this is textbook label leakage — the feature partially encodes the answer it's meant to predict.
+- **Reproduction:** Compute base rates for a ticker with a single alert → win_rate was 1.0 (should be NaN, no priors). For a ticker with N alerts, the last row's frequency was N (should be N-1).
+- **Impact:** Overfit meta-models that don't generalize to production. Most visible on low-sample tickers where including/excluding 1 alert shifts win_rate significantly (e.g., 5 alerts: 80% vs 100%).
+- **Root cause:** `<=` should be `<` to exclude the current row from its own feature computation
+- **Fix:** Changed to `< current_ts`. When count==0 (first alert, no priors), emit NaN features instead of skipping the row. Updated 29 unit tests to match non-leaky behavior (all pass).
+
 ### [LOW] Backfill cancel_job doesn't stop running job
 - **Location:** `heber/backfill/__init__.py` lines 721, 759, 809-818
 - **Hypothesis:** `cancel_job` sets status=CANCELLED but running job ignores it and overwrites to COMPLETED
