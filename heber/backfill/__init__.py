@@ -719,6 +719,22 @@ class BackfillCoordinator:
 
         try:
             for i, chunk in enumerate(chunks):
+                # Check for cancellation between chunks
+                if job.status == BackfillStatus.CANCELLED:
+                    logger.info(
+                        "backfill_job_cancelled",
+                        backfill_id=backfill_id,
+                        chunks_completed=i,
+                        total_chunks=total_chunks,
+                    )
+                    backfill_jobs_total.labels(
+                        provider=job.provider,
+                        feed=job.feed,
+                        status="cancelled",
+                    ).inc()
+                    self._persist_job(job)
+                    return job
+
                 # Fetch data
                 if self.data_fetcher:
                     records = await self.data_fetcher(

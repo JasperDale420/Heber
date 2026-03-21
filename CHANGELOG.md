@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docker healthcheck regression**: Restored all 5 healthchecked services in `docker-compose.yml` to production-grade settings (`interval=10s, timeout=5s, retries=5, start_period=120s`) — regressed by repo hygiene commit to aggressive dev values, causing premature unhealthy marks during slow recovery.
+- **Gold Poller timezone mismatch**: Fixed `_last_run_date` using UTC date while `_should_run()` uses ET date — could cause double pipeline execution if runs finished after midnight UTC. Both now use Eastern Time consistently.
+- **Equity feature symbol column inconsistency**: Fixed 4 compute functions (`compute_momentum_features`, `compute_volatility_features`, `compute_microstructure_features`, `compute_return_labels`) setting `symbol` to full `instrument_key` value (e.g., `equity:AAPL`) instead of plain ticker (`AAPL`). Cross-dataset joins with `flow_features` would silently produce zero matches.
+- **Backfill cancel ignored**: Fixed `cancel_job` setting status to CANCELLED but running job continuing to completion and overwriting status to COMPLETED. Added cancellation check in the chunk processing loop.
+
 - **Maintenance 2026-03-20**: Fixed `exc_info=True` in `EventConsumer._process_stream_messages` producing `"exception": "MISSING"` in logs — exceptions caught via `asyncio.gather(return_exceptions=True)` are not in the active exception context, so structlog captured nothing. Now passes `exc_info=result` to include the actual exception traceback (`writer/consumer.py`).
 
 - **27-bug sweep across Heber codebase** (2026-03-18):

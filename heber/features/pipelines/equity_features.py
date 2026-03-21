@@ -322,7 +322,7 @@ def compute_momentum_features(bars: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = pd.concat(results, ignore_index=True)
-    out["symbol"] = out["instrument_key"]
+    out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
     return _ensure_ts_available(out)
 
 
@@ -423,7 +423,7 @@ def compute_volatility_features(bars: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = pd.concat(results, ignore_index=True)
-    out["symbol"] = out["instrument_key"]
+    out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
     return _ensure_ts_available(out)
 
 
@@ -501,7 +501,7 @@ def compute_microstructure_features(quotes: pd.DataFrame) -> pd.DataFrame:
 
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
-    agg["symbol"] = agg["instrument_key"]
+    agg["symbol"] = agg["instrument_key"].str.replace(r"^equity:", "", regex=True)
 
     return _ensure_instrument_key(_ensure_ts_available(agg), symbol_col="instrument_key")
 
@@ -552,7 +552,7 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = pd.concat(results, ignore_index=True)
-    out["symbol"] = out["instrument_key"]
+    out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
     return _ensure_ts_available(out)
 
 
