@@ -45,6 +45,24 @@
 - **Root cause:** Success log placed outside try block instead of inside or after a continue
 - **Fix:** Added `continue` after the `except Timeout` handler to skip the success log and move to the next partition.
 
+### [LOW] Silver writer salvage path non-atomic write
+- **Location:** `heber/writer/utils.py:166` (salvage code path in `write_silver_parquet`)
+- **Hypothesis:** The salvage path (row-by-row fallback after ArrowTypeError) writes directly to the final file path without atomic temp-then-rename
+- **Evidence:** Normal write path uses `tmp_path = file_path.with_suffix(".parquet.tmp")` → `pq.write_table(table, tmp_path, ...)` → `tmp_path.rename(file_path)`. Salvage path wrote `pq.write_table(table, file_path, ...)` directly — no temp file, no rename.
+- **Reproduction:** Trigger a Silver batch with mixed-type rows → ArrowTypeError → salvage path fires → crash or power loss during write leaves partial/corrupt Parquet at the final path.
+- **Impact:** Partial/corrupt Parquet files on crash during salvage writes. Downstream readers would get ArrowInvalid errors. The normal path is immune (atomic rename is all-or-nothing).
+- **Root cause:** Salvage path was added later and didn't follow the same atomic write pattern as the normal path
+- **Fix:** Added `salvage_tmp = file_path.with_suffix(".parquet.tmp")` with temp-then-rename, matching the normal path pattern.
+
+### [LOW] Duration parser regex not anchored — accepts trailing garbage
+- **Location:** `heber/gold/duration.py:35`
+- **Hypothesis:** `parse_duration` regex `r"(\d+)([Mwdhms])"` is not anchored — strings like "5dGARBAGE" silently parse as 5 days
+- **Evidence:** `re.match(r"(\d+)([Mwdhms])", "5dGARBAGE")` matches at position 0 and returns `("5", "d")`. The parser never validates that the entire input is consumed.
+- **Reproduction:** `parse_duration("5dGARBAGE")` → `timedelta(days=5)` (should raise ValueError). Also `parse_duration(" 5d ")` → ValueError (should parse after stripping).
+- **Impact:** Invalid duration strings from config or user input silently accepted with potentially wrong values. The DLQ reprocessor's duration parser already had correct anchoring — this was inconsistent.
+- **Root cause:** Regex used `re.match` without `$` anchor, which only checks the start of the string
+- **Fix:** Changed to `r"^(\d+)([Mwdhms])$"` with `.strip()` on input.
+
 ### [LOW] Backfill cancel_job doesn't stop running job
 - **Location:** `heber/backfill/__init__.py` lines 721, 759, 809-818
 - **Hypothesis:** `cancel_job` sets status=CANCELLED but running job ignores it and overwrites to COMPLETED

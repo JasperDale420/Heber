@@ -163,7 +163,9 @@ def write_silver_parquet(
                 dataset=dataset,
                 context={"path": str(file_path), "salvage": "true"},
             )
-            pq.write_table(table, file_path, compression="snappy", row_group_size=100_000, use_dictionary=False)
+            salvage_tmp = file_path.with_suffix(".parquet.tmp")
+            pq.write_table(table, salvage_tmp, compression="snappy", row_group_size=100_000, use_dictionary=False)
+            salvage_tmp.rename(file_path)
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             bytes_written = file_path.stat().st_size if file_path.exists() else 0
             record_write(

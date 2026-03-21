@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ticker base rates label leakage**: Fixed `compute_ticker_base_rates` including the current alert's own outcome in its `ticker_win_rate_90d` feature — textbook label leakage that causes meta-model overfit. Rolling window now uses strictly-before comparison (`< current_ts`). First alerts with no prior history emit NaN features instead of being silently dropped.
 - **Misleading Gold write success log**: Fixed `persist_features_to_gold` logging "Persisted features partition" even when the write was skipped due to file lock timeout. Now skips the success log on lock contention.
 
+- **Silver writer salvage non-atomic write**: Fixed `write_silver_parquet` salvage code path (row-by-row fallback after type errors) writing directly to the final file path instead of using atomic temp-then-rename. Crash during salvage write could leave corrupt Parquet files (`writer/utils.py`).
+- **Duration parser accepts trailing garbage**: Fixed `parse_duration` regex not being anchored — strings like "5dGARBAGE" silently parsed as 5 days. Now rejects malformed input with `ValueError` (`gold/duration.py`).
+
 - **Maintenance 2026-03-20**: Fixed `exc_info=True` in `EventConsumer._process_stream_messages` producing `"exception": "MISSING"` in logs — exceptions caught via `asyncio.gather(return_exceptions=True)` are not in the active exception context, so structlog captured nothing. Now passes `exc_info=result` to include the actual exception traceback (`writer/consumer.py`).
 
 - **27-bug sweep across Heber codebase** (2026-03-18):

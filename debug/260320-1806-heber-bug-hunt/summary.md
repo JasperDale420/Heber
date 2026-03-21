@@ -1,17 +1,17 @@
 ## Debug Session Summary
 
 **Scope:** Entire Heber codebase (138 Python source files + infrastructure)
-**Duration:** 28 iterations (14 initial + 6 deep pass + 8 deeper pass)
+**Duration:** 32+ iterations (14 initial + 6 deep pass + 8 deeper pass + 4+ deepest pass)
 **Mode:** Unlimited autonomous hunt with auto-fix
 
 ### Results
 
 | Metric | Value |
 |--------|-------|
-| Bugs found | 6 (1 HIGH, 3 MEDIUM, 2 LOW) |
-| Bugs fixed | 6 |
-| Hypotheses tested | 31 (6 confirmed, 25 disproven/noted) |
-| Files investigated | ~65 source files + docker-compose.yml |
+| Bugs found | 8 (1 HIGH, 3 MEDIUM, 4 LOW) |
+| Bugs fixed | 8 |
+| Hypotheses tested | 49 (8 confirmed, 41 disproven/noted) |
+| Files investigated | ~95 source files + docker-compose.yml |
 | Techniques used | Direct inspection, git bisect, pattern search, differential debugging, cross-file consistency analysis, label leakage analysis |
 | Tests before | 1665 passed, 2 failed |
 | Tests after | 1669 passed, 0 failed |
@@ -24,6 +24,8 @@
 4. **heber/backfill/__init__.py** — Added cancellation check in the chunk processing loop so `cancel_job` actually stops running jobs
 5. **heber/features/pipelines/ticker_base_rates.py** — Fixed label leakage: rolling window now excludes current alert's own outcome (`<= current_ts` → `< current_ts`). First alerts emit NaN features instead of being silently dropped.
 6. **heber/ml/datasets.py** — Fixed misleading success log after lock timeout in `persist_features_to_gold`: added `continue` so "Persisted features partition" log only appears when write actually succeeds.
+7. **heber/writer/utils.py** — Fixed Silver writer salvage path writing directly to final path instead of atomic temp-then-rename. Crash during salvage would leave corrupt Parquet.
+8. **heber/gold/duration.py** — Anchored `parse_duration` regex with `^...$` so strings like "5dGARBAGE" raise ValueError instead of silently parsing as 5 days.
 
 ### Codebase Health Assessment
 

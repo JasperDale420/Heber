@@ -80,3 +80,54 @@
 
 ### Write audit null detection false positives
 - **Result:** Disproven. `audit_null_fields` only checks columns in `EXPECTED_NON_NULL` for known datasets; unknown datasets check all columns. The audit is observe-and-continue (doesn't block writes). Pandas and PyArrow both handled correctly.
+
+### HeberReader schema conflict resolution bugs
+- **Result:** Disproven. `_open_dataset_safe` has correct fallback chain: unified schema → coerce dict→string → per-file unification. All edge cases (empty dirs, single file) handled.
+
+### Catalog service upsert race conditions
+- **Result:** Disproven. Uses SQLAlchemy async sessions with proper commit/rollback patterns. Upsert operations are atomic within a session.
+
+### Gold poller pipeline registry stale entries
+- **Result:** Disproven. All 15 registered pipelines correspond to existing module files with correct class names.
+
+### Straddle momentum ATM selection logic errors
+- **Result:** Disproven. `_select_atm_by_strike` uses `argsort().iloc[0]` correctly — returns the index of the strike closest to spot. Handles empty chains with early return.
+
+### Bronze writer atomic write issues
+- **Result:** Disproven. Uses proper `tmp_path.rename(file_path)` pattern consistently. Buffer flush is synchronized.
+
+### Compactor event_id deduplication correctness
+- **Result:** Disproven. Uses `to_pylist()` on event_id column → set for O(1) lookup → filter mask. Memory concern noted but acceptable for compaction batch sizes.
+
+### EventEnvelope validator timezone edge cases
+- **Result:** Disproven. Pydantic validators correctly coerce naive datetimes to UTC and handle all timezone-aware inputs.
+
+### Watch poller multi-route fallback logic
+- **Result:** Disproven. Correctly tries routes in order, tracks stale/partial quotes, selects best available. Timeout and error handling are comprehensive.
+
+### Watch gateway URL candidate generation bugs
+- **Result:** Disproven. `gateway_url_candidates` correctly orders API prefix variants with legacy fallback. `coerce_optional_float` properly rejects None, booleans, NaN, Inf.
+
+### Retention/reaper unsafe deletion of Gold dependencies
+- **Result:** Disproven. `DeletionSafetyChecker` validates Gold lineage before any partition deletion. Archive path uses atomic compress-then-delete.
+
+### Market calendar early close handling
+- **Result:** Disproven. `add_trading_hours` and `trading_minutes_until` correctly use exchange_calendars' session schedules including early closes.
+
+### Backtest integration config hash collisions
+- **Result:** Disproven. `ExperimentConfig` hashes all relevant fields including fold parameters. SHA256 collision probability is negligible.
+
+### Version sort key edge cases
+- **Result:** Disproven. Handles both semver (v1.2.3) and non-semver strings with proper fallback sorting.
+
+### Survivor bias filter incorrect default
+- **Result:** Disproven. `exclude_future_delistings=True` is an intentional design choice for point-in-time correctness, not a bug.
+
+### Walk-forward splits embargo period logic
+- **Result:** Disproven. `purge_window` correctly excludes overlapping labels between train and test splits. Embargo periods handle both fixed-offset and label-duration modes.
+
+### Feature template rolling calculations off-by-one
+- **Result:** Disproven. All rolling window calculations in momentum, volatility, microstructure, and cross-asset templates use standard pandas rolling with correct min_periods settings.
+
+### Key normalization OCC symbol extraction errors
+- **Result:** Disproven. Comprehensive regex patterns for all instrument types. Feed-specific normalizers handle all known payload formats with proper fallback to None on failure.
