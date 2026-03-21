@@ -36,6 +36,15 @@
 - **Root cause:** `<=` should be `<` to exclude the current row from its own feature computation
 - **Fix:** Changed to `< current_ts`. When count==0 (first alert, no priors), emit NaN features instead of skipping the row. Updated 29 unit tests to match non-leaky behavior (all pass).
 
+### [LOW] Misleading success log after lock timeout in persist_features_to_gold
+- **Location:** `heber/ml/datasets.py:511`
+- **Hypothesis:** `logger.info("Persisted features partition")` runs even when write was skipped due to lock timeout
+- **Evidence:** The `logger.info` at line 511 is outside the `try/except Timeout` block (lines 488-509). When `FileLock` times out, the except handler logs "Could not acquire partition lock, skipping write" but execution falls through to the success log.
+- **Reproduction:** Two concurrent writers contending for the same partition lock → one gets Timeout → logs both "skipping write" AND "Persisted features partition" with row count.
+- **Impact:** Misleading operator logs — appears that data was written when it wasn't. Could mask data loss during concurrent enrichment backfill runs.
+- **Root cause:** Success log placed outside try block instead of inside or after a continue
+- **Fix:** Added `continue` after the `except Timeout` handler to skip the success log and move to the next partition.
+
 ### [LOW] Backfill cancel_job doesn't stop running job
 - **Location:** `heber/backfill/__init__.py` lines 721, 759, 809-818
 - **Hypothesis:** `cancel_job` sets status=CANCELLED but running job ignores it and overwrites to COMPLETED

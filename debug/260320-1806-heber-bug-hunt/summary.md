@@ -8,9 +8,9 @@
 
 | Metric | Value |
 |--------|-------|
-| Bugs found | 5 (1 HIGH, 3 MEDIUM, 1 LOW) |
-| Bugs fixed | 5 |
-| Hypotheses tested | 28 (5 confirmed, 23 disproven/noted) |
+| Bugs found | 6 (1 HIGH, 3 MEDIUM, 2 LOW) |
+| Bugs fixed | 6 |
+| Hypotheses tested | 31 (6 confirmed, 25 disproven/noted) |
 | Files investigated | ~65 source files + docker-compose.yml |
 | Techniques used | Direct inspection, git bisect, pattern search, differential debugging, cross-file consistency analysis, label leakage analysis |
 | Tests before | 1665 passed, 2 failed |
@@ -23,6 +23,7 @@
 3. **heber/features/pipelines/equity_features.py** — Fixed `symbol` column in 4 compute functions to strip `equity:` prefix, consistent with flow_features and daily bar resampling
 4. **heber/backfill/__init__.py** — Added cancellation check in the chunk processing loop so `cancel_job` actually stops running jobs
 5. **heber/features/pipelines/ticker_base_rates.py** — Fixed label leakage: rolling window now excludes current alert's own outcome (`<= current_ts` → `< current_ts`). First alerts emit NaN features instead of being silently dropped.
+6. **heber/ml/datasets.py** — Fixed misleading success log after lock timeout in `persist_features_to_gold`: added `continue` so "Persisted features partition" log only appears when write actually succeeds.
 
 ### Codebase Health Assessment
 

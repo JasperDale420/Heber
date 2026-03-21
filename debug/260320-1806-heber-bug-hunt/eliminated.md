@@ -71,3 +71,12 @@
 
 ### Normalizer type coercion edge cases
 - **Result:** Disproven. `_coerce_value` wraps all coercion in try/except returning None on any error. Each type handler (`_coerce_float`, `_coerce_int`, `_coerce_date`, etc.) handles empty strings and invalid formats. No unguarded conversions.
+
+### Feature extractor response cache unbounded growth
+- **Result:** Disproven (bounded in practice). `_response_cache` in `AlertFeatureExtractor` is a dict with TTL-based expiration on read. Since alerts are processed one at a time and cache TTL is 30 seconds, the cache size is bounded by the number of unique symbols with active alerts within a 30-second window.
+
+### Barrier labeling logic errors
+- **Result:** Disproven. `_compute_barrier_outcome` correctly handles call/put direction flipping, empty price paths (returns NaN), slippage adjustment, edge_ratio computation, and time_efficiency. ATR computation delegates to canonical volatility module with per-instrument groupby. All edge cases guarded.
+
+### Write audit null detection false positives
+- **Result:** Disproven. `audit_null_fields` only checks columns in `EXPECTED_NON_NULL` for known datasets; unknown datasets check all columns. The audit is observe-and-continue (doesn't block writes). Pandas and PyArrow both handled correctly.

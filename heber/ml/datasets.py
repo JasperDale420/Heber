@@ -507,6 +507,7 @@ def persist_features_to_gold(
                 path=str(out_file),
                 lock_file=str(lock_file),
             )
+            continue
 
         logger.info(
             "Persisted features partition",
