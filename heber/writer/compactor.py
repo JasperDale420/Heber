@@ -279,7 +279,10 @@ class Compactor:
         if len(sized_files) <= 1:
             return None
 
-        small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
+        small_files = [path for path, size in sized_files if 0 < size < TARGET_FILE_SIZE]
+        skipped_empty = [path for path, size in sized_files if size == 0]
+        for empty_path in skipped_empty:
+            logger.warning("compactor_skip_empty_file", path=str(empty_path))
         if len(small_files) <= 1:
             return None
 
@@ -311,6 +314,14 @@ class Compactor:
 
         # 2. Combine into a single table
         combined_table = pa.concat_tables(aligned_tables)
+
+        # 2b. Cast string columns to large_string to avoid 32-bit offset overflow
+        # during sort_by/take on partitions with large string data.
+        for i, field in enumerate(combined_table.schema):
+            if pa.types.is_string(field.type):
+                combined_table = combined_table.set_column(
+                    i, field.name, combined_table.column(i).cast(pa.large_string())
+                )
 
         # 3. Fast path: If empty or no event_id, just write it
         if combined_table.num_rows == 0:
@@ -359,7 +370,7 @@ class Compactor:
         # directory containing files from both the real-time writer and the
         # compactor — mixed string vs dictionary<string, int32> encoding is
         # otherwise incompatible.
-        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy", use_dictionary=False) as writer:
+        with pq.ParquetWriter(temp_path, final_table.schema, compression="snappy", use_dictionary=False) as writer:
             writer.write_table(final_table, row_group_size=250_000)
 
         return final_table.num_rows

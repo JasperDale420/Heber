@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compactor crash on large string partitions**: Cast string columns to `large_string` before sort/dedup to prevent PyArrow 32-bit offset overflow on partitions with large cumulative string data (e.g., `option_chain_snapshot`).
+- **Compactor crash on zero-byte parquet files**: Skip 0-byte corrupt files during compaction instead of crashing when `ParquetFile()` tries to read them.
 - **Consumer NOGROUP infinite retry loop**: When `data-gateway-redis` restarts without persistence, the `heber:events` stream and consumer group disappear. The consumer now auto-recreates the stream and consumer group on NOGROUP errors instead of entering an indefinite error retry loop.
 - **Docker healthcheck regression**: Restored all 5 healthchecked services in `docker-compose.yml` to production-grade settings (`interval=10s, timeout=5s, retries=5, start_period=120s`) — regressed by repo hygiene commit to aggressive dev values, causing premature unhealthy marks during slow recovery.
 - **Gold Poller timezone mismatch**: Fixed `_last_run_date` using UTC date while `_should_run()` uses ET date — could cause double pipeline execution if runs finished after midnight UTC. Both now use Eastern Time consistently.
