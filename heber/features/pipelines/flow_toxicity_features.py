@@ -1,17 +1,16 @@
-"""Flow normalization feature pipeline -- compute Gold datasets from Silver flow_alerts.
+"""Flow toxicity (VPIN) feature pipeline -- compute Gold datasets from Silver flow_alerts.
 
-Produces per-ticker daily flow normalization metrics:
-  - adv_premium_20d   (20-day average daily total premium)
-  - adv_volume_20d    (20-day average daily total option volume)
-  - adv_oi_20d        (20-day average daily total open interest)
+Produces per-ticker daily flow toxicity metrics:
+  - flow_toxicity_1d   (VPIN approximation: |ask_prem - bid_prem| / (ask_prem + bid_prem))
+  - toxicity_acceleration  (today's toxicity minus 5-day rolling mean of toxicity)
 
-These rolling averages allow normalizing individual alert premiums/volumes by the
-ticker's typical activity level, distinguishing genuinely unusual flow from normally
-active tickers.
+VPIN (Volume-Synchronized Probability of Informed Trading) measures order-flow
+imbalance.  Values near 1 indicate one-sided flow (likely informed traders);
+values near 0 indicate balanced flow.
 
 Usage:
-    uv run python -m heber.features.pipelines.flow_normalization_features --start 2026-01-01 --end 2026-03-10
-    uv run python -m heber.features.pipelines.flow_normalization_features --start 2026-01-01 --end 2026-03-10 --dry-run
+    uv run python -m heber.features.pipelines.flow_toxicity_features --start 2026-01-01 --end 2026-03-10
+    uv run python -m heber.features.pipelines.flow_toxicity_features --start 2026-01-01 --end 2026-03-10 --dry-run
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
-LOOKBACK_DAYS = 30  # Need 20 trading days + buffer for rolling window
+LOOKBACK_DAYS = 10  # Need 5 trading days for acceleration rolling window + buffer
 
 
 def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,14 +43,27 @@ def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.D
     return df
 
 
-def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-ticker daily flow normalization metrics.
+def compute_vpin(ask_premium: float, bid_premium: float) -> float:
+    """Compute VPIN for a single (ticker, date) observation.
 
-    Input: Silver flow_alerts with columns: underlying, ts_event, premium, total_size, open_interest
+    VPIN = |ask_premium - bid_premium| / (ask_premium + bid_premium)
+
+    Returns NaN when both premiums are zero (no flow to measure).
+    """
+    total = ask_premium + bid_premium
+    if total == 0:
+        return float("nan")
+    return abs(ask_premium - bid_premium) / total
+
+
+def compute_flow_toxicity_features(flow_alerts: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-ticker daily flow toxicity (VPIN) metrics.
+
+    Input: Silver flow_alerts with columns: underlying, ts_event,
+           total_ask_side_prem, total_bid_side_prem
     Output: One row per (instrument_key, date) with:
-      - adv_premium_20d: 20-day rolling avg daily premium
-      - adv_volume_20d: 20-day rolling avg daily option volume (total_size)
-      - adv_oi_20d: 20-day rolling avg daily open interest
+      - flow_toxicity_1d: VPIN approximation (0-1 range)
+      - toxicity_acceleration: today's toxicity minus 5-day rolling mean
     """
     if flow_alerts.empty:
         return pd.DataFrame()
@@ -63,50 +75,36 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
     df["date"] = df["ts_event"].dt.date
 
     # --- Step 2: Coerce numeric columns ---
-    df["premium"] = pd.to_numeric(df.get("premium", 0), errors="coerce").fillna(0)
-    df["total_size"] = pd.to_numeric(df.get("total_size", 0), errors="coerce").fillna(0)
+    df["total_ask_side_prem"] = pd.to_numeric(df.get("total_ask_side_prem", 0), errors="coerce").fillna(0)
+    df["total_bid_side_prem"] = pd.to_numeric(df.get("total_bid_side_prem", 0), errors="coerce").fillna(0)
 
-    has_oi = "open_interest" in df.columns
-    if has_oi:
-        df["open_interest"] = pd.to_numeric(df["open_interest"], errors="coerce").fillna(0)
+    # --- Step 3: Group by (underlying, date) and sum premiums ---
+    daily = (
+        df.groupby(["underlying", "date"])
+        .agg(
+            ask_sum=("total_ask_side_prem", "sum"),
+            bid_sum=("total_bid_side_prem", "sum"),
+        )
+        .reset_index()
+    )
 
-    # --- Step 3: Group by (underlying, date) and sum to get daily totals ---
-    agg_spec: dict[str, tuple[str, str]] = {
-        "daily_premium": ("premium", "sum"),
-        "daily_volume": ("total_size", "sum"),
-    }
-    if has_oi:
-        agg_spec["daily_oi"] = ("open_interest", "sum")
+    # --- Step 4: Compute VPIN per (ticker, date) ---
+    daily["flow_toxicity_1d"] = daily.apply(lambda row: compute_vpin(row["ask_sum"], row["bid_sum"]), axis=1)
 
-    daily = df.groupby(["underlying", "date"]).agg(**agg_spec).reset_index()
-
-    if not has_oi:
-        daily["daily_oi"] = float("nan")
-
-    # --- Step 4: Sort and compute 20-day rolling mean per underlying ---
+    # --- Step 5: Sort and compute toxicity_acceleration per underlying ---
     daily = daily.sort_values(["underlying", "date"])
 
-    rolling_parts: list[pd.DataFrame] = []
+    accel_parts: list[pd.DataFrame] = []
     for _ticker, group in daily.groupby("underlying"):
         g = group.copy()
-        g["adv_premium_20d"] = g["daily_premium"].rolling(window=20, min_periods=20).mean()
-        g["adv_volume_20d"] = g["daily_volume"].rolling(window=20, min_periods=20).mean()
-        if has_oi:
-            g["adv_oi_20d"] = g["daily_oi"].rolling(window=20, min_periods=20).mean()
-        else:
-            g["adv_oi_20d"] = float("nan")
-        rolling_parts.append(g)
+        rolling_mean = g["flow_toxicity_1d"].rolling(window=5, min_periods=5).mean()
+        g["toxicity_acceleration"] = g["flow_toxicity_1d"] - rolling_mean
+        accel_parts.append(g)
 
-    if not rolling_parts:
+    if not accel_parts:
         return pd.DataFrame()
 
-    result = pd.concat(rolling_parts, ignore_index=True)
-
-    # --- Step 5: Drop NaN rows (first 19 days per ticker won't have enough data) ---
-    result = result.dropna(subset=["adv_premium_20d", "adv_volume_20d"])
-
-    if result.empty:
-        return pd.DataFrame()
+    result = pd.concat(accel_parts, ignore_index=True)
 
     # --- Step 6: Rename and add Gold metadata columns ---
     result = result.rename(columns={"underlying": "symbol"})
@@ -121,9 +119,8 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
         "symbol",
         "ts_event",
         "ts_available",
-        "adv_premium_20d",
-        "adv_volume_20d",
-        "adv_oi_20d",
+        "flow_toxicity_1d",
+        "toxicity_acceleration",
     ]
     return result[output_cols].reset_index(drop=True)
 
@@ -133,8 +130,8 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
 # ---------------------------------------------------------------------------
 
 
-class FlowNormalizationPipeline:
-    """Pipeline to compute flow normalization Gold features from Silver flow_alerts."""
+class FlowToxicityPipeline:
+    """Pipeline to compute flow toxicity (VPIN) Gold features from Silver flow_alerts."""
 
     def __init__(
         self,
@@ -152,7 +149,7 @@ class FlowNormalizationPipeline:
         end_date: str | datetime,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Run the flow normalization pipeline.
+        """Run the flow toxicity pipeline.
 
         Args:
             start_date: Start of date range
@@ -171,7 +168,7 @@ class FlowNormalizationPipeline:
         if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
             end_date = end_date.replace(hour=23, minute=59, second=59)
 
-        gold_name = "flow_normalization_features"
+        gold_name = "flow_toxicity_features"
 
         # Read Silver flow_alerts with lookback for rolling window
         read_start = start_date - timedelta(days=LOOKBACK_DAYS)
@@ -188,11 +185,11 @@ class FlowNormalizationPipeline:
         logger.info("Loaded flow_alerts", rows=len(flow_alerts))
 
         # Compute features
-        logger.info("Computing flow normalization features")
-        df = compute_flow_normalization_features(flow_alerts)
+        logger.info("Computing flow toxicity features")
+        df = compute_flow_toxicity_features(flow_alerts)
 
         if df.empty:
-            logger.warning("No flow normalization features computed")
+            logger.warning("No flow toxicity features computed")
             return {gold_name: {"status": "no_data", "rows": 0}}
 
         # Filter output to requested date range (exclude lookback period)
@@ -227,7 +224,7 @@ class FlowNormalizationPipeline:
 
 def main() -> None:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Compute flow normalization Gold features from Silver flow_alerts")
+    parser = argparse.ArgumentParser(description="Compute flow toxicity (VPIN) Gold features from Silver flow_alerts")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true", help="Don't write output")
@@ -236,7 +233,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    pipeline = FlowNormalizationPipeline(project=args.project, version=args.version)
+    pipeline = FlowToxicityPipeline(project=args.project, version=args.version)
     stats = pipeline.run(
         start_date=args.start,
         end_date=args.end,
@@ -244,7 +241,7 @@ def main() -> None:
     )
 
     print("\n" + "=" * 60)
-    print("FLOW NORMALIZATION PIPELINE RESULTS")
+    print("FLOW TOXICITY PIPELINE RESULTS")
     print("=" * 60)
     for dataset, info in stats.items():
         status = info.get("status", "unknown")

@@ -260,8 +260,8 @@ class TickerBaseRatesPipeline:
 
         # Filter to requested date range only (exclude lookback)
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-        df = df[df["ts_event"] >= pd.Timestamp(start_date, tz="UTC")]
-        df = df[df["ts_event"] <= pd.Timestamp(end_date, tz="UTC")]
+        df = df[df["ts_event"] >= pd.to_datetime(start_date, utc=True)]
+        df = df[df["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         if df.empty:
             logger.warning("No base rates in requested date range after filtering")

@@ -366,8 +366,8 @@ class StraddleMomentumPipeline:
 
         # Filter to requested date range
         features["ts_event"] = pd.to_datetime(features["ts_event"], utc=True)
-        features = features[features["ts_event"] >= pd.Timestamp(start_date, tz="UTC")]
-        features = features[features["ts_event"] <= pd.Timestamp(end_date, tz="UTC")]
+        features = features[features["ts_event"] >= pd.to_datetime(start_date, utc=True)]
+        features = features[features["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         if features.empty:
             logger.warning("No features within date range after filtering")

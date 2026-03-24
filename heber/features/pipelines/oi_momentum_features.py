@@ -1,17 +1,16 @@
-"""Flow normalization feature pipeline -- compute Gold datasets from Silver flow_alerts.
+"""OI change momentum feature pipeline -- compute Gold datasets from Silver oi_change.
 
-Produces per-ticker daily flow normalization metrics:
-  - adv_premium_20d   (20-day average daily total premium)
-  - adv_volume_20d    (20-day average daily total option volume)
-  - adv_oi_20d        (20-day average daily total open interest)
+Produces per-ticker daily OI momentum metrics:
+  - oi_buildup_ratio    (net OI change / average OI across strikes)
+  - new_position_signal (binary: fresh informed positioning detected)
+  - oi_change_momentum_5d (5-day rolling sum of oi_buildup_ratio)
 
-These rolling averages allow normalizing individual alert premiums/volumes by the
-ticker's typical activity level, distinguishing genuinely unusual flow from normally
-active tickers.
+These features capture institutional open interest dynamics — new position
+building, position unwinding, and sustained directional conviction.
 
 Usage:
-    uv run python -m heber.features.pipelines.flow_normalization_features --start 2026-01-01 --end 2026-03-10
-    uv run python -m heber.features.pipelines.flow_normalization_features --start 2026-01-01 --end 2026-03-10 --dry-run
+    uv run python -m heber.features.pipelines.oi_momentum_features --start 2026-01-01 --end 2026-03-10
+    uv run python -m heber.features.pipelines.oi_momentum_features --start 2026-01-01 --end 2026-03-10 --dry-run
 """
 
 from __future__ import annotations
@@ -27,7 +26,10 @@ from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
-LOOKBACK_DAYS = 30  # Need 20 trading days + buffer for rolling window
+LOOKBACK_DAYS = 10  # Need 5 trading days + buffer for 5d rolling window
+
+# Threshold: volume / prev_oi must exceed this for new_position_signal
+NEW_POSITION_VOLUME_RATIO_THRESHOLD = 1.5
 
 
 def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,57 +46,75 @@ def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.D
     return df
 
 
-def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFrame:
-    """Compute per-ticker daily flow normalization metrics.
+def compute_oi_momentum(oi_change_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-ticker daily OI momentum features.
 
-    Input: Silver flow_alerts with columns: underlying, ts_event, premium, total_size, open_interest
+    Input: Silver oi_change with columns:
+        symbol, ts_event, call_oi, put_oi, call_oi_change, put_oi_change,
+        avg_price, prev_oi, volume, trades
+
     Output: One row per (instrument_key, date) with:
-      - adv_premium_20d: 20-day rolling avg daily premium
-      - adv_volume_20d: 20-day rolling avg daily option volume (total_size)
-      - adv_oi_20d: 20-day rolling avg daily open interest
+      - oi_buildup_ratio: total_oi_change / avg_oi across all strikes
+      - new_position_signal: 1.0 if buildup > 0 and volume/prev_oi > 1.5
+      - oi_change_momentum_5d: 5-day rolling sum of oi_buildup_ratio
     """
-    if flow_alerts.empty:
+    if oi_change_df.empty:
         return pd.DataFrame()
 
-    df = flow_alerts.copy()
+    df = oi_change_df.copy()
 
     # --- Step 1: Parse timestamps and extract date ---
     df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
     df["date"] = df["ts_event"].dt.date
 
     # --- Step 2: Coerce numeric columns ---
-    df["premium"] = pd.to_numeric(df.get("premium", 0), errors="coerce").fillna(0)
-    df["total_size"] = pd.to_numeric(df.get("total_size", 0), errors="coerce").fillna(0)
+    numeric_cols = ["call_oi", "put_oi", "call_oi_change", "put_oi_change", "volume", "prev_oi"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0
 
-    has_oi = "open_interest" in df.columns
-    if has_oi:
-        df["open_interest"] = pd.to_numeric(df["open_interest"], errors="coerce").fillna(0)
+    # --- Step 3: Group by (symbol, date) and aggregate across all strikes ---
+    daily = (
+        df.groupby(["symbol", "date"])
+        .agg(
+            total_call_oi_change=("call_oi_change", "sum"),
+            total_put_oi_change=("put_oi_change", "sum"),
+            avg_call_oi=("call_oi", "mean"),
+            avg_put_oi=("put_oi", "mean"),
+            total_volume=("volume", "sum"),
+            total_prev_oi=("prev_oi", "sum"),
+        )
+        .reset_index()
+    )
 
-    # --- Step 3: Group by (underlying, date) and sum to get daily totals ---
-    agg_spec: dict[str, tuple[str, str]] = {
-        "daily_premium": ("premium", "sum"),
-        "daily_volume": ("total_size", "sum"),
-    }
-    if has_oi:
-        agg_spec["daily_oi"] = ("open_interest", "sum")
+    # --- Step 4: Compute oi_buildup_ratio ---
+    daily["total_oi_change"] = daily["total_call_oi_change"] + daily["total_put_oi_change"]
+    daily["avg_oi"] = daily["avg_call_oi"] + daily["avg_put_oi"]
 
-    daily = df.groupby(["underlying", "date"]).agg(**agg_spec).reset_index()
+    # Avoid division by zero: when avg_oi is 0, ratio is 0
+    daily["oi_buildup_ratio"] = daily.apply(
+        lambda row: row["total_oi_change"] / row["avg_oi"] if row["avg_oi"] != 0 else 0.0,
+        axis=1,
+    )
 
-    if not has_oi:
-        daily["daily_oi"] = float("nan")
+    # --- Step 5: Compute new_position_signal ---
+    daily["volume_prev_oi_ratio"] = daily.apply(
+        lambda row: row["total_volume"] / row["total_prev_oi"] if row["total_prev_oi"] != 0 else 0.0,
+        axis=1,
+    )
+    daily["new_position_signal"] = (
+        (daily["oi_buildup_ratio"] > 0) & (daily["volume_prev_oi_ratio"] > NEW_POSITION_VOLUME_RATIO_THRESHOLD)
+    ).astype(float)
 
-    # --- Step 4: Sort and compute 20-day rolling mean per underlying ---
-    daily = daily.sort_values(["underlying", "date"])
+    # --- Step 6: Sort and compute 5-day rolling sum per symbol ---
+    daily = daily.sort_values(["symbol", "date"])
 
     rolling_parts: list[pd.DataFrame] = []
-    for _ticker, group in daily.groupby("underlying"):
+    for _ticker, group in daily.groupby("symbol"):
         g = group.copy()
-        g["adv_premium_20d"] = g["daily_premium"].rolling(window=20, min_periods=20).mean()
-        g["adv_volume_20d"] = g["daily_volume"].rolling(window=20, min_periods=20).mean()
-        if has_oi:
-            g["adv_oi_20d"] = g["daily_oi"].rolling(window=20, min_periods=20).mean()
-        else:
-            g["adv_oi_20d"] = float("nan")
+        g["oi_change_momentum_5d"] = g["oi_buildup_ratio"].rolling(window=5, min_periods=5).sum()
         rolling_parts.append(g)
 
     if not rolling_parts:
@@ -102,14 +122,13 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
 
     result = pd.concat(rolling_parts, ignore_index=True)
 
-    # --- Step 5: Drop NaN rows (first 19 days per ticker won't have enough data) ---
-    result = result.dropna(subset=["adv_premium_20d", "adv_volume_20d"])
+    # --- Step 7: Drop NaN rows (first 4 days per ticker won't have enough data for 5d window) ---
+    result = result.dropna(subset=["oi_change_momentum_5d"])
 
     if result.empty:
         return pd.DataFrame()
 
-    # --- Step 6: Rename and add Gold metadata columns ---
-    result = result.rename(columns={"underlying": "symbol"})
+    # --- Step 8: Add Gold metadata columns ---
     result["ts_event"] = pd.to_datetime(result["date"], utc=True)
 
     result = _ensure_instrument_key(result)
@@ -121,9 +140,9 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
         "symbol",
         "ts_event",
         "ts_available",
-        "adv_premium_20d",
-        "adv_volume_20d",
-        "adv_oi_20d",
+        "oi_buildup_ratio",
+        "new_position_signal",
+        "oi_change_momentum_5d",
     ]
     return result[output_cols].reset_index(drop=True)
 
@@ -133,8 +152,8 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
 # ---------------------------------------------------------------------------
 
 
-class FlowNormalizationPipeline:
-    """Pipeline to compute flow normalization Gold features from Silver flow_alerts."""
+class OiMomentumPipeline:
+    """Pipeline to compute OI momentum Gold features from Silver oi_change."""
 
     def __init__(
         self,
@@ -152,7 +171,7 @@ class FlowNormalizationPipeline:
         end_date: str | datetime,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Run the flow normalization pipeline.
+        """Run the OI momentum pipeline.
 
         Args:
             start_date: Start of date range
@@ -171,28 +190,27 @@ class FlowNormalizationPipeline:
         if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
             end_date = end_date.replace(hour=23, minute=59, second=59)
 
-        gold_name = "flow_normalization_features"
+        gold_name = "oi_momentum_features"
 
-        # Read Silver flow_alerts with lookback for rolling window
+        # Read Silver oi_change with lookback for rolling window
         read_start = start_date - timedelta(days=LOOKBACK_DAYS)
         logger.info(
-            "Loading Silver flow_alerts",
+            "Loading Silver oi_change",
             read_start=read_start.isoformat(),
             end=end_date.isoformat(),
         )
-        flow_alerts = self.reader.read_silver(
-            "flow_alerts",
-            instrument_type="option",
+        oi_change = self.reader.read_silver(
+            "oi_change",
             time_range=(read_start, end_date),
         )
-        logger.info("Loaded flow_alerts", rows=len(flow_alerts))
+        logger.info("Loaded oi_change", rows=len(oi_change))
 
         # Compute features
-        logger.info("Computing flow normalization features")
-        df = compute_flow_normalization_features(flow_alerts)
+        logger.info("Computing OI momentum features")
+        df = compute_oi_momentum(oi_change)
 
         if df.empty:
-            logger.warning("No flow normalization features computed")
+            logger.warning("No OI momentum features computed")
             return {gold_name: {"status": "no_data", "rows": 0}}
 
         # Filter output to requested date range (exclude lookback period)
@@ -227,7 +245,7 @@ class FlowNormalizationPipeline:
 
 def main() -> None:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Compute flow normalization Gold features from Silver flow_alerts")
+    parser = argparse.ArgumentParser(description="Compute OI momentum Gold features from Silver oi_change")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true", help="Don't write output")
@@ -236,7 +254,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    pipeline = FlowNormalizationPipeline(project=args.project, version=args.version)
+    pipeline = OiMomentumPipeline(project=args.project, version=args.version)
     stats = pipeline.run(
         start_date=args.start,
         end_date=args.end,
@@ -244,7 +262,7 @@ def main() -> None:
     )
 
     print("\n" + "=" * 60)
-    print("FLOW NORMALIZATION PIPELINE RESULTS")
+    print("OI MOMENTUM PIPELINE RESULTS")
     print("=" * 60)
     for dataset, info in stats.items():
         status = info.get("status", "unknown")

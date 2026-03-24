@@ -283,8 +283,8 @@ class TrendScanPipeline:
 
         # Filter to requested date range (labels computed within range)
         labels["ts_event"] = pd.to_datetime(labels["ts_event"], utc=True)
-        labels = labels[labels["ts_event"] >= pd.Timestamp(start_date, tz="UTC")]
-        labels = labels[labels["ts_event"] <= pd.Timestamp(end_date, tz="UTC")]
+        labels = labels[labels["ts_event"] >= pd.to_datetime(start_date, utc=True)]
+        labels = labels[labels["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         if labels.empty:
             logger.warning("No labels within date range after filtering")

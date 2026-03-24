@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gold poller crash loop — tz-aware ValueError in 15 feature pipelines**: All Gold feature pipelines used `pd.Timestamp(start_date, tz="UTC")` which raises `ValueError` when `start_date` is already timezone-aware (as passed by the gold poller). Replaced with `pd.to_datetime(start_date, utc=True)` which handles both naive and aware inputs. Affected: darkpool, flow_toxicity, market_tide_context, sector_flow, flow_context, and 10 other pipelines.
+- **OI momentum pipeline KeyError on 'underlying' column**: `oi_momentum_features.py` referenced a non-existent `underlying` column — the Silver oi_change schema uses `symbol`. Fixed all groupby/sort references and removed the now-unnecessary rename.
 - **Compactor crash on large string partitions**: Cast string columns to `large_string` before sort/dedup to prevent PyArrow 32-bit offset overflow on partitions with large cumulative string data (e.g., `option_chain_snapshot`).
 - **Compactor crash on zero-byte parquet files**: Skip 0-byte corrupt files during compaction instead of crashing when `ParquetFile()` tries to read them.
 - **Consumer NOGROUP infinite retry loop**: When `data-gateway-redis` restarts without persistence, the `heber:events` stream and consumer group disappear. The consumer now auto-recreates the stream and consumer group on NOGROUP errors instead of entering an indefinite error retry loop.

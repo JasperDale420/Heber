@@ -24,7 +24,7 @@ from heber.features.pipelines.oi_momentum_features import (
 
 
 def _make_oi_change_row(
-    underlying: str,
+    symbol: str,
     ts_event: str | datetime,
     strike: float = 150.0,
     call_oi: float = 1000.0,
@@ -36,7 +36,7 @@ def _make_oi_change_row(
 ) -> dict:
     """Build a single oi_change Silver row."""
     return {
-        "underlying": underlying,
+        "symbol": symbol,
         "ts_event": ts_event,
         "strike": strike,
         "expiry": "2026-06-19",
@@ -48,12 +48,12 @@ def _make_oi_change_row(
         "prev_oi": prev_oi,
         "volume": volume,
         "trades": 10,
-        "instrument_key": f"equity:{underlying}",
+        "instrument_key": f"equity:{symbol}",
     }
 
 
 def _make_multi_day_df(
-    underlying: str,
+    symbol: str,
     n_days: int,
     start_date: date | None = None,
     call_oi_change: float = 100.0,
@@ -72,7 +72,7 @@ def _make_multi_day_df(
         ts = datetime(day.year, day.month, day.day, 14, 0, 0, tzinfo=UTC)
         rows.append(
             _make_oi_change_row(
-                underlying=underlying,
+                symbol=symbol,
                 ts_event=ts.isoformat(),
                 call_oi_change=call_oi_change,
                 put_oi_change=put_oi_change,
@@ -119,7 +119,7 @@ class TestOiBuildupRatio:
             # Strike 150: call_oi_change=100, put_oi_change=50, call_oi=1000, put_oi=500
             rows.append(
                 _make_oi_change_row(
-                    underlying="TSLA",
+                    symbol="TSLA",
                     ts_event=day_ts,
                     strike=150,
                     call_oi_change=100,
@@ -133,7 +133,7 @@ class TestOiBuildupRatio:
             # Strike 160: call_oi_change=200, put_oi_change=100, call_oi=2000, put_oi=1000
             rows.append(
                 _make_oi_change_row(
-                    underlying="TSLA",
+                    symbol="TSLA",
                     ts_event=day_ts,
                     strike=160,
                     call_oi_change=200,

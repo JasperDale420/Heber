@@ -239,8 +239,8 @@ class DarkpoolPipeline:
 
         # Filter output to requested date range (exclude lookback period)
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-        df = df[df["ts_event"] >= pd.Timestamp(start_date, tz="UTC")]
-        df = df[df["ts_event"] <= pd.Timestamp(end_date, tz="UTC")]
+        df = df[df["ts_event"] >= pd.to_datetime(start_date, utc=True)]
+        df = df[df["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         if df.empty:
             logger.warning("No data in requested date range after filtering")

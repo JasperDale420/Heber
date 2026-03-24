@@ -221,8 +221,8 @@ class MarketTideContextPipeline:
 
         # Filter to requested date range
         merged["ts_event"] = pd.to_datetime(merged["ts_event"], utc=True)
-        merged = merged[merged["ts_event"] >= pd.Timestamp(start_date, tz="UTC")]
-        merged = merged[merged["ts_event"] <= pd.Timestamp(end_date, tz="UTC")]
+        merged = merged[merged["ts_event"] >= pd.to_datetime(start_date, utc=True)]
+        merged = merged[merged["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         # Add Gold schema columns
         merged = _ensure_ts_available(merged)
