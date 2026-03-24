@@ -667,6 +667,30 @@ class EventConsumer:
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice
+            except redis.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    logger.warning(
+                        "Consumer group missing — recreating after Redis restart",
+                        stream=settings.redis_stream_name,
+                        group=settings.redis_consumer_group,
+                    )
+                    try:
+                        await self.redis.xgroup_create(
+                            name=settings.redis_stream_name,
+                            groupname=settings.redis_consumer_group,
+                            id="0",
+                            mkstream=True,
+                        )
+                        logger.info(
+                            "consumer_group_auto_created",
+                            stream=settings.redis_stream_name,
+                            group=settings.redis_consumer_group,
+                        )
+                    except redis.ResponseError as create_err:
+                        if "BUSYGROUP" not in str(create_err):
+                            raise
+                    continue
+                raise  # Re-raise non-NOGROUP ResponseErrors to the general handler
             except Exception as e:  # noqa: BLE001 — top-level consumer loop must not crash
                 error_streak += 1
                 delay = calculate_retry_delay(

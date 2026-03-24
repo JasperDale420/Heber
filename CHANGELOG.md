@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Consumer NOGROUP infinite retry loop**: When `data-gateway-redis` restarts without persistence, the `heber:events` stream and consumer group disappear. The consumer now auto-recreates the stream and consumer group on NOGROUP errors instead of entering an indefinite error retry loop.
 - **Docker healthcheck regression**: Restored all 5 healthchecked services in `docker-compose.yml` to production-grade settings (`interval=10s, timeout=5s, retries=5, start_period=120s`) — regressed by repo hygiene commit to aggressive dev values, causing premature unhealthy marks during slow recovery.
 - **Gold Poller timezone mismatch**: Fixed `_last_run_date` using UTC date while `_should_run()` uses ET date — could cause double pipeline execution if runs finished after midnight UTC. Both now use Eastern Time consistently.
 - **Equity feature symbol column inconsistency**: Fixed 4 compute functions (`compute_momentum_features`, `compute_volatility_features`, `compute_microstructure_features`, `compute_return_labels`) setting `symbol` to full `instrument_key` value (e.g., `equity:AAPL`) instead of plain ticker (`AAPL`). Cross-dataset joins with `flow_features` would silently produce zero matches.
