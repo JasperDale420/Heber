@@ -22,6 +22,9 @@ logger = structlog.get_logger(__name__)
 # Target file size in bytes (256 MB)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
+# Maximum files to compact in a single pass to prevent OOM on large partitions.
+MAX_FILES_PER_BATCH = 50
+
 
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
@@ -286,7 +289,17 @@ class Compactor:
         if len(small_files) <= 1:
             return None
 
-        total_size = sum(size for _, size in sized_files)
+        # Cap batch size to prevent OOM on partitions with many small files.
+        if len(small_files) > MAX_FILES_PER_BATCH:
+            logger.info(
+                "compactor_batch_capped",
+                partition=str(partition_path),
+                total_files=len(small_files),
+                batch_size=MAX_FILES_PER_BATCH,
+            )
+            small_files = small_files[:MAX_FILES_PER_BATCH]
+
+        total_size = sum(f.stat().st_size for f in small_files if f.exists())
         logger.info(
             "Compacting partition",
             partition=str(partition_path),

@@ -629,7 +629,9 @@ class HeberReader:
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
 
-        if (df["ts_available"] < df["ts_event"]).any():
+        ts_avail = pd.to_datetime(df["ts_available"], utc=True)
+        ts_evt = pd.to_datetime(df["ts_event"], utc=True)
+        if (ts_avail < ts_evt).any():
             raise ValueError("ts_available cannot be before ts_event (look-ahead detected)")
 
         df = df.copy()
