@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compactor OOM on large partitions**: Capped compaction batch size to 50 files per pass to prevent OOM kills on partitions with many small files (e.g., `option_chain_snapshot` with 189 files / 565MB).
+- **Gold poller write_gold tz comparison crash**: Fixed `write_gold()` look-ahead check comparing tz-naive `ts_available` against tz-aware `ts_event` — now normalizes both to UTC before comparison.
+- **Sector tide read failure from macOS resource fork file**: Deleted stale `._compacted-*` resource fork file in `sector_tide` partition that blocked PyArrow dataset reads.
 - **Gold poller crash loop — tz-aware ValueError in 15 feature pipelines**: All Gold feature pipelines used `pd.Timestamp(start_date, tz="UTC")` which raises `ValueError` when `start_date` is already timezone-aware (as passed by the gold poller). Replaced with `pd.to_datetime(start_date, utc=True)` which handles both naive and aware inputs. Affected: darkpool, flow_toxicity, market_tide_context, sector_flow, flow_context, and 10 other pipelines.
 - **OI momentum pipeline KeyError on 'underlying' column**: `oi_momentum_features.py` referenced a non-existent `underlying` column — the Silver oi_change schema uses `symbol`. Fixed all groupby/sort references and removed the now-unnecessary rename.
 - **Compactor crash on large string partitions**: Cast string columns to `large_string` before sort/dedup to prevent PyArrow 32-bit offset overflow on partitions with large cumulative string data (e.g., `option_chain_snapshot`).
