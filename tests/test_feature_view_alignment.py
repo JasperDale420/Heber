@@ -63,6 +63,9 @@ def _build_feast_stub():
     class Float32:
         pass
 
+    class Float64:
+        pass
+
     class Int64:
         pass
 
@@ -70,6 +73,7 @@ def _build_feast_stub():
         pass
 
     feast_types.Float32 = Float32
+    feast_types.Float64 = Float64
     feast_types.Int64 = Int64
     feast_types.String = String
 
@@ -201,29 +205,34 @@ FEATURE_VIEW_CASES = [
         "features.feature_views.alert_labels",
         "alert_barrier_labels",
         [
+            "watch_id",
+            "instrument_key",
+            "occ_symbol",
             "underlying",
             "put_call",
-            "dte",
             "horizon",
-            "spot_at_alert",
-            "atr_at_alert",
-            "tp_threshold",
-            "sl_threshold",
+            "outcome",
+            "outcome_reason",
             "hit_tp_first",
+            "contract_hit_tp_first",
             "mfe",
             "mae",
-            "mfe_adj",
-            "mae_adj",
             "bars_to_hit",
-            "contract_hit_tp_first",
+            "time_to_mfe_seconds",
+            "time_to_mae_seconds",
+            "mfe_mae_ratio",
+            "excursion_velocity",
+            "capture_efficiency",
             "contract_mfe",
             "contract_mae",
             "contract_mfe_adj",
             "contract_mae_adj",
             "contract_bars_to_hit",
-            "beta_neutral_return",
-            "vix_at_alert",
-            "vix_regime",
+            "trading_minutes_to_hit",
+            "outcome_return",
+            "entry_price",
+            "spot_at_alert",
+            "window_duration_hours",
         ],
     ),
 ]
@@ -273,5 +282,6 @@ def test_feast_stub_behaves_like_package_for_types_import() -> None:
     import feast.types as feast_types  # type: ignore[import-not-found]
 
     assert hasattr(feast_types, "Float32")
+    assert hasattr(feast_types, "Float64")
     assert hasattr(feast_types, "Int64")
     assert hasattr(feast_types, "String")
