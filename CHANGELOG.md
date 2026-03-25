@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Temporal excursion fields in alert label feature views**: Added `time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, and `capture_efficiency` to all three alert barrier label Feast feature views (all-horizons, intraday, swing).
+
 ### Fixed
 
 - **Compactor OOM on large partitions**: Capped compaction batch size to 50 files per pass to prevent OOM kills on partitions with many small files (e.g., `option_chain_snapshot` with 189 files / 565MB).
