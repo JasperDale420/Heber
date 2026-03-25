@@ -149,6 +149,13 @@ PIPELINE_REGISTRY: list[dict[str, Any]] = [
         "datasets": None,
         "gold_datasets": ["ticker_base_rates"],
     },
+    {
+        "name": "excursion_analytics",
+        "module": "heber.features.pipelines.excursion_analytics",
+        "class": "ExcursionAnalyticsPipeline",
+        "datasets": None,
+        "gold_datasets": ["excursion_analytics"],
+    },
 ]
 
 
@@ -166,10 +173,10 @@ def _is_nyse_trading_day(dt: date) -> bool:
 
 def _last_trading_day() -> date:
     """Return the most recent completed trading day."""
-    today = datetime.now(UTC).date()
-    candidate = today
-    # If it's before 16:35 ET, the current day isn't done yet
     et_now = datetime.now(ZoneInfo("America/New_York"))
+    today = et_now.date()
+    candidate = today
+    # If it's before 17:00 ET, the current day isn't done yet
     if et_now.hour < 17:
         candidate = today - timedelta(days=1)
     # Walk backward to find a trading day
@@ -304,7 +311,7 @@ class GoldFeaturePoller:
         success_count = sum(1 for r in results.values() if r["status"] == "success")
         error_count = sum(1 for r in results.values() if r["status"] == "error")
 
-        self._last_run_date = datetime.now(UTC).date()
+        self._last_run_date = datetime.now(ZoneInfo("America/New_York")).date()
 
         run_summary = {
             "date": end_date.isoformat(),
