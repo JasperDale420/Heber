@@ -189,6 +189,7 @@ def _check_fill_rate(
         col = "instrument_key" if "instrument_key" in df.columns else "symbol"
         distinct = df[col].nunique() if col in df.columns else 0
     except Exception:
+        logger.warning("fill_rate_partition_read_failed", feed="bars", date=dt_str, exc_info=True)
         distinct = 0
 
     expected = settings.daily_health_expected_symbol_count

@@ -82,6 +82,7 @@ class ShutdownConfig:
 
                 self.timeout_seconds = get_settings().shutdown_timeout_seconds
             except Exception:
+                logger.warning("lifecycle_settings_load_failed", exc_info=True)
                 self.timeout_seconds = DEFAULT_SHUTDOWN_TIMEOUT
 
 

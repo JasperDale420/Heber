@@ -352,7 +352,7 @@ class AlertWatchConsumer:
                 return False
             return envelope.get("feed") == FLOW_ALERTS_FEED
         except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
-            pass
+            logger.debug("flow_alert_parse_skip", exc_info=True)
         return False
 
     @staticmethod
@@ -576,7 +576,7 @@ class AlertWatchConsumer:
             return parsed_alerts
 
         except Exception as e:
-            logger.error("Failed to parse alert", error=str(e))
+            logger.error("Failed to parse alert", error=str(e), exc_info=True)
             self._log_parse_summary(
                 alert_parse_success=0,
                 alert_parse_failed=1,
@@ -785,6 +785,7 @@ class AlertWatchConsumer:
             exp_date = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
             return (exp_date - date.today()).days
         except Exception:
+            logger.warning("dte_calculation_fallback", expiry=expiry, exc_info=True)
             return 5
 
     def _parse_timestamp(self, parsed: dict) -> datetime:
@@ -844,7 +845,7 @@ class AlertWatchConsumer:
                 )
 
         except Exception as e:
-            logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e))
+            logger.error("Failed to get entry price", occ_symbol=occ_symbol, error=str(e), exc_info=True)
             return None
 
     async def _try_route(

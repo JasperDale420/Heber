@@ -314,7 +314,7 @@ def _scan_silver_feeds_blocking(silver_root: Path) -> set[str]:
             if entry.is_dir() and entry.name.startswith("feed="):
                 disk_feeds.add(entry.name.split("=", 1)[1])
     except OSError:
-        pass
+        logger.warning("catalog_feed_scan_oserror", path=str(silver_root), exc_info=True)
     return disk_feeds
 
 
@@ -401,6 +401,7 @@ def _count_parquet_rows(dt_dir: Path) -> int:
             meta = pq.read_metadata(pf)
             total += meta.num_rows
         except Exception:
+            logger.warning("catalog_parquet_metadata_unreadable", path=str(pf), exc_info=True)
             continue
     return total
 
@@ -424,7 +425,7 @@ def _scan_partition_dates(feed_dir: Path) -> list[tuple[str, int]] | None:
                 if row_count > 0:
                     results.append((date_str, row_count))
     except OSError:
-        pass
+        logger.warning("catalog_partition_scan_oserror", path=str(feed_dir), exc_info=True)
 
     if not results:
         return None

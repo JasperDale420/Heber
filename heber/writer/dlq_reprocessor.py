@@ -268,11 +268,12 @@ async def reprocess_dlq(
                         processed = True
                         break
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug(
+                    logger.warning(
                         "dlq_reprocess_attempt_failed",
                         entry_id=entry_id_str,
                         attempt=attempt,
                         error=str(exc),
+                        exc_info=True,
                     )
 
             if processed:

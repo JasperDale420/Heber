@@ -186,7 +186,7 @@ class WatchManager:
         data_list = self.redis.mget(keys)
 
         watches = []
-        for data in data_list:
+        for key, data in zip(keys, data_list, strict=False):
             if data:
                 try:
                     watch = AlertWatch.model_validate_json(data)
@@ -194,7 +194,12 @@ class WatchManager:
                     if watch.status == WatchStatus.WATCHING:
                         watches.append(watch)
                 except Exception as e:
-                    logger.warning("Failed to deserialize watch during bulk fetch", error=str(e))
+                    logger.warning(
+                        "Failed to deserialize watch during bulk fetch",
+                        watch_key=key,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
         return watches
 

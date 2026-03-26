@@ -93,6 +93,7 @@ def _fetch_metrics_samples(metrics_url: str) -> tuple[list[tuple[str, dict[str, 
         raise_for_status(response)
         return _parse_prometheus_text(response.text), None
     except Exception as exc:
+        logger.warning("dataflow_metrics_fetch_failed", url=metrics_url, error=str(exc), exc_info=True)
         return None, str(exc)
 
 

@@ -292,11 +292,11 @@ class BronzeToSilverTransformer:
                             if row:
                                 records.append(row)
                     except (json.JSONDecodeError, ValidationError, ValueError, KeyError) as e:
-                        logger.debug("Failed to parse line", error=str(e))
+                        logger.warning("bronze_line_parse_failed", error=str(e), exc_info=True)
                         continue
 
         except OSError as e:
-            logger.error("Failed to read Bronze file", path=str(file_path), error=str(e))
+            logger.error("Failed to read Bronze file", path=str(file_path), error=str(e), exc_info=True)
 
         return records
 
