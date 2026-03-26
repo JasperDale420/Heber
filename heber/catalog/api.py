@@ -543,6 +543,47 @@ async def list_backfills(
     }
 
 
+# Health Monitor summary endpoint
+@app.get("/api/v1/health/summary")
+async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
+    """Return latest health check results and trend data."""
+    from datetime import date, timedelta
+
+    import pandas as pd
+
+    from heber.health_monitor.store import HealthStore
+
+    store = HealthStore()
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+
+    frames: list[pd.DataFrame] = []
+    current = start
+    while current <= today:
+        df = store.read_results(current)
+        if len(df) > 0:
+            frames.append(df)
+        current += timedelta(days=1)
+
+    if not frames:
+        return {"checks": [], "summary": {"total": 0, "pass": 0, "warn": 0, "fail": 0, "error": 0}}
+
+    all_results = pd.concat(frames, ignore_index=True)
+    latest = all_results.sort_values("ts_checked").groupby(["check_name", "feed"]).last().reset_index()
+    summary = latest["status"].value_counts().to_dict()
+
+    return {
+        "checks": latest.to_dict(orient="records"),
+        "summary": {
+            "total": len(latest),
+            "pass": summary.get("pass", 0),
+            "warn": summary.get("warn", 0),
+            "fail": summary.get("fail", 0),
+            "error": summary.get("error", 0),
+        },
+    }
+
+
 # Error codes (PRD §11.7.5)
 ERROR_CODES: dict[int, str] = {
     400: "INVALID_REQUEST",

@@ -303,6 +303,39 @@ services:
         max-file: "5"
     restart: always
 
+  # Data Health Monitor — tiered data quality monitoring
+  heber-health-monitor:
+    build:
+      context: ..
+      dockerfile: Heber/Dockerfile
+    container_name: heber-health-monitor
+    command: [ "python", "-m", "heber.health_monitor" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_STREAM_NAME=heber:events
+      - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_HEALTH_MONITOR_ENABLED=true
+      - HEBER_HEALTH_STREAM_CHECK_INTERVAL_SECONDS=30
+      - HEBER_HEALTH_PARTITION_CHECK_INTERVAL_SECONDS=900
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "9093:9093"
+    depends_on:
+      heber-consumer:
+        condition: service_started
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    restart: always
+
   # Uncomment to run DLQ reprocessor as a one-shot service:
   # heber-dlq-reprocessor:
   #   build:
