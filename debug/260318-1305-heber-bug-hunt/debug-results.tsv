@@ -1,0 +1,57 @@
+iteration	type	hypothesis	result	severity	location	description
+0	baseline	-	pass	-	-	1667 tests pass, 0 lint errors, 4 mypy issues (minor return type annotations)
+1	hypothesis	GoldFeaturePoller hardcodes EDT offset, wrong during EST	confirmed	MEDIUM	gold_poller/service.py:171,258	Both _last_trading_day() and _should_run() use timedelta(hours=4). During EST (Nov-Mar), trigger fires 1h early
+2	hypothesis	Pipeline.run() receives naive datetimes	confirmed	MEDIUM	gold_poller/service.py:425-426	datetime(y,m,d) creates tz-naive timestamps violating timezone-aware contract
+3	discovery	Misleading EST comment	confirmed	LOW	gold_poller/service.py:257	Comment says fires 1h late during EST; actually fires 1h early
+4	hypothesis	_silver_validation_warning_counts grows unboundedly	confirmed	MEDIUM	writer/consumer.py:76,585-592	Dict keys include unique event IDs/instrument keys from str(error), never cleared
+5	hypothesis	BronzeWriter.buffer_counts is dead code that leaks	confirmed	LOW	writer/bronze.py:30,53	Incremented, never read or cleared
+6	hypothesis	Race condition on writer buffers from async tasks	disproven	-	writer/consumer.py:434-441	asyncio.gather with sync code — no true parallelism in single-threaded event loop
+7	hypothesis	Float-epoch strings silently become None in _coerce_timestamp	confirmed	MEDIUM	writer/normalizer.py:180-182,250	isdigit() misses "1710000000.5" → fromisoformat fails → silent None
+8	hypothesis	flush_if_needed modifies dict during iteration	disproven	-	writer/bronze.py:61-67	Value replacement during iteration is safe; no concurrent modification
+9	hypothesis	_check_and_write_loop swallows exceptions without traceback	confirmed	MEDIUM	watch/writer.py:282-283	logger.error missing exc_info=True, no traceback logged
+10	hypothesis	LabelWriter buffer grows on persistent write failures	confirmed	LOW	watch/writer.py:87-102	Buffer only cleared on success, accumulates on disk-full scenarios
+11	hypothesis	Forward return labels use future data (ts_available wrong)	disproven	-	features/pipelines/equity_features.py:534,556	Design decision, not bug — ts_available=now() is conservative
+12	hypothesis	_open_dataset_safe silently swallows exceptions	confirmed	MEDIUM	reader/core.py:106-107,116	except Exception: pass with no logging on fallback paths
+13	hypothesis	_coerce_int loses precision for large ints via float	disproven	-	writer/normalizer.py:158	Theoretical only — Silver int fields don't exceed 2^53
+14	hypothesis	Watch consumer sync Redis in async context	disproven	-	watch/consumer.py:164-173	Correctly uses asyncio.to_thread() wrapper
+15	hypothesis	Bronze partial gzip on disk-full creates duplicates	confirmed	MEDIUM	writer/bronze.py:82-90	No atomic write — partial file persists, retry creates duplicate
+16	hypothesis	Silver Parquet writes also non-atomic	confirmed	MEDIUM	writer/utils.py:119-125	Same pattern — partial file on crash, duplicates on retry
+17	hypothesis	_normalize_symbol rejects BRK.B and dot-class tickers	confirmed	HIGH	writer/key_normalization.py:41,501-505	SYMBOL_PATTERN=[A-Z]{1,5} rejects dots — alt data for BRK.B etc loses symbol
+18	hypothesis	Bloom filter false positives drop legitimate events	disproven	-	ops/reliability.py:150-157	Design tradeoff — documented as conservative, FPR ~0.03%
+19	hypothesis	_coerce_strike wrong for fractional strikes	disproven	-	writer/key_normalization.py:543-552	Decimal math is correct
+20	hypothesis	WatchService.run() doesn't cancel siblings on failure	confirmed	MEDIUM	watch/writer.py:260-268	asyncio.gather without cancellation — dead sibling continues
+21	hypothesis	DLQEvent.from_dict crashes on missing fields	disproven	-	ops/reliability.py:224-235	_load() exception handler catches all parse errors
+22	hypothesis	Catalog auto-discovery TOCTOU race	disproven	-	catalog/seeds.py:334-339	Irrelevant in mounted volume context
+23	hypothesis	Feature pipelines have division by zero	disproven	-	features/pipelines/*.py	All divisions guarded with np.where
+24	hypothesis	Market calendar has stale holiday data	disproven	-	calendar/market.py	Uses exchange_calendars (dynamic), correctly uses ZoneInfo
+25	hypothesis	_last_trading_day date mismatch with _should_run	disproven	-	gold_poller/service.py:168,259	Trigger hour check masks UTC/ET date mismatch
+26	hypothesis	Silver salvage path bypasses null audit	confirmed	LOW	writer/utils.py:158-163	Salvaged writes skip audit_null_fields()
+27	hypothesis	EventBus streams.py has connection leak	disproven	-	bus/streams.py	Config dataclasses only, no connections
+28	pattern_search	logger.error() missing exc_info=True	confirmed	LOW	12+ files	Widespread — 12+ logger.error() calls without traceback logging
+29	hypothesis	Watch consumer enrichment retry without backoff	disproven	-	watch/consumer.py:293-296	Uses calculate_retry_delay with exponential backoff
+30	hypothesis	Pipeline thread safety issue	disproven	-	gold_poller/service.py:301-303	Pipelines run sequentially, not concurrently
+31	hypothesis	Circuit breaker state machine race	disproven	-	ops/circuit_breaker.py:133,142	Race between lock acquisitions is benign
+32	hypothesis	Division by zero in ops/slices.py	confirmed	MEDIUM	ops/slices.py:180	completed/total*100 crashes when no slices exist
+33	hypothesis	Division by zero in watch/poller.py:485	disproven	-	watch/poller.py:431-470	stale_ages and stale_quotes always populated together
+34	hypothesis	Silent except pass in feast/materialization.py	confirmed	LOW	feast/materialization.py:47-48,56-57	Two except Exception: pass with no logging
+35	hypothesis	Compactor has data corruption risks	disproven	-	writer/compactor.py	Excellent implementation: lock files, temp+rename, dedup, source preserved on error
+36	hypothesis	Backfill transformer uses different normalization	disproven	-	writer/transformer.py:311-312	Correctly reuses same normalize_envelope_for_silver + envelope_to_silver_row
+37	hypothesis	_coerce_date mishandles empty strings	disproven	-	writer/normalizer.py:161-168	ValueError caught by parent _coerce_value → None
+38	hypothesis	OCC symbol wrong for 6-letter underlyings	disproven	-	writer/key_normalization.py:488-498	Variable-length OCC is correct per INSTRUMENT_KEY_PATTERNS validation
+39	hypothesis	TOCTOU in exists()/stat() patterns	disproven	-	writer/bronze.py:93, etc	Zero practical risk — file just written by same process, no concurrent deleter
+40	hypothesis	Naive datetime in ml/datasets.py	confirmed	LOW	ml/datasets.py:46	datetime.now() without UTC violates timezone-aware contract
+41	hypothesis	WatchService.stop() doesn't close Redis	confirmed	MEDIUM	watch/writer.py:287-294	Redis client passed in but never closed — connection pool leak
+42	hypothesis	Compactor blocks event loop during compaction	confirmed	MEDIUM	writer/compactor.py:471	scan_and_compact is sync, called from async run() without to_thread
+43	hypothesis	Watch snapshots unbounded in Redis	disproven	-	watch/manager.py:386-387	7-day TTL prevents truly unbounded growth; optimization, not bug
+44	hypothesis	DLQ O(n) linear search	disproven	-	ops/reliability.py:264-275	Max 10K entries with persist — O(n) on 10K is <1ms, not a real perf issue
+45	hypothesis	Signal handler closure in consumer.py:812	disproven	-	writer/consumer.py:812	Lambda captures consumer by reference; consumer stays alive for program lifetime
+46	hypothesis	Bloom filter memory on rotation	disproven	-	ops/reliability.py:117-121	Old bloom is GC'd when _previous_bloom is overwritten; ~1.25MB per rotation is fine
+47	hypothesis	upsert_instrument ignores type/symbol on update	confirmed	MEDIUM	catalog/service.py:120-136	Update path only iterates **kwargs; positional args silently dropped
+48	hypothesis	update_coverage falsy check for row count	confirmed	LOW	catalog/service.py:180	if approx_row_count: is falsy for 0
+49	hypothesis	Dead expression in Archiver	confirmed	LOW	retention/__init__.py:256	Path object created but never assigned
+50	hypothesis	assert in production retention code	disproven	-	retention/__init__.py:728	Type-narrowing assert; completed_at always set before call
+51	hypothesis	LakeFS _get_repo auto-create never fires	confirmed	LOW	versioning/__init__.py:165-173	Repository() is lazy; except block unreachable
+52	hypothesis	create_dataset passes wrong keyword	confirmed	HIGH	catalog/api.py:429-438	dataset_name= vs name= parameter mismatch — runtime TypeError
+53	hypothesis	CancelledError re-raised in lifespan	confirmed	MEDIUM	catalog/api.py:121-123	Propagates to ASGI server causing unclean shutdown log
+54	hypothesis	Non-async circuit breaker decorator	disproven	-	ops/circuit_breaker.py:378-395	Not used with async functions anywhere; latent design issue only
+55	hypothesis	_normalize_put_call defaults unknown to C	confirmed	LOW	watch/consumer.py:766-774	Non-P/C values silently become Call

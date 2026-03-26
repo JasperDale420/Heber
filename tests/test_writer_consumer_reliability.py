@@ -166,7 +166,9 @@ def test_process_event_rate_limits_repeated_insider_identifier_failures(monkeypa
     for _ in range(2):
         success, error, retryable = consumer._process_event_once({"data": json.dumps(envelope)})
         assert success is False
-        assert error == "Missing symbol/ticker for insider_trades"
+        # With empty ticker, normalization falls back to UNKNOWN sentinel.
+        # The record then fails at required-field validation (missing trade_type).
+        assert "missing_required_fields:insider_trades:" in error
         assert retryable is False
 
     consumer.bronze_writer.write.assert_called()

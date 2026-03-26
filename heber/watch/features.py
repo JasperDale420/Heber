@@ -1121,9 +1121,201 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
 def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
     """Persist one feature row into Gold meta-label feature partitions."""
     row = dict(features.__dict__)
+
+    # Add Gold contract required fields: instrument_key, ts_event, ts_available.
+    # instrument_key: derive from occ_symbol (option) or underlying (equity).
+    if "instrument_key" not in row or row.get("instrument_key") is None:
+        occ = row.get("occ_symbol")
+        if occ:
+            row["instrument_key"] = f"option:{occ}"
+        else:
+            row["instrument_key"] = f"equity:{row.get('underlying', row.get('symbol', 'UNKNOWN'))}"
+
+    # ts_event: use alert_time (point when the feature was observed).
+    if "ts_event" not in row or row.get("ts_event") is None:
+        row["ts_event"] = row.get("alert_time")
+
+    # ts_available: current wall-clock time when the feature row is written.
+    if "ts_available" not in row or row.get("ts_available") is None:
+        row["ts_available"] = datetime.now(UTC)
+
     features_df = pd.DataFrame([row])
     persist_features_frame_to_gold(
         features_df=features_df,
         output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,
         partition_col="alert_time",
     )
+
+
+def backfill_uw_fields(
+    gold_df: pd.DataFrame,
+    data_root: Path | None = None,
+    gex_tolerance: str = "1h",
+    tide_tolerance: str = "1h",
+) -> pd.DataFrame:
+    """Backfill null GEX/VEX/market_tide fields in Gold features from Silver data.
+
+    Performs asof-joins against Silver ``greek_exposure`` and ``market_tide``
+    feeds to fill null values for:
+      - gex (from call_gamma)
+      - vex (from call_vanna + put_vanna)
+      - market_tide_net_premium (from net_call_premium - net_put_premium)
+      - market_tide_direction (from sentiment)
+
+    Parameters
+    ----------
+    gold_df:
+        Gold meta_label_features DataFrame with potential null fields.
+    data_root:
+        Heber data root. Defaults to ``settings.data_root``.
+    gex_tolerance:
+        Maximum time gap for greek_exposure asof join (default 1 hour).
+    tide_tolerance:
+        Maximum time gap for market_tide asof join (default 1 hour).
+
+    Returns
+    -------
+    pd.DataFrame
+        Updated DataFrame with nulls filled where Silver data is available.
+    """
+    from heber.reader.core import HeberReader
+
+    root = Path(data_root or settings.data_root)
+    reader = HeberReader(data_root=root)
+
+    df = gold_df.copy()
+
+    # Ensure alert_time is datetime for asof join
+    if "alert_time" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["alert_time"]):
+        df["alert_time"] = pd.to_datetime(df["alert_time"], utc=True)
+
+    # ── GEX / VEX backfill from Silver greek_exposure ──────────────────
+    gex_null_mask = df["gex"].isna() | df["vex"].isna()
+    if gex_null_mask.any():
+        # Determine time range from rows that need filling
+        null_rows = df.loc[gex_null_mask]
+        t_min = null_rows["alert_time"].min()
+        t_max = null_rows["alert_time"].max()
+
+        gex_silver = reader.read_silver(
+            dataset="greek_exposure",
+            time_range=(t_min, t_max),
+            columns=["ts_event", "ts_available", "instrument_key", "call_gamma", "call_vanna", "put_vanna"],
+        )
+
+        if not gex_silver.empty and "symbol" in df.columns:
+            # Build instrument_key on Silver side for join
+            if "instrument_key" not in gex_silver.columns and "symbol" in gex_silver.columns:
+                gex_silver["instrument_key"] = "equity:" + gex_silver["symbol"]
+
+            # Build instrument_key on Gold side for join
+            if "instrument_key" not in df.columns:
+                df["_ik"] = "equity:" + df["symbol"]
+            else:
+                df["_ik"] = df["instrument_key"]
+
+            # Sort for merge_asof
+            gex_silver = gex_silver.sort_values("ts_event")
+            if "ts_available" in gex_silver.columns:
+                gex_silver["_safe_time"] = gex_silver[["ts_event", "ts_available"]].max(axis=1)
+            else:
+                gex_silver["_safe_time"] = gex_silver["ts_event"]
+
+            # Ensure tz-aware timestamps
+            for col in ["_safe_time", "ts_event"]:
+                if col in gex_silver.columns and gex_silver[col].dt.tz is None:
+                    gex_silver[col] = gex_silver[col].dt.tz_localize("UTC")
+
+            gex_silver = gex_silver.sort_values("_safe_time")
+            df_sorted = df.sort_values("alert_time")
+
+            merged = pd.merge_asof(
+                df_sorted[["alert_time", "_ik"]].reset_index(),
+                gex_silver[["_safe_time", "instrument_key", "call_gamma", "call_vanna", "put_vanna"]].rename(
+                    columns={"instrument_key": "_ik"}
+                ),
+                left_on="alert_time",
+                right_on="_safe_time",
+                by="_ik",
+                tolerance=pd.Timedelta(gex_tolerance),
+                direction="backward",
+            )
+
+            # Fill nulls from matched Silver data
+            for idx_row in merged.itertuples():
+                orig_idx = idx_row.index
+                if orig_idx not in df.index:
+                    continue
+                if pd.isna(df.at[orig_idx, "gex"]) and pd.notna(idx_row.call_gamma):
+                    df.at[orig_idx, "gex"] = float(idx_row.call_gamma)
+                if pd.isna(df.at[orig_idx, "vex"]):
+                    cv = idx_row.call_vanna if pd.notna(idx_row.call_vanna) else 0.0
+                    pv = idx_row.put_vanna if pd.notna(idx_row.put_vanna) else 0.0
+                    if pd.notna(idx_row.call_vanna) or pd.notna(idx_row.put_vanna):
+                        df.at[orig_idx, "vex"] = float(cv) + float(pv)
+
+            df = df.drop(columns=["_ik"], errors="ignore")
+
+        logger.info(
+            "backfill_uw_gex_vex",
+            null_before=int(gex_null_mask.sum()),
+            null_after_gex=int(df["gex"].isna().sum()),
+            null_after_vex=int(df["vex"].isna().sum()),
+        )
+
+    # ── Market Tide backfill from Silver market_tide ───────────────────
+    tide_null_mask = df["market_tide_net_premium"].isna() | df["market_tide_direction"].isna()
+    if tide_null_mask.any():
+        null_rows = df.loc[tide_null_mask]
+        t_min = null_rows["alert_time"].min()
+        t_max = null_rows["alert_time"].max()
+
+        tide_silver = reader.read_silver(
+            dataset="market_tide",
+            time_range=(t_min, t_max),
+            columns=["ts_event", "ts_available", "net_call_premium", "net_put_premium", "sentiment"],
+        )
+
+        if not tide_silver.empty:
+            tide_silver = tide_silver.sort_values("ts_event")
+            if "ts_available" in tide_silver.columns:
+                tide_silver["_safe_time"] = tide_silver[["ts_event", "ts_available"]].max(axis=1)
+            else:
+                tide_silver["_safe_time"] = tide_silver["ts_event"]
+
+            for col in ["_safe_time", "ts_event"]:
+                if col in tide_silver.columns and tide_silver[col].dt.tz is None:
+                    tide_silver[col] = tide_silver[col].dt.tz_localize("UTC")
+
+            tide_silver = tide_silver.sort_values("_safe_time")
+            df_sorted = df.sort_values("alert_time")
+
+            merged = pd.merge_asof(
+                df_sorted[["alert_time"]].reset_index(),
+                tide_silver[["_safe_time", "net_call_premium", "net_put_premium", "sentiment"]],
+                left_on="alert_time",
+                right_on="_safe_time",
+                tolerance=pd.Timedelta(tide_tolerance),
+                direction="backward",
+            )
+
+            for idx_row in merged.itertuples():
+                orig_idx = idx_row.index
+                if orig_idx not in df.index:
+                    continue
+                if pd.isna(df.at[orig_idx, "market_tide_net_premium"]):
+                    ncp = idx_row.net_call_premium if pd.notna(idx_row.net_call_premium) else 0.0
+                    npp = idx_row.net_put_premium if pd.notna(idx_row.net_put_premium) else 0.0
+                    if pd.notna(idx_row.net_call_premium) or pd.notna(idx_row.net_put_premium):
+                        df.at[orig_idx, "market_tide_net_premium"] = float(ncp) - float(npp)
+                if pd.isna(df.at[orig_idx, "market_tide_direction"]) and pd.notna(idx_row.sentiment):
+                    df.at[orig_idx, "market_tide_direction"] = str(idx_row.sentiment)
+
+        logger.info(
+            "backfill_uw_market_tide",
+            null_before=int(tide_null_mask.sum()),
+            null_after_premium=int(df["market_tide_net_premium"].isna().sum()),
+            null_after_direction=int(df["market_tide_direction"].isna().sum()),
+        )
+
+    return df

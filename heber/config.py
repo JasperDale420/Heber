@@ -227,6 +227,61 @@ class Settings(BaseSettings):
         description="Max rows to re-enrich per scan cycle",
     )
 
+    # Gold Feature Poller
+    gold_poller_enabled: bool = Field(
+        default=True,
+        description="Enable the Gold feature poller service",
+    )
+    gold_poller_eod_hour: int = Field(
+        default=16,
+        description="Hour (ET) to trigger EOD Gold feature refresh (0-23)",
+    )
+    gold_poller_eod_minute: int = Field(
+        default=35,
+        description="Minute past the hour to trigger EOD Gold feature refresh",
+    )
+    gold_poller_check_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=600,
+        description="How often the poller checks if a run is due (seconds)",
+    )
+    gold_poller_retry_max: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max retries per pipeline on failure",
+    )
+    gold_poller_retry_backoff_seconds: float = Field(
+        default=30.0,
+        description="Base backoff between retries (multiplied by attempt number)",
+    )
+    gold_poller_project: str = Field(
+        default="watch",
+        description="Gold project namespace for poller-generated datasets",
+    )
+    gold_poller_version: str = Field(
+        default="v1",
+        description="Gold version namespace for poller-generated datasets",
+    )
+    gold_poller_lookback_days: int = Field(
+        default=1,
+        ge=1,
+        le=30,
+        description="Number of days back to recompute on each run (ensures gap-fill)",
+    )
+    gold_poller_disabled_pipelines: str = Field(
+        default="",
+        description="Comma-separated pipeline names to skip (e.g. 'trend_scan,ticker_base_rates')",
+    )
+
+    @property
+    def gold_poller_disabled_pipeline_set(self) -> set[str]:
+        """Parse disabled pipelines into a set."""
+        if not self.gold_poller_disabled_pipelines:
+            return set()
+        return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
+
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
 

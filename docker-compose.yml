@@ -143,9 +143,9 @@ services:
         condition: service_healthy
     healthcheck:
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\"" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 120s
     logging:
       driver: json-file
@@ -222,13 +222,41 @@ services:
       - DATA_GATEWAY_URL=http://host.docker.internal:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
-      - HEBER_GOLD_PATH=/data/gold/labels_alert_barriers
+      - HEBER_GOLD_PATH=/data/gold
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
       - "9091:9090"
+    depends_on:
+      heber-catalog:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    restart: always
+
+  # Gold Feature Poller - Refreshes Gold feature datasets after market close
+  heber-gold-poller:
+    build:
+      context: ..
+      dockerfile: Heber/Dockerfile
+    container_name: heber-gold-poller
+    command: [ "python", "-m", "heber.gold_poller" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_GOLD_POLLER_ENABLED=true
+      - HEBER_GOLD_POLLER_EOD_HOUR=16
+      - HEBER_GOLD_POLLER_EOD_MINUTE=35
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "9092:9091"
     depends_on:
       heber-catalog:
         condition: service_healthy
@@ -274,6 +302,32 @@ services:
         max-size: "50m"
         max-file: "5"
     restart: always
+
+  # Uncomment to run DLQ reprocessor as a one-shot service:
+  # heber-dlq-reprocessor:
+  #   build:
+  #     context: ..
+  #     dockerfile: Heber/Dockerfile
+  #   container_name: heber-dlq-reprocessor
+  #   command: [ "python", "-m", "heber.writer.dlq_reprocessor", "--analyze" ]
+  #   environment:
+  #     - HEBER_DATA_ROOT=/data
+  #     - HEBER_REDIS_URL=redis://host.docker.internal:6379
+  #     - HEBER_REDIS_DLQ_STREAM_NAME=heber:events:dlq
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   volumes:
+  #     - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+  #   depends_on:
+  #     heber-consumer:
+  #       condition: service_started
+  #   restart: "no"
+  #
+  #   # Example: reprocess only insider_trades feed
+  #   # command: [ "python", "-m", "heber.writer.dlq_reprocessor", "--reprocess", "--feed", "insider_trades", "--batch-size", "500" ]
+  #
+  #   # Example: purge entries older than 30 days
+  #   # command: [ "python", "-m", "heber.writer.dlq_reprocessor", "--purge", "--older-than", "30d", "--confirm" ]
 
 volumes:
   heber-data:

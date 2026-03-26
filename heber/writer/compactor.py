@@ -25,6 +25,13 @@ TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 # Maximum files to compact in a single pass to prevent OOM on large partitions.
 MAX_FILES_PER_BATCH = 50
 
+# Maximum total compressed bytes to read in a single compaction batch.
+# Feeds with large embedded JSON (e.g. option_chain_snapshot with chain_json) can
+# expand 5-10x in memory, so keep this budget conservative to avoid OOM in Docker.
+# At ~14 MB/file compressed and ~6x expansion: 50 MB → ~300 MB uncompressed,
+# ~600 MB with concat copy — safe under typical 4 GB Docker Desktop limits.
+MAX_BATCH_COMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
+
 
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
@@ -299,7 +306,32 @@ class Compactor:
             )
             small_files = small_files[:MAX_FILES_PER_BATCH]
 
-        total_size = sum(f.stat().st_size for f in small_files if f.exists())
+        # Cap total compressed bytes to prevent OOM on feeds with large embedded data
+        # (e.g. option_chain_snapshot chain_json expands ~6x from compressed size).
+        running_bytes = 0
+        byte_capped_files: list[Path] = []
+        for f in small_files:
+            file_size = self._safe_stat_size(f, partition_path)
+            if file_size is None:
+                continue
+            if running_bytes + file_size > MAX_BATCH_COMPRESSED_BYTES and byte_capped_files:
+                logger.info(
+                    "compactor_byte_budget_capped",
+                    partition=str(partition_path),
+                    total_files=len(small_files),
+                    included_files=len(byte_capped_files),
+                    included_bytes=running_bytes,
+                    budget_bytes=MAX_BATCH_COMPRESSED_BYTES,
+                )
+                break
+            byte_capped_files.append(f)
+            running_bytes += file_size
+        small_files = byte_capped_files
+
+        if len(small_files) <= 1:
+            return None
+
+        total_size = running_bytes
         logger.info(
             "Compacting partition",
             partition=str(partition_path),

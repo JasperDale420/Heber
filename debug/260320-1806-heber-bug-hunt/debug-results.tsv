@@ -1,0 +1,7 @@
+iteration	type	hypothesis	result	severity	location	description
+1	hypothesis	Docker-compose postgres healthcheck regressed from contract values	confirmed	HIGH	docker-compose.yml:19-24	Commit 5e14f24 regressed postgres healthcheck from interval=10s/timeout=5s/retries=5/start_period=120s to 5s/3s/10/10s. All 5 healthchecked services had start_period regressed below 120s minimum. Fixed all to match contract test expectations.
+2	hypothesis	Timezone-naive datetime usage corrupts data	disproven	-	-	All datetime usage correctly uses UTC-aware timestamps
+3	hypothesis	Unclosed file handles / resource leaks	disproven	-	-	All file opens use context managers
+4	hypothesis	Field mapping or normalization bugs in ingest	disproven	-	-	Normalizer is well-structured with comprehensive type coercion
+5	hypothesis	Watch consumer error handling issues	disproven	-	-	Retry, DLQ, batch processing all well-implemented
+6	hypothesis	Gold poller _last_run_date uses UTC but _should_run uses ET — potential double-run	confirmed	MEDIUM	gold_poller/service.py:307	If pipelines take >3.5h (past midnight UTC), _last_run_date would be set to next day UTC while _should_run checks against same day ET. Fixed: use ET consistently.

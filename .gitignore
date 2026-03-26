@@ -46,3 +46,9 @@ sonar_scan.log
 
 # Axon knowledge graph cache
 .axon/
+
+# Log files (empire_core daily rotation)
+logs/
+
+# Local dev data
+.local_heber_data/

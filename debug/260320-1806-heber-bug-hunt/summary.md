@@ -10,8 +10,8 @@
 |--------|-------|
 | Bugs found | 11 (1 HIGH, 5 MEDIUM, 5 LOW) |
 | Bugs fixed | 11 |
-| Hypotheses tested | 56 (11 confirmed, 45 disproven/noted) |
-| Files investigated | ~95 source files + docker-compose.yml |
+| Hypotheses tested | 86 (11 confirmed, 75 disproven/noted) |
+| Files investigated | ~138 source files + docker-compose.yml |
 | Techniques used | Direct inspection, git bisect, pattern search, differential debugging, cross-file consistency analysis, label leakage analysis |
 | Tests before | 1665 passed, 2 failed |
 | Tests after | 1669 passed, 0 failed |
@@ -78,6 +78,46 @@ The Heber codebase is in excellent shape:
   - market_regime_features, iv_surface_features, trend_scan_features
   - straddle_momentum_features, ticker_base_rates, alert_labels
   - darkpool_features, gex_regime_features, equity_features
+
+### Duration Update
+**Duration:** 36+ iterations (14 initial + 6 deep + 8 deeper + 4 deepest + 4+ exhaustive)
+
+### Deepest Pass Areas Investigated (iterations 29-36)
+
+- ML inference (`heber/ml/inference.py`, `trainer.py`)
+- Ops tracing, circuit breaker, alerting, dataflow health, lifecycle (`heber/ops/`)
+- Writer transformer (`heber/writer/transformer.py`)
+- Watch gateway helpers (`heber/watch/gateway.py`)
+- Backtest integration (`heber/backtest/integration.py`)
+- SRE error budget (`heber/sre/error_budget.py`)
+- Iceberg writer (`heber/storage/iceberg_writer.py`)
+- Catalog access control, db, datasources (`heber/catalog/`)
+- Feature templates alert_labels (`heber/features/templates/alert_labels.py`)
+- HeberReader core (`heber/reader/core.py`)
+- SRE capacity, chaos experiments (`heber/sre/capacity.py`, `chaos.py`)
+- Testing generators, CI gates, leakage detector, environments (`heber/testing/`)
+- Catalog API (`heber/catalog/api.py`)
+- Watch label writer (`heber/watch/writer.py`)
+- Schema registry client (`heber/schema_registry/registry_client.py`)
+- Compactor (`heber/writer/compactor.py`)
+- Bus backpressure (`heber/bus/backpressure.py`)
+- Watch feature enrichment (`heber/watch/features.py`)
+- SRE runbooks (`heber/sre/runbooks.py`)
+
+### Exhaustive Pass Areas Investigated (iterations 37-48)
+
+- Bus streams consumer cursor (`heber/bus/streams.py` via `writer/consumer.py`)
+- Bus deduplication bloom filter (`heber/bus/dedupe.py`)
+- Catalog URN parsing (`heber/catalog/urn.py`)
+- Quality contracts validation (`heber/quality/contracts.py`)
+- Feature template utilities (`heber/features/templates/_utils.py`)
+- Watch manager state machine (`heber/watch/manager.py`)
+- Feature template momentum (`heber/features/templates/momentum.py`)
+- Feature template volatility (`heber/features/templates/volatility.py`)
+- Feature template cross-asset (`heber/features/templates/cross_asset.py`)
+- Catalog service async sessions (`heber/catalog/service.py`)
+- Iceberg catalog naming (`heber/storage/iceberg_catalog.py`)
+- HTTP client retry logic (`heber/core/http_client.py`)
 
 ### Also Cleaned Up (pre-debug)
 

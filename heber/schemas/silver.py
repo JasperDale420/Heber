@@ -32,6 +32,28 @@ SILVER_SCHEMAS = {
             ("vwap", pa.float64()),
         ]
     ),
+    "borrow_cost": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Borrow cost-specific
+            ("fee_rate", pa.float64()),
+            ("rebate_rate", pa.float64()),
+            ("short_shares_available", pa.float64()),
+            ("currency", pa.string()),
+            ("name", pa.string()),
+        ]
+    ),
     "quotes": pa.schema(
         [
             ("event_id", pa.string()),
@@ -76,9 +98,12 @@ SILVER_SCHEMAS = {
             ("price", pa.float64()),
             ("size", pa.float64()),
             ("exchange", pa.string()),
+            ("exchange_type", pa.string()),  # Code table: "sip" (equity), "opra" (option), null (crypto)
             ("tape", pa.string()),
             ("conditions", pa.list_(pa.string())),
+            ("condition_type", pa.string()),  # Code table: "sip" (equity), "opra" (option), null (crypto)
             ("taker_side", pa.string()),
+            ("update", pa.string()),
         ]
     ),
     "flow_alerts": pa.schema(
@@ -122,6 +147,12 @@ SILVER_SCHEMAS = {
             ("all_opening_trades", pa.bool_()),
             ("total_size", pa.int64()),
             ("expiry_count", pa.int64()),
+            ("sentiment", pa.string()),
+            # GEX / VEX enrichment from UWPoller
+            ("gex", pa.float64()),
+            ("vex", pa.float64()),
+            ("max_pain_strike", pa.float64()),
+            ("max_pain_distance_pct", pa.float64()),
         ]
     ),
     "darkpool": pa.schema(
@@ -147,7 +178,11 @@ SILVER_SCHEMAS = {
             ("print_id", pa.string()),
             ("nbbo_bid", pa.float64()),
             ("nbbo_ask", pa.float64()),
+            ("nbbo_bid_size", pa.float64()),
+            ("nbbo_ask_size", pa.float64()),
             ("ext_hours", pa.string()),
+            ("sale_cond_codes", pa.string()),
+            ("trade_code", pa.string()),
             ("trade_settlement", pa.string()),
             ("canceled", pa.bool_()),
         ]
@@ -190,6 +225,7 @@ SILVER_SCHEMAS = {
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
             # Market tide-specific
+            ("tide_date", pa.string()),
             ("total_call_premium", pa.float64()),
             ("total_put_premium", pa.float64()),
             ("net_volume", pa.float64()),
@@ -221,8 +257,8 @@ SILVER_SCHEMAS = {
             ("call_charm", pa.float64()),
             ("put_charm", pa.float64()),
             ("strike", pa.float64()),
-            ("expiry", pa.string()),
-            ("dte", pa.int32()),
+            ("expiry", pa.date32()),
+            ("dte", pa.int64()),
         ]
     ),
     "max_pain": pa.schema(
@@ -261,8 +297,17 @@ SILVER_SCHEMAS = {
             ("quality_flags", pa.list_(pa.string())),
             ("net_call_premium", pa.float64()),
             ("net_put_premium", pa.float64()),
-            ("call_volume", pa.int64()),
-            ("put_volume", pa.int64()),
+            ("call_volume", pa.float64()),
+            ("put_volume", pa.float64()),
+            # Additional UW fields
+            ("net_delta", pa.float64()),
+            ("net_call_volume", pa.float64()),
+            ("net_put_volume", pa.float64()),
+            ("call_volume_ask_side", pa.float64()),
+            ("call_volume_bid_side", pa.float64()),
+            ("put_volume_ask_side", pa.float64()),
+            ("put_volume_bid_side", pa.float64()),
+            ("tape_time", pa.string()),
         ]
     ),
     "hottest_chain": pa.schema(
@@ -283,9 +328,9 @@ SILVER_SCHEMAS = {
             ("underlying", pa.string()),
             ("strike", pa.float64()),
             ("expiry", pa.date32()),
-            ("option_type", pa.string()),
-            ("volume", pa.int64()),
-            ("open_interest", pa.int64()),
+            ("put_call", pa.string()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
             ("premium", pa.float64()),
             ("iv", pa.float64()),
         ]
@@ -305,12 +350,23 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("earnings_date", pa.string()),
+            ("earnings_date", pa.date32()),
             ("time", pa.string()),
             ("eps_estimate", pa.float64()),
             ("eps_actual", pa.float64()),
             ("revenue_estimate", pa.float64()),
             ("revenue_actual", pa.float64()),
+            # Additional UW fields
+            ("expected_move", pa.float64()),
+            ("expected_move_pct", pa.float64()),
+            ("prior_close", pa.float64()),
+            ("has_options", pa.bool_()),
+            ("market_cap", pa.float64()),
+            ("sector", pa.string()),
+            # Earnings reaction fields
+            ("is_s_p_500", pa.bool_()),
+            ("post_earnings_close", pa.float64()),
+            ("reaction", pa.float64()),
         ]
     ),
     "corporate_action": pa.schema(
@@ -327,12 +383,48 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
+            # Corporate action core
+            ("id", pa.string()),
             ("action_type", pa.string()),
-            ("ex_date", pa.string()),
-            ("record_date", pa.string()),
-            ("payable_date", pa.string()),
+            # Dates
+            ("ex_date", pa.date32()),
+            ("record_date", pa.date32()),
+            ("payable_date", pa.date32()),
+            ("process_date", pa.date32()),
+            ("effective_date", pa.date32()),
+            ("due_bill_redemption_date", pa.date32()),
+            ("expiration_date", pa.date32()),
+            # Financial details
             ("amount", pa.float64()),
             ("ratio", pa.string()),
+            ("new_rate", pa.float64()),
+            ("old_rate", pa.float64()),
+            ("cash_rate", pa.float64()),
+            # CUSIP identifiers
+            ("cusip", pa.string()),
+            ("old_cusip", pa.string()),
+            ("new_cusip", pa.string()),
+            # Merger-specific
+            ("acquirer_symbol", pa.string()),
+            ("acquirer_cusip", pa.string()),
+            ("acquirer_rate", pa.float64()),
+            ("acquiree_symbol", pa.string()),
+            ("acquiree_cusip", pa.string()),
+            ("acquiree_rate", pa.float64()),
+            # Spin-off / rights distribution
+            ("source_symbol", pa.string()),
+            ("source_cusip", pa.string()),
+            ("source_rate", pa.float64()),
+            ("new_symbol", pa.string()),
+            # Unit split alternate security
+            ("alternate_symbol", pa.string()),
+            ("alternate_cusip", pa.string()),
+            ("alternate_rate", pa.float64()),
+            # Name change
+            ("old_symbol", pa.string()),
+            # Dividend flags
+            ("special", pa.bool_()),
+            ("foreign", pa.bool_()),
         ]
     ),
     # Phase 3: Screeners
@@ -350,8 +442,13 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("volume", pa.int64()),
+            ("volume", pa.float64()),
             ("trade_count", pa.int64()),
+            # Additional market data fields
+            ("vwap", pa.float64()),
+            ("price", pa.float64()),
+            ("change", pa.float64()),
+            ("change_percent", pa.float64()),
         ]
     ),
     "mover": pa.schema(
@@ -372,6 +469,8 @@ SILVER_SCHEMAS = {
             ("change", pa.float64()),
             ("percent_change", pa.float64()),
             ("direction", pa.string()),
+            # Additional fields
+            ("volume", pa.int64()),
         ]
     ),
     "screener_result": pa.schema(
@@ -388,13 +487,60 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
+            # Core
             ("price", pa.float64()),
-            ("volume", pa.int64()),
+            ("volume", pa.float64()),
             ("market_cap", pa.float64()),
             ("sector", pa.string()),
-            ("call_volume", pa.int64()),
-            ("put_volume", pa.int64()),
+            ("call_volume", pa.float64()),
+            ("put_volume", pa.float64()),
             ("iv_rank", pa.float64()),
+            # IV metrics
+            ("iv30d", pa.float64()),
+            ("iv30d_1d", pa.float64()),
+            ("iv30d_1w", pa.float64()),
+            ("iv30d_1m", pa.float64()),
+            ("volatility", pa.float64()),
+            # Flow / premium metrics
+            ("bearish_premium", pa.float64()),
+            ("bullish_premium", pa.float64()),
+            ("call_premium", pa.float64()),
+            ("put_premium", pa.float64()),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            # OI data
+            ("call_open_interest", pa.float64()),
+            ("put_open_interest", pa.float64()),
+            ("total_open_interest", pa.float64()),
+            ("prev_call_oi", pa.float64()),
+            ("prev_put_oi", pa.float64()),
+            # Volume breakdowns
+            ("call_volume_ask_side", pa.float64()),
+            ("call_volume_bid_side", pa.float64()),
+            ("put_volume_ask_side", pa.float64()),
+            ("put_volume_bid_side", pa.float64()),
+            # Average volume metrics
+            ("avg_30_day_call_volume", pa.float64()),
+            ("avg_30_day_put_volume", pa.float64()),
+            ("avg_3_day_call_volume", pa.float64()),
+            ("avg_3_day_put_volume", pa.float64()),
+            ("avg_7_day_call_volume", pa.float64()),
+            ("avg_7_day_put_volume", pa.float64()),
+            # Market data
+            ("prev_close", pa.float64()),
+            ("week_52_high", pa.float64()),
+            ("week_52_low", pa.float64()),
+            ("relative_volume", pa.float64()),
+            ("implied_move", pa.float64()),
+            ("implied_move_perc", pa.float64()),
+            ("put_call_ratio", pa.float64()),
+            # Metadata
+            ("is_index", pa.bool_()),
+            ("issue_type", pa.string()),
+            ("er_time", pa.string()),
+            ("next_earnings_date", pa.string()),
+            ("next_dividend_date", pa.string()),
+            ("full_name", pa.string()),
         ]
     ),
     # Phase 4: Advanced Analytics
@@ -417,6 +563,9 @@ SILVER_SCHEMAS = {
             ("current_iv", pa.float64()),
             ("one_year_high", pa.float64()),
             ("one_year_low", pa.float64()),
+            # Additional fields
+            ("close", pa.float64()),
+            ("date", pa.string()),
         ]
     ),
     "iv_term_structure": pa.schema(
@@ -435,7 +584,7 @@ SILVER_SCHEMAS = {
             ("quality_flags", pa.list_(pa.string())),
             ("expiry", pa.date32()),
             ("iv", pa.float64()),
-            ("days_to_expiry", pa.int64()),
+            ("dte", pa.int64()),
             ("call_iv", pa.float64()),
             ("put_iv", pa.float64()),
         ]
@@ -476,11 +625,30 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("oi_date", pa.string()),
+            ("oi_date", pa.date32()),
             ("call_oi", pa.int64()),
             ("put_oi", pa.int64()),
             ("call_oi_change", pa.int64()),
             ("put_oi_change", pa.int64()),
+            # Additional UW fields
+            ("avg_price", pa.float64()),
+            ("prev_oi", pa.float64()),
+            ("option_symbol", pa.string()),
+            ("volume", pa.float64()),
+            ("trades", pa.float64()),
+            # Additional UW OI fields
+            ("last_ask", pa.float64()),
+            ("last_bid", pa.float64()),
+            ("last_fill", pa.float64()),
+            ("percentage_of_total", pa.float64()),
+            ("prev_ask_volume", pa.int64()),
+            ("prev_bid_volume", pa.int64()),
+            ("prev_multi_leg_volume", pa.int64()),
+            ("prev_total_premium", pa.float64()),
+            ("last_date", pa.string()),
+            ("prev_mid_volume", pa.int64()),
+            ("prev_neutral_volume", pa.int64()),
+            ("prev_stock_multi_leg_volume", pa.int64()),
         ]
     ),
     "historic_option_volume": pa.schema(
@@ -497,12 +665,12 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("hov_date", pa.string()),
+            ("hov_date", pa.date32()),
             ("expiry", pa.date32()),
-            ("volume", pa.int64()),
-            ("open_interest", pa.int64()),
-            ("call_volume", pa.int64()),
-            ("put_volume", pa.int64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("call_volume", pa.float64()),
+            ("put_volume", pa.float64()),
             ("premium", pa.float64()),
         ]
     ),
@@ -541,7 +709,7 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("flow_date", pa.string()),
+            ("flow_date", pa.date32()),
             ("inflow", pa.float64()),
             ("outflow", pa.float64()),
             ("net_flow", pa.float64()),
@@ -561,7 +729,7 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("short_date", pa.string()),
+            ("short_date", pa.date32()),
             ("short_interest", pa.int64()),
             ("days_to_cover", pa.float64()),
             ("short_percent_float", pa.float64()),
@@ -582,7 +750,7 @@ SILVER_SCHEMAS = {
             ("source", pa.string()),
             ("schema_version", pa.string()),
             ("quality_flags", pa.list_(pa.string())),
-            ("ftd_date", pa.string()),
+            ("ftd_date", pa.date32()),
             ("quantity", pa.int64()),
             ("price", pa.float64()),
             ("value", pa.float64()),
@@ -629,6 +797,20 @@ SILVER_SCHEMAS = {
             ("expiry", pa.date32()),
             ("strike", pa.float64()),
             ("put_call", pa.string()),
+            ("bid", pa.float64()),
+            ("ask", pa.float64()),
+            ("last", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("underlying_price", pa.float64()),
+            # Greeks
+            ("delta", pa.float64()),
+            ("gamma", pa.float64()),
+            ("theta", pa.float64()),
+            ("vega", pa.float64()),
+            ("rho", pa.float64()),
+            ("iv", pa.float64()),
+            # SCD fields
             ("multiplier", pa.int64()),
             ("style", pa.string()),
             ("exchange", pa.string()),
@@ -653,11 +835,15 @@ SILVER_SCHEMAS = {
             ("quality_flags", pa.list_(pa.string())),
             ("news_id", pa.string()),
             ("ts_published", pa.timestamp("us", tz="UTC")),
+            ("ts_updated", pa.timestamp("us", tz="UTC")),
             ("headline", pa.string()),
             ("summary", pa.string()),
             ("body", pa.string()),
             ("url", pa.string()),
             ("source_name", pa.string()),
+            ("author", pa.string()),
+            ("symbols", pa.string()),  # JSON array of ticker symbols
+            ("images", pa.string()),  # JSON array of image objects
             ("valid_from", pa.timestamp("us", tz="UTC")),
             ("valid_to", pa.timestamp("us", tz="UTC")),
             ("revision_id", pa.string()),
@@ -709,6 +895,10 @@ SILVER_SCHEMAS = {
             ("amount_max", pa.float64()),
             ("asset_type", pa.string()),
             ("is_late", pa.bool_()),
+            ("politician_id", pa.string()),
+            ("owner", pa.string()),
+            ("asset_description", pa.string()),
+            ("cap_gains_over_200", pa.bool_()),
         ]
     ),
     "insider_trades": pa.schema(
@@ -736,6 +926,8 @@ SILVER_SCHEMAS = {
             ("value", pa.float64()),
             ("shares_owned_after", pa.float64()),
             ("filing_date", pa.date32()),
+            # Additional fields
+            ("stock_price", pa.float64()),
         ]
     ),
     "insider_flow": pa.schema(
@@ -892,8 +1084,22 @@ SILVER_SCHEMAS = {
             ("industry", pa.string()),
             ("market_cap", pa.float64()),
             ("pe_ratio", pa.float64()),
+            ("forward_pe", pa.float64()),
+            ("peg_ratio", pa.float64()),
+            ("pb_ratio", pa.float64()),
+            ("ps_ratio", pa.float64()),
             ("eps", pa.float64()),
+            ("eps_growth", pa.float64()),
             ("dividend_yield", pa.float64()),
+            ("dividend_per_share", pa.float64()),
+            ("revenue", pa.float64()),
+            ("revenue_growth", pa.float64()),
+            ("profit_margin", pa.float64()),
+            ("operating_margin", pa.float64()),
+            ("roe", pa.float64()),
+            ("roa", pa.float64()),
+            ("debt_to_equity", pa.float64()),
+            ("current_ratio", pa.float64()),
             ("beta", pa.float64()),
             ("shares_outstanding", pa.float64()),
             ("float_shares", pa.float64()),
@@ -901,6 +1107,9 @@ SILVER_SCHEMAS = {
             ("price", pa.float64()),
             ("high_52w", pa.float64()),
             ("low_52w", pa.float64()),
+            ("exchange", pa.string()),
+            ("country", pa.string()),
+            ("description", pa.string()),
         ]
     ),
     "economic_events": pa.schema(
@@ -984,6 +1193,59 @@ SILVER_SCHEMAS = {
             ("vega", pa.float64()),
         ]
     ),
+    "option_trades": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Option trades-specific
+            ("underlying_symbol", pa.string()),
+            ("option_symbol", pa.string()),
+            ("strike", pa.float64()),
+            ("expiry", pa.date32()),
+            ("option_type", pa.string()),
+            ("premium", pa.float64()),
+            ("size", pa.float64()),
+            ("price", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            ("underlying_price", pa.float64()),
+            # Greeks
+            ("delta", pa.float64()),
+            ("gamma", pa.float64()),
+            ("theta", pa.float64()),
+            ("vega", pa.float64()),
+            ("rho", pa.float64()),
+            ("implied_volatility", pa.float64()),
+            # NBBO
+            ("nbbo_ask", pa.float64()),
+            ("nbbo_bid", pa.float64()),
+            # Volume breakdowns
+            ("ask_vol", pa.float64()),
+            ("bid_vol", pa.float64()),
+            ("mid_vol", pa.float64()),
+            ("multi_vol", pa.float64()),
+            ("stock_multi_vol", pa.float64()),
+            ("no_side_vol", pa.float64()),
+            # Metadata
+            ("exchange", pa.string()),
+            ("trade_id", pa.string()),
+            ("canceled", pa.bool_()),
+            ("er_time", pa.string()),
+            ("next_earnings_date", pa.string()),
+            ("sector", pa.string()),
+            ("tags", pa.string()),  # JSON array of tags
+        ]
+    ),
     "option_chain_snapshot": pa.schema(
         [
             ("event_id", pa.string()),
@@ -1008,6 +1270,26 @@ SILVER_SCHEMAS = {
             ("total_call_oi", pa.float64()),
             ("total_put_oi", pa.float64()),
             ("atm_iv", pa.float64()),
+            # Per-contract fields from NormalizedOptionContract
+            ("occ_symbol", pa.string()),
+            ("strike", pa.float64()),
+            ("put_call", pa.string()),
+            ("bid", pa.float64()),
+            ("ask", pa.float64()),
+            ("last", pa.float64()),
+            ("volume", pa.float64()),
+            ("open_interest", pa.float64()),
+            # Greeks
+            ("delta", pa.float64()),
+            ("gamma", pa.float64()),
+            ("theta", pa.float64()),
+            ("vega", pa.float64()),
+            ("rho", pa.float64()),
+            ("iv", pa.float64()),
+            # Size fields
+            ("bid_size", pa.float64()),
+            ("ask_size", pa.float64()),
+            ("last_trade_size", pa.float64()),
         ]
     ),
     "volume_profile": pa.schema(
@@ -1131,6 +1413,143 @@ SILVER_SCHEMAS = {
             ("high", pa.float64()),
             ("low", pa.float64()),
             ("close", pa.float64()),
+        ]
+    ),
+    "treasury_yields": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("date", pa.string()),
+            ("maturity", pa.string()),
+            ("yield_pct", pa.float64()),
+        ]
+    ),
+    # Real-time market status feeds
+    "lulds": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("timestamp", pa.timestamp("us", tz="UTC")),
+            ("upper_limit", pa.float64()),
+            ("lower_limit", pa.float64()),
+            ("indicator", pa.string()),
+        ]
+    ),
+    "statuses": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("timestamp", pa.timestamp("us", tz="UTC")),
+            ("status_code", pa.string()),
+            ("status_message", pa.string()),
+            ("reason_code", pa.string()),
+            ("reason_message", pa.string()),
+            ("tape", pa.string()),
+        ]
+    ),
+    "corrections": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            ("timestamp", pa.timestamp("us", tz="UTC")),
+            ("exchange", pa.string()),
+            ("original_trade_id", pa.string()),
+            ("original_price", pa.float64()),
+            ("original_size", pa.int64()),
+            ("original_conditions", pa.string()),  # JSON-serialized list
+            ("corrected_trade_id", pa.string()),
+            ("corrected_price", pa.float64()),
+            ("corrected_size", pa.int64()),
+            ("corrected_conditions", pa.string()),  # JSON-serialized list
+            ("tape", pa.string()),
+        ]
+    ),
+    # Phase 3: Cerberus advanced strategy feeds
+    "etf_tide": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # ETF tide-specific
+            ("tide_type", pa.string()),
+            ("ticker", pa.string()),
+            ("tide_date", pa.string()),
+            ("net_call_premium", pa.float64()),
+            ("net_put_premium", pa.float64()),
+            ("net_volume", pa.int64()),
+            ("sentiment", pa.string()),
+        ]
+    ),
+    "auctions": pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("provider", pa.string()),
+            ("feed", pa.string()),
+            ("instrument_type", pa.string()),
+            ("instrument_key", pa.string()),
+            ("symbol", pa.string()),
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_ingest", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("source", pa.string()),
+            ("schema_version", pa.string()),
+            ("quality_flags", pa.list_(pa.string())),
+            # Auction-specific (Alpaca /stocks/auctions)
+            ("auction_type", pa.string()),  # "open" or "close"
+            ("auction_price", pa.float64()),
+            ("imbalance_size", pa.int64()),
+            ("imbalance_side", pa.string()),  # "buy", "sell", "none"
+            ("paired_shares", pa.int64()),
+            ("reference_price", pa.float64()),
         ]
     ),
 }

@@ -283,6 +283,21 @@ class EnrichmentBackfillScanner:
         """Write updated feature row back to parquet using dedup-on-alert_id."""
         from heber.ml.datasets import persist_features_to_gold
 
+        # Add Gold contract fields if missing.
+        if "instrument_key" not in updated_row or updated_row.get("instrument_key") is None:
+            occ = updated_row.get("occ_symbol")
+            if occ:
+                updated_row["instrument_key"] = f"option:{occ}"
+            else:
+                underlying = updated_row.get("underlying", updated_row.get("symbol", "UNKNOWN"))
+                updated_row["instrument_key"] = f"equity:{underlying}"
+
+        if "ts_event" not in updated_row or updated_row.get("ts_event") is None:
+            updated_row["ts_event"] = updated_row.get("alert_time")
+
+        if "ts_available" not in updated_row or updated_row.get("ts_available") is None:
+            updated_row["ts_available"] = datetime.now(UTC)
+
         features_df = pd.DataFrame([updated_row])
 
         # Coerce alert_time to datetime if needed

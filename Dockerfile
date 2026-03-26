@@ -31,6 +31,8 @@ COPY empire-schemas/ /workspace/empire-schemas/
 # Install pinned runtime dependencies from lockfile, then install project package
 RUN uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file requirements.txt \
     && uv pip install --target=/build/deps -r requirements.txt \
+    && uv pip install --target=/build/deps /workspace/empire-core --no-deps \
+    && uv pip install --target=/build/deps /workspace/empire-schemas --no-deps \
     && uv pip install --target=/build/deps -e . --no-deps
 
 # -----------------------------------------------------------------------------
@@ -111,3 +113,9 @@ CMD ["python", "-m", "heber.backfill"]
 # -----------------------------------------------------------------------------
 FROM runtime AS hotloader
 CMD ["python", "-m", "heber.writer.hotstore"]
+
+# -----------------------------------------------------------------------------
+# Stage 9 (optional): Gold Feature Poller service
+# -----------------------------------------------------------------------------
+FROM runtime AS gold-poller
+CMD ["python", "-m", "heber.gold_poller"]

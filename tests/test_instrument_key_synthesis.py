@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-
 from heber.models.envelope import EventEnvelope
-from heber.writer.key_normalization import MissingInstrumentIdentifierError, normalize_envelope_for_silver
+from heber.writer.key_normalization import normalize_envelope_for_silver
 
 NOW = datetime(2026, 2, 11, 16, 0, tzinfo=UTC)
 
@@ -156,7 +154,10 @@ def test_congress_insider_and_news_fill_symbol_from_payload_fields() -> None:
     assert news_normalized.is_valid_instrument_key()
 
 
-def test_insider_trades_require_non_empty_symbol_or_ticker() -> None:
+def test_insider_trades_fallback_to_unknown_when_symbol_empty() -> None:
+    """When both envelope symbol and payload ticker are empty, normalization
+    falls back to the UNKNOWN sentinel instead of raising an error.  This lets
+    the record proceed to Silver required-field validation."""
     envelope = _build_envelope(
         "insider_trades",
         {
@@ -170,8 +171,10 @@ def test_insider_trades_require_non_empty_symbol_or_ticker() -> None:
         instrument_key="equity:",
     )
 
-    with pytest.raises(MissingInstrumentIdentifierError, match="Missing symbol/ticker for insider_trades"):
-        normalize_envelope_for_silver(envelope)
+    normalized = normalize_envelope_for_silver(envelope)
+    assert normalized.symbol == "UNKNOWN"
+    assert normalized.instrument_key == "equity:UNKNOWN"
+    assert normalized.instrument_type == "equity"
 
 
 # ---------------------------------------------------------------------------
