@@ -3,10 +3,157 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ---------------------------------------------------------------------------
+# Typed section accessors (NamedTuples)
+#
+# These provide a grouped, dot-accessible view over flat Settings fields.
+# They are returned by @property methods on Settings and do NOT replace the
+# flat fields — all existing ``settings.field_name`` access still works.
+# ---------------------------------------------------------------------------
+
+
+class StorageConfig(NamedTuple):
+    """Grouped view of storage / path settings."""
+
+    data_root: Path
+    volume_root: Path
+    bronze_path: Path
+    silver_path: Path
+    gold_path: Path
+    quarantine_path: str
+
+
+class RedisConfig(NamedTuple):
+    """Grouped view of Redis event-bus settings."""
+
+    url: str
+    stream_name: str
+    consumer_group: str
+    dlq_stream_name: str
+    claim_idle_ms: int
+    claim_batch_size: int
+    process_max_retries: int
+    retry_backoff_seconds: float
+    read_batch_size: int
+    read_block_ms: int
+    process_concurrency: int
+
+
+class PostgresConfig(NamedTuple):
+    """Grouped view of Postgres catalog settings."""
+
+    url: str
+
+
+class WriterConfig(NamedTuple):
+    """Grouped view of Bronze/Silver writer tuning settings."""
+
+    bronze_flush_interval_seconds: int
+    bronze_max_batch_size: int
+    silver_target_file_size_mb: int
+    silver_max_rows_per_file: int
+    silver_max_flush_time_seconds: int
+    silver_row_group_size_mb: int
+
+
+class GoldPollerConfig(NamedTuple):
+    """Grouped view of Gold feature poller settings."""
+
+    enabled: bool
+    eod_hour: int
+    eod_minute: int
+    check_interval_seconds: int
+    retry_max: int
+    retry_backoff_seconds: float
+    project: str
+    version: str
+    lookback_days: int
+    disabled_pipelines: str
+    disabled_pipeline_set: set[str]
+
+
+class WatchConfig(NamedTuple):
+    """Grouped view of watch consumer settings."""
+
+    redis_url: str
+    gateway_url: str
+    gateway_api_key: str | None
+    gateway_legacy_fallback_enabled: bool
+    enrichment_backfill_enabled: bool
+    enrichment_backfill_interval: int
+    enrichment_backfill_lookback_days: int
+    enrichment_backfill_batch_size: int
+
+
+class HealthMonitorConfig(NamedTuple):
+    """Grouped view of health monitor settings."""
+
+    enabled: bool
+    stream_check_interval_seconds: int
+    partition_check_interval_seconds: int
+    volume_baseline_days: int
+    stats_baseline_days: int
+    volume_warn_ratio: float
+    volume_critical_ratio: float
+    null_rate_threshold: float
+    psi_threshold: float
+    leakage_sample_size: int
+
+
+class DataflowHealthConfig(NamedTuple):
+    """Grouped view of dataflow health verification settings."""
+
+    consumer_metrics_url: str
+    watch_metrics_url: str
+    freshness_seconds: int
+    report_dir: Path
+    interval_seconds: int
+
+
+class CatalogConfig(NamedTuple):
+    """Grouped view of catalog settings."""
+
+    url: str
+    auto_discover: bool
+    discover_interval_seconds: int
+
+
+class LLMConfig(NamedTuple):
+    """Grouped view of LLM provider settings."""
+
+    provider: str
+    model: str
+    base_url: str | None
+    api_key: str
+    qwen_region: str
+    effective_base_url: str | None
+
+
+class IcebergConfig(NamedTuple):
+    """Grouped view of Iceberg catalog settings."""
+
+    catalog_type: str
+    catalog_uri: str
+    warehouse: str
+    s3_endpoint: str | None
+    s3_access_key: str | None
+    s3_secret_key: str | None
+
+
+class LakeFSConfig(NamedTuple):
+    """Grouped view of LakeFS versioning settings."""
+
+    endpoint: str
+    access_key: str
+    secret_key: str
+    default_repo: str
+    storage_namespace_base: str
+    storage_namespace_template: str | None
 
 
 class Settings(BaseSettings):
@@ -514,6 +661,159 @@ class Settings(BaseSettings):
             return qwen_endpoints[self.llm_qwen_region]
 
         return None
+
+    # ------------------------------------------------------------------
+    # Typed section accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def storage(self) -> StorageConfig:
+        """Grouped storage / path settings."""
+        return StorageConfig(
+            data_root=self.data_root,
+            volume_root=self.volume_root,
+            bronze_path=self.bronze_path,
+            silver_path=self.silver_path,
+            gold_path=self.gold_path,
+            quarantine_path=self.quarantine_path,
+        )
+
+    @property
+    def redis(self) -> RedisConfig:
+        """Grouped Redis event-bus settings."""
+        return RedisConfig(
+            url=self.redis_url,
+            stream_name=self.redis_stream_name,
+            consumer_group=self.redis_consumer_group,
+            dlq_stream_name=self.redis_dlq_stream_name,
+            claim_idle_ms=self.redis_claim_idle_ms,
+            claim_batch_size=self.redis_claim_batch_size,
+            process_max_retries=self.redis_process_max_retries,
+            retry_backoff_seconds=self.redis_retry_backoff_seconds,
+            read_batch_size=self.redis_read_batch_size,
+            read_block_ms=self.redis_read_block_ms,
+            process_concurrency=self.redis_process_concurrency,
+        )
+
+    @property
+    def postgres(self) -> PostgresConfig:
+        """Grouped Postgres catalog settings."""
+        return PostgresConfig(url=self.postgres_url)
+
+    @property
+    def writer(self) -> WriterConfig:
+        """Grouped Bronze/Silver writer tuning settings."""
+        return WriterConfig(
+            bronze_flush_interval_seconds=self.bronze_flush_interval_seconds,
+            bronze_max_batch_size=self.bronze_max_batch_size,
+            silver_target_file_size_mb=self.silver_target_file_size_mb,
+            silver_max_rows_per_file=self.silver_max_rows_per_file,
+            silver_max_flush_time_seconds=self.silver_max_flush_time_seconds,
+            silver_row_group_size_mb=self.silver_row_group_size_mb,
+        )
+
+    @property
+    def gold_poller(self) -> GoldPollerConfig:
+        """Grouped Gold feature poller settings."""
+        return GoldPollerConfig(
+            enabled=self.gold_poller_enabled,
+            eod_hour=self.gold_poller_eod_hour,
+            eod_minute=self.gold_poller_eod_minute,
+            check_interval_seconds=self.gold_poller_check_interval_seconds,
+            retry_max=self.gold_poller_retry_max,
+            retry_backoff_seconds=self.gold_poller_retry_backoff_seconds,
+            project=self.gold_poller_project,
+            version=self.gold_poller_version,
+            lookback_days=self.gold_poller_lookback_days,
+            disabled_pipelines=self.gold_poller_disabled_pipelines,
+            disabled_pipeline_set=self.gold_poller_disabled_pipeline_set,
+        )
+
+    @property
+    def watch(self) -> WatchConfig:
+        """Grouped watch consumer settings."""
+        return WatchConfig(
+            redis_url=self.watch_redis_url,
+            gateway_url=self.watch_gateway_url,
+            gateway_api_key=self.watch_gateway_api_key,
+            gateway_legacy_fallback_enabled=self.watch_gateway_legacy_fallback_enabled,
+            enrichment_backfill_enabled=self.enrichment_backfill_enabled,
+            enrichment_backfill_interval=self.enrichment_backfill_interval,
+            enrichment_backfill_lookback_days=self.enrichment_backfill_lookback_days,
+            enrichment_backfill_batch_size=self.enrichment_backfill_batch_size,
+        )
+
+    @property
+    def health_monitor(self) -> HealthMonitorConfig:
+        """Grouped health monitor settings."""
+        return HealthMonitorConfig(
+            enabled=self.health_monitor_enabled,
+            stream_check_interval_seconds=self.health_stream_check_interval_seconds,
+            partition_check_interval_seconds=self.health_partition_check_interval_seconds,
+            volume_baseline_days=self.health_volume_baseline_days,
+            stats_baseline_days=self.health_stats_baseline_days,
+            volume_warn_ratio=self.health_volume_warn_ratio,
+            volume_critical_ratio=self.health_volume_critical_ratio,
+            null_rate_threshold=self.health_null_rate_threshold,
+            psi_threshold=self.health_psi_threshold,
+            leakage_sample_size=self.health_leakage_sample_size,
+        )
+
+    @property
+    def dataflow_health(self) -> DataflowHealthConfig:
+        """Grouped dataflow health verification settings."""
+        return DataflowHealthConfig(
+            consumer_metrics_url=self.health_consumer_metrics_url,
+            watch_metrics_url=self.health_watch_metrics_url,
+            freshness_seconds=self.health_freshness_seconds,
+            report_dir=self.health_report_dir,
+            interval_seconds=self.health_interval_seconds,
+        )
+
+    @property
+    def catalog(self) -> CatalogConfig:
+        """Grouped catalog settings."""
+        return CatalogConfig(
+            url=self.catalog_url,
+            auto_discover=self.catalog_auto_discover,
+            discover_interval_seconds=self.catalog_discover_interval_seconds,
+        )
+
+    @property
+    def llm(self) -> LLMConfig:
+        """Grouped LLM provider settings."""
+        return LLMConfig(
+            provider=self.llm_provider,
+            model=self.llm_model,
+            base_url=self.llm_base_url,
+            api_key=self.llm_api_key,
+            qwen_region=self.llm_qwen_region,
+            effective_base_url=self.llm_effective_base_url,
+        )
+
+    @property
+    def iceberg(self) -> IcebergConfig:
+        """Grouped Iceberg catalog settings."""
+        return IcebergConfig(
+            catalog_type=self.iceberg_catalog_type,
+            catalog_uri=self.iceberg_catalog_uri,
+            warehouse=self.iceberg_warehouse,
+            s3_endpoint=self.iceberg_s3_endpoint,
+            s3_access_key=self.iceberg_s3_access_key,
+            s3_secret_key=self.iceberg_s3_secret_key,
+        )
+
+    @property
+    def lakefs(self) -> LakeFSConfig:
+        """Grouped LakeFS versioning settings."""
+        return LakeFSConfig(
+            endpoint=self.lakefs_endpoint,
+            access_key=self.lakefs_access_key,
+            secret_key=self.lakefs_secret_key,
+            default_repo=self.lakefs_default_repo,
+            storage_namespace_base=self.lakefs_storage_namespace_base,
+            storage_namespace_template=self.lakefs_storage_namespace_template,
+        )
 
 
 @lru_cache
