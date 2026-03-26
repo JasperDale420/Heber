@@ -90,7 +90,7 @@ class ScanResult:
 class SodaQualityScanner:
     """Data quality scanner using Soda Core.
 
-    This replaces custom DataQualityValidator with Soda's SodaCL checks.
+    Uses Soda's SodaCL checks for data quality validation.
 
     Example:
         scanner = SodaQualityScanner()

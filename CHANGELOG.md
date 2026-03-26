@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `DataQualityValidator` contracts module (`heber/quality/contracts.py`) — superseded by the Data Health Monitor's comprehensive check system
+
 ### Fixed
 
 - Test runs no longer write to production `logs/` directory — `EMPIRE_LOG_DIR` is redirected to `/tmp/heber-test-logs` via root `conftest.py`
