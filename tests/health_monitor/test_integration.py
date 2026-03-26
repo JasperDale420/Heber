@@ -19,6 +19,7 @@ from heber.health_monitor.checks.partition import run_partition_checks
 from heber.health_monitor.checks.stream_health import run_stream_health_checks
 from heber.health_monitor.models import CheckContext, Status
 from heber.health_monitor.store import HealthStore
+from tests.health_monitor.conftest import make_healthy_redis
 
 ET = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
@@ -70,10 +71,10 @@ def _create_gold_with_leakage(data_root: Path) -> pd.DataFrame:
 
 def _healthy_redis_mock() -> AsyncMock:
     """Return an AsyncMock Redis with healthy stream state."""
-    redis = AsyncMock()
+    redis = make_healthy_redis()
+    # Override defaults to match integration test expectations
     redis.xinfo_stream = AsyncMock(return_value={"length": 100})
     redis.xinfo_groups = AsyncMock(return_value=[{"name": "heber-writers", "pending": 0, "consumers": 1}])
-    redis.xlen = AsyncMock(return_value=0)
     return redis
 
 

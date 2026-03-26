@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from heber.config import Settings
 from heber.health_monitor.checks.schema import run_schema_checks
-from heber.health_monitor.models import CheckContext, Severity, Status
-
-ET = ZoneInfo("America/New_York")
-TRADING_DAY = date(2026, 3, 25)
-WEEKEND_DAY = date(2026, 3, 28)
-MARKET_OPEN_DT = datetime(2026, 3, 25, 11, 30, tzinfo=ET)
+from heber.health_monitor.models import Severity, Status
+from tests.health_monitor.conftest import (
+    MARKET_OPEN_DT,
+    TRADING_DAY,
+    WEEKEND_DAY,
+    make_check_context,
+)
 
 
 def _write_parquet_with_schema(path: Path, schema: pa.Schema, num_rows: int = 5) -> None:
@@ -41,23 +40,8 @@ def _make_ctx(
     tmp_path: Path,
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
-) -> CheckContext:
-    settings = Settings(data_root=str(tmp_path))
-    if calendar is None:
-        calendar = MagicMock()
-        calendar.is_trading_day = MagicMock(return_value=True)
-        calendar.adjust_severity = MagicMock(side_effect=lambda sev, _dt: sev)
-    if store is None:
-        store = MagicMock()
-        store.read_baselines = MagicMock(return_value=pd.DataFrame())
-        store.write_baseline = MagicMock()
-    return CheckContext(
-        settings=settings,
-        reader=MagicMock(),
-        redis=MagicMock(),
-        calendar=calendar,
-        store=store,
-    )
+):
+    return make_check_context(tmp_path, calendar=calendar, store=store)
 
 
 SCHEMA_V1 = pa.schema(

@@ -3,53 +3,42 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import pytest
 
-from heber.config import Settings
 from heber.health_monitor.checks.stream_health import (
     PENDING_CRITICAL,
     PENDING_WARN,
     run_stream_health_checks,
 )
-from heber.health_monitor.models import CheckContext, Severity, Status
-
-ET = ZoneInfo("America/New_York")
+from heber.health_monitor.models import Severity, Status
+from tests.health_monitor.conftest import ET, make_check_context, make_healthy_redis
 
 # Market-open time: Wednesday 2026-03-25 10:00 ET
 MARKET_OPEN_DT = datetime(2026, 3, 25, 10, 0, tzinfo=ET)
 # Market-closed time: Saturday 2026-03-28 10:00 ET
 MARKET_CLOSED_DT = datetime(2026, 3, 28, 10, 0, tzinfo=ET)
 
+# Stream-health tests use a fixed tmp dir (no Parquet I/O).
+_TMP = Path("/tmp/heber_test_stream")
 
-def _make_ctx(redis_mock: AsyncMock) -> CheckContext:
-    settings = Settings(
-        data_root="/tmp/heber_test",
-        redis_stream_name="heber:events",
-        redis_consumer_group="heber-writers",
-        redis_dlq_stream_name="heber:events:dlq",
-    )
-    calendar = MagicMock()
-    # Default: market open -> pass-through severity
-    calendar.adjust_severity = MagicMock(side_effect=lambda sev, _dt: sev)
-    return CheckContext(
-        settings=settings,
-        reader=MagicMock(),
+
+def _make_ctx(redis_mock: AsyncMock):
+    return make_check_context(
+        _TMP,
         redis=redis_mock,
-        calendar=calendar,
-        store=MagicMock(),
+        settings_overrides={
+            "redis_stream_name": "heber:events",
+            "redis_consumer_group": "heber-writers",
+            "redis_dlq_stream_name": "heber:events:dlq",
+        },
     )
 
 
 def _healthy_redis() -> AsyncMock:
-    """Return a mock Redis client that represents a healthy stream."""
-    redis = AsyncMock()
-    redis.xinfo_stream = AsyncMock(return_value={"length": 42})
-    redis.xinfo_groups = AsyncMock(return_value=[{"name": "heber-writers", "pending": 5, "consumers": 2}])
-    redis.xlen = AsyncMock(return_value=0)
-    return redis
+    return make_healthy_redis()
 
 
 @pytest.mark.unit

@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from heber.config import Settings
 from heber.health_monitor.checks.statistical import run_statistical_checks
-from heber.health_monitor.models import CheckContext, Severity, Status
-
-ET = ZoneInfo("America/New_York")
-TRADING_DAY = date(2026, 3, 25)  # Wednesday
-WEEKEND_DAY = date(2026, 3, 28)  # Saturday
-MARKET_OPEN_DT = datetime(2026, 3, 25, 11, 30, tzinfo=ET)
+from heber.health_monitor.models import Severity, Status
+from tests.health_monitor.conftest import (
+    MARKET_OPEN_DT,
+    TRADING_DAY,
+    WEEKEND_DAY,
+    make_check_context,
+)
 
 
 def _make_ctx(
@@ -26,25 +24,8 @@ def _make_ctx(
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
     reader: MagicMock | None = None,
-) -> CheckContext:
-    settings = Settings(data_root=str(tmp_path))
-    if calendar is None:
-        calendar = MagicMock()
-        calendar.is_trading_day = MagicMock(return_value=True)
-        calendar.adjust_severity = MagicMock(side_effect=lambda sev, _dt: sev)
-    if store is None:
-        store = MagicMock()
-        store.read_baselines = MagicMock(return_value=pd.DataFrame())
-        store.write_baseline = MagicMock()
-    if reader is None:
-        reader = MagicMock()
-    return CheckContext(
-        settings=settings,
-        reader=reader,
-        redis=MagicMock(),
-        calendar=calendar,
-        store=store,
-    )
+):
+    return make_check_context(tmp_path, calendar=calendar, store=store, reader=reader)
 
 
 def _silver_df(n: int = 100, null_pct: float = 0.0, mean: float = 50.0, std: float = 10.0) -> pd.DataFrame:
