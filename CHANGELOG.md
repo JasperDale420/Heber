@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Test runs no longer write to production `logs/` directory — `EMPIRE_LOG_DIR` is redirected to `/tmp/heber-test-logs` via root `conftest.py`
+- Debug investigation artifacts (`debug/`) removed from git tracking and added to `.gitignore`
+
 ### Added
 
 - **Data Health Monitor** — New tiered monitoring service (`python -m heber.health_monitor`) that detects data gaps, volume anomalies, schema drift, and ML quality issues across all Silver feeds. Three check tiers: stream health (30s), partition completeness (15min), statistical profiling (EOD). Market-calendar-aware to suppress false positives. Results stored in `gold/dataset=data_health/` and exposed via Prometheus metrics and `/api/v1/health/summary` catalog endpoint.

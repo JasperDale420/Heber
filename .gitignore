@@ -50,5 +50,8 @@ sonar_scan.log
 # Log files (empire_core daily rotation)
 logs/
 
+# Debug investigation artifacts
+debug/
+
 # Local dev data
 .local_heber_data/
