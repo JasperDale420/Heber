@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tier 1 stream health checks**: New health monitor check that verifies Redis stream reachability, consumer group status, consumer lag (pending messages), and DLQ depth every 30 seconds. Severity is suppressed to P2_INFO outside market hours.
 - **Cross-system excursion analytics Gold pipeline**: New pipeline that reads LedgerTrade records from all trading system ledgers (3Roses, Kairos, Cerberus, Orion, whalehunter, trading-bot, options-bot) and writes unified excursion profiles (MFE/MAE, capture efficiency, excursion velocity, holding time) to the Gold layer. Includes Feast feature view and gold poller registration.
 - **Temporal excursion fields in alert label feature views**: Added `time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, and `capture_efficiency` to all three alert barrier label Feast feature views (all-horizons, intraday, swing).
 
