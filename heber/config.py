@@ -282,6 +282,65 @@ class Settings(BaseSettings):
             return set()
         return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
 
+    # Health Monitor
+    health_monitor_enabled: bool = Field(
+        default=True,
+        description="Enable the data health monitor service",
+    )
+    health_stream_check_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Tier 1 stream health check interval (seconds)",
+    )
+    health_partition_check_interval_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=3600,
+        description="Tier 2 partition completeness check interval (seconds)",
+    )
+    health_volume_baseline_days: int = Field(
+        default=5,
+        ge=1,
+        le=30,
+        description="Days of history for volume baseline comparison",
+    )
+    health_stats_baseline_days: int = Field(
+        default=30,
+        ge=7,
+        le=90,
+        description="Days of history for statistical baseline comparison",
+    )
+    health_volume_warn_ratio: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Volume ratio threshold for warning (e.g., 0.5 = 50% of baseline)",
+    )
+    health_volume_critical_ratio: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Volume ratio threshold for critical alert",
+    )
+    health_null_rate_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Null rate threshold for ML feature alerts (e.g., 0.05 = 5%)",
+    )
+    health_psi_threshold: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Population Stability Index threshold for label drift detection",
+    )
+    health_leakage_sample_size: int = Field(
+        default=0,
+        ge=0,
+        description="Rows to sample for zero-leakage audit (0 = full scan)",
+    )
+
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
 
