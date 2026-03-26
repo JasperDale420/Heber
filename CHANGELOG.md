@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Health Monitor service orchestrator**: New `HealthMonitorService` that runs three tiered check loops in parallel — Tier 1 (stream health, every 30s), Tier 2 (partition + volume, every 15min during market hours), Tier 3 (schema + statistical + ML readiness, once daily after EOD). Includes `__main__.py` entry point for `python -m heber.health_monitor`.
 - **Tier 1 stream health checks**: New health monitor check that verifies Redis stream reachability, consumer group status, consumer lag (pending messages), and DLQ depth every 30 seconds. Severity is suppressed to P2_INFO outside market hours.
 - **Tier 2 partition completeness checks**: New health monitor check that verifies expected Silver partitions exist and contain data every 15 minutes during market hours. Checks dt= partitions for all feeds and hour= sub-partitions for bars, trades, and quotes. Skips non-trading days.
 - **Tier 2 volume trending checks**: New health monitor check that compares today's Silver partition row counts against a trailing N-day baseline median. Alerts at configurable warn (50%) and critical (20%) thresholds. Reads Parquet metadata only (no data loading). Skips feeds with no baseline on first run.
