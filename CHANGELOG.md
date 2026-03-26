@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Data Health Monitor** — New tiered monitoring service (`python -m heber.health_monitor`) that detects data gaps, volume anomalies, schema drift, and ML quality issues across all Silver feeds. Three check tiers: stream health (30s), partition completeness (15min), statistical profiling (EOD). Market-calendar-aware to suppress false positives. Results stored in `gold/dataset=data_health/` and exposed via Prometheus metrics and `/api/v1/health/summary` catalog endpoint.
 - **Health Monitor service orchestrator**: New `HealthMonitorService` that runs three tiered check loops in parallel — Tier 1 (stream health, every 30s), Tier 2 (partition + volume, every 15min during market hours), Tier 3 (schema + statistical + ML readiness, once daily after EOD). Includes `__main__.py` entry point for `python -m heber.health_monitor`.
 - **Health Monitor Docker Compose service**: New `heber-health-monitor` container in `docker-compose.yml` exposing Prometheus metrics on port 9093.
 - **Health summary API endpoint**: New `GET /api/v1/health/summary?days=N` endpoint on the Catalog API that returns the latest health check results and pass/warn/fail/error counts.
