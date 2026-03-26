@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -12,11 +12,7 @@ import pytest
 from heber.config import Settings
 from heber.ops.daily_health import (
     _check_cross_feed_completeness,
-    _check_dlq_status,
-    _check_fill_rate,
     _check_gold_freshness,
-    _check_partition_freshness,
-    _check_zero_leakage,
     generate_daily_health_report,
     write_daily_report,
 )
@@ -57,46 +53,6 @@ def _write_gold_partition(
     out = partition / "data.parquet"
     df.to_parquet(out, index=False)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Partition Freshness
-# ---------------------------------------------------------------------------
-
-
-class TestPartitionFreshness:
-    def test_partition_exists(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        _write_silver_partition(
-            settings.data_root,
-            "bars",
-            dt,
-            pd.DataFrame({"instrument_key": ["equity:AAPL"], "close": [150.0]}),
-        )
-        checks = _check_partition_freshness(dt, settings)
-        bars_check = next(c for c in checks if c["id"] == "partition_freshness_bars")
-        assert bars_check["status"] == "ok"
-
-    def test_partition_missing(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        checks = _check_partition_freshness(dt, settings)
-        bars_check = next(c for c in checks if c["id"] == "partition_freshness_bars")
-        assert bars_check["status"] == "fail"
-
-    def test_empty_partition_dir_is_missing(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        partition = settings.silver_path / "feed=bars" / f"dt={dt.isoformat()}"
-        partition.mkdir(parents=True, exist_ok=True)
-        # Dir exists but is empty — no parquet files
-        checks = _check_partition_freshness(dt, settings)
-        bars_check = next(c for c in checks if c["id"] == "partition_freshness_bars")
-        assert bars_check["status"] == "fail"
-
-    def test_checks_all_expected_feeds(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        checks = _check_partition_freshness(dt, settings)
-        check_ids = {c["id"] for c in checks}
-        assert check_ids == {"partition_freshness_bars", "partition_freshness_quotes"}
 
 
 # ---------------------------------------------------------------------------
@@ -144,117 +100,6 @@ class TestCrossFeedCompleteness:
             pd.DataFrame({"instrument_key": ["equity:AAPL"]}),
         )
         result = _check_cross_feed_completeness(dt, settings)
-        assert result["status"] == "warn"
-
-
-# ---------------------------------------------------------------------------
-# Fill Rate
-# ---------------------------------------------------------------------------
-
-
-class TestFillRate:
-    def test_meets_threshold(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        _write_silver_partition(
-            settings.data_root,
-            "bars",
-            dt,
-            pd.DataFrame({"instrument_key": ["equity:AAPL", "equity:MSFT", "equity:GOOG"]}),
-        )
-        result = _check_fill_rate(dt, settings)
-        assert result["status"] == "ok"
-        assert result["observed"]["distinct_symbols"] == 3
-
-    def test_below_threshold(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        _write_silver_partition(
-            settings.data_root,
-            "bars",
-            dt,
-            pd.DataFrame({"instrument_key": ["equity:AAPL"]}),
-        )
-        result = _check_fill_rate(dt, settings)
-        assert result["status"] == "warn"
-
-    def test_no_partition(self, settings: Settings) -> None:
-        result = _check_fill_rate(date(2026, 3, 9), settings)
-        assert result["status"] == "fail"
-
-
-# ---------------------------------------------------------------------------
-# Zero Leakage
-# ---------------------------------------------------------------------------
-
-
-class TestZeroLeakage:
-    def test_no_violations(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        now = datetime(2026, 3, 9, 20, 0, tzinfo=UTC)
-        _write_silver_partition(
-            settings.data_root,
-            "bars",
-            dt,
-            pd.DataFrame(
-                {
-                    "instrument_key": ["equity:AAPL"],
-                    "ts_event": [now],
-                    "ts_available": [now],
-                }
-            ),
-        )
-        result = _check_zero_leakage(dt, settings)
-        assert result["status"] == "ok"
-        assert result["observed"]["violations"] == 0
-
-    def test_violation_detected(self, settings: Settings) -> None:
-        dt = date(2026, 3, 9)
-        event_time = datetime(2026, 3, 9, 20, 0, tzinfo=UTC)
-        early_available = datetime(2026, 3, 9, 19, 0, tzinfo=UTC)  # Before event!
-        _write_silver_partition(
-            settings.data_root,
-            "bars",
-            dt,
-            pd.DataFrame(
-                {
-                    "instrument_key": ["equity:AAPL"],
-                    "ts_event": [event_time],
-                    "ts_available": [early_available],
-                }
-            ),
-        )
-        result = _check_zero_leakage(dt, settings)
-        assert result["status"] == "fail"
-        assert result["observed"]["violations"] == 1
-
-    def test_no_data_warns(self, settings: Settings) -> None:
-        result = _check_zero_leakage(date(2026, 3, 9), settings)
-        assert result["status"] == "warn"
-
-
-# ---------------------------------------------------------------------------
-# DLQ Status
-# ---------------------------------------------------------------------------
-
-
-class TestDLQStatus:
-    def test_empty_dlq(self) -> None:
-        mock_client = MagicMock()
-        mock_client.xlen.return_value = 0
-        with patch("heber.ops.daily_health.redis.Redis.from_url", return_value=mock_client):
-            result = _check_dlq_status(Settings())
-        assert result["status"] == "ok"
-
-    def test_nonempty_dlq(self) -> None:
-        mock_client = MagicMock()
-        mock_client.xlen.return_value = 42
-        with patch("heber.ops.daily_health.redis.Redis.from_url", return_value=mock_client):
-            result = _check_dlq_status(Settings())
-        assert result["status"] == "warn"
-        assert result["observed"]["dlq_length"] == 42
-
-    def test_connection_failure_warns(self) -> None:
-        with patch("heber.ops.daily_health.redis.Redis.from_url", side_effect=ConnectionError("refused")):
-            result = _check_dlq_status(Settings())
         assert result["status"] == "warn"
 
 
@@ -308,7 +153,6 @@ class TestGenerateReport:
                 settings=settings,
                 force=True,
                 skip_soda=True,
-                skip_dlq=True,
             )
         assert report["overall_status"] != "skipped"
         assert len(report["checks"]) > 0
@@ -340,7 +184,6 @@ class TestGenerateReport:
                 report_date=dt,
                 settings=settings,
                 skip_soda=True,
-                skip_dlq=True,
             )
 
         assert report["overall_status"] == "ok"
@@ -353,7 +196,6 @@ class TestGenerateReport:
                 report_date=date(2026, 3, 9),
                 settings=settings,
                 skip_soda=True,
-                skip_dlq=True,
             )
         assert "ts_utc" in report
         assert "report_date" in report

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `DataQualityValidator` contracts module (`heber/quality/contracts.py`) — superseded by the Data Health Monitor's comprehensive check system
+- Daily health checks for partition freshness, fill rate, zero-leakage, and DLQ status — superseded by health_monitor (checks/partition.py, checks/volume.py, checks/ml_readiness.py, checks/stream_health.py). The daily report now runs 3 unique checks: cross-feed completeness, Soda quality, and Gold freshness.
 
 ### Fixed
 

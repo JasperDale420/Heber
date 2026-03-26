@@ -2,6 +2,10 @@
 
 Provides JSON-only health reports for proving that data is flowing through
 Heber and landing in storage.
+
+NOTE: Stream reachability, consumer group, feed freshness, and DLQ checks
+are also performed by heber.health_monitor (with richer alerting and persistence).
+This module remains as the /health endpoint for container orchestration probes.
 """
 
 from __future__ import annotations
