@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DataLayer` implicit re-export causing mypy `attr-defined` error**: `heber.catalog.access_control` now explicitly re-exports `DataLayer` using the `import X as X` form so that mypy recognises it as a public symbol when `openmetadata_client` imports it from that module.
 - **Feature view alignment test out of sync with alert_barrier_labels schema**: Test expected fields list for `alert_barrier_labels` did not include the five temporal excursion fields (`time_to_mfe_seconds`, `time_to_mae_seconds`, `mfe_mae_ratio`, `excursion_velocity`, `capture_efficiency`) added in the prior commit. Updated `test_feature_view_alignment.py` to match the live schema.
 - **Compactor OOM crash-loop on option_chain_snapshot**: Added a 50 MB compressed-bytes-per-batch budget cap in addition to the existing file-count cap. `option_chain_snapshot` files contain a `chain_json` column that expands ~6× in memory (210 MB compressed → 1.2 GB uncompressed); the previous 50-file batch was attempting to load ~60 GB into RAM. The new budget limit skips batches that would exceed memory, stopping the 1932-restart crash loop.
 - **Compactor OOM on large partitions**: Capped compaction batch size to 50 files per pass to prevent OOM kills on partitions with many small files (e.g., `option_chain_snapshot` with 189 files / 565MB).

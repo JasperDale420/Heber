@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 
 # DataLayer is the canonical enum from heber.retention (superset with HOT_STORE, DLQ).
 # Access control only uses BRONZE/SILVER/GOLD but importing the canonical avoids duplication.
-from heber.retention import DataLayer  # noqa: E402
+from heber.retention import DataLayer as DataLayer  # noqa: E402
 
 
 class AccessLevel(StrEnum):
