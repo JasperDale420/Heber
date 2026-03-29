@@ -12,7 +12,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 [project]
 name = "empire-core"
-version = "0.0.0-ci"
+version = "0.0.0.dev0"
 requires-python = ">=3.11"
 dependencies = [
     "structlog>=24.1.0",
@@ -93,7 +93,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 [project]
 name = "empire-schemas"
-version = "0.0.0-ci"
+version = "0.0.0.dev0"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.5"]
 EOF
