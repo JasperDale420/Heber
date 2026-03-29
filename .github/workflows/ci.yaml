@@ -85,8 +85,8 @@ jobs:
 
       - name: Set up Python and virtual environment
         run: |
-          uv python install 3.11
-          uv venv .venv --python 3.11
+          uv python install 3.12
+          uv venv .venv --python 3.12
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
 
       - name: Create monorepo sibling stubs
@@ -127,8 +127,8 @@ jobs:
 
       - name: Set up Python and virtual environment
         run: |
-          uv python install 3.11
-          uv venv .venv --python 3.11
+          uv python install 3.12
+          uv venv .venv --python 3.12
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
 
       - name: Create monorepo sibling stubs
