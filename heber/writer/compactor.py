@@ -271,10 +271,11 @@ class Compactor:
             )
             return None
 
-    def _collect_small_files(self, partition_path: Path) -> list[Path] | None:
+    def _collect_small_files(self, partition_path: Path) -> tuple[list[Path], dict[Path, int]] | None:
         """Collect compactable parquet files below the target size threshold.
 
-        Returns list of small file paths, or None if there aren't enough files to compact.
+        Returns (small_file_paths, size_cache) tuple, or None if there aren't enough files to compact.
+        The size_cache maps each file to its byte size, avoiding repeated stat() calls.
         """
         parquet_files = self._list_compactable_parquet_files(partition_path)
         if len(parquet_files) <= 1:
@@ -306,12 +307,15 @@ class Compactor:
             )
             small_files = small_files[:MAX_FILES_PER_BATCH]
 
+        # Build size cache from already-computed sizes to avoid repeated stat() calls.
+        size_cache = {path: size for path, size in sized_files}
+
         # Cap total compressed bytes to prevent OOM on feeds with large embedded data
         # (e.g. option_chain_snapshot chain_json expands ~6x from compressed size).
         running_bytes = 0
         byte_capped_files: list[Path] = []
         for f in small_files:
-            file_size = self._safe_stat_size(f, partition_path)
+            file_size = size_cache.get(f)
             if file_size is None:
                 continue
             if running_bytes + file_size > MAX_BATCH_COMPRESSED_BYTES and byte_capped_files:
@@ -338,7 +342,8 @@ class Compactor:
             files=len(small_files),
             total_bytes=total_size,
         )
-        return small_files
+
+        return small_files, size_cache
 
     def _merge_tables_to_parquet(
         self,
@@ -433,9 +438,10 @@ class Compactor:
         dataset = self._dataset_label(partition_path)
 
         try:
-            small_files = self._collect_small_files(partition_path)
-            if small_files is None:
+            result = self._collect_small_files(partition_path)
+            if result is None:
                 return 0
+            small_files, size_cache = result
 
             source_tables = [self._normalize_dict_columns(pq.ParquetFile(f).read()) for f in small_files]
 
@@ -449,7 +455,7 @@ class Compactor:
 
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0
-            source_bytes = sum(f.stat().st_size for f in small_files if f.exists())
+            source_bytes = sum(size_cache.get(f, 0) for f in small_files)
             reclaimed = max(source_bytes - merged_size, 0)
 
             for f in small_files:
