@@ -105,7 +105,7 @@ PIPELINE_REGISTRY: list[dict[str, Any]] = [
         "module": "heber.features.pipelines.straddle_momentum_features",
         "class": "StraddleMomentumPipeline",
         "datasets": None,
-        "gold_datasets": ["straddle_momentum"],
+        "gold_datasets": ["straddle_momentum_features"],
     },
     {
         "name": "trend_scan",

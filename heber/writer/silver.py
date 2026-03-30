@@ -108,7 +108,8 @@ class SilverWriter:
         elapsed = (now - self.last_flush).total_seconds()
 
         flushed = False
-        for partition_key, rows in self.buffers.items():
+        for partition_key in list(self.buffers):
+            rows = self.buffers[partition_key]
             should_flush = (
                 len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
             )

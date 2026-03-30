@@ -6,6 +6,7 @@ See PRD Section 11.7 for API contract.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -128,9 +129,6 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
-
-from collections.abc import AsyncGenerator
 
 
 # Dependency for database session
@@ -300,13 +298,20 @@ def _instrument_response(inst: Any) -> InstrumentResponse:
     )
 
 
-@app.get("/api/v1/instruments/{key}")
-async def get_instrument(key: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
-    instrument = await service.get_instrument(key)
-    if not instrument:
-        raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
+@app.get("/api/v1/instruments/search")
+async def search_instruments(
+    instrument_type: str | None = Query(None),
+    symbol_prefix: str | None = Query(None),
+    limit: int = Query(100, le=1000),
+    service: CatalogService = Depends(get_service),
+) -> dict[str, Any]:
+    instruments = await service.search_instruments(
+        instrument_type=instrument_type,
+        symbol_prefix=symbol_prefix,
+        limit=limit,
+    )
     return {
-        "data": _instrument_response(instrument),
+        "data": [_instrument_response(i) for i in instruments],
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -323,20 +328,13 @@ async def lookup_instruments(
     }
 
 
-@app.get("/api/v1/instruments/search")
-async def search_instruments(
-    instrument_type: str | None = Query(None),
-    symbol_prefix: str | None = Query(None),
-    limit: int = Query(100, le=1000),
-    service: CatalogService = Depends(get_service),
-) -> dict[str, Any]:
-    instruments = await service.search_instruments(
-        instrument_type=instrument_type,
-        symbol_prefix=symbol_prefix,
-        limit=limit,
-    )
+@app.get("/api/v1/instruments/{key}")
+async def get_instrument(key: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
+    instrument = await service.get_instrument(key)
+    if not instrument:
+        raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
     return {
-        "data": [_instrument_response(i) for i in instruments],
+        "data": _instrument_response(instrument),
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -425,16 +423,21 @@ async def create_dataset(
     service: CatalogService = Depends(get_service),
 ) -> dict[str, Any]:
     """Create a new dataset in the catalog."""
-    dataset = await service.create_dataset(
-        name=request.dataset_name,
-        layer=request.layer,
-        owner=request.owner,
-        description=request.description,
-        storage_root=request.storage_root,
-        path_template=request.path_template,
-        partition_cols=request.partition_cols,
-        primary_keys=request.primary_keys,
-    )
+    try:
+        dataset = await service.create_dataset(
+            name=request.dataset_name,
+            layer=request.layer,
+            owner=request.owner,
+            description=request.description,
+            storage_root=request.storage_root,
+            path_template=request.path_template,
+            partition_cols=request.partition_cols,
+            primary_keys=request.primary_keys,
+        )
+    except Exception as exc:
+        if "IntegrityError" in type(exc).__name__ or "UniqueViolation" in str(type(exc).__mro__):
+            raise HTTPException(status_code=409, detail=f"Dataset '{request.dataset_name}' already exists")
+        raise
     return {
         "data": {"dataset_name": dataset.dataset_name},
         "meta": {"ts": datetime.now(UTC)},

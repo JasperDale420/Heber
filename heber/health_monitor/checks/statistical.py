@@ -76,7 +76,7 @@ async def run_statistical_checks(ctx: CheckContext, check_date: date | None = No
     baseline_days = ctx.settings.health_stats_baseline_days
     baseline_end = today - timedelta(days=1)
     baseline_start = baseline_end - timedelta(days=baseline_days - 1)
-    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end)
+    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end, baseline_key="stats")
 
     # Build baseline lookup: {(feed, column): {mean, stddev}}
     baseline_lookup: dict[tuple[str, str], dict] = {}
@@ -215,6 +215,6 @@ async def run_statistical_checks(ctx: CheckContext, check_date: date | None = No
     # Store today's stats as baseline
     if all_stats_rows:
         baseline_df = pd.DataFrame(all_stats_rows)
-        ctx.store.write_baseline(baseline_df, today)
+        ctx.store.write_baseline(baseline_df, today, baseline_key="stats")
 
     return results

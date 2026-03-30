@@ -590,7 +590,7 @@ class EventConsumer:
             envelope.provider,
             envelope.feed,
             type(error).__name__,
-            type(error).__name__,
+            str(error)[:120],
         )
         occurrence_count = self._silver_validation_warning_counts.get(signature, 0) + 1
         self._silver_validation_warning_counts[signature] = occurrence_count

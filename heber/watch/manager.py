@@ -294,7 +294,10 @@ class WatchManager:
         updated_count = 0
 
         for watch, price, timestamp in updates:
-            # Common update logic (duplicate of update_watch_price logic but optimized for loop)
+            current = self.get_watch(watch.watch_id)
+            if current is None or current.status != WatchStatus.WATCHING:
+                continue
+
             current_return: float | None = None
             mfe = watch.mfe
             mae = watch.mae
@@ -471,11 +474,17 @@ class WatchManager:
         else:
             self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
 
-        # Add to symbol index
-        self.redis.sadd(
-            WatchKeys.by_symbol_key(watch.occ_symbol),
-            watch.watch_id,
-        )
+        # Keep symbol index synchronized with status transitions.
+        if watch.status == WatchStatus.WATCHING:
+            self.redis.sadd(
+                WatchKeys.by_symbol_key(watch.occ_symbol),
+                watch.watch_id,
+            )
+        else:
+            self.redis.srem(
+                WatchKeys.by_symbol_key(watch.occ_symbol),
+                watch.watch_id,
+            )
 
     def get_stats(self) -> dict[str, Any]:
         """Get watch list statistics."""

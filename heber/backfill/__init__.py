@@ -11,6 +11,7 @@ Provides:
 import asyncio
 import gzip
 import json
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -428,10 +429,17 @@ class BackfillWriter:
         for (partition_date, hour), partition_records in partitions.items():
             partition_path = self._get_bronze_partition_path(job, partition_date, hour)
             partition_path.mkdir(parents=True, exist_ok=True)
-            output_file = partition_path / f"events-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}.jsonl.gz"
-            with gzip.open(output_file, "wt", encoding="utf-8") as handle:
-                for record in partition_records:
-                    handle.write(json.dumps(record, default=str) + "\n")
+            final_name = f"events-{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}.jsonl.gz"
+            output_file = partition_path / final_name
+            tmp_file = partition_path / f"{final_name}.tmp"
+            try:
+                with gzip.open(tmp_file, "wt", encoding="utf-8") as handle:
+                    for record in partition_records:
+                        handle.write(json.dumps(record, default=str) + "\n")
+                os.replace(tmp_file, output_file)
+            except Exception:
+                tmp_file.unlink(missing_ok=True)
+                raise
             files_written += 1
 
         return files_written
@@ -443,7 +451,8 @@ class BackfillWriter:
     ) -> None:
         """Write records to Parquet file."""
         path.mkdir(parents=True, exist_ok=True)
-        output_file = path / f"{uuid.uuid4()}.parquet"
+        file_id = uuid.uuid4()
+        output_file = path / f"{file_id}.parquet"
 
         if self._parquet_writer is not None:
             self._parquet_writer(records, output_file)
@@ -452,14 +461,20 @@ class BackfillWriter:
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
-
-            table = pa.Table.from_pylist(records)
-            pq.write_table(table, str(output_file))
         except ImportError as exc:
             logger.error("pyarrow_not_available", path=str(output_file))
             raise RuntimeError(
                 "Backfill write failed because pyarrow is not installed. Install pyarrow to enable parquet writes."
             ) from exc
+
+        tmp_file = path / f"_{file_id}.parquet.tmp"
+        try:
+            table = pa.Table.from_pylist(records)
+            pq.write_table(table, str(tmp_file))
+            os.replace(tmp_file, output_file)
+        except Exception:
+            tmp_file.unlink(missing_ok=True)
+            raise
 
 
 class BackfillCoordinator:
@@ -493,10 +508,15 @@ class BackfillCoordinator:
 
     def _persist_job(self, job: BackfillJob) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
-        self._job_state_path(job.backfill_id).write_text(
-            json.dumps(job.to_dict(), default=str, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        content = json.dumps(job.to_dict(), default=str, separators=(",", ":"))
+        final_path = self._job_state_path(job.backfill_id)
+        tmp_path = final_path.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, final_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def _load_jobs(self) -> None:
         if not self._state_dir.exists():
@@ -604,63 +624,65 @@ class BackfillCoordinator:
             from heber.config import settings
 
             engine = create_async_engine(settings.postgres_url, echo=False)
-            session_factory = async_sessionmaker(engine, expire_on_commit=False)
-            silver_dataset, bronze_dataset = self._coverage_dataset_names(job)
-            coverage_counts = self._coverage_counts(records)
+            try:
+                session_factory = async_sessionmaker(engine, expire_on_commit=False)
+                silver_dataset, bronze_dataset = self._coverage_dataset_names(job)
+                coverage_counts = self._coverage_counts(records)
 
-            async with session_factory() as session:
-                service = CatalogService(session)
+                async with session_factory() as session:
+                    service = CatalogService(session)
 
-                silver = await service.get_dataset(silver_dataset)
-                if silver is None:
-                    await service.create_dataset(
-                        name=silver_dataset,
-                        layer="silver",
-                        owner="shared",
-                        storage_root=str(Path(self.storage_root) / "silver"),
-                        description=f"Backfilled Silver dataset for {job.provider}/{job.feed}",
-                        path_template=f"silver/{job.provider}_{job.feed}/dt={{date}}",
-                        partition_cols=["dt"],
+                    silver = await service.get_dataset(silver_dataset)
+                    if silver is None:
+                        await service.create_dataset(
+                            name=silver_dataset,
+                            layer="silver",
+                            owner="shared",
+                            storage_root=str(Path(self.storage_root) / "silver"),
+                            description=f"Backfilled Silver dataset for {job.provider}/{job.feed}",
+                            path_template=f"silver/{job.provider}_{job.feed}/dt={{date}}",
+                            partition_cols=["dt"],
+                        )
+
+                    bronze = await service.get_dataset(bronze_dataset)
+                    if bronze is None:
+                        await service.create_dataset(
+                            name=bronze_dataset,
+                            layer="bronze",
+                            owner="shared",
+                            storage_root=str(Path(self.storage_root) / "bronze"),
+                            description=f"Backfilled Bronze dataset for {job.provider}/{job.feed}",
+                            path_template=f"bronze/provider={job.provider}/feed={job.feed}/dt={{date}}/hour={{hour}}",
+                            partition_cols=["dt", "hour"],
+                        )
+
+                    dt_start = datetime.combine(chunk_date, time.min, tzinfo=UTC)
+                    dt_end = datetime.combine(chunk_date, time.max, tzinfo=UTC)
+                    for instrument_key, count in coverage_counts.items():
+                        await service.update_coverage(
+                            dataset_name=silver_dataset,
+                            instrument_key=instrument_key,
+                            dt_min=dt_start,
+                            dt_max=dt_end,
+                            approx_row_count=count,
+                        )
+                        await service.update_coverage(
+                            dataset_name=bronze_dataset,
+                            instrument_key=instrument_key,
+                            dt_min=dt_start,
+                            dt_max=dt_end,
+                            approx_row_count=count,
+                        )
+
+                    logger.info(
+                        "backfill_catalog_metadata_updated",
+                        backfill_id=job.backfill_id,
+                        date=chunk_date.isoformat(),
+                        rows=rows_written,
+                        coverage_keys=len(coverage_counts),
                     )
-
-                bronze = await service.get_dataset(bronze_dataset)
-                if bronze is None:
-                    await service.create_dataset(
-                        name=bronze_dataset,
-                        layer="bronze",
-                        owner="shared",
-                        storage_root=str(Path(self.storage_root) / "bronze"),
-                        description=f"Backfilled Bronze dataset for {job.provider}/{job.feed}",
-                        path_template=f"bronze/provider={job.provider}/feed={job.feed}/dt={{date}}/hour={{hour}}",
-                        partition_cols=["dt", "hour"],
-                    )
-
-                dt_start = datetime.combine(chunk_date, time.min, tzinfo=UTC)
-                dt_end = datetime.combine(chunk_date, time.max, tzinfo=UTC)
-                for instrument_key, count in coverage_counts.items():
-                    await service.update_coverage(
-                        dataset_name=silver_dataset,
-                        instrument_key=instrument_key,
-                        dt_min=dt_start,
-                        dt_max=dt_end,
-                        approx_row_count=count,
-                    )
-                    await service.update_coverage(
-                        dataset_name=bronze_dataset,
-                        instrument_key=instrument_key,
-                        dt_min=dt_start,
-                        dt_max=dt_end,
-                        approx_row_count=count,
-                    )
-
-            await engine.dispose()
-            logger.info(
-                "backfill_catalog_metadata_updated",
-                backfill_id=job.backfill_id,
-                date=chunk_date.isoformat(),
-                rows=rows_written,
-                coverage_keys=len(coverage_counts),
-            )
+            finally:
+                await engine.dispose()
         except Exception as exc:
             # Catalog metadata updates are best effort; data writes must still complete.
             logger.warning(
@@ -836,6 +858,9 @@ class BackfillCoordinator:
         return job
 
 
+# Prevent background tasks from being garbage-collected before completion.
+_background_tasks: set[asyncio.Task] = set()
+
 # FastAPI router for backfill API per PRD §11.7
 
 
@@ -873,7 +898,11 @@ def create_backfill_router() -> Any:
         try:
             policy = TsAvailablePolicy(request.ts_available_policy)
         except ValueError:
-            policy = TsAvailablePolicy.COMMIT
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid ts_available_policy: {request.ts_available_policy!r}. "
+                f"Valid values: {[p.value for p in TsAvailablePolicy]}",
+            )
 
         definition = BackfillJobDefinition(
             provider=request.provider,
@@ -888,7 +917,9 @@ def create_backfill_router() -> Any:
         job = coordinator.create_job(definition)
 
         # Start job in background
-        _background_task = asyncio.create_task(coordinator.run_job(job.backfill_id, definition))  # noqa: F841
+        task = asyncio.create_task(coordinator.run_job(job.backfill_id, definition))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return job.to_dict()
 
@@ -903,7 +934,10 @@ def create_backfill_router() -> Any:
     @router.get("")
     async def list_backfills(status: str | None = None) -> list[dict[str, Any]]:
         """List backfill jobs (GET /backfill)."""
-        filter_status = BackfillStatus(status) if status else None
+        try:
+            filter_status = BackfillStatus(status) if status else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status!r}")
         jobs = coordinator.list_jobs(status=filter_status)
         return [j.to_dict() for j in jobs]
 

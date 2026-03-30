@@ -53,7 +53,7 @@ class Dataset(Base):
     updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    versions = relationship("DatasetVersion", back_populates="dataset", lazy="dynamic")
+    versions = relationship("DatasetVersion", back_populates="dataset", lazy="select")
 
 
 class DatasetVersion(Base):
@@ -109,7 +109,7 @@ class InstrumentRegistry(Base):
     updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    provider_mappings = relationship("InstrumentProviderMap", back_populates="instrument", lazy="dynamic")
+    provider_mappings = relationship("InstrumentProviderMap", back_populates="instrument", lazy="select")
 
 
 class InstrumentProviderMap(Base):

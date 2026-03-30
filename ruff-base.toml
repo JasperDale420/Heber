@@ -1,7 +1,7 @@
 # Heber-local Ruff base config (mirrors Empire shared defaults for CI portability).
 
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [lint]
 select = [

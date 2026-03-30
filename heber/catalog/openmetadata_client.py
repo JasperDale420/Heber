@@ -435,13 +435,7 @@ class MockOpenMetadataClient:
 
 
 # Singleton
-_catalog: OpenMetadataCatalog | None = None
-
-
 @lru_cache(maxsize=1)
 def get_catalog() -> OpenMetadataCatalog:
     """Get the singleton catalog instance."""
-    global _catalog
-    if _catalog is None:
-        _catalog = OpenMetadataCatalog()
-    return _catalog
+    return OpenMetadataCatalog()

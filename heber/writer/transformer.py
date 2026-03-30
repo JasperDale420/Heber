@@ -154,7 +154,7 @@ class BronzeToSilverTransformer:
 
             # Date filtering
             if since or until:
-                dt_date = datetime.strptime(dt_str, "%Y-%m-%d")
+                dt_date = datetime.strptime(dt_str, "%Y-%m-%d").replace(tzinfo=UTC)
                 if since and dt_date < since:
                     continue
                 if until and dt_date > until:

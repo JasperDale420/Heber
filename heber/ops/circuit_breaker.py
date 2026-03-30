@@ -21,11 +21,16 @@ logger = structlog.get_logger(__name__)
 
 
 # Degraded mode metric (PRD §12.13.4)
-degraded_mode = Gauge(
-    "heber_degraded_mode",
-    "Service operating in degraded mode (1=degraded, 0=normal)",
-    ["dependency"],
-)
+try:
+    degraded_mode = Gauge(
+        "heber_degraded_mode",
+        "Service operating in degraded mode (1=degraded, 0=normal)",
+        ["dependency"],
+    )
+except ValueError:
+    from prometheus_client import REGISTRY as _R
+
+    degraded_mode = next(c for c in _R._collectors if hasattr(c, "_name") and c._name == "heber_degraded_mode")
 
 
 class DependencyType(StrEnum):

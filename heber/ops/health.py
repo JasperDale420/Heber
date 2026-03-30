@@ -173,7 +173,7 @@ def check_readiness() -> ReadinessResponse:
                 message=str(e),
             )
             all_ok = False
-            logger.warning("dependency_check_failed", name=name, error=str(e))
+            logger.warning("dependency_check_failed", name=name, error=str(e), exc_info=True)
 
     status = ReadinessStatus.READY if all_ok else ReadinessStatus.NOT_READY
 

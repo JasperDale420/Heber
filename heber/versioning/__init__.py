@@ -514,14 +514,7 @@ class LakeFSVersionManager:
         return f"lakefs://{repo_name}/{ref}/"
 
 
-# Singleton
-_manager: LakeFSVersionManager | None = None
-
-
 @lru_cache(maxsize=1)
 def get_version_manager() -> LakeFSVersionManager:
     """Get the singleton version manager instance."""
-    global _manager
-    if _manager is None:
-        _manager = LakeFSVersionManager()
-    return _manager
+    return LakeFSVersionManager()

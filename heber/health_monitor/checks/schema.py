@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -96,7 +96,8 @@ async def run_schema_checks(ctx: CheckContext, check_date: date | None = None) -
 
     # Load previous schema baselines.
     # Schema baselines are stored with feed, schema_hash, columns_json columns.
-    baselines_df = ctx.store.read_baselines(today, today)
+    yesterday = today - timedelta(days=1)
+    baselines_df = ctx.store.read_baselines(yesterday, yesterday, baseline_key="schema")
     prev_schemas: dict[str, list[tuple[str, str]]] = {}
     if not baselines_df.empty and "feed" in baselines_df.columns and "columns_json" in baselines_df.columns:
         for _, row in baselines_df.iterrows():
@@ -229,6 +230,6 @@ async def run_schema_checks(ctx: CheckContext, check_date: date | None = None) -
     # Write new schema baselines
     if new_baselines:
         baseline_df = pd.DataFrame(new_baselines)
-        ctx.store.write_baseline(baseline_df, today)
+        ctx.store.write_baseline(baseline_df, today, baseline_key="schema")
 
     return results

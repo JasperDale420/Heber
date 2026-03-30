@@ -453,6 +453,14 @@ class Compactor:
 
             merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path, dataset)
 
+            if merged_rows == 0:
+                logger.info(
+                    "compaction_skipped_zero_rows",
+                    partition=str(partition_path),
+                    source_files=len(small_files),
+                )
+                return 0
+
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0
             source_bytes = sum(size_cache.get(f, 0) for f in small_files)

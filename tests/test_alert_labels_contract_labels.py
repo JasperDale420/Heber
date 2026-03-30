@@ -43,11 +43,7 @@ def test_add_contract_labels_uses_cached_occ_symbol_lookup(monkeypatch) -> None:
     async def _fake_fetch_option_bars(occ_symbols, bar_start, bar_end):  # noqa: ANN001, ARG001
         return option_bars
 
-    def _raise_if_called(*_args, **_kwargs):  # noqa: ANN001
-        raise AssertionError("_get_occ_symbol_for_alert should not be called when using cached lookup")
-
     monkeypatch.setattr(pipeline, "_fetch_option_bars", _fake_fetch_option_bars)
-    monkeypatch.setattr(pipeline, "_get_occ_symbol_for_alert", _raise_if_called)
 
     result = pipeline._add_contract_labels(labels, flow_alerts, start, later)
 

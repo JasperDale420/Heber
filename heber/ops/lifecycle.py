@@ -42,26 +42,42 @@ class LifecycleState(StrEnum):
     STOPPED = "stopped"
 
 
+def _make_metric(metric_cls, name, *args, **kwargs):
+    try:
+        return metric_cls(name, *args, **kwargs)
+    except ValueError:
+        from prometheus_client import REGISTRY as _R
+
+        for c in list(_R._collectors):
+            if hasattr(c, "_name") and c._name == name:
+                return c
+        raise
+
+
 # Prometheus metrics for canary deployments (PRD §12.14.6)
-shutdown_initiated = Counter(
+shutdown_initiated = _make_metric(
+    Counter,
     "heber_shutdown_initiated_total",
     "Number of shutdown sequences initiated",
     ["reason"],
 )
 
-shutdown_completed = Counter(
+shutdown_completed = _make_metric(
+    Counter,
     "heber_shutdown_completed_total",
     "Number of shutdown sequences completed",
     ["status"],  # success, timeout, error
 )
 
-in_flight_requests = Gauge(
+in_flight_requests = _make_metric(
+    Gauge,
     "heber_in_flight_requests",
     "Current number of in-flight requests/operations",
     ["service"],
 )
 
-drain_duration_seconds = Gauge(
+drain_duration_seconds = _make_metric(
+    Gauge,
     "heber_drain_duration_seconds",
     "Time spent draining in-flight work",
 )
@@ -492,7 +508,8 @@ CANARY_METRICS = [
     "heber_catalog_request_duration_seconds",
 ]
 
-canary_health = Gauge(
+canary_health = _make_metric(
+    Gauge,
     "heber_canary_healthy",
     "Canary deployment health status (1=healthy, 0=unhealthy)",
     ["deployment"],

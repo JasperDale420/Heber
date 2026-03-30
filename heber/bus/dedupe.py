@@ -9,6 +9,7 @@ This module builds on the BloomFilter from ops/reliability.py with
 additional features for rotating filters and compaction dedupe.
 """
 
+import hashlib
 import math
 import time
 from collections.abc import Callable, Coroutine
@@ -111,9 +112,11 @@ class BloomFilter:
 
     def _hash_positions(self, item: str) -> list[int]:
         """Calculate hash positions for an item using double hashing."""
-        # Use Python's built-in hash and a simple rehash
-        h1 = hash(item) % self.size_bits
-        h2 = hash(item + "_salt") % self.size_bits
+        encoded = item.encode()
+        h1 = int(hashlib.sha256(encoded).hexdigest(), 16) % self.size_bits
+        h2 = int(hashlib.sha256(b"\x00" + encoded).hexdigest(), 16) % self.size_bits
+        if h2 == 0:
+            h2 = 1
 
         positions = []
         for i in range(self.num_hashes):

@@ -19,6 +19,7 @@ import argparse
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import structlog
 
@@ -89,7 +90,12 @@ def compute_flow_toxicity_features(flow_alerts: pd.DataFrame) -> pd.DataFrame:
     )
 
     # --- Step 4: Compute VPIN per (ticker, date) ---
-    daily["flow_toxicity_1d"] = daily.apply(lambda row: compute_vpin(row["ask_sum"], row["bid_sum"]), axis=1)
+    total_flow = daily["ask_sum"] + daily["bid_sum"]
+    daily["flow_toxicity_1d"] = np.where(
+        total_flow > 0,
+        (daily["ask_sum"] - daily["bid_sum"]).abs() / total_flow,
+        np.nan,
+    )
 
     # --- Step 5: Sort and compute toxicity_acceleration per underlying ---
     daily = daily.sort_values(["underlying", "date"])

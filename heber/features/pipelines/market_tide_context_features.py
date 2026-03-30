@@ -80,7 +80,7 @@ def compute_market_sentiment_score(market_tide_df: pd.DataFrame) -> pd.DataFrame
 
     # Handle zero total premium: result is 0.0 (neutral)
     daily["market_sentiment_score"] = net / total
-    daily.loc[total == 0, "market_sentiment_score"] = 0.0
+    daily.loc[total.isna() | (total == 0), "market_sentiment_score"] = 0.0
 
     return daily[["ts_event", "market_sentiment_score"]].copy()
 

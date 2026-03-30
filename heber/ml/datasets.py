@@ -353,7 +353,7 @@ class MetaLabelDatasetBuilder:
 
         # Ensure datetime type
         df = df.copy()
-        df["alert_time"] = pd.to_datetime(df["alert_time"])
+        df["alert_time"] = pd.to_datetime(df["alert_time"], utc=True)
 
         # Determine split date
         if split_date is None:

@@ -239,6 +239,8 @@ class OnCallManager:
 
         policy = self.get_escalation_policy(incident.severity)
         elapsed = datetime.now(UTC) - incident.created_at
+        if policy.escalation_trigger_minutes == 0:
+            return False
         return elapsed.total_seconds() / 60 > policy.escalation_trigger_minutes
 
     def get_channels_for_severity(

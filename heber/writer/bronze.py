@@ -56,7 +56,8 @@ class BronzeWriter:
         elapsed = (now - self.last_flush).total_seconds()
 
         flushed = False
-        for partition_key, events in self.buffers.items():
+        for partition_key in list(self.buffers):
+            events = self.buffers[partition_key]
             should_flush = (
                 len(events) >= settings.bronze_max_batch_size or elapsed >= settings.bronze_flush_interval_seconds
             )

@@ -45,8 +45,8 @@ class HealthStore:
     def _health_partition(self, report_date: date) -> Path:
         return self.data_root / "gold" / f"dataset={HEALTH_DATASET}" / f"dt={report_date.isoformat()}"
 
-    def _baseline_partition(self, report_date: date) -> Path:
-        return self.data_root / "gold" / f"dataset={BASELINE_DATASET}" / f"dt={report_date.isoformat()}"
+    def _baseline_partition(self, report_date: date, baseline_key: str = "default") -> Path:
+        return self.data_root / "gold" / f"dataset={BASELINE_DATASET}" / f"dt={report_date.isoformat()}" / baseline_key
 
     def write_results(self, results: list[CheckResult], report_date: date) -> None:
         """Write health check results as a Parquet file in the Gold layer."""
@@ -71,19 +71,19 @@ class HealthStore:
             return pd.DataFrame(columns=[f.name for f in HEALTH_SCHEMA])
         return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
 
-    def write_baseline(self, df: pd.DataFrame, report_date: date) -> None:
-        """Write volume/statistics baseline data for a given date."""
-        partition = self._baseline_partition(report_date)
+    def write_baseline(self, df: pd.DataFrame, report_date: date, baseline_key: str = "default") -> None:
+        """Write baseline data for a given date and check type."""
+        partition = self._baseline_partition(report_date, baseline_key)
         partition.mkdir(parents=True, exist_ok=True)
         out_path = partition / "baseline.parquet"
         df.to_parquet(out_path, index=False)
 
-    def read_baselines(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """Read baseline data across a date range."""
+    def read_baselines(self, start_date: date, end_date: date, baseline_key: str = "default") -> pd.DataFrame:
+        """Read baseline data across a date range for a specific check type."""
         frames: list[pd.DataFrame] = []
         current = start_date
         while current <= end_date:
-            partition = self._baseline_partition(current)
+            partition = self._baseline_partition(current, baseline_key)
             if partition.exists():
                 for f in partition.glob("*.parquet"):
                     frame = pd.read_parquet(f)

@@ -174,6 +174,7 @@ class HealthMonitorService:
         from heber.health_monitor.checks.ml_readiness import run_ml_readiness_checks
         from heber.health_monitor.checks.schema import run_schema_checks
         from heber.health_monitor.checks.statistical import run_statistical_checks
+        from heber.health_monitor.checks.volume import write_volume_baseline
 
         assert self._ctx is not None
         # Check every 60 seconds whether we should trigger
@@ -190,6 +191,7 @@ class HealthMonitorService:
                     results.extend(await run_schema_checks(self._ctx, today))
                     results.extend(await run_statistical_checks(self._ctx, today))
                     results.extend(await run_ml_readiness_checks(self._ctx, today))
+                    await write_volume_baseline(self._ctx, today)
                     elapsed = time.monotonic() - t0
 
                     self._record_and_store(results, elapsed, "tier3")
@@ -237,7 +239,8 @@ class HealthMonitorService:
 
         summary = _summarise(results)
         logger.info(
-            f"health_{tier}_complete",
+            "health_tier_complete",
+            tier=tier,
             checks=len(results),
             elapsed_seconds=round(elapsed, 2),
             **summary,

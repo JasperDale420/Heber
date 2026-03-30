@@ -257,7 +257,7 @@ class Settings(BaseSettings):
         description="LLM provider selector for OpenAI-compatible clients",
     )
     llm_model: str = Field(
-        default="gpt-4o-mini",
+        default="glm-5-turbo",
         validation_alias=AliasChoices("HEBER_LLM_MODEL", "LLM_MODEL"),
         description="Default chat model name",
     )

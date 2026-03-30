@@ -228,10 +228,17 @@ class AlertWatchConsumer:
             last_reason = reason
             if not retryable:
                 logger.warning(
-                    "Non-retriable flow alert failure",
+                    "non_retriable_flow_alert_failure",
                     msg_id=msg_id_text,
                     reason=reason,
                 )
+                if not success:
+                    return await self._dead_letter_message(
+                        msg_id=msg_id_text,
+                        data=data,
+                        attempts=attempt,
+                        error=f"non_retriable_failure:{reason}",
+                    )
                 return True
             if attempt < self.max_process_retries:
                 await asyncio.sleep(max(0.0, self.retry_backoff_seconds * attempt))

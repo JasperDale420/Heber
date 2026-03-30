@@ -98,14 +98,6 @@ def _open_dataset_safe(
     except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError):
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
-    # Fallback: build a unified schema with dictionary types coerced to string
-    try:
-        file_dataset = ds.dataset(path, format="parquet", partitioning=partitioning, schema=None)
-        # If we got here without error, return it
-        return file_dataset
-    except Exception:
-        logger.debug("dataset_open_fallback", path=str(path), exc_info=True)
-
     # Manual schema unification from individual fragment metadata
     try:
         raw = ds.dataset(path, format="parquet")
@@ -233,7 +225,8 @@ class HeberReader:
 
     def __init__(self, data_root: Path | None = None) -> None:
         self._root = Path(data_root or settings.data_root)
-        logger.info("heber_reader_init", data_root=str(self._root))
+        self._gold_root = Path(data_root) / "gold" if data_root is not None else Path(settings.gold_path)
+        logger.info("heber_reader_init", data_root=str(self._root), gold_root=str(self._gold_root))
 
     # ------------------------------------------------------------------
     # Context-manager support (no resources to close, but keeps API clean)
@@ -430,6 +423,13 @@ class HeberReader:
         if on_keys is None:
             on_keys = ["instrument_key"]
 
+        missing_left = {left_time} - set(left.columns)
+        if missing_left:
+            raise ValueError(f"asof_join: left DataFrame missing columns: {missing_left}")
+        missing_right = {right_time, right_available} - set(right.columns)
+        if missing_right:
+            raise ValueError(f"asof_join: right DataFrame missing columns: {missing_right}")
+
         right = right.copy()
         right["_safe_time"] = right[[right_time, right_available]].max(axis=1)
 
@@ -447,10 +447,8 @@ class HeberReader:
             suffixes=("", suffix),
         )
 
-        # Drop the helper column (may appear with suffix if name collides)
-        safe_col = "_safe_time" + suffix if "_safe_time" + suffix in result.columns else "_safe_time"
-        if safe_col in result.columns:
-            result = result.drop(columns=[safe_col])
+        if "_safe_time" in result.columns:
+            result = result.drop(columns=["_safe_time"])
 
         logger.debug(
             "heber_reader_asof_join",
@@ -496,7 +494,7 @@ class HeberReader:
         asof_time:
             When set, adds ``ts_available <= asof_time`` to the scan.
         """
-        gold_path = self._root / "gold" / f"dataset={dataset}"
+        gold_path = self._gold_root / f"dataset={dataset}"
         if project:
             gold_path = gold_path / f"project={project}"
 
@@ -635,14 +633,13 @@ class HeberReader:
             raise ValueError("ts_available cannot be before ts_event (look-ahead detected)")
 
         df = df.copy()
-        df["dt"] = pd.to_datetime(df["ts_event"]).dt.date
+        df["dt"] = pd.to_datetime(df["ts_event"], utc=True).dt.date
 
         output_paths: list[Path] = []
 
         for dt, group in df.groupby("dt"):
             partition_dir = (
-                self._root
-                / "gold"
+                self._gold_root
                 / f"dataset={dataset}"
                 / f"project={project}"
                 / f"{_VERSION_PREFIX}{version}"
@@ -753,7 +750,7 @@ class HeberReader:
         list[str]
             Version strings sorted newest-first (e.g. ``["v3", "v2", "v1"]``).
         """
-        base = self._root / "gold" / f"dataset={dataset}"
+        base = self._gold_root / f"dataset={dataset}"
         if project:
             base = base / f"project={project}"
 

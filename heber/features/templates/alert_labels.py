@@ -214,7 +214,7 @@ def compute_atr(
     df["atr"] = (
         df.groupby("instrument_key", group_keys=False)
         .apply(
-            lambda g: _core_atr(g["high"], g["low"], g["close"], period).fillna(method="bfill"),
+            lambda g: _core_atr(g["high"], g["low"], g["close"], period).bfill(),
             include_groups=False,
         )
         .reset_index(level=0, drop=True)

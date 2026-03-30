@@ -20,10 +20,13 @@ def _get_or_create(metric_cls, name, *args, **kwargs):
     Prevents ``ValueError: Duplicated timeseries`` when the module is
     re-imported (e.g. across test files that transitively import ops.metrics).
     """
-    existing = REGISTRY._names_to_collectors.get(name)
-    if existing is not None:
-        return existing
-    return metric_cls(name, *args, **kwargs)
+    try:
+        return metric_cls(name, *args, **kwargs)
+    except ValueError:
+        for collector in list(REGISTRY._collectors):
+            if hasattr(collector, "_name") and collector._name == name:
+                return collector
+        raise
 
 
 # Default metrics port (PRD §12.5.1)

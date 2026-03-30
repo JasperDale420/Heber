@@ -66,7 +66,7 @@ services:
     environment:
       LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_SECRET_KEY:-some-random-secret-key-min-32-chars}
       LAKEFS_DATABASE_TYPE: postgres
-      LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING: postgresql://heber:heber_dev_password@postgres:5432/heber_lakefs?sslmode=disable # pragma: allowlist secret
+      LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING: "postgresql://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_lakefs?sslmode=disable"
       LAKEFS_BLOCKSTORE_TYPE: s3
       LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
       LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
@@ -100,7 +100,7 @@ services:
     environment:
       REGISTRY_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heber_apicurio
       REGISTRY_DATASOURCE_USERNAME: heber
-      REGISTRY_DATASOURCE_PASSWORD: heber_dev_password # pragma: allowlist secret
+      REGISTRY_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-heber_dev_password}
       QUARKUS_HTTP_PORT: 8081
       QUARKUS_LOG_LEVEL: INFO
     ports:
@@ -130,7 +130,7 @@ services:
     command: [ "python", "-m", "uvicorn", "heber.catalog.api:app", "--host", "0.0.0.0", "--port", "8080" ]
     environment:
       - HEBER_DATA_ROOT=/data
-      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -162,7 +162,7 @@ services:
     command: [ "python", "-m", "heber.writer.consumer" ]
     environment:
       - HEBER_DATA_ROOT=/data
-      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
@@ -194,7 +194,7 @@ services:
     command: [ "python", "-m", "heber.writer.compactor" ]
     environment:
       - HEBER_DATA_ROOT=/data
-      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:heber_dev_password@postgres:5432/heber_catalog
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     depends_on:
@@ -220,7 +220,7 @@ services:
       # Uses heber:events stream from Data Gateway's Redis
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - DATA_GATEWAY_URL=http://host.docker.internal:8080
-      - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY:-gw_orion_trading_key_55555}
+      - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
       - HEBER_GOLD_PATH=/data/gold
     extra_hosts:

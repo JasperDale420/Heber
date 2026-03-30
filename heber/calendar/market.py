@@ -149,7 +149,11 @@ class MarketCalendar:
         """
         ts = self._to_exchange_timestamp(dt)
 
-        # Find next session
+        if self.is_market_open(dt):
+            session = self._get_session(ts)
+            if session is not None:
+                ts = self._cal.session_close(session) + pd.Timedelta(minutes=1)
+
         next_session = self._next_session(ts)
         open_time = self._cal.session_open(next_session)
 

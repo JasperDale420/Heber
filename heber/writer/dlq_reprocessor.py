@@ -305,10 +305,6 @@ async def reprocess_dlq(
     # Final flush
     _flush_writers(consumer)
 
-    # Delete any remaining successful entries
-    if delete_ids:
-        await redis_conn.xdel(stream_name, *delete_ids)
-
     elapsed = time.monotonic() - t0
     stats = {
         "success": success_count,

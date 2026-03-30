@@ -63,7 +63,7 @@ async def run_volume_checks(ctx: CheckContext, check_date: date | None = None) -
     baseline_days = ctx.settings.health_volume_baseline_days
     baseline_end = today - timedelta(days=1)
     baseline_start = baseline_end - timedelta(days=baseline_days - 1)
-    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end)
+    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end, baseline_key="volume")
 
     # Compute median per feed from baselines
     feed_medians: dict[str, float] = {}
@@ -174,10 +174,18 @@ async def run_volume_checks(ctx: CheckContext, check_date: date | None = None) -
                 )
             )
 
-    # Write today's counts as new baseline
+    return results
+
+
+async def write_volume_baseline(ctx: CheckContext, check_date: date) -> None:
+    """Write EOD volume baseline for all Silver feeds. Called from Tier 3 only."""
+    silver_root = ctx.settings.silver_path
+    today_counts: dict[str, int] = {}
+    for feed in _silver_feeds():
+        dt_dir = silver_root / f"feed={feed}" / f"dt={check_date.isoformat()}"
+        if dt_dir.exists():
+            today_counts[feed] = _count_rows(dt_dir)
     if today_counts:
         baseline_rows = [{"feed": feed, "row_count": count} for feed, count in today_counts.items()]
-        baseline_df = pd.DataFrame(baseline_rows)
-        ctx.store.write_baseline(baseline_df, today)
-
-    return results
+        ctx.store.write_baseline(pd.DataFrame(baseline_rows), check_date, baseline_key="volume")
+        logger.info("volume_baseline_written", date=check_date.isoformat(), feeds=len(today_counts))

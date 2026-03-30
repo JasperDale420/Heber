@@ -174,7 +174,7 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
     baseline_days = ctx.settings.health_stats_baseline_days
     baseline_end = date.fromisoformat(today_str) - timedelta(days=1)
     baseline_start = baseline_end - timedelta(days=baseline_days - 1)
-    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end)
+    baselines_df = ctx.store.read_baselines(baseline_start, baseline_end, baseline_key="label_dist")
 
     if baselines_df.empty or "label_value" not in baselines_df.columns:
         # No baseline — store current and skip
@@ -182,7 +182,7 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
             {"label_value": lbl, "count": int(cnt), "proportion": float(cnt / len(df))}
             for lbl, cnt in today_counts.items()
         ]
-        ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str))
+        ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str), baseline_key="label_dist")
         return [
             CheckResult(
                 check_name="ml_label_stability",

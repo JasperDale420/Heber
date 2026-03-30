@@ -553,7 +553,8 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    return _ensure_ts_available(out)
+    out["ts_available"] = pd.to_datetime(out["ts_event"], utc=True) + timedelta(days=horizon)
+    return out
 
 
 # ---------------------------------------------------------------------------

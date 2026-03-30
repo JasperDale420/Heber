@@ -8,6 +8,7 @@ Extracted from scripts/seed_catalog.py so the catalog lifespan can import cleanl
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from datetime import date as date_type
 from pathlib import Path
@@ -295,9 +296,6 @@ async def seed_feed_mappings(session: AsyncSession, dry_run: bool = False) -> in
 
     logger.info("feed_mappings_seeded", count=count, dry_run=dry_run)
     return count
-
-
-import asyncio  # Added import
 
 
 def _scan_silver_feeds_blocking(silver_root: Path) -> set[str]:

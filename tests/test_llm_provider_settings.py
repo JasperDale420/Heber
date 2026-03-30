@@ -26,7 +26,7 @@ def _clear_llm_env(monkeypatch) -> None:
 def test_llm_settings_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.llm_provider == "openai"
-    assert settings.llm_model == "gpt-4o-mini"
+    assert settings.llm_model == "glm-5-turbo"
     assert settings.llm_effective_base_url is None
 
 

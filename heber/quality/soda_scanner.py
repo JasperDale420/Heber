@@ -179,7 +179,7 @@ data_source heber_silver:
                 passed=len(scan.get_checks_pass()),
                 warned=len(scan.get_checks_warn()),
                 failed=len(scan.get_checks_fail()),
-                errors=scan.has_error_logs(),
+                errors=1 if scan.has_error_logs() else 0,
                 duration_seconds=duration,
                 timestamp=datetime.now(UTC),
                 details=[

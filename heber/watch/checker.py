@@ -306,6 +306,8 @@ class BarrierChecker:
             return WatchStatus.HIT_TP, int(tp_first) + 1
         elif sl_first < tp_first:
             return WatchStatus.HIT_SL, int(sl_first) + 1
+        elif tp_first != float("inf"):
+            return WatchStatus.HIT_TP, int(tp_first) + 1
         else:
             return WatchStatus.WATCHING, None
 

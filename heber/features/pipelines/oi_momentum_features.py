@@ -19,6 +19,7 @@ import argparse
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import structlog
 
@@ -94,15 +95,17 @@ def compute_oi_momentum(oi_change_df: pd.DataFrame) -> pd.DataFrame:
     daily["avg_oi"] = daily["avg_call_oi"] + daily["avg_put_oi"]
 
     # Avoid division by zero: when avg_oi is 0, ratio is 0
-    daily["oi_buildup_ratio"] = daily.apply(
-        lambda row: row["total_oi_change"] / row["avg_oi"] if row["avg_oi"] != 0 else 0.0,
-        axis=1,
+    daily["oi_buildup_ratio"] = np.where(
+        daily["avg_oi"] != 0,
+        daily["total_oi_change"] / daily["avg_oi"],
+        0.0,
     )
 
     # --- Step 5: Compute new_position_signal ---
-    daily["volume_prev_oi_ratio"] = daily.apply(
-        lambda row: row["total_volume"] / row["total_prev_oi"] if row["total_prev_oi"] != 0 else 0.0,
-        axis=1,
+    daily["volume_prev_oi_ratio"] = np.where(
+        daily["total_prev_oi"] != 0,
+        daily["total_volume"] / daily["total_prev_oi"],
+        0.0,
     )
     daily["new_position_signal"] = (
         (daily["oi_buildup_ratio"] > 0) & (daily["volume_prev_oi_ratio"] > NEW_POSITION_VOLUME_RATIO_THRESHOLD)

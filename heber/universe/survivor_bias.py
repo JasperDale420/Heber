@@ -124,7 +124,6 @@ class UniverseManager:
         df: pd.DataFrame,
         asof_date: date | str,
         instrument_key_col: str = "instrument_key",
-        exclude_future_delistings: bool = True,
         mark_delistings: bool = False,
         delist_warning_days: int = 30,
     ) -> pd.DataFrame:
@@ -134,7 +133,6 @@ class UniverseManager:
             df: DataFrame to filter
             asof_date: Point-in-time date for filtering
             instrument_key_col: Column containing instrument keys
-            exclude_future_delistings: If True, exclude symbols that delist after asof_date
             mark_delistings: If True, add column indicating upcoming delistings
             delist_warning_days: Days ahead to mark delistings
 
@@ -152,15 +150,6 @@ class UniverseManager:
 
         # Filter to active instruments
         result = df[df[instrument_key_col].isin(active_keys)].copy()
-
-        # Additional filtering for future delistings
-        if exclude_future_delistings:
-            keys_to_exclude = set()
-            for key in result[instrument_key_col].unique():
-                inst = self.instruments.get(key)
-                if inst and inst.delist_date and inst.delist_date > asof_date:
-                    keys_to_exclude.add(key)
-            result = result[~result[instrument_key_col].isin(keys_to_exclude)]
 
         # Optionally mark upcoming delistings
         if mark_delistings:
