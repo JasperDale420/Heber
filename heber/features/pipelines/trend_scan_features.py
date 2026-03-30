@@ -16,7 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -37,9 +37,14 @@ LOOKBACK_DAYS = 0  # No backward lookback; purely forward-looking
 
 
 def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
+    """Add ts_available column for zero-leakage Gold writes.
+
+    Trend scan labels are forward-looking — each label requires price data
+    through FORWARD_BUFFER_DAYS after ts_event, so ts_available must reflect
+    that to prevent look-ahead bias.
+    """
     if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
+        df["ts_available"] = pd.to_datetime(df["ts_event"], utc=True) + timedelta(days=FORWARD_BUFFER_DAYS)
     return df
 
 

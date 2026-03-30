@@ -368,10 +368,12 @@ class MetaLabelDatasetBuilder:
         embargo_end = split_date + timedelta(days=self.config.embargo_days)
 
         # Train: before purge_start
-        train_df = df[df["alert_time"] < datetime.combine(purge_start, datetime.min.time())].reset_index(drop=True)
+        purge_boundary = datetime.combine(purge_start, datetime.min.time(), tzinfo=UTC)
+        train_df = df[df["alert_time"] < purge_boundary].reset_index(drop=True)
 
         # Test: after embargo_end
-        test_df = df[df["alert_time"] >= datetime.combine(embargo_end, datetime.min.time())].reset_index(drop=True)
+        embargo_boundary = datetime.combine(embargo_end, datetime.min.time(), tzinfo=UTC)
+        test_df = df[df["alert_time"] >= embargo_boundary].reset_index(drop=True)
 
         logger.info(
             "Train/test split completed",
