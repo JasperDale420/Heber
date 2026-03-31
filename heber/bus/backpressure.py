@@ -32,9 +32,13 @@ def _get_or_create(metric_cls: type, name: str, *args: Any, **kwargs: Any) -> An
     try:
         return metric_cls(name, *args, **kwargs)
     except ValueError:
-        for collector in list(REGISTRY._collectors):
-            if hasattr(collector, "_name") and collector._name == name:
-                return collector
+        collectors = REGISTRY._names_to_collectors
+        if name in collectors:
+            return collectors[name]
+        # Also check with _total suffix (counters are registered with _total)
+        total_name = f"{name}_total"
+        if total_name in collectors:
+            return collectors[total_name]
         raise
 
 
