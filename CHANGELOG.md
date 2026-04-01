@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debug investigation artifacts (`debug/`) removed from git tracking and added to `.gitignore`
 - Removed unused `UTC` import from `heber/features/pipelines/trend_scan_features.py` (lint F401)
 - Broke two over-length lines in `heber/ml/datasets.py` into named boundary variables (lint E501)
+- Fixed `test_baseline_written_after_check` in `tests/health_monitor/test_volume.py` — test was incorrectly asserting that `run_volume_checks()` writes the volume baseline; baseline writing is a separate step (`write_volume_baseline()`) called from the Tier 3 service loop, so the test now calls `write_volume_baseline` directly
 
 ### Added
 
