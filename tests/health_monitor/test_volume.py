@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from heber.health_monitor.checks.volume import run_volume_checks
+from heber.health_monitor.checks.volume import run_volume_checks, write_volume_baseline
 from heber.health_monitor.models import Severity, Status
 from tests.health_monitor.conftest import (
     MARKET_OPEN_DT,
@@ -133,18 +133,16 @@ async def test_non_trading_day_empty(mock_now: MagicMock, tmp_path: Path) -> Non
 
 
 @pytest.mark.unit
-@patch("heber.health_monitor.checks.volume._now_et", return_value=MARKET_OPEN_DT)
-async def test_baseline_written_after_check(mock_now: MagicMock, tmp_path: Path) -> None:
-    """Today's row counts are written as new baseline after checks."""
+async def test_baseline_written_after_check(tmp_path: Path) -> None:
+    """Today's row counts are written as new baseline via write_volume_baseline."""
     silver_root = tmp_path / "silver"
     create_feed_partition(silver_root, "bars", TRADING_DAY, num_rows=500)
 
     store = MagicMock()
-    store.read_baselines = MagicMock(return_value=pd.DataFrame())
     store.write_baseline = MagicMock()
 
     ctx = _make_ctx(tmp_path, store=store)
-    await run_volume_checks(ctx, check_date=TRADING_DAY)
+    await write_volume_baseline(ctx, check_date=TRADING_DAY)
 
     # Verify write_baseline was called
     store.write_baseline.assert_called_once()
