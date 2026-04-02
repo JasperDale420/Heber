@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from heber.config import Settings
 from heber.reader.core import HeberReader
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     P0_CRITICAL = "critical"
     P1_WARNING = "warning"
     P2_INFO = "info"
@@ -22,7 +22,7 @@ class Severity(str, Enum):
         return order[self] < order[other]
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     PASS = "pass"
     WARN = "warn"
     FAIL = "fail"

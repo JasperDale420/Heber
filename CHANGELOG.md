@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replaced `(str, Enum)` multiple-inheritance on `Severity` and `Status` in `heber/health_monitor/models.py` with `StrEnum` (ruff UP042)
 - Fixed `AttributeError` in `heber/bus/backpressure.py` where `_get_or_create` accessed the removed `REGISTRY._collectors` attribute; updated to use the current `REGISTRY._names_to_collectors` dict instead, restoring test collection for `test_backpressure_quarantine_paths.py`
 - Test runs no longer write to production `logs/` directory — `EMPIRE_LOG_DIR` is redirected to `/tmp/heber-test-logs` via root `conftest.py`
 - Debug investigation artifacts (`debug/`) removed from git tracking and added to `.gitignore`
