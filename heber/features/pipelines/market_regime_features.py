@@ -342,11 +342,25 @@ class MarketRegimePipeline:
         """Load Silver bars and compute dispersion."""
         bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
         logger.info("Loading Silver bars for dispersion", start=bar_start.isoformat(), end=end_date.isoformat())
-        bars = self.reader.read_silver("bars", instrument_type="equity", time_range=(bar_start, end_date))
+        bars = self.reader.read_silver(
+            "bars",
+            instrument_type="equity",
+            time_range=(bar_start, end_date),
+            columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
+            batch_size=500_000,
+        )
         logger.info("Loaded bars for dispersion", rows=len(bars))
 
         if bars.empty:
             return pd.DataFrame()
+
+        # Drop intraday rows early — _to_daily_close only needs close prices
+        # and prefers 1Day bars.  Loading millions of intraday rows causes OOM.
+        if "timeframe" in bars.columns and len(bars) > 1_000_000:
+            daily_only = bars[bars["timeframe"] == "1Day"]
+            if not daily_only.empty:
+                logger.info("Dropped intraday bars", before=len(bars), after=len(daily_only))
+                bars = daily_only
 
         # Resample to daily if needed — take last close per (instrument_key, date)
         bars = self._to_daily_close(bars)
