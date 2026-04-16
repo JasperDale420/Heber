@@ -395,6 +395,8 @@ def _count_parquet_rows(dt_dir: Path) -> int:
 
     total = 0
     for pf in dt_dir.glob("*.parquet"):
+        if pf.name.startswith("."):
+            continue
         try:
             meta = pq.read_metadata(pf)
             total += meta.num_rows
