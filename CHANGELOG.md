@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **heber-watch NOGROUP self-healing** — if the `watch-consumer` Redis consumer group is ever dropped (e.g. after a Redis flush/restart without persistence), `WatchConsumer._read_messages` now catches the `NOGROUP` `ResponseError`, re-runs `setup_consumer_group`, and retries the `XREADGROUP` call exactly once. Previously the service got stuck in an indefinite retry loop (observed today with 450+ consecutive errors over ~4 hours) because the one-shot group-create at startup couldn't recover from mid-lifecycle group loss. The group was manually recreated (`XGROUP CREATE heber:events watch-consumer $`) to unblock today's session.
+
+### Known issues (not yet fixed)
+
+- **Duplicate rows in `labels_alert_barriers`** — steady-state dup ratio is ~1.05–1.32× (one alert on 2026-03-11 appears 918×, likely from a one-off replay). Root cause is a concurrency race: `WatchManager.update_watch_price` reads the watch with `get_watch`, mutates it in memory, and calls `_save_watch` — while the checker may concurrently call `complete_watch` to set status to terminal and srem from `ACTIVE_WATCHES`. If the checker wins the race on the save but the poller's stale in-memory watch is saved afterward, the watch is resurrected with status=WATCHING and re-added to the active set, so the checker re-evaluates it on the next cycle and writes a second outcome row. Proper fix needs a Redis WATCH/MULTI transaction or status re-check in `update_watch_price`. Downstream readers should `drop_duplicates(subset=['alert_id'], keep='first')` for now.
+- **All-zero 0DTE label rows** — every `labels_alert_barriers` row for 0DTE alerts has `bars_to_hit=0, mfe=0, mae=0, outcome="expired"` — the `_handle_no_snapshots` path. Root cause still unpinned; not from the known dup race or the fixed NOGROUP loop. Needs hands-on interactive debug against the live watch poller.
+
 - **Gold poller OOM crash on equity_features pipeline** — The `equity_features` pipeline loaded ~100 days of Silver bars for all equities into memory at once via `to_table()`, exceeding available memory and causing the heber-gold-poller container to crash-loop (1400+ restarts). Two fixes applied: (1) `HeberReader.read_silver()` now accepts a `batch_size` parameter that uses PyArrow's `Scanner` to stream data in fixed-size record batches instead of materializing everything at once; (2) the equity_features pipeline now uses column projection (12 of 20+ columns) and batched reading (`batch_size=500_000`), reducing peak memory by ~50-60%.
 
 ### Fixed

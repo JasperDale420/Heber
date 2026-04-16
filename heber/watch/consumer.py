@@ -164,15 +164,41 @@ class AlertWatchConsumer:
         await asyncio.to_thread(self.setup_consumer_group)
 
     async def _read_messages(self):
-        """Read stream messages without blocking the event loop."""
-        return await asyncio.to_thread(
-            self.redis.xreadgroup,
-            CONSUMER_GROUP,
-            CONSUMER_NAME,
-            {self.stream_name: ">"},
-            count=100,
-            block=5000,
-        )
+        """Read stream messages without blocking the event loop.
+
+        Self-heals if the consumer group has been dropped from Redis
+        (e.g. after a Redis flush/restart without persistence) by re-running
+        setup and retrying once. Prevents the service from getting stuck in
+        a NOGROUP retry loop indefinitely when the group simply needs
+        recreation.
+        """
+        try:
+            return await asyncio.to_thread(
+                self.redis.xreadgroup,
+                CONSUMER_GROUP,
+                CONSUMER_NAME,
+                {self.stream_name: ">"},
+                count=100,
+                block=5000,
+            )
+        except redis.ResponseError as e:
+            if "NOGROUP" not in str(e):
+                raise
+            logger.warning(
+                "Consumer group missing; re-creating and retrying",
+                stream=self.stream_name,
+                group=CONSUMER_GROUP,
+                error=str(e),
+            )
+            await self._setup_consumer_group_async()
+            return await asyncio.to_thread(
+                self.redis.xreadgroup,
+                CONSUMER_GROUP,
+                CONSUMER_NAME,
+                {self.stream_name: ">"},
+                count=100,
+                block=5000,
+            )
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""
