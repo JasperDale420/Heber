@@ -134,6 +134,8 @@ class AlertWatchConsumer:
             gateway_url=gateway_url,
             gateway_api_key=gateway_api_key,
             legacy_route_fallback_enabled=self.legacy_route_fallback_enabled,
+            request_timeout_seconds=settings.watch_enrichment_timeout_seconds,
+            request_timeout_option_chain_seconds=settings.watch_enrichment_option_chain_timeout_seconds,
         )
 
     def setup_consumer_group(self) -> None:

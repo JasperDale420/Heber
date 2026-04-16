@@ -84,6 +84,8 @@ class WatchConfig(NamedTuple):
     gateway_url: str
     gateway_api_key: str | None
     gateway_legacy_fallback_enabled: bool
+    enrichment_timeout_seconds: float
+    enrichment_option_chain_timeout_seconds: float
     enrichment_backfill_enabled: bool
     enrichment_backfill_interval: int
     enrichment_backfill_lookback_days: int
@@ -290,6 +292,12 @@ class Settings(BaseSettings):
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
     silver_max_rows_per_file: int = Field(default=1_000_000, description="Max rows per file (250k-2M)")
     silver_max_flush_time_seconds: int = Field(default=30, description="Max seconds before flush (5-30s)")
+    silver_min_rows_per_flush: int = Field(
+        default=50,
+        ge=1,
+        le=10000,
+        description="Min rows before flushing a Silver partition (prevents tiny files during backfill)",
+    )
     silver_row_group_size_mb: int = Field(default=128, description="Parquet row group size (64-256 MB)")
 
     # Environment
@@ -354,6 +362,21 @@ class Settings(BaseSettings):
             "WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED",
         ),
         description="Enable legacy unprefixed gateway route fallback after /api/v1 routes",
+    )
+
+    # Enrichment HTTP timeouts
+    watch_enrichment_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=120.0,
+        description="Default HTTP timeout for enrichment requests (seconds)",
+    )
+    watch_enrichment_option_chain_timeout_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=120.0,
+        description="HTTP timeout for option chain enrichment requests (seconds); "
+        "higher than the default because large chains (QQQ, SPY) can take 6-7s",
     )
 
     # Enrichment backfill scanner
@@ -737,6 +760,8 @@ class Settings(BaseSettings):
             gateway_url=self.watch_gateway_url,
             gateway_api_key=self.watch_gateway_api_key,
             gateway_legacy_fallback_enabled=self.watch_gateway_legacy_fallback_enabled,
+            enrichment_timeout_seconds=self.watch_enrichment_timeout_seconds,
+            enrichment_option_chain_timeout_seconds=self.watch_enrichment_option_chain_timeout_seconds,
             enrichment_backfill_enabled=self.enrichment_backfill_enabled,
             enrichment_backfill_interval=self.enrichment_backfill_interval,
             enrichment_backfill_lookback_days=self.enrichment_backfill_lookback_days,

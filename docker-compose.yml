@@ -166,6 +166,7 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_REDIS_READ_BATCH_SIZE=2000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -297,6 +297,8 @@ class AlertFeatureExtractor:
         cache_ttl_seconds: float = 30.0,
         auth_failure_threshold: int = 5,
         auth_failure_window_seconds: float = 120.0,
+        request_timeout_seconds: float = 10.0,
+        request_timeout_option_chain_seconds: float = 30.0,
     ):
         """Initialize extractor.
 
@@ -311,6 +313,9 @@ class AlertFeatureExtractor:
             cache_ttl_seconds: TTL for in-process request cache.
             auth_failure_threshold: Fail-fast threshold for HTTP 401 in rolling window.
             auth_failure_window_seconds: Rolling window for auth failure counting.
+            request_timeout_seconds: Default HTTP timeout for enrichment requests.
+            request_timeout_option_chain_seconds: HTTP timeout for option chain requests
+                (higher because large chains like QQQ/SPY can take 6-7s to respond).
         """
         self.redis = redis
         self.gateway_url = gateway_url
@@ -325,6 +330,8 @@ class AlertFeatureExtractor:
         self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
         self.auth_failure_threshold = max(1, int(auth_failure_threshold))
         self.auth_failure_window_seconds = max(1.0, float(auth_failure_window_seconds))
+        self.request_timeout_seconds = max(1.0, float(request_timeout_seconds))
+        self.request_timeout_option_chain_seconds = max(1.0, float(request_timeout_option_chain_seconds))
         self._request_semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         self._response_cache: dict[str, tuple[float, dict]] = {}
         self._auth_failure_timestamps: deque[float] = deque()
@@ -551,6 +558,7 @@ class AlertFeatureExtractor:
         symbol: str,
         params: dict | None = None,
         alert_id: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict | None:
         """Fetch JSON payload with route fallback, retries, throttling, and in-process caching."""
         cache_key = self._cache_key(endpoint=endpoint, symbol=symbol, params=params)
@@ -558,8 +566,9 @@ class AlertFeatureExtractor:
         if cached_payload is not None:
             return cached_payload
 
+        effective_timeout = timeout_seconds if timeout_seconds is not None else self.request_timeout_seconds
         ctx = {"endpoint": endpoint, "symbol": symbol, "alert_id": alert_id}
-        async with create_async_http_client(timeout=10.0) as client:
+        async with create_async_http_client(timeout=effective_timeout) as client:
             for route in routes:
                 result = await self._try_route(client, route, params, ctx)
                 if result is False:
@@ -927,6 +936,7 @@ class AlertFeatureExtractor:
                 params=params,
                 symbol=features.underlying,
                 alert_id=features.alert_id,
+                timeout_seconds=self.request_timeout_option_chain_seconds,
             )
             if data is None:
                 return features

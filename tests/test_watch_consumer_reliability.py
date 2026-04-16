@@ -81,7 +81,7 @@ async def test_process_flow_alert_retries_then_dead_letters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_flow_alert_non_retriable_failure_skips_retries_and_dlq() -> None:
+async def test_process_flow_alert_non_retriable_failure_skips_retries_but_dead_letters() -> None:
     redis_client = _RedisWithDlq()
     consumer = AlertWatchConsumer(
         redis_client,
@@ -96,7 +96,10 @@ async def test_process_flow_alert_non_retriable_failure_skips_retries_and_dlq() 
 
     assert ackable is True
     assert consumer._process_alert.await_count == 1
-    assert redis_client.added == []
+    # Non-retriable failures are still dead-lettered for observability
+    assert len(redis_client.added) == 1
+    assert redis_client.added[0][0] == "heber:watch:dlq"
+    assert "non_retriable_failure:alert_parse_failed" in redis_client.added[0][1]["error"]
 
 
 @pytest.mark.asyncio

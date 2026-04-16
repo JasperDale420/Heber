@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gold poller OOM crash on equity_features pipeline** — The `equity_features` pipeline loaded ~100 days of Silver bars for all equities into memory at once via `to_table()`, exceeding available memory and causing the heber-gold-poller container to crash-loop (1400+ restarts). Two fixes applied: (1) `HeberReader.read_silver()` now accepts a `batch_size` parameter that uses PyArrow's `Scanner` to stream data in fixed-size record batches instead of materializing everything at once; (2) the equity_features pipeline now uses column projection (12 of 20+ columns) and batched reading (`batch_size=500_000`), reducing peak memory by ~50-60%.
+
+### Fixed
+
+- **Feature enrichment timeouts for large option chains (QQQ, SPY)** — Option chain enrichment requests used a hardcoded 10-second HTTP timeout, but large chains (QQQ ~9,800 contracts, SPY ~3,200 contracts) take 6-7 seconds to respond from the Data-Gateway. Combined with semaphore queueing and retries, this caused 551 "Feature enrichment request failed" errors and 250 backfill re-enrichment failures per day. The option chain enrichment endpoint now uses a dedicated 30-second timeout (`HEBER_WATCH_ENRICHMENT_OPTION_CHAIN_TIMEOUT_SECONDS`), while other enrichment endpoints keep the 10-second default (`HEBER_WATCH_ENRICHMENT_TIMEOUT_SECONDS`). Both are configurable.
+- **Reduced false-positive null warnings for `historic_option_volume`** (`heber/quality/write_audit.py`): Added explicit `EXPECTED_NON_NULL` entry for the `historic_option_volume` Silver dataset, limiting null auditing to `hov_date`, `volume`, and `ts_event`. Previously, the audit checked ALL columns (including legitimately nullable fields like `call_volume`, `put_volume`, `premium`, `expiry`), generating thousands of spurious "Null values detected at write time" warnings. Root cause of the volume nulls was upstream in Data-Gateway (volume=0 treated as None); see Data-Gateway changelog.
+
+### Changed
+
+- **Silver writer min-rows gate for backfill throughput** — Added `HEBER_SILVER_MIN_ROWS_PER_FLUSH` setting (default 50) that prevents flushing partitions with fewer rows than the threshold. During backfill, records scatter across hundreds of date partitions with only 2-4 rows each, creating tiny parquet files and tanking throughput to 2-7 msg/s. The min-rows gate lets rows accumulate across XREADGROUP batches before flushing, reducing file count ~15x. The time-based safety valve (`silver_max_flush_time_seconds`) still ensures data is eventually persisted.
+- **Increased default Redis read batch size** — `HEBER_REDIS_READ_BATCH_SIZE` set to 2000 in docker-compose (was 500 default) for better backfill throughput.
+
 ### Removed
 
 - `DataQualityValidator` contracts module (`heber/quality/contracts.py`) — superseded by the Data Health Monitor's comprehensive check system

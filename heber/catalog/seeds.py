@@ -454,7 +454,14 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
     entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
 
     for entry in entries:
-        if not entry.is_dir() or entry.name.startswith(".") or not entry.name.startswith("feed="):
+        # String checks first to avoid stat() on macOS AppleDouble resource fork files
+        if entry.name.startswith(".") or not entry.name.startswith("feed="):
+            continue
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:
+            logger.debug("coverage_scan_skip_stat", path=str(entry), exc_info=True)
             continue
 
         feed_name = entry.name.split("=", 1)[1]

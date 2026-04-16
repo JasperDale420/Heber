@@ -206,6 +206,44 @@ def _discover_version_dirs(base_path: Path) -> list[Path]:
     )
 
 
+def _scan_batched(
+    dataset_obj: ds.Dataset,
+    scan_filter: ds.Expression | None,
+    projection: list[str] | None,
+    batch_size: int,
+) -> pa.Table:
+    """Read a dataset in batches via a Scanner to cap peak memory.
+
+    Instead of materializing the full filtered result with ``to_table()``,
+    this creates a ``Scanner`` with ``batch_size`` and iterates over record
+    batches.  The batches are collected and concatenated into a single
+    ``pa.Table`` at the end.
+
+    This is functionally equivalent to ``dataset.to_table()`` but the Scanner
+    streams data from disk in fixed-size batches, keeping the working set
+    bounded even for very large scans (e.g. 100 days of equity bars).
+    """
+    scanner = dataset_obj.scanner(
+        filter=scan_filter,
+        columns=projection,
+        batch_size=batch_size,
+    )
+    batches: list[pa.RecordBatch] = []
+    total_rows = 0
+    for batch in scanner.to_batches():
+        batches.append(batch)
+        total_rows += batch.num_rows
+        if total_rows % (batch_size * 10) == 0:
+            logger.debug("heber_reader_batched_progress", rows_so_far=total_rows)
+
+    if not batches:
+        schema = scanner.projected_schema
+        empty_arrays = {name: pa.array([], type=schema.field(name).type) for name in schema.names}
+        return pa.table(empty_arrays)
+
+    return pa.Table.from_batches(batches, schema=batches[0].schema)
+
+
 class HeberReader:
     """Thin filesystem reader for the Heber Bronze/Silver/Gold lakehouse.
 
@@ -253,6 +291,7 @@ class HeberReader:
         instrument_type: str | None = None,
         asof_time: str | datetime | None = None,
         columns: list[str] | None = None,
+        batch_size: int | None = None,
     ) -> pd.DataFrame:
         """Read Silver layer data with optional point-in-time correctness.
 
@@ -274,6 +313,11 @@ class HeberReader:
             Column projection.  ``ts_event``, ``ts_available``, and
             ``instrument_key`` are always included when they exist in the
             schema.
+        batch_size:
+            When set, reads data in batches of this many rows using PyArrow's
+            ``Scanner`` to cap peak memory.  Batches are concatenated into a
+            single table at the end.  Default ``None`` reads all matching rows
+            at once (original behaviour).
 
         Returns
         -------
@@ -325,7 +369,10 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter, columns=projection)
+            if batch_size is not None:
+                table = _scan_batched(dataset_obj, scan_filter, projection, batch_size)
+            else:
+                table = dataset_obj.to_table(filter=scan_filter, columns=projection)
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
@@ -349,6 +396,7 @@ class HeberReader:
         instrument_type: str | None = None,
         time_range: tuple[str | datetime, str | datetime] | None = None,
         columns: list[str] | None = None,
+        batch_size: int | None = None,
     ) -> pd.DataFrame:
         """Read Silver data with point-in-time correctness.
 
@@ -371,6 +419,8 @@ class HeberReader:
             ``(start_iso, end_iso)`` applied to ``ts_event``.
         columns:
             Optional column projection.
+        batch_size:
+            When set, reads data in batches to cap peak memory.
         """
         return self.read_silver(
             dataset=dataset,
@@ -379,6 +429,7 @@ class HeberReader:
             instrument_type=instrument_type,
             asof_time=asof_time,
             columns=columns,
+            batch_size=batch_size,
         )
 
     # ------------------------------------------------------------------

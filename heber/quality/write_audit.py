@@ -63,6 +63,11 @@ EXPECTED_NON_NULL: dict[tuple[str, str], list[str]] = {
         "call_charm",
         "put_charm",
     ],
+    ("silver", "historic_option_volume"): [
+        "hov_date",
+        "volume",
+        "ts_event",
+    ],
     # Gold feature datasets
     ("gold", "meta_label_features"): [
         "alert_id",

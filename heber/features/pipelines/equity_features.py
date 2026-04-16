@@ -32,6 +32,30 @@ logger = structlog.get_logger(__name__)
 LOOKBACK_DAYS = 90  # Extra history for computing rolling indicators
 FORWARD_DAYS = 10  # Extra future data for computing forward return labels
 
+# Column projection for Silver bars — only load fields needed by the pipeline.
+# The full bars schema has 20+ columns (event_id, provider, source, quality_flags,
+# etc.) but the feature computations only use OHLCV + metadata.  Projecting away
+# unused columns reduces memory by ~40-60%.
+_BARS_COLUMNS = [
+    "instrument_key",
+    "symbol",
+    "ts_event",
+    "ts_available",
+    "timeframe",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "vwap",
+    "trade_count",
+]
+
+# Batch size for Silver reads — streams data from disk in fixed-size chunks
+# instead of materializing the entire dataset at once, preventing OOM on large
+# scans (e.g. 100 days of all-equity bars).
+_BARS_BATCH_SIZE = 500_000
+
 
 def _resample_bars_to_daily(bars: pd.DataFrame) -> pd.DataFrame:
     """Resample intraday bars to daily OHLCV.
@@ -628,7 +652,13 @@ class EquityFeaturePipeline:
             # Load extra future bars for forward return label computation
             bar_end = end_date + timedelta(days=FORWARD_DAYS) if needs_forward else end_date
             logger.info("Loading Silver bars", start=bar_start.isoformat(), end=bar_end.isoformat())
-            bars = self.reader.read_silver("bars", instrument_type="equity", time_range=(bar_start, bar_end))
+            bars = self.reader.read_silver(
+                "bars",
+                instrument_type="equity",
+                time_range=(bar_start, bar_end),
+                columns=_BARS_COLUMNS,
+                batch_size=_BARS_BATCH_SIZE,
+            )
             logger.info("Loaded bars", rows=len(bars))
             bars = _resample_bars_to_daily(bars)
 

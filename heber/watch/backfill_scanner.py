@@ -59,6 +59,36 @@ backfill_duration_seconds = Histogram(
 )
 
 
+def _coerce_expiry_to_int(val: object) -> int | None:
+    """Convert an expiry value to YYYYMMDD integer.
+
+    Handles:
+      - int / float already in YYYYMMDD form
+      - date / datetime objects
+      - ISO date strings  ("2026-04-18")
+      - compact strings   ("20260418")
+      - None / NaN        → None
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, date):
+        return int(val.strftime("%Y%m%d"))
+    if isinstance(val, str):
+        cleaned = val.strip().replace("-", "")
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned[:8])
+        except ValueError:
+            logger.warning("Cannot coerce expiry to int", raw_value=val)
+            return None
+    return None
+
+
 def _is_polars_panic_exception(exc: BaseException) -> bool:
     """Return True when a BaseException is a polars/pyo3 panic wrapper."""
     return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
@@ -311,6 +341,17 @@ class EnrichmentBackfillScanner:
         # Coerce alert_time to datetime if needed
         if "alert_time" in features_df.columns:
             features_df["alert_time"] = pd.to_datetime(features_df["alert_time"], utc=True)
+
+        # Coerce expiry to int (YYYYMMDD) — the Gold parquet schema stores
+        # expiry as an integer, but enrichment returns date strings like
+        # "2026-04-18" or "20260418".
+        if "expiry" in features_df.columns:
+            features_df["expiry"] = features_df["expiry"].apply(_coerce_expiry_to_int)
+
+        # Coerce ts_event / ts_available to datetime if present as strings
+        for ts_col in ("ts_event", "ts_available"):
+            if ts_col in features_df.columns:
+                features_df[ts_col] = pd.to_datetime(features_df[ts_col], utc=True)
 
         persist_features_to_gold(
             features_df=features_df,

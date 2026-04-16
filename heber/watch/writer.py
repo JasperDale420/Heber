@@ -240,6 +240,8 @@ class WatchService:
             gateway_url=gateway_url,
             gateway_api_key=resolved_gateway_api_key,
             legacy_route_fallback_enabled=settings.watch_gateway_legacy_fallback_enabled,
+            request_timeout_seconds=settings.watch_enrichment_timeout_seconds,
+            request_timeout_option_chain_seconds=settings.watch_enrichment_option_chain_timeout_seconds,
         )
         self.backfill_scanner = EnrichmentBackfillScanner(
             feature_extractor=backfill_extractor,

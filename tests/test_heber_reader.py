@@ -595,6 +595,54 @@ class TestCombinedSilverFilters:
         assert (df["instrument_key"] == "equity:AAPL").all()
 
 
+class TestBatchedReading:
+    """Tests for the batch_size parameter on read_silver."""
+
+    def test_batched_returns_same_as_unbatched(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df_normal = reader.read_silver("bars")
+        df_batched = reader.read_silver("bars", batch_size=2)
+        assert len(df_batched) == len(df_normal)
+        # Same columns
+        assert set(df_batched.columns) == set(df_normal.columns)
+
+    def test_batched_with_filters(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df = reader.read_silver(
+            "bars",
+            instrument_keys=["equity:AAPL"],
+            batch_size=1,
+        )
+        assert len(df) == 2
+        assert (df["instrument_key"] == "equity:AAPL").all()
+
+    def test_batched_with_column_projection(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df = reader.read_silver("bars", columns=["close"], batch_size=2)
+        assert "close" in df.columns
+        assert "ts_event" in df.columns  # essential column kept
+        assert len(df) == 4
+
+    def test_batched_empty_result(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df = reader.read_silver(
+            "bars",
+            instrument_keys=["equity:NONEXISTENT"],
+            batch_size=2,
+        )
+        assert df.empty
+
+    def test_read_asof_passes_batch_size(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = silver_data
+        reader = HeberReader(root)
+        df = reader.read_asof("bars", asof_time=_ts(2), batch_size=2)
+        assert len(df) == 2
+
+
 class TestMultiInstrumentAsofJoin:
     def test_groups_by_instrument(self) -> None:
         reader = HeberReader(Path("/tmp/unused"))
