@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **equity_features OOM guard** — when more than 1 million bar rows are loaded and daily (`1Day`) bars cover all dates, intraday rows are dropped before resampling. This prevents an out-of-memory crash in the gold-poller that occurred when the Silver bars table grew to cover long date ranges with mixed timeframes.
+- **heber-watch gateway key not required in dev** — `_resolve_gateway_api_key` no longer raises a hard error when `HEBER_WATCH_GATEWAY_API_KEY` is unset in non-production environments. It now emits a structured warning and returns an empty key, allowing local development and testing without credentials. Production (`HEBER_ENVIRONMENT=prod`) still enforces the key.
+
+
+
 - **heber-watch NOGROUP self-healing** — if the `watch-consumer` Redis consumer group is ever dropped (e.g. after a Redis flush/restart without persistence), `WatchConsumer._read_messages` now catches the `NOGROUP` `ResponseError`, re-runs `setup_consumer_group`, and retries the `XREADGROUP` call exactly once. Previously the service got stuck in an indefinite retry loop (observed today with 450+ consecutive errors over ~4 hours) because the one-shot group-create at startup couldn't recover from mid-lifecycle group loss. The group was manually recreated (`XGROUP CREATE heber:events watch-consumer $`) to unblock today's session.
 
 ### Known issues (not yet fixed)

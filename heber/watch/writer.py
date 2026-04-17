@@ -20,12 +20,17 @@ DEFAULT_GATEWAY_URL = "http://localhost:8080"
 
 def _resolve_gateway_api_key(explicit_gateway_api_key: str | None, settings_gateway_api_key: str | None) -> str:
     """Resolve and validate the gateway API key used by watch components."""
+    from heber.config import get_settings
+
     candidate = explicit_gateway_api_key
     if candidate is None:
         candidate = settings_gateway_api_key
     normalized = (candidate or "").strip()
     if not normalized:
-        raise ValueError("HEBER_WATCH_GATEWAY_API_KEY (or DATA_GATEWAY_API_KEY) must be configured")
+        if get_settings().environment == "prod":
+            raise ValueError("HEBER_WATCH_GATEWAY_API_KEY (or DATA_GATEWAY_API_KEY) must be configured")
+        logger.warning("gateway_api_key_missing", hint="Set HEBER_WATCH_GATEWAY_API_KEY for authenticated access")
+        return ""
     return normalized
 
 

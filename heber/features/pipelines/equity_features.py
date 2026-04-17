@@ -660,6 +660,20 @@ class EquityFeaturePipeline:
                 batch_size=_BARS_BATCH_SIZE,
             )
             logger.info("Loaded bars", rows=len(bars))
+            # Drop intraday rows early when daily bars are available.
+            # _resample_bars_to_daily prefers 1Day bars and only falls back
+            # to intraday for uncovered dates, but sorting/grouping millions
+            # of intraday rows causes OOM.  Filtering here is safe because
+            # daily bars have been available for all dates since mid-2025.
+            if "timeframe" in bars.columns and len(bars) > 1_000_000:
+                daily_only = bars[bars["timeframe"] == "1Day"]
+                if not daily_only.empty:
+                    logger.info(
+                        "Dropped intraday bars to reduce memory",
+                        before=len(bars),
+                        after=len(daily_only),
+                    )
+                    bars = daily_only
             bars = _resample_bars_to_daily(bars)
 
         if "microstructure" in datasets:
