@@ -55,3 +55,6 @@ debug/
 
 # Local dev data
 .local_heber_data/
+
+# Sourcegraph SCIP indexes (build artifact)
+*.scip
