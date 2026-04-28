@@ -72,7 +72,14 @@ PIPELINE_REGISTRY: list[dict[str, Any]] = [
         "name": "market_intel",
         "module": "heber.features.pipelines.market_intel_features",
         "class": "MarketIntelPipeline",
-        "datasets": None,
+        # Explicitly exclude "darkpool" — the dedicated darkpool pipeline owns
+        # darkpool_features with the per-ticker schema (darkpool_notional_1d /
+        # darkpool_premium_ratio / darkpool_activity_zscore). Letting MarketIntel
+        # default to ALL_DATASETS double-writes the same partition with an
+        # incompatible schema (total_volume / total_notional / pct_above_nbbo)
+        # which downstream readers then merge into a frame missing the columns
+        # consumers actually configured against.
+        "datasets": ("greek_exposure", "options_sentiment", "ftd"),
         "gold_datasets": [
             "greek_exposure_features",
             "options_sentiment_features",

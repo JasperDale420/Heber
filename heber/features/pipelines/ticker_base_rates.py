@@ -196,7 +196,7 @@ class TickerBaseRatesPipeline:
         project: str = "watch",
         version: str = "v1",
         labels_dataset: str = "labels_alert_barriers",
-        labels_project: str = "quant",
+        labels_project: str = "watch",
     ):
         self.reader = reader or HeberReader()
         self.project = project
