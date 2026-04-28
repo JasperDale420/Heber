@@ -297,7 +297,7 @@ def main() -> None:
     parser.add_argument("--project", default="watch", help="Gold project name")
     parser.add_argument("--version", default="v1", help="Gold version")
     parser.add_argument("--labels-dataset", default="labels_alert_barriers", help="Source labels dataset")
-    parser.add_argument("--labels-project", default="quant", help="Source labels project")
+    parser.add_argument("--labels-project", default="watch", help="Source labels project")
 
     args = parser.parse_args()
 
