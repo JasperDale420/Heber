@@ -516,6 +516,22 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                 },
             ),
         ),
+        (
+            "treasury_yields",
+            "treasury_yields",
+            _envelope(
+                feed="treasury_yields",
+                provider="alphavantage",
+                instrument_type="macro",
+                instrument_key="macro:treasury_yield:2year",
+                symbol="TREASURY_2YEAR",
+                payload={
+                    "date": "2026-04-27",
+                    "maturity": "2year",
+                    "yield_pct": 3.78,
+                },
+            ),
+        ),
     ]
 
 
