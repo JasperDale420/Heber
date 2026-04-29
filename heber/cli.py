@@ -19,6 +19,20 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_research_artifact(feed_dir) -> bool:
+    """Return True for non-Heber-managed feed dirs (Atlas hypothesis materializations).
+
+    Atlas writes hypothesis outputs directly to ``silver/feed=atlas_features_*/``
+    with an ``_atlas_materialization_meta.json`` marker. They share storage but
+    are NOT Bronze→Silver pipeline outputs and pollute dataset listings/audits.
+    """
+    if (feed_dir / "_atlas_materialization_meta.json").exists():
+        return True
+    if feed_dir.name.startswith("feed=atlas_features_"):
+        return True
+    return False
+
+
 def _cmd_datasets(args: argparse.Namespace) -> int:
     """Handle the 'datasets' subcommand."""
     try:
@@ -29,7 +43,9 @@ def _cmd_datasets(args: argparse.Namespace) -> int:
         if not base.exists():
             print(f"No {layer} data found at {base}", file=sys.stderr)
             return 1
-        feeds = sorted({p.name.split("=")[1] for p in base.glob("feed=*") if p.is_dir()})
+        feeds = sorted(
+            {p.name.split("=")[1] for p in base.glob("feed=*") if p.is_dir() and not _is_research_artifact(p)}
+        )
         for feed in feeds:
             print(f"  {feed}")
     except Exception as e:

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`heber datasets --layer silver` no longer lists Atlas hypothesis materializations** — Atlas writes hypothesis outputs directly to `silver/feed=atlas_features_*/` with an `_atlas_materialization_meta.json` marker. They share storage but are NOT Bronze→Silver pipeline outputs. Today there are 57 of them polluting the inventory listing. The CLI now hides any `feed=*` directory that either contains the marker file or matches the `atlas_features_` name prefix. Listing now shows only the 17 contracted Heber-managed feeds. Regression test in `tests/test_cli_datasets_atlas_filter.py`.
+
 ### Removed
 
 - **Quarantined three uncontracted Silver/Bronze paths created before the contract gate landed** — moved to `silver/_quarantine/2026-04-29/` and `bronze/_quarantine/2026-04-29/`:
