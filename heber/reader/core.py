@@ -108,11 +108,19 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
         return []
     files: list[str] = []
     for f in base.rglob("*.parquet"):
-        if not f.is_file():
-            continue
+        # Filter by name BEFORE any stat() call. On macOS bind mounts inside
+        # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
+        # stat(), so calling f.is_file() first crashes the walk before we
+        # get a chance to skip them by name. Ordering matters here.
         if f.name.startswith("._"):
             continue
         if any(part.startswith("._") for part in f.parts):
+            continue
+        try:
+            if not f.is_file():
+                continue
+        except OSError:
+            # Defensive: any other unstattable path (rare) is also skipped.
             continue
         files.append(str(f))
     return files
