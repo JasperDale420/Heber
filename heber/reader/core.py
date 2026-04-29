@@ -29,6 +29,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,19 +50,20 @@ _VERSION_PREFIX = "version="
 
 
 def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
-    """Cast dictionary-encoded string columns to plain ``pa.string()``.
+    """Cast string-family columns to plain ``pa.string()``.
 
     When Silver files are written by different code paths (real-time writer vs
-    compactor) their Parquet encoding for low-cardinality string columns may
-    differ — one path writes ``string``, the other ``dictionary<string, int32>``.
-    ``pyarrow.dataset`` refuses to merge these schemas.
+    compactor) their Parquet encoding for string columns may differ — one
+    path writes ``string``, another writes ``large_string``, a third writes
+    ``dictionary<string, int32>``. ``pyarrow.dataset`` refuses to merge
+    these schemas across fragments.
 
     Applying this coercion after ``to_table()`` ensures downstream consumers
     always see plain string columns regardless of on-disk encoding.
     """
     needs_cast = False
     for field in table.schema:
-        if pa.types.is_dictionary(field.type):
+        if pa.types.is_dictionary(field.type) or pa.types.is_large_string(field.type):
             needs_cast = True
             break
     if not needs_cast:
@@ -74,6 +76,9 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
         if pa.types.is_dictionary(field.type) and (
             pa.types.is_string(field.type.value_type) or pa.types.is_large_string(field.type.value_type)
         ):
+            col = col.cast(pa.string())
+            field = field.with_type(pa.string())
+        elif pa.types.is_large_string(field.type):
             col = col.cast(pa.string())
             field = field.with_type(pa.string())
         arrays.append(col)
@@ -126,11 +131,38 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
     return files
 
 
+def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
+    """Collapse string-family Arrow types into plain ``pa.string()``.
+
+    Different Parquet writers in this lakehouse emit string columns under
+    several Arrow encodings:
+
+    * ``string`` — the historical/default encoding from the real-time writer.
+    * ``large_string`` — emitted by the compactor for files that may exceed
+      the 2 GiB string-buffer limit (newer parquet builds).
+    * ``dictionary<string|large_string, int*>`` — emitted by some writers
+      for low-cardinality columns.
+
+    ``pyarrow.dataset`` refuses to merge fragments whose schemas differ on
+    these — even though the on-the-wire payload is identical UTF-8 bytes —
+    raising ``ArrowTypeError: Unable to merge: ... incompatible types:
+    large_string vs string``. Folding everything down to ``pa.string()`` at
+    schema-unification time gives the dataset scanner a single target type
+    it can cast every fragment into, and is the same lossless coercion we
+    already apply post-read in ``_coerce_dict_columns_to_string``.
+    """
+    if pa.types.is_dictionary(dt) and (pa.types.is_string(dt.value_type) or pa.types.is_large_string(dt.value_type)):
+        return pa.string()
+    if pa.types.is_large_string(dt):
+        return pa.string()
+    return dt
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
 ) -> ds.Dataset | None:
-    """Open a Parquet dataset, recovering from dictionary/string schema conflicts.
+    """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
     Pre-filters the file list to skip macOS sidecars (``._*``) and
     partial-write ``*.tmp`` files; these are picked up by
@@ -138,10 +170,11 @@ def _open_dataset_safe(
     ``EPERM`` or ``ArrowInvalid: Parquet file size is X bytes``.
 
     On the first attempt we let ``pyarrow.dataset`` infer the unified schema.
-    If that fails with ``ArrowInvalid`` (the dictionary-vs-string mismatch),
-    we manually read the schemas of individual files, unify them with
-    dictionary types coerced to plain string, and re-open the dataset with
-    the explicit schema.
+    If that fails because fragments disagree on string-family encodings —
+    ``ArrowInvalid`` for dictionary-vs-string, ``ArrowTypeError`` for
+    ``large_string`` vs ``string`` — we manually read the schemas of
+    individual files, fold all string-family types down to plain
+    ``pa.string()``, and re-open the dataset with the explicit schema.
     """
     file_list = _collect_parquet_files(path)
     if not file_list:
@@ -149,11 +182,15 @@ def _open_dataset_safe(
 
     try:
         return ds.dataset(file_list, format="parquet", partitioning=partitioning)
-    except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError):
+    except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError, pa.lib.ArrowTypeError):
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
-    # Manual schema unification from individual fragment metadata
+    # Manual schema unification from individual fragment metadata.
     try:
+        # Open without partitioning first — purely to enumerate fragments
+        # and read their physical schemas. Partition columns are not part
+        # of fragment.physical_schema, so this read is partition-agnostic
+        # and avoids the cross-fragment merge that just failed above.
         raw = ds.dataset(file_list, format="parquet")
         schemas: list[pa.Schema] = []
         for fragment in raw.get_fragments():
@@ -165,31 +202,64 @@ def _open_dataset_safe(
         if not schemas:
             return None
 
-        # Build unified schema, coercing dictionary types to plain string
+        # Build the data-column unified schema. Fold all string-family
+        # encodings (dictionary, large_string) down to plain pa.string()
+        # so the scanner has a single cast target — pyarrow can cast
+        # string<->large_string and decode dictionaries on read, but it
+        # refuses to *merge* across fragments with these mismatches.
+        # Numeric mismatches (e.g. ``trade_count`` int64 vs double from
+        # different writers) widen to the more general type — float64
+        # losslessly holds int values up to 2^53 and avoids the
+        # ``ArrowInvalid: Float value X was truncated converting to int64``
+        # that fires when a float-typed fragment is read into an int-typed
+        # schema.
         field_map: dict[str, pa.DataType] = {}
         field_order: list[str] = []
         for schema in schemas:
             for field in schema:
+                incoming = _normalize_string_type(field.type)
                 if field.name not in field_map:
                     field_order.append(field.name)
-                    dt = field.type
-                    if pa.types.is_dictionary(dt):
-                        dt = pa.string()
-                    field_map[field.name] = dt
+                    field_map[field.name] = incoming
                 else:
                     existing = field_map[field.name]
-                    incoming = field.type
-                    if pa.types.is_dictionary(incoming):
-                        incoming = pa.string()
-                    if pa.types.is_dictionary(existing):
-                        existing = pa.string()
-                    if not existing.equals(incoming):
-                        # Widen to string as a safe fallback
+                    if existing.equals(incoming):
+                        continue
+                    if pa.types.is_string(existing) or pa.types.is_string(incoming):
                         field_map[field.name] = pa.string()
-                    else:
-                        field_map[field.name] = existing
+                    elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
+                        # int64 vs float64 → widen to float64
+                        field_map[field.name] = pa.float64()
 
-        unified = pa.schema([pa.field(name, field_map[name]) for name in field_order])
+        # Append hive partition columns to the unified schema. Without
+        # them, ``ds.dataset(file_list, schema=unified, partitioning=hive)``
+        # raises ``ArrowInvalid: No match for FieldRef.Name(dt) in ...``
+        # because the partition factory expects the schema to declare each
+        # discovered partition column. The partitioning factory only
+        # treats ``key=value`` segments **below** the dataset root as
+        # partition columns, where the dataset root is the common prefix
+        # of the file list. We replicate that scope here and type each
+        # discovered key as ``pa.string()`` to match pyarrow's default
+        # hive-partitioning behaviour.
+        common_root = os.path.commonpath(file_list)
+        partition_columns: list[str] = []
+        seen_partition: set[str] = set()
+        for fp in file_list:
+            rel = os.path.relpath(fp, common_root)
+            for segment in rel.split(os.sep):
+                eq = segment.find("=")
+                if eq <= 0:
+                    continue
+                name = segment[:eq]
+                if not name.isidentifier() or name in seen_partition or name in field_map:
+                    continue
+                seen_partition.add(name)
+                partition_columns.append(name)
+
+        unified_fields = [pa.field(n, field_map[n]) for n in field_order]
+        unified_fields.extend(pa.field(n, pa.string()) for n in partition_columns)
+        unified = pa.schema(unified_fields)
+
         return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
     except Exception:
         logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
