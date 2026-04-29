@@ -515,8 +515,13 @@ class Compactor:
         partitions_scanned = 0
         files_merged = 0
 
-        # Walk through all partitions (directories containing .parquet files)
+        # Walk through all partitions (directories containing .parquet files).
+        # Skip names starting with "." so macOS AppleDouble resource-fork
+        # files (._foo) on exFAT/NTFS volumes don't raise PermissionError
+        # from the is_dir() stat call. Mirrors the catalog fix in 8af04ef.
         for partition_path in layer_path.rglob("*"):
+            if partition_path.name.startswith("."):
+                continue
             if partition_path.is_dir():
                 parquet_files = self._list_compactable_parquet_files(partition_path)
                 if parquet_files:
