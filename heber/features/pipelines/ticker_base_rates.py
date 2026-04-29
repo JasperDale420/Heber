@@ -48,19 +48,29 @@ def _normalize_instrument_key(value: Any) -> str:
 def _extract_ticker_column(df: pd.DataFrame) -> pd.Series:
     """Extract and normalize the ticker identifier from the labels DataFrame.
 
-    Coalesces instrument_key and underlying columns (preferring instrument_key where
-    non-null), then normalizes to canonical ``equity:TICKER`` format.
+    Ticker base rates are per-underlying statistics (e.g., "AAPL's 90-day win
+    rate"), so we want one identifier per underlying. The labels source
+    (``labels_alert_barriers``) keys ``instrument_key`` to the specific
+    option contract that fired the alert (``option:OCC:AAPL260515C00190000``),
+    not the underlying — so preferring ``instrument_key`` produced one row
+    per option contract, which (a) duplicated stats across thousands of
+    strike/expiry combinations and (b) made downstream consumers (Orion ML
+    scorer's ``EQUITY_TICKER_RATES_FEATURES``) unable to find the rates
+    when filtering by ``equity:AAPL``.
+
+    Prefer ``underlying`` (the ticker symbol) and only fall back to
+    ``instrument_key`` when ``underlying`` is missing entirely.
     """
     has_ik = "instrument_key" in df.columns
     has_ul = "underlying" in df.columns
 
-    if has_ik and has_ul:
-        # Coalesce: prefer instrument_key, fall back to underlying
-        raw = df["instrument_key"].fillna(df["underlying"])
-    elif has_ik:
-        raw = df["instrument_key"]
+    if has_ul and has_ik:
+        # Coalesce: prefer underlying, fall back to instrument_key for any null underlying.
+        raw = df["underlying"].fillna(df["instrument_key"])
     elif has_ul:
         raw = df["underlying"]
+    elif has_ik:
+        raw = df["instrument_key"]
     else:
         raise ValueError("Labels DataFrame must contain 'instrument_key' or 'underlying' column")
 
