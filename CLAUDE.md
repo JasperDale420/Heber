@@ -114,6 +114,22 @@ Incoming feeds from Data-Gateway are routed through `ingest_contracts.py`:
 
 Silver layer does rename + type coerce only. Derived/computed fields (moneyness, DTE, volume_oi_ratio) belong in Gold/Feature views.
 
+## Gold Pipeline Result Shape
+
+Pipelines return one of two `dict` shapes from `run()`:
+
+- Nested: `{gold_dataset_name: {"status": ..., "rows": N, "path": ...}}`
+  (used by `darkpool_features`, `oi_momentum_features`, `iv_surface_features`,
+  `flow_toxicity_features`, `flow_normalization_features`, `market_intel_features`)
+- Flat: `{"status": ..., "rows": N, "path": ...}` (used by `sector_flow_features`,
+  `trend_scan_features`, `flow_context_features`, `straddle_momentum_features`,
+  `ticker_base_rates`, `excursion_analytics`, `alert_labels`)
+
+`heber.gold_poller.service` normalizes both before aggregation. New pipelines
+may pick either; the orchestrator handles both. The flat shape was historically
+counted as `total_rows=0` in poller logs — that's been fixed but worth knowing
+if you read older log lines.
+
 ## Instrument Key Format
 
 Per PRD section 6.2, validated by regex patterns in `models/envelope.py`:
@@ -125,9 +141,27 @@ Per PRD section 6.2, validated by regex patterns in `models/envelope.py`:
 | forex | `forex:{FROM}-{TO}` | `forex:USD-EUR` |
 | option | `option:OCC:{OCC_SYMBOL}` | `option:OCC:AAPL260116C00200000` |
 
+**Per-underlying analytics with `expiry` fields are equity, not option.** Feeds like
+`iv_term_structure` carry one row per expiry of the *same* underlying — they're
+IV term structure across expiries for one ticker, not per-OCC-contract data.
+Producers must emit `instrument_type=equity, instrument_key=equity:{symbol}`;
+the bare `option:{symbol}` form (no OCC suffix) is rejected at the writer.
+
 ## HeberReader (Canonical Read Interface)
 
 `heber.reader.HeberReader` is the only supported way to read lakehouse data. All predicates are pushed into pyarrow dataset scans for row-group pruning.
+
+`_open_dataset_safe` silently filters three classes of files before passing
+to `pyarrow.dataset` — required for bind-mounted volumes on macOS:
+- `._*.parquet` AppleDouble sidecar files (stat() returns EPERM on Apple
+  Silicon Docker bind mounts; pyarrow's auto-walk crashes if not pre-filtered)
+- Files inside `._<name>` sidecar directories (`._dt=2026-03-11/...`)
+- `*.tmp` files (typically `part-*.parquet.tmp` partial writes — pyarrow
+  bails with `Parquet file size is X bytes` on these)
+
+It also folds `large_string` / `dictionary<string>` into plain `pa.string()`
+during manual schema unification so fragments written by different writers
+(real-time vs. compactor) merge cleanly.
 
 ```python
 from heber.reader import HeberReader
