@@ -81,11 +81,53 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     return pa.table(arrays, schema=pa.schema(fields))
 
 
+def _collect_parquet_files(root: str | Path) -> list[str]:
+    """Walk a Parquet dataset root and return only readable parquet files.
+
+    Skips three classes of files that would otherwise cause pyarrow to
+    raise on dataset open:
+
+    1. ``._<name>.parquet`` AppleDouble sidecar files copied by macOS Finder /
+       APFS xattr handling. ``stat()`` returns ``EPERM`` even though the
+       primary file is fine.
+    2. Files inside ``._<name>`` sidecar directories (e.g.
+       ``._dt=2026-03-11/...``) — same root cause but at the partition-dir
+       level.
+    3. ``*.tmp`` files (typically ``part-*.parquet.tmp``) — partial writes
+       from interrupted writers. Even when the rest of the partition is
+       healthy, pyarrow's auto-discovery includes them and errors with
+       ``Parquet file size is X bytes, smaller than the minimum file
+       footer (8 bytes)``.
+
+    Returning an explicit file list to ``ds.dataset(...)`` short-circuits
+    pyarrow's recursive directory walk and lets hive partitioning still
+    be inferred from the path components.
+    """
+    base = Path(root)
+    if not base.exists():
+        return []
+    files: list[str] = []
+    for f in base.rglob("*.parquet"):
+        if not f.is_file():
+            continue
+        if f.name.startswith("._"):
+            continue
+        if any(part.startswith("._") for part in f.parts):
+            continue
+        files.append(str(f))
+    return files
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from dictionary/string schema conflicts.
+
+    Pre-filters the file list to skip macOS sidecars (``._*``) and
+    partial-write ``*.tmp`` files; these are picked up by
+    ``ds.dataset()``'s automatic directory walk and break the open with
+    ``EPERM`` or ``ArrowInvalid: Parquet file size is X bytes``.
 
     On the first attempt we let ``pyarrow.dataset`` infer the unified schema.
     If that fails with ``ArrowInvalid`` (the dictionary-vs-string mismatch),
@@ -93,14 +135,18 @@ def _open_dataset_safe(
     dictionary types coerced to plain string, and re-open the dataset with
     the explicit schema.
     """
+    file_list = _collect_parquet_files(path)
+    if not file_list:
+        return None
+
     try:
-        return ds.dataset(path, format="parquet", partitioning=partitioning)
+        return ds.dataset(file_list, format="parquet", partitioning=partitioning)
     except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError):
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
     # Manual schema unification from individual fragment metadata
     try:
-        raw = ds.dataset(path, format="parquet")
+        raw = ds.dataset(file_list, format="parquet")
         schemas: list[pa.Schema] = []
         for fragment in raw.get_fragments():
             try:
@@ -136,7 +182,7 @@ def _open_dataset_safe(
                         field_map[field.name] = existing
 
         unified = pa.schema([pa.field(name, field_map[name]) for name in field_order])
-        return ds.dataset(path, format="parquet", partitioning=partitioning, schema=unified)
+        return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
     except Exception:
         logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
         return None
