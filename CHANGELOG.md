@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Quarantined three uncontracted Silver/Bronze paths created before the contract gate landed** — moved to `silver/_quarantine/2026-04-29/` and `bronze/_quarantine/2026-04-29/`:
+  - `silver/feed=data/` (3 files, 32 rows, last write 2026-02-11; one partition was `dt=2023-01-01` from a payload-internal date) — uncontracted feed name `data` from a misconfigured publisher.
+  - `silver/feed=stocks/` (1 file, 2 rows, 2026-02-12) — `stocks` is not in `CONTRACTED_RAW_FEEDS` and resolves to `None`.
+  - `bronze/provider=unknown/feed=data/` (~30 MB across 2026-02-10/11 + the spurious `dt=2023-01-01`) — `provider=unknown, feed=data` indicates a publisher that didn't set the envelope's provider/feed correctly.
+  Files were moved (not deleted) following the existing `gold/_quarantine/` convention so they remain recoverable; they can be permanently removed after a soak period if nothing surfaces. Silver inventory is now clean — only the 17 contracted feeds plus the 57 `atlas_features_hyp_*` materializations remain.
+
 ### Fixed
 
 - **`treasury_yields` 100 % DLQ'd — `instrument_type=macro` rejected by envelope key validator** — Data-Gateway emits AlphaVantage treasury yields as `instrument_type=macro, instrument_key=macro:treasury_yield:{maturity}`, but `INSTRUMENT_KEY_PATTERNS` only knew `equity|crypto|forex|option`, so every event was rejected at `normalize_envelope_for_silver` with `Invalid instrument_key format for instrument_type macro`. Bronze accumulated 22+ partitions (last 2026-04-27); Silver had zero rows for the dataset. Fix: register a `macro` pattern (`^macro:[a-z][a-z0-9_]*(?::[a-z0-9_]+)*$`) that accepts `macro:treasury_yield:2year`, `macro:cpi`, `macro:fed_funds_rate`, etc. Existing DLQ entries can be drained via `python -m heber.writer.dlq_reprocessor --reprocess --feed treasury_yields`. Regression tests in `tests/test_equity_instrument_key_format.py::test_macro_*` and `tests/test_ingest_feed_contract_matrix.py` (treasury_yields case added to the feed matrix).
