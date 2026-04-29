@@ -68,6 +68,36 @@ EXPECTED_NON_NULL: dict[tuple[str, str], list[str]] = {
         "volume",
         "ts_event",
     ],
+    # option_chain_snapshot stores one row per underlying snapshot with the
+    # full chain serialized in `chain_json`. The Arrow schema also carries
+    # per-contract columns (occ_symbol, strike, bid, ask, etc.) for legacy
+    # ChainSnapshotRecord compatibility; those are LEGITIMATELY null in the
+    # canonical dataset. Restrict the audit to the actually-required fields
+    # per REQUIRED_FIELDS_BY_FEED["option_chain_snapshot"] in ingest_contracts.
+    ("silver", "option_chain_snapshot"): [
+        "snapshot_ts",
+        "underlying",
+        "chain_json",
+    ],
+    # oi_change canonical record: oi_date + call/put OI and OI-change. Other
+    # UW detail fields (last_ask/last_bid/avg_price/prev_*) are optional and
+    # often absent for aggregate rows.
+    ("silver", "oi_change"): [
+        "oi_date",
+        "call_oi",
+        "put_oi",
+        "call_oi_change",
+        "put_oi_change",
+    ],
+    # darkpool: NBBO context (nbbo_bid_size, nbbo_ask_size, sale_cond_codes,
+    # trade_code) is sometimes absent from the upstream feed for off-hours
+    # or low-quality prints. Required is symbol/price/size/ts.
+    ("silver", "darkpool"): [
+        "underlying",
+        "price",
+        "size",
+        "ts_event",
+    ],
     # Gold feature datasets
     ("gold", "meta_label_features"): [
         "alert_id",

@@ -202,3 +202,82 @@ class TestExpectedNonNull:
         enrichment_cols = ["delta", "gamma", "theta", "vega", "iv", "iv_rank", "gex", "vex"]
         for col in enrichment_cols:
             assert col in cols, f"Enrichment column {col} not tracked"
+
+
+class TestCanonicalRowPerSnapshotDatasets:
+    """Datasets that legitimately leave most Arrow columns null because the
+    canonical record is a single snapshot row whose payload lives in a
+    serialized blob (chain_json). The audit must not warn on those.
+    """
+
+    def test_option_chain_snapshot_canonical_row_does_not_warn_on_per_contract_nulls(self):
+        """The canonical option_chain_snapshot row has chain_json + a few
+        aggregate columns; per-contract fields (occ_symbol, strike, bid, ask)
+        are legitimately null and must not trigger audit warnings.
+        """
+        df = pd.DataFrame(
+            {
+                "snapshot_ts": pd.to_datetime(["2026-04-28T14:30:00Z"]),
+                "underlying": ["AAPL"],
+                "chain_json": ['{"data": {"contracts": []}}'],
+                # Per-contract Arrow columns — legitimately null on canonical row.
+                "occ_symbol": [None],
+                "strike": [None],
+                "bid": [None],
+                "ask": [None],
+                "last": [None],
+                "volume": [None],
+                "put_call": [None],
+                "underlying_price": [None],
+            }
+        )
+        result = audit_null_fields(df, layer="silver", dataset="option_chain_snapshot")
+        assert result == {}, f"audit raised false-positive warnings: {result}"
+
+    def test_option_chain_snapshot_warns_when_canonical_field_is_null(self):
+        """If chain_json itself is null, that IS a real problem and should warn."""
+        df = pd.DataFrame(
+            {
+                "snapshot_ts": pd.to_datetime(["2026-04-28T14:30:00Z"]),
+                "underlying": ["AAPL"],
+                "chain_json": [None],
+                "occ_symbol": [None],
+            }
+        )
+        result = audit_null_fields(df, layer="silver", dataset="option_chain_snapshot")
+        assert "chain_json" in result
+
+    def test_oi_change_canonical_aggregate_row_does_not_warn_on_optional_nulls(self):
+        df = pd.DataFrame(
+            {
+                "oi_date": ["2026-04-28"],
+                "call_oi": [1000],
+                "put_oi": [800],
+                "call_oi_change": [50],
+                "put_oi_change": [-20],
+                # Optional UW detail fields — legitimately null on aggregates.
+                "last_ask": [None],
+                "last_bid": [None],
+                "avg_price": [None],
+                "option_symbol": [None],
+            }
+        )
+        result = audit_null_fields(df, layer="silver", dataset="oi_change")
+        assert result == {}
+
+    def test_darkpool_does_not_warn_on_missing_nbbo_context(self):
+        df = pd.DataFrame(
+            {
+                "underlying": ["TSLA"],
+                "price": [250.5],
+                "size": [100],
+                "ts_event": pd.to_datetime(["2026-04-28T14:30:00Z"]),
+                # NBBO context legitimately absent for off-hours / low-quality prints.
+                "nbbo_bid_size": [None],
+                "nbbo_ask_size": [None],
+                "sale_cond_codes": [None],
+                "trade_code": [None],
+            }
+        )
+        result = audit_null_fields(df, layer="silver", dataset="darkpool")
+        assert result == {}
