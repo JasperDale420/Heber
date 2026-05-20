@@ -78,15 +78,176 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "iv_term_structure",
     "etf_tide",
     "auctions",
+    # Reference / metadata feeds — contracted-but-Bronze-only.
+    # Listed here so `is_contracted_feed` passes the routing gate (no
+    # `silver_feed_uncontracted` DLQ).  Each canonical name appears in
+    # ``BRONZE_ONLY_SILVER_DATASETS`` below so the Silver writer skips them.
+    # Re-classify to typed Silver later by adding an Arrow schema in
+    # ``heber/schemas/silver.py`` and removing the canonical name from the
+    # Bronze-only set.
+    "filings",
+    "institution_holdings",
+    "13f",
+    "account",
+    "alerts",
+    "assets",
+    "balance-sheet",
+    "calendar",
+    "cash-flow",
+    "clock",
+    "company",
+    "concept",
+    "congress",
+    "congress-trading",
+    "contract",
+    "corporate-actions",
+    "crypto",
+    "economic",
+    "estimates",
+    "etf_metadata",
+    "executives",
+    "fda-calendar",
+    "fixed-income",
+    "forex",
+    "frames",
+    "fund-ownership",
+    "income-statement",
+    "index",
+    "indicator",
+    "insider",
+    "insider-sentiment",
+    "insider-transactions",
+    "listing-status",
+    "lobbying",
+    "logos",
+    "market",
+    "meta",
+    "metrics",
+    "mutual-fund",
+    "option-contract",
+    "option_contract",
+    "orders",
+    "orders:by_client_order_id",
+    "ownership",
+    "patterns",
+    "peers",
+    "politician_trades",
+    "portfolio",
+    "positions",
+    "price-target",
+    "recommendations",
+    "screener_result",
+    "search",
+    "seasonality",
+    "sectors",
+    "sentiment",
+    "short_data",
+    "social-sentiment",
+    "stock",
+    "stock_fundamentals",
+    "stocks",
+    "support-resistance",
+    "ticker",
+    "upgrade-downgrade",
+    "usa-spending",
+    "watchlists",
+    "{symbol}",
 )
 
 # Backwards-compatible name used by tests and docs for gateway feed inventory.
 DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
 
 # Feeds to persist in Bronze but skip Silver by default until an active Gold use-case exists.
-# Currently empty — all contracted feeds get Silver normalization. Add canonical Silver
-# dataset names here to gate them out of Silver writes.
-BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset({"news", "institution_holdings"})
+# Each entry must be the canonical (post-FEED_ALIASES) feed name.  ``is_bronze_only_feed``
+# resolves aliases before lookup, so raw feed names that alias into one of these are also
+# silenced.  See ``CONTRACTED_RAW_FEEDS`` above for the matching raw-name allowlist.
+BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset(
+    {
+        # Already Bronze-only since Phase 2 — news bodies and 13F holdings have
+        # no time-series shape that warrants Silver typing.
+        "news",
+        "institution_holdings",
+        # ── Reference / metadata feeds (UnusualWhales REST endpoint names) ──
+        # Account, watchlists, portfolio: user-account REST endpoints, not market data.
+        "account",
+        "watchlists",
+        "portfolio",
+        "positions",
+        "orders",
+        "orders:by_client_order_id",
+        # Calendar / clock / market-state: trading-day metadata.
+        "calendar",
+        "clock",
+        "fda-calendar",
+        "market",
+        "listing-status",
+        # Reference data lookups: per-symbol point-in-time metadata snapshots.
+        "company",
+        "executives",
+        "logos",
+        "meta",
+        "metrics",
+        "assets",
+        "stock",
+        "stocks",
+        "ticker",
+        "{symbol}",  # template placeholder leaking from the gateway router
+        "search",
+        "concept",
+        "contract",
+        "option-contract",
+        "option_contract",
+        "mutual-fund",
+        # Sector / index / ETF metadata: slow-moving descriptive data.
+        "sectors",
+        "index",
+        "etf_metadata",
+        "fund-ownership",
+        # Government / political: lobbying disclosures, congressional trades index,
+        # USASpending federal contracts.  Keep raw blobs; promote to Silver if a
+        # strategy actually consumes them.
+        "13f",
+        "lobbying",
+        "usa-spending",
+        "congress",
+        "congress-trading",
+        "politician_trades",
+        # Insider activity (variant feeds — canonical typed feed is ``insider_trades``).
+        "insider",
+        "insider-sentiment",
+        "insider-transactions",
+        "ownership",
+        # Corporate actions / filings / earnings estimates: row-per-event metadata.
+        "corporate-actions",
+        "estimates",
+        "upgrade-downgrade",
+        "price-target",
+        "recommendations",
+        # Sentiment, social, screener, peers, patterns: per-symbol scoring snapshots.
+        "sentiment",
+        "social-sentiment",
+        "screener_result",
+        "peers",
+        "patterns",
+        "support-resistance",
+        "indicator",
+        "seasonality",
+        # Cross-asset reference (forex, crypto, fixed income, economic, frames).
+        "forex",
+        "crypto",
+        "fixed-income",
+        "economic",
+        "frames",
+        # Fundamentals: balance sheet / cash flow / income statement / fundamentals snapshot.
+        "balance-sheet",
+        "cash-flow",
+        "income-statement",
+        "stock_fundamentals",
+        # Misc options / shorts variants pending a typed Silver schema.
+        "short_data",
+        "alerts",
+    }
+)
 
 # Required and allowed payload keys for schema validation.
 # Required keys trigger a warning when missing; unexpected keys (outside

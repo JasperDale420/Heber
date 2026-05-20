@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from heber.catalog.seeds import FEED_MAPPING_SEEDS
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import DATA_GATEWAY_FEEDS, FEED_ALIAS_MAP, resolve_feed_alias
+from heber.writer.ingest_contracts import (
+    BRONZE_ONLY_SILVER_DATASETS,
+    DATA_GATEWAY_FEEDS,
+    FEED_ALIAS_MAP,
+    resolve_feed_alias,
+)
 
 
 def test_alias_map_matches_contract() -> None:
@@ -22,9 +27,17 @@ def test_alias_map_matches_contract() -> None:
 
 
 def test_all_data_gateway_feeds_route_to_mapped_silver_schema() -> None:
+    """Every Silver-bound contracted feed resolves to a typed Silver schema.
+
+    Bronze-only feeds (reference / metadata endpoints) are explicitly excluded —
+    they're contracted so the writer doesn't DLQ them, but they intentionally
+    have no Silver schema until a downstream use-case promotes them.
+    """
     for feed in DATA_GATEWAY_FEEDS:
         canonical_feed = resolve_feed_alias(feed)
-        assert canonical_feed in SILVER_SCHEMAS
+        if canonical_feed in BRONZE_ONLY_SILVER_DATASETS:
+            continue
+        assert canonical_feed in SILVER_SCHEMAS, f"{feed} -> {canonical_feed} missing Silver schema"
 
 
 def test_seed_catalog_includes_data_gateway_alias_mappings() -> None:

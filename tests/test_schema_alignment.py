@@ -16,6 +16,7 @@ import pytest
 
 from heber.schemas.silver import SILVER_SCHEMAS
 from heber.writer.ingest_contracts import (
+    BRONZE_ONLY_SILVER_DATASETS,
     CONTRACTED_RAW_FEEDS,
     FEED_ALIASES,
     FIELD_MAPPINGS,
@@ -250,9 +251,17 @@ class TestContractedFeedsSilverSchemas:
     """Every contracted feed must resolve to a Silver schema."""
 
     def test_all_contracted_feeds_have_silver_schemas(self) -> None:
+        """Every contracted feed must either have a Silver schema or be Bronze-only.
+
+        Bronze-only feeds (reference / metadata) are contracted purely to silence
+        the ``silver_feed_uncontracted`` DLQ — they intentionally lack a Silver
+        schema until promoted.
+        """
         missing: list[str] = []
         for feed in CONTRACTED_RAW_FEEDS:
             canonical = resolve_feed_alias(feed)
+            if canonical in BRONZE_ONLY_SILVER_DATASETS:
+                continue
             if canonical not in SILVER_SCHEMAS:
                 missing.append(f"{feed} -> {canonical}")
         assert not missing, "Contracted feeds without Silver schemas:\n" + "\n".join(f"  - {m}" for m in missing)
