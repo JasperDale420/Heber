@@ -257,6 +257,7 @@ class WatchService:
         )
         self._backfill_enabled = settings.enrichment_backfill_enabled
         self._running = False
+        self._stopped = False
 
     async def run(self) -> None:
         """Run all components concurrently."""
@@ -303,14 +304,46 @@ class WatchService:
             await asyncio.sleep(60)  # Check every minute
 
     def stop(self) -> None:
-        """Stop all components."""
+        """Stop all components.
+
+        Idempotent: calling stop() twice (e.g. once from a SIGTERM handler
+        and once from the ``finally`` block of the CLI entrypoint) returns
+        cleanly on the second call instead of raising on already-closed
+        redis clients or already-flushed writers. This is what eliminates
+        the recurring "Watch service stop failed" log noise during normal
+        SIGTERM-driven shutdown.
+        """
+        if self._stopped:
+            return
+        self._stopped = True
         self._running = False
-        self.consumer.stop()
-        self.poller.stop()
-        self.backfill_scanner.stop()
-        self.writer.flush()
-        self.redis.close()
+
+        # Best-effort cleanup of each component — one failure must not skip
+        # the others. We capture and log per-component errors and re-raise
+        # the first one only if nothing else failed afterwards.
+        errors: list[Exception] = []
+        for component, action in (
+            ("consumer", self.consumer.stop),
+            ("poller", self.poller.stop),
+            ("backfill_scanner", self.backfill_scanner.stop),
+            ("writer_flush", self.writer.flush),
+            ("redis_close", self.redis.close),
+        ):
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 — cleanup must be exhaustive
+                errors.append(exc)
+                logger.warning(
+                    "watch_component_stop_failed",
+                    component=component,
+                    error=str(exc),
+                )
+
         logger.info("Watch service stopped")
+        if errors:
+            # Re-raise the first error so callers can react if they wish,
+            # but the rest of the components are guaranteed to have run.
+            raise errors[0]
 
     def get_stats(self) -> dict[str, Any]:
         """Get service statistics."""
