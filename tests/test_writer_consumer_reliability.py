@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import heber.writer.consumer as consumer_module
+import heber.writer.dlq_fallback as dlq_fallback_module
 from heber.models.envelope import EventEnvelope
 from heber.writer.consumer import EventConsumer
 
@@ -98,11 +99,20 @@ async def test_process_stream_messages_moves_failures_to_dlq() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
+async def test_process_stream_messages_falls_back_to_disk_when_dlq_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     consumer = EventConsumer()
     redis = _StubRedis()
     redis.fail_xadd = True
     consumer.redis = redis
+
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
 
     consumer._process_with_retry = AsyncMock(return_value=(False, "boom", 3))
 
@@ -112,8 +122,10 @@ async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
         ]
     )
 
-    assert ack_ids == []
-    assert failed_ids == ["2-0"]
+    assert ack_ids == ["2-0"]
+    assert failed_ids == []
+    fallback_files = list(tmp_path.rglob("*.json"))
+    assert len(fallback_files) == 1
 
 
 def test_process_event_rejects_invalid_instrument_key() -> None:

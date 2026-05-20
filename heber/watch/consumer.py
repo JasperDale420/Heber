@@ -53,6 +53,11 @@ from heber.watch.gateway import (
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import POLL_CONFIG, WatchHorizon
+from heber.writer.dlq_fallback import (
+    log_fallback_backlog,
+    try_xadd_with_retry,
+    write_dlq_fallback_file,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -216,7 +221,14 @@ class AlertWatchConsumer:
         return normalized
 
     async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
-        """Write failed message to DLQ stream."""
+        """Write failed message to DLQ stream with on-disk fallback.
+
+        Attempts a Redis ``XADD`` with bounded exponential backoff (3 attempts).
+        On exhaustion, persists the event to a JSON file under
+        ``settings.dlq_fallback_path`` so the message is captured durably and
+        the caller can ACK. Always returns ``True`` — the message is never
+        silently lost.
+        """
         dlq_payload = {
             "origin_stream": self.stream_name,
             "origin_message_id": msg_id,
@@ -225,8 +237,12 @@ class AlertWatchConsumer:
             "failed_at": datetime.now(UTC).isoformat(),
             "payload": json.dumps(self._normalize_stream_data(data), default=str),
         }
-        try:
-            await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+
+        async def _xadd() -> Any:
+            return await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+
+        success, _result, last_exc = await try_xadd_with_retry(_xadd)
+        if success:
             logger.error(
                 "Watch message dead-lettered",
                 stream=self.dlq_stream_name,
@@ -235,15 +251,34 @@ class AlertWatchConsumer:
                 error=error,
             )
             return True
-        except Exception as dlq_error:
+
+        try:
+            fallback_path = await asyncio.to_thread(
+                write_dlq_fallback_file,
+                settings.dlq_fallback_path,
+                self.dlq_stream_name,
+                msg_id,
+                dlq_payload,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001 — last-resort fallback must not crash watch consumer
             logger.error(
-                "Failed to dead-letter watch message",
+                "dlq_file_fallback_failed",
                 stream=self.dlq_stream_name,
                 msg_id=msg_id,
-                attempts=attempts,
-                error=str(dlq_error),
+                redis_error=str(last_exc) if last_exc else None,
+                fallback_error=str(fallback_exc),
+                exc_info=True,
             )
             return False
+
+        logger.critical(
+            "dlq_file_fallback_used",
+            stream=self.dlq_stream_name,
+            event_id=msg_id,
+            fallback_path=str(fallback_path),
+            redis_error=str(last_exc) if last_exc else None,
+        )
+        return True
 
     async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
         """Process one flow alert with retry + DLQ behavior."""
@@ -306,6 +341,7 @@ class AlertWatchConsumer:
         """Run the consumer as a continuous service."""
         self._running = True
         await self._setup_consumer_group_async()
+        log_fallback_backlog(settings.dlq_fallback_path, service="heber-watch")
         error_streak = 0
 
         logger.info(
