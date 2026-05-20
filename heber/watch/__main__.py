@@ -14,11 +14,56 @@ import argparse
 import asyncio
 import os
 import signal
+import threading
 from pathlib import Path
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+def _install_signal_handlers(
+    loop: asyncio.AbstractEventLoop,
+    handler: object,
+) -> bool:
+    """Register SIGTERM/SIGINT handlers via the event loop.
+
+    Uses ``loop.add_signal_handler()`` rather than ``signal.signal()`` so the
+    callback runs inside the event loop (well-defined async state) rather than
+    in an OS-signal-interrupt context where awaiting/closing resources is
+    racy.
+
+    ``add_signal_handler`` itself still requires the *main thread* (Python's
+    signal module raises ``ValueError: signal only works in main thread of
+    the main interpreter`` otherwise). Returns ``True`` if installation
+    succeeded, ``False`` if we were called off the main thread or on a
+    platform without unix signals (e.g. Windows). The caller may proceed
+    without signal hooks in that case — the service will still exit cleanly
+    via the ``finally`` block once ``run()`` returns or raises.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        logger.warning(
+            "watch_signal_install_skipped",
+            reason="not_main_thread",
+            thread=threading.current_thread().name,
+        )
+        return False
+
+    success = False
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, handler)  # type: ignore[arg-type]
+            success = True
+        except (NotImplementedError, RuntimeError, ValueError) as exc:
+            # NotImplementedError: Windows / unsupported event loop.
+            # RuntimeError/ValueError: signal module main-thread check.
+            logger.warning(
+                "watch_signal_install_skipped",
+                reason="add_signal_handler_failed",
+                signal=sig.name,
+                error=str(exc),
+            )
+    return success
 
 
 def _get_defaults() -> tuple[str, str, str]:
@@ -114,31 +159,27 @@ Environment variables:
     resolved_output_path: Path | None = _ensure_writable_output_path(args.output)
 
     service = WatchService(r, gateway_url=args.gateway, output_path=resolved_output_path)
-    run_error: BaseException | None = None
-    run_error_tb = None
 
     def _safe_stop(source: str) -> None:
         try:
             service.stop()
         except Exception as stop_error:
-            logger.error("Watch service stop failed", source=source, error=str(stop_error))
+            logger.warning("watch_service_stop_failed", source=source, error=str(stop_error))
 
-    # Handle graceful shutdown
-    def shutdown_handler(sig: int, frame: object) -> None:
-        logger.info("Shutdown signal received", signal=sig)
-        _safe_stop(source=f"signal:{sig}")
+    async def _run_with_signals() -> None:
+        loop = asyncio.get_running_loop()
 
+        def _on_signal() -> None:
+            logger.info("watch_shutdown_signal_received")
+            _safe_stop(source="signal")
+
+        _install_signal_handlers(loop, _on_signal)
+        await service.run()
+
+    run_error: BaseException | None = None
+    run_error_tb = None
     try:
-        signal.signal(signal.SIGTERM, shutdown_handler)
-        signal.signal(signal.SIGINT, shutdown_handler)
-    except (ValueError, RuntimeError) as signal_error:
-        logger.warning(
-            "Signal handlers unavailable, continuing without process signal hooks",
-            error=str(signal_error),
-        )
-
-    try:
-        asyncio.run(service.run())
+        asyncio.run(_run_with_signals())
     except KeyboardInterrupt:
         pass
     except Exception as exc:
