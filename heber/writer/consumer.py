@@ -831,7 +831,10 @@ class EventConsumer:
 async def main():
     """Entry point for the consumer."""
     configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     consumer = EventConsumer()
 
     # Handle signals

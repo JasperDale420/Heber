@@ -83,7 +83,10 @@ async def lifespan(app: FastAPI):
     configure_logging(service_name="heber-catalog", log_level=settings.log_level, json_output=True)
 
     if settings.metrics_port:
-        start_metrics_server_from_env(default_port=9090)
+        try:
+            start_metrics_server_from_env(default_port=9090)
+        except Exception as exc:
+            logger.warning("metrics_server_startup_skipped", error=str(exc))
 
     if _should_auto_create_catalog_tables():
         async with engine.begin() as conn:
