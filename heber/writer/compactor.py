@@ -569,7 +569,10 @@ async def main():
     from heber.ops.logging import configure_logging
 
     configure_logging(service_name="heber-compactor", log_level=settings.log_level, json_output=True)
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     compactor = Compactor()
 
     loop = asyncio.get_event_loop()

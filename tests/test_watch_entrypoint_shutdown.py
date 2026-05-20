@@ -186,10 +186,16 @@ def test_watch_entrypoint_continues_when_signal_registration_fails(
         lambda self: SimpleNamespace(redis="redis://example:6379", gateway="http://gateway:8000", output=None),
     )
 
-    def _signal_failure(*_args, **_kwargs):  # noqa: ANN002, ANN003
-        raise ValueError("signal only works in main thread")
-
-    monkeypatch.setattr(watch_main.signal, "signal", _signal_failure)
+    # The signal-handler helper is what may refuse to install when the
+    # entrypoint runs from a context where signal installation is not
+    # possible (off main thread, Windows, ASGI worker, etc.). Force it to
+    # report "could not install" and verify the service still runs and
+    # cleans up.
+    monkeypatch.setattr(
+        watch_main,
+        "_install_signal_handlers",
+        lambda _loop, _handler: False,
+    )
 
     import redis
 

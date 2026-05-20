@@ -63,7 +63,10 @@ Environment variables:
         tier2_interval=settings.health_partition_check_interval_seconds,
     )
 
-    start_metrics_server_from_env(default_port=9093)
+    try:
+        start_metrics_server_from_env(default_port=9093)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
 
     shutdown_event = asyncio.Event()
 

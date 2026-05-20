@@ -34,6 +34,11 @@ from heber.ops.metrics import (
 from heber.ops.reliability import EventDeduplicator
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
+from heber.writer.dlq_fallback import (
+    log_fallback_backlog,
+    try_xadd_with_retry,
+    write_dlq_fallback_file,
+)
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
     PAYLOAD_ALLOWED_FIELDS,
@@ -91,6 +96,8 @@ class EventConsumer:
         """Connect to Redis."""
         self.redis = redis.from_url(settings.redis_url)
         logger.info("Connected to Redis", url=settings.redis_url)
+
+        log_fallback_backlog(settings.dlq_fallback_path, service="heber-consumer")
 
         # Create consumer group if it doesn't exist
         try:
@@ -156,36 +163,89 @@ class EventConsumer:
         attempts: int,
         feed: str = "unknown",
     ) -> bool:
-        """Write failed message details to DLQ stream."""
-        try:
-            dlq_event = {
-                "source_stream": settings.redis_stream_name,
-                "source_group": settings.redis_consumer_group,
-                "source_message_id": self._decode_string(message_id),
-                "consumer_name": self.consumer_name,
-                "attempts": str(attempts),
-                "error": error,
-                "failed_at": datetime.now(UTC).isoformat(),
-                "payload": self._serialize_message_data(message_data),
-            }
-            dlq_id = await self.redis.xadd(settings.redis_dlq_stream_name, dlq_event)
+        """Write failed message details to DLQ stream with file fallback.
+
+        Tries Redis ``XADD`` first (3 attempts, exponential backoff). If every
+        attempt fails the event is durably persisted to a JSON file under
+        ``settings.dlq_fallback_path`` and the caller can ACK the source
+        message. Always returns ``True`` — the event is captured one way or
+        the other and never silently dropped.
+        """
+        source_message_id = self._decode_string(message_id)
+        dlq_event = {
+            "source_stream": settings.redis_stream_name,
+            "source_group": settings.redis_consumer_group,
+            "source_message_id": source_message_id,
+            "consumer_name": self.consumer_name,
+            "attempts": str(attempts),
+            "error": error,
+            "failed_at": datetime.now(UTC).isoformat(),
+            "payload": self._serialize_message_data(message_data),
+        }
+        error_type = error.split(":", 1)[0] if error else "unknown_error"
+
+        success, dlq_id, last_exc = await try_xadd_with_retry(
+            lambda: self.redis.xadd(settings.redis_dlq_stream_name, dlq_event),
+        )
+        if success:
             logger.warning(
                 "Message sent to DLQ",
                 dlq_stream=settings.redis_dlq_stream_name,
-                source_message_id=dlq_event["source_message_id"],
-                dlq_message_id=self._decode_string(dlq_id),
+                source_message_id=source_message_id,
+                dlq_message_id=self._decode_string(dlq_id) if dlq_id is not None else None,
             )
-            error_type = error.split(":", 1)[0] if error else "unknown_error"
             record_dlq_event(feed=feed, error_type=error_type)
             return True
-        except Exception as exc:  # noqa: BLE001 — DLQ write failure must not crash consumer
+
+        fallback_path = await self._write_dlq_fallback(
+            source_message_id=source_message_id,
+            dlq_event=dlq_event,
+            redis_error=last_exc,
+        )
+        if fallback_path is not None:
+            logger.critical(
+                "dlq_file_fallback_used",
+                stream=settings.redis_dlq_stream_name,
+                event_id=source_message_id,
+                fallback_path=str(fallback_path),
+                redis_error=str(last_exc) if last_exc else None,
+            )
+            record_dlq_event(feed=feed, error_type=error_type)
+            return True
+
+        logger.error(
+            "Failed to write message to DLQ",
+            source_message_id=source_message_id,
+            error=str(last_exc) if last_exc else "unknown",
+            exc_info=last_exc,
+        )
+        return False
+
+    async def _write_dlq_fallback(
+        self,
+        source_message_id: str,
+        dlq_event: dict[str, Any],
+        redis_error: Exception | None,
+    ) -> Any | None:
+        """Persist a DLQ event to the on-disk fallback dir; return the path or None."""
+        try:
+            return await asyncio.to_thread(
+                write_dlq_fallback_file,
+                settings.dlq_fallback_path,
+                settings.redis_dlq_stream_name,
+                source_message_id,
+                dlq_event,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001 — last-resort fallback must not crash consumer
             logger.error(
-                "Failed to write message to DLQ",
-                source_message_id=self._decode_string(message_id),
-                error=str(exc),
+                "dlq_file_fallback_failed",
+                stream=settings.redis_dlq_stream_name,
+                source_message_id=source_message_id,
+                redis_error=str(redis_error) if redis_error else None,
+                fallback_error=str(fallback_exc),
                 exc_info=True,
             )
-            return False
+            return None
 
     def _parse_and_validate_envelope(self, event_data: dict) -> EventEnvelope:
         """Parse event data dict into a validated EventEnvelope."""
@@ -831,7 +891,10 @@ class EventConsumer:
 async def main():
     """Entry point for the consumer."""
     configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     consumer = EventConsumer()
 
     # Handle signals

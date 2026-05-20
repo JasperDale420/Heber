@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -53,6 +54,11 @@ from heber.watch.gateway import (
 )
 from heber.watch.manager import WatchManager
 from heber.watch.models import POLL_CONFIG, WatchHorizon
+from heber.writer.dlq_fallback import (
+    log_fallback_backlog,
+    try_xadd_with_retry,
+    write_dlq_fallback_file,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -216,7 +222,14 @@ class AlertWatchConsumer:
         return normalized
 
     async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
-        """Write failed message to DLQ stream."""
+        """Write failed message to DLQ stream with on-disk fallback.
+
+        Attempts a Redis ``XADD`` with bounded exponential backoff (3 attempts).
+        On exhaustion, persists the event to a JSON file under
+        ``settings.dlq_fallback_path`` so the message is captured durably and
+        the caller can ACK. Always returns ``True`` — the message is never
+        silently lost.
+        """
         dlq_payload = {
             "origin_stream": self.stream_name,
             "origin_message_id": msg_id,
@@ -225,8 +238,12 @@ class AlertWatchConsumer:
             "failed_at": datetime.now(UTC).isoformat(),
             "payload": json.dumps(self._normalize_stream_data(data), default=str),
         }
-        try:
-            await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+
+        async def _xadd() -> Any:
+            return await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+
+        success, _result, last_exc = await try_xadd_with_retry(_xadd)
+        if success:
             logger.error(
                 "Watch message dead-lettered",
                 stream=self.dlq_stream_name,
@@ -235,15 +252,34 @@ class AlertWatchConsumer:
                 error=error,
             )
             return True
-        except Exception as dlq_error:
+
+        try:
+            fallback_path = await asyncio.to_thread(
+                write_dlq_fallback_file,
+                settings.dlq_fallback_path,
+                self.dlq_stream_name,
+                msg_id,
+                dlq_payload,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001 — last-resort fallback must not crash watch consumer
             logger.error(
-                "Failed to dead-letter watch message",
+                "dlq_file_fallback_failed",
                 stream=self.dlq_stream_name,
                 msg_id=msg_id,
-                attempts=attempts,
-                error=str(dlq_error),
+                redis_error=str(last_exc) if last_exc else None,
+                fallback_error=str(fallback_exc),
+                exc_info=True,
             )
             return False
+
+        logger.critical(
+            "dlq_file_fallback_used",
+            stream=self.dlq_stream_name,
+            event_id=msg_id,
+            fallback_path=str(fallback_path),
+            redis_error=str(last_exc) if last_exc else None,
+        )
+        return True
 
     async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
         """Process one flow alert with retry + DLQ behavior."""
@@ -306,6 +342,7 @@ class AlertWatchConsumer:
         """Run the consumer as a continuous service."""
         self._running = True
         await self._setup_consumer_group_async()
+        log_fallback_backlog(settings.dlq_fallback_path, service="heber-watch")
         error_streak = 0
 
         logger.info(
@@ -448,7 +485,23 @@ class AlertWatchConsumer:
                 if parsed:
                     alerts = [parsed]
         if not alerts:
-            logger.warning("Could not parse alert", msg_id=msg_id)
+            decoded_for_diagnostics: dict[str, Any] = {}
+            try:
+                decoded_for_diagnostics = self._decode_stream_data(data)
+            except Exception:  # pragma: no cover - defensive: never raise from a log site
+                pass
+            logger.warning(
+                "Could not parse alert",
+                msg_id=msg_id,
+                event_id=(
+                    decoded_for_diagnostics.get("id")
+                    or decoded_for_diagnostics.get("event_id")
+                    or decoded_for_diagnostics.get("alert_id")
+                ),
+                provider=decoded_for_diagnostics.get("provider"),
+                feed=decoded_for_diagnostics.get("feed"),
+                payload_keys=self._summarize_payload_keys(decoded_for_diagnostics),
+            )
             return False, False, "alert_parse_failed"
 
         created_count = 0
@@ -503,17 +556,21 @@ class AlertWatchConsumer:
                 )
                 return "stale_alert_window"
 
-        # Prefer price carried with the alert to avoid stale quote lookups.
-        entry_price = coerce_optional_float(alert.get("contract_px"))
+        entry_price, entry_price_source = await self._resolve_entry_price(alert)
         if entry_price is None or entry_price <= 0:
-            entry_price = await self._get_entry_price(alert["occ_symbol"])
-
-        if not entry_price or entry_price <= 0:
             logger.warning(
                 "Could not get entry price",
+                event_id=alert.get("id"),
                 occ_symbol=alert["occ_symbol"],
+                underlying=alert.get("underlying"),
+                fallback_used=entry_price_source,
+                contract_px=alert.get("contract_px"),
+                bid=alert.get("bid"),
+                ask=alert.get("ask"),
+                last=alert.get("last"),
             )
             entry_price = 1.0
+            entry_price_source = "default_floor"
 
         # Create watch
         watch = await self.manager.create_watch_async(
@@ -623,18 +680,40 @@ class AlertWatchConsumer:
     def _build_alert_record(self, parsed: dict[str, Any], batch_index: int | None) -> dict[str, Any] | None:
         """Build normalized alert record from parsed payload."""
         result = self._map_alert_fields(parsed)
-        if not result.get("id") or not result.get("underlying"):
+        missing_fields: list[str] = []
+        if not result.get("id"):
+            missing_fields.append("id")
+        if not result.get("underlying"):
+            missing_fields.append("underlying")
+        if missing_fields:
             logger.warning(
                 "Alert missing required fields",
+                event_id=parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
+                provider=parsed.get("provider"),
+                feed=parsed.get("feed"),
+                missing_fields=missing_fields,
                 has_id=bool(result.get("id")),
                 has_underlying=bool(result.get("underlying")),
                 has_occ_symbol=bool(result.get("occ_symbol")),
+                payload_keys=self._summarize_payload_keys(parsed),
                 batch_index=batch_index,
             )
             return None
         result["dte"] = self._calculate_dte(result.get("expiry"))
         result["ts_event"] = self._parse_timestamp(parsed)
         return result
+
+    @staticmethod
+    def _summarize_payload_keys(parsed: dict[str, Any]) -> list[str]:
+        """Return a sorted list of top-level keys in ``parsed``.
+
+        Used in diagnostic logs to show *what shape* the payload had without
+        leaking the actual values (which may contain PII, large blobs, or
+        provider-private data).
+        """
+        if not isinstance(parsed, dict):
+            return []
+        return sorted(str(k) for k in parsed)
 
     @staticmethod
     def _log_parse_summary(
@@ -722,14 +801,42 @@ class AlertWatchConsumer:
         return result if result is not None else default
 
     def _resolve_put_call(self, parsed: dict) -> str | None:
-        """Resolve put/call from available parsed fields."""
+        """Resolve put/call from available parsed fields.
+
+        Falls back to deriving the option type from the OCC symbol when the
+        explicit ``put_call`` / ``option_type`` / ``call_put`` / ``type``
+        fields are missing.
+
+        Preserves the historical contract: when a raw value WAS provided but
+        is unrecognizable (e.g. integer ``1``), returns ``None`` so the
+        warning log fires and the caller can decide how to handle it. Only
+        defaults to ``"C"`` when every put/call hint was absent entirely
+        AND the OCC symbol couldn't supply one — matching the legacy
+        ``put_call_raw or "C"`` semantics.
+        """
         put_call_raw = self._first_present_value(parsed, ("put_call", "option_type", "call_put"))
         type_raw = parsed.get("type")
         if put_call_raw is None and isinstance(type_raw, str):
             normalized_type = type_raw.strip().upper()
             if normalized_type.startswith("C") or normalized_type.startswith("P"):
                 put_call_raw = normalized_type
-        return self._normalize_put_call(put_call_raw or "C")
+
+        occ_symbol = parsed.get("occ_symbol") or parsed.get("option_chain") or parsed.get("option_symbol")
+        event_id = parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id")
+
+        if put_call_raw is not None:
+            # An explicit signal was provided: let _normalize_put_call try to
+            # parse it (with OCC fallback for unrecognized cases) and return
+            # whatever it produces — including None, which preserves the
+            # historical "1 -> None" behaviour callers rely on.
+            return self._normalize_put_call(put_call_raw, occ_symbol=occ_symbol, event_id=event_id)
+
+        # No explicit signal at all: try the OCC symbol, then fall back to "C"
+        # to match the legacy default.
+        derived = self._put_call_from_occ_symbol(occ_symbol)
+        if derived is not None:
+            return derived
+        return "C"
 
     def _resolve_alert_type(self, parsed: dict) -> str:
         """Resolve alert_type from available parsed fields."""
@@ -774,6 +881,10 @@ class AlertWatchConsumer:
         if normalized_volume_oi_ratio is None and normalized_open_interest is not None and normalized_open_interest > 0:
             normalized_volume_oi_ratio = normalized_volume / normalized_open_interest
 
+        bid_px = coerce_optional_float(self._first_present_value(parsed, ("bid", "bid_price", "bp")))
+        ask_px = coerce_optional_float(self._first_present_value(parsed, ("ask", "ask_price", "ap")))
+        last_px = coerce_optional_float(self._first_present_value(parsed, ("last", "last_price", "trade_price")))
+
         return {
             "id": parsed.get("id") or parsed.get("event_id") or parsed.get("alert_id"),
             "occ_symbol": parsed.get("occ_symbol") or parsed.get("option_chain"),
@@ -790,6 +901,9 @@ class AlertWatchConsumer:
             "side": self._normalize_optional_text(self._first_present_value(parsed, ("side", "execution_side"))),
             "aggressor": self._normalize_optional_text(self._first_present_value(parsed, ("aggressor",))),
             "tags": self._normalize_tags(self._first_present_value(parsed, ("tags", "tag_list", "flags"))),
+            "bid": bid_px,
+            "ask": ask_px,
+            "last": last_px,
             "is_sweep": parsed.get("is_sweep"),
             "is_unusual": parsed.get("is_unusual"),
             "sentiment": self._normalize_optional_text(parsed.get("sentiment")),
@@ -797,17 +911,82 @@ class AlertWatchConsumer:
             "volume_oi_ratio": normalized_volume_oi_ratio,
         }
 
-    @staticmethod
-    def _normalize_put_call(value: Any) -> str | None:
-        """Normalize put/call values to C/P."""
-        if isinstance(value, str):
-            normalized = value.strip().upper()
-            if normalized.startswith("P"):
-                return "P"
-            if normalized.startswith("C"):
-                return "C"
-        if value is not None:
-            logger.warning("unrecognized_put_call", value=value)
+    # OCC option symbol regex: <ROOT (1-6 alnum)><YYMMDD><C|P><STRIKE (8 digits)>
+    _OCC_PUT_CALL_RE = re.compile(r"^[A-Z][A-Z0-9.]{0,5}\d{6}([CP])\d{8}$")
+
+    @classmethod
+    def _put_call_from_occ_symbol(cls, occ_symbol: Any) -> str | None:
+        """Derive put/call letter from an OCC option symbol, if recognizable."""
+        if not isinstance(occ_symbol, str):
+            return None
+        match = cls._OCC_PUT_CALL_RE.match(occ_symbol.strip().upper())
+        if match is None:
+            return None
+        return match.group(1)
+
+    @classmethod
+    def _normalize_put_call(
+        cls,
+        value: Any,
+        *,
+        occ_symbol: Any = None,
+        event_id: Any = None,
+    ) -> str | None:
+        """Normalize put/call values to ``"C"`` / ``"P"``.
+
+        Accepts a wide set of representations so we don't drop alerts whenever
+        Data-Gateway tweaks its payload encoding:
+
+        - ``"call"`` / ``"put"`` (any case, with surrounding whitespace)
+        - Single-character ``"C"`` / ``"P"`` aliases
+        - Compound strings starting with ``C``/``P`` (e.g. ``"call_sweep"``,
+          ``"PUT_BLOCK"``)
+        - A dict carrying the value under ``put_call`` / ``option_type`` /
+          ``type`` (Data-Gateway has historically wrapped option metadata in
+          a sub-object)
+        - Bare option-type letter embedded in an OCC symbol passed via the
+          ``occ_symbol`` keyword (fallback when the explicit field is unusable)
+
+        When the value is still unrecognized the warning log includes the
+        repr of the raw value plus ``event_id`` and ``occ_symbol`` to make
+        upstream debugging tractable. Previously the emit was just
+        ``value=value`` which serialised non-string scalars (the live
+        regression was an integer ``1``) without enough context to diagnose.
+        """
+        candidate = value
+        if isinstance(candidate, dict):
+            for key in ("put_call", "option_type", "type", "value"):
+                if candidate.get(key) is not None:
+                    candidate = candidate[key]
+                    break
+
+        is_empty_string = False
+        if isinstance(candidate, str):
+            normalized = candidate.strip().upper()
+            if normalized:
+                if normalized.startswith("P"):
+                    return "P"
+                if normalized.startswith("C"):
+                    return "C"
+            else:
+                is_empty_string = True
+
+        derived = cls._put_call_from_occ_symbol(occ_symbol)
+        if derived is not None:
+            return derived
+
+        # Empty / whitespace-only strings are treated as "no signal" rather
+        # than as a parse failure — the caller will apply its own default.
+        if value is None or is_empty_string:
+            return None
+
+        logger.warning(
+            "unrecognized_put_call",
+            raw_value=repr(value),
+            raw_type=type(value).__name__,
+            event_id=event_id,
+            occ_symbol=occ_symbol,
+        )
         return None
 
     def _calculate_dte(self, expiry: str | None) -> int:
@@ -830,6 +1009,43 @@ class AlertWatchConsumer:
             if result is not None:
                 return result
         return datetime.now(UTC)
+
+    async def _resolve_entry_price(self, alert: dict[str, Any]) -> tuple[float | None, str]:
+        """Resolve an entry price using a documented fallback chain.
+
+        The chain (first non-null, positive value wins):
+
+        1. ``contract_px`` carried on the alert (Data-Gateway's normalized
+           trade price) — preferred to avoid a remote round-trip.
+        2. Live option quote fetched from Data-Gateway (uses the existing
+           multi-route ``_get_entry_price`` logic which already returns the
+           bid/ask mid when present).
+        3. Mid of bid/ask carried on the alert payload itself (covers the
+           case where the gateway publishes quote context but the live
+           quote lookup is rate-limited, stale, or otherwise unusable).
+        4. ``last`` trade price carried on the alert payload.
+
+        Returns a tuple of ``(price_or_none, source_label)``. The label is
+        logged so operators can tell from logs which leg of the chain fired.
+        """
+        contract_px = coerce_optional_float(alert.get("contract_px"))
+        if contract_px is not None and contract_px > 0:
+            return contract_px, "alert_contract_px"
+
+        gateway_price = await self._get_entry_price(alert["occ_symbol"])
+        if gateway_price is not None and gateway_price > 0:
+            return gateway_price, "gateway_quote"
+
+        bid = coerce_optional_float(alert.get("bid"))
+        ask = coerce_optional_float(alert.get("ask"))
+        if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+            return (bid + ask) / 2, "alert_bid_ask_mid"
+
+        last_px = coerce_optional_float(alert.get("last"))
+        if last_px is not None and last_px > 0:
+            return last_px, "alert_last_price"
+
+        return None, "exhausted"
 
     async def _get_entry_price(self, occ_symbol: str) -> float | None:
         """Get latest option quote from Data Gateway.

@@ -4,10 +4,90 @@ from datetime import UTC, datetime
 
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import REQUIRED_NON_NULL_FIELDS, resolve_feed_alias
+from heber.writer.ingest_contracts import (
+    REQUIRED_NON_NULL_FIELDS,
+    is_bronze_only_feed,
+    is_contracted_feed,
+    resolve_feed_alias,
+)
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.normalizer import envelope_to_silver_row
 from heber.writer.transformer import BronzeToSilverTransformer
+
+# Reference / metadata feed names that were previously emitting
+# ``silver_feed_uncontracted`` warnings and being routed to DLQ.  Sourced from
+# 13 days of heber-catalog error logs (3,350 warnings across 67 unique feeds).
+# Each name must now satisfy ``is_contracted_feed`` (no uncontracted warning)
+# AND ``is_bronze_only_feed`` (no Silver typing attempted).
+PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS: tuple[str, ...] = (
+    "13f",
+    "account",
+    "alerts",
+    "assets",
+    "balance-sheet",
+    "calendar",
+    "cash-flow",
+    "clock",
+    "company",
+    "concept",
+    "congress",
+    "congress-trading",
+    "contract",
+    "corporate-actions",
+    "crypto",
+    "economic",
+    "estimates",
+    "etf_metadata",
+    "executives",
+    "fda-calendar",
+    "filings",
+    "fixed-income",
+    "forex",
+    "frames",
+    "fund-ownership",
+    "income-statement",
+    "index",
+    "indicator",
+    "insider",
+    "insider-sentiment",
+    "insider-transactions",
+    "institution_holdings",
+    "listing-status",
+    "lobbying",
+    "logos",
+    "market",
+    "meta",
+    "metrics",
+    "mutual-fund",
+    "option-contract",
+    "option_contract",
+    "orders",
+    "orders:by_client_order_id",
+    "ownership",
+    "patterns",
+    "peers",
+    "politician_trades",
+    "portfolio",
+    "positions",
+    "price-target",
+    "recommendations",
+    "screener_result",
+    "search",
+    "seasonality",
+    "sectors",
+    "sentiment",
+    "short_data",
+    "social-sentiment",
+    "stock",
+    "stock_fundamentals",
+    "stocks",
+    "support-resistance",
+    "ticker",
+    "upgrade-downgrade",
+    "usa-spending",
+    "watchlists",
+    "{symbol}",
+)
 
 NOW = datetime(2026, 2, 11, 14, 30, tzinfo=UTC)
 
@@ -569,6 +649,23 @@ def test_live_and_backfill_paths_produce_equivalent_rows_for_shared_feeds() -> N
 
         for required_field in REQUIRED_NON_NULL_FIELDS[live_row["feed"]]:
             assert backfill_row[required_field] == live_row[required_field]
+
+
+def test_previously_uncontracted_feeds_now_route_to_bronze_only() -> None:
+    """Regression: 67 reference/metadata feeds that emitted ``silver_feed_uncontracted``
+    in 13 days of production logs (3,350 warnings) must now pass the contracted gate
+    AND be flagged Bronze-only.  Adding to ``CONTRACTED_RAW_FEEDS`` silences the DLQ;
+    adding the canonical name to ``BRONZE_ONLY_SILVER_DATASETS`` skips Silver typing.
+    """
+    not_contracted: list[str] = []
+    not_bronze_only: list[str] = []
+    for feed in PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS:
+        if not is_contracted_feed(feed):
+            not_contracted.append(feed)
+        if not is_bronze_only_feed(feed):
+            not_bronze_only.append(feed)
+    assert not not_contracted, f"Still uncontracted (would emit silver_feed_uncontracted): {not_contracted}"
+    assert not not_bronze_only, f"Not flagged as Bronze-only (would attempt Silver write): {not_bronze_only}"
 
 
 def test_option_chain_snapshot_preserves_underlying_price() -> None:

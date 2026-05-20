@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -11,6 +12,20 @@ import httpx
 
 DEFAULT_GATEWAY_API_PREFIX = "/api/v1"
 DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS = 300
+
+# Env vars that supply the gateway API key, in the same precedence order used
+# by ``empire_gateway_client.auth`` and ``heber.config.Settings.watch_gateway_api_key``.
+# Listed here so 401 diagnostics can report which vars were checked without
+# importing the optional empire_gateway_client package.
+GATEWAY_API_KEY_ENV_VARS: tuple[str, ...] = (
+    "HEBER_WATCH_GATEWAY_API_KEY",
+    "DATA_GATEWAY_API_KEY",
+    "GATEWAY_API_KEY",
+    "EMPIRE_GATEWAY_KEY",
+    "X_GATEWAY_KEY",
+)
+
+GATEWAY_AUTH_HEADER_NAME = "X-Gateway-Key"
 
 
 def is_retryable_http_status(status_code: int) -> bool:
@@ -44,7 +59,33 @@ def gateway_auth_headers(gateway_api_key: str | None) -> dict[str, str]:
     normalized_key = gateway_api_key.strip()
     if not normalized_key:
         return {}
-    return {"X-Gateway-Key": normalized_key}
+    return {GATEWAY_AUTH_HEADER_NAME: normalized_key}
+
+
+def describe_gateway_auth_env() -> dict[str, Any]:
+    """Return a credential-safe summary of the gateway auth env state.
+
+    Used for diagnostic logging on 401s — never includes credential values.
+    Reports header name(s), each env var consulted, whether it was set, and
+    the redacted length of the first non-empty value found.
+    """
+    env_status: list[dict[str, Any]] = []
+    first_set: str | None = None
+    first_set_len: int | None = None
+    for var in GATEWAY_API_KEY_ENV_VARS:
+        raw = os.environ.get(var)
+        is_set = raw is not None and raw.strip() != ""
+        env_status.append({"name": var, "set": is_set})
+        if is_set and first_set is None:
+            first_set = var
+            first_set_len = len(raw.strip()) if raw is not None else 0
+    return {
+        "auth_header_names": [GATEWAY_AUTH_HEADER_NAME],
+        "env_vars_checked": env_status,
+        "env_var_used": first_set,
+        "key_length": first_set_len,
+        "any_env_var_set": first_set is not None,
+    }
 
 
 def _normalize_gateway_base(raw_base: str) -> str:
