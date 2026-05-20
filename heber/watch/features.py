@@ -29,6 +29,7 @@ from heber.ops.metrics import (
 )
 from heber.watch.gateway import (
     coerce_optional_float,
+    describe_gateway_auth_env,
     gateway_auth_headers,
     gateway_url_candidates,
     is_retryable_http_status,
@@ -687,11 +688,21 @@ class AlertFeatureExtractor:
     def _handle_auth_failure(self, fail_kwargs: dict) -> str:
         """Handle 401 responses. Returns 'break' or raises EnrichmentAuthFailure."""
         auth_failures = self._record_auth_failure()
+        # Include credential-safe diagnostics on every 401 so operators can
+        # tell whether the failure is "no key sent" vs "key sent but rejected"
+        # without having to re-run the request manually. Never logs values.
+        auth_env = describe_gateway_auth_env()
+        sent_header_names = sorted(self.gateway_headers.keys()) if self.gateway_headers else []
         self._log_and_record_failure(
             **fail_kwargs,
             retryable=False,
             error="unauthorized",
-            extra={"auth_failures_window": auth_failures},
+            extra={
+                "auth_failures_window": auth_failures,
+                "auth_header_sent": bool(sent_header_names),
+                "auth_header_names_sent": sent_header_names,
+                "auth_env": auth_env,
+            },
         )
         if auth_failures >= self.auth_failure_threshold:
             raise EnrichmentAuthFailure(
