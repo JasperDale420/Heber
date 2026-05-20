@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **heber-watch gateway auth preflight at boot** — `WatchService.run()` now performs a single auth-required probe against the gateway (`/api/v1/uw/SPY/iv-rank`) before starting the consumer/poller/backfill loops. On `401`, the service emits a `CRITICAL` log explicitly naming the cascade (`Feature enrichment WILL fail and Gold meta_label_features WILL be written with null Greeks unless this is fixed`) and stores `service._auth_preflight_ok = False`. Transport errors log a warning and leave the flag `None` (unknown). The service still starts in all cases — preflight is observational, not gating — so a transient probe failure cannot turn a credential outage into a service outage. Implemented in `heber/watch/writer.py::WatchService._gateway_auth_preflight`. Tests in `tests/test_watch_service_auth_preflight.py`.
+
 ### Changed
 
 - **heber-watch 401 logs now include credential-safe diagnostics** — When the gateway returns `401 unauthorized` from a feature-enrichment call, the `Feature enrichment request failed` warning now carries `auth_header_sent` (bool), `auth_header_names_sent` (the actual header name list, e.g. `["X-Gateway-Key"]`), and `auth_env` (which env vars were checked, which one supplied the key, and the key length — no values). Previously a 401 log only said `error=unauthorized`, leaving operators unable to tell "no key was sent" from "key was sent but rejected" without re-running the request. Implemented in `heber/watch/features.py::_handle_auth_failure`; helper `describe_gateway_auth_env` and constants `GATEWAY_API_KEY_ENV_VARS` / `GATEWAY_AUTH_HEADER_NAME` added to `heber/watch/gateway.py`. Regression tests in `tests/test_watch_gateway_auth_diagnostics.py` verify the log payload AND that credential values never leak into diagnostics.

@@ -10,7 +10,14 @@ from typing import Any
 import pandas as pd
 import structlog
 
+from heber.core.http_client import create_async_http_client
 from heber.watch.checker import BarrierChecker, outcome_to_label_row
+from heber.watch.gateway import (
+    GATEWAY_AUTH_HEADER_NAME,
+    describe_gateway_auth_env,
+    gateway_auth_headers,
+    gateway_url_candidates,
+)
 from heber.watch.models import WatchOutcome
 
 logger = structlog.get_logger(__name__)
@@ -222,6 +229,9 @@ class WatchService:
             settings.watch_gateway_api_key,
         )
 
+        self._gateway_url = gateway_url
+        self._gateway_api_key = resolved_gateway_api_key
+        self._auth_preflight_timeout_seconds = 5.0
         self.redis = redis_client
         self.manager = WatchManager(redis_client)
         self.consumer = AlertWatchConsumer(
@@ -269,6 +279,10 @@ class WatchService:
             enrichment_backfill_enabled=self._backfill_enabled,
         )
 
+        # Preflight: surface broken gateway auth at boot rather than discovering
+        # it via cascading 401s and null Greeks downstream.
+        await self._gateway_auth_preflight()
+
         coroutines = [
             self.consumer.run(),
             self.poller.run(),
@@ -284,6 +298,69 @@ class WatchService:
         except ExceptionGroup as eg:
             # Re-raise the first exception for backward-compatible error handling
             raise eg.exceptions[0] from eg
+
+    async def _gateway_auth_preflight(self) -> None:
+        """One-shot auth check at boot. Surfaces 401s loudly without crashing.
+
+        Hits a lightweight auth-required gateway endpoint (`uw/SPY/iv-rank`)
+        and emits a CRITICAL-grade structured log on 401 — operators see the
+        problem immediately instead of discovering it via null Greeks in Gold
+        meta_label_features hours later.
+
+        Failure modes:
+          - 401: log critical, set self._auth_preflight_ok = False, but DO NOT
+            raise. The service still starts in case the operator is reusing the
+            container for non-enriched watches; downstream 401 fail-fast already
+            kicks in after the configured threshold.
+          - transport error / timeout: log warning, mark unknown.
+          - 2xx / 5xx / other 4xx: log info, mark OK (gateway reachable + auth
+            accepted; non-200 may be expected for the probe symbol).
+        """
+        self._auth_preflight_ok: bool | None = None
+        auth_env = describe_gateway_auth_env()
+        headers = gateway_auth_headers(self._gateway_api_key) or None
+        routes = gateway_url_candidates(self._gateway_url, "/uw/SPY/iv-rank")
+        probe_url = routes[0]
+
+        log_ctx = {
+            "gateway_url": self._gateway_url,
+            "probe_route": probe_url,
+            "auth_header_names_sent": [GATEWAY_AUTH_HEADER_NAME] if headers else [],
+            "auth_env": auth_env,
+        }
+
+        try:
+            async with create_async_http_client(timeout=self._auth_preflight_timeout_seconds) as client:
+                resp = await client.get(probe_url, headers=headers)
+        except Exception as exc:  # network/transport — non-fatal
+            logger.warning(
+                "Gateway auth preflight: transport error (auth state unknown)",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                **log_ctx,
+            )
+            return
+
+        status_code = getattr(resp, "status_code", None)
+        if status_code == 401:
+            # This is the canary for the cascade. Make it impossible to miss.
+            self._auth_preflight_ok = False
+            logger.critical(
+                "GATEWAY AUTH PREFLIGHT FAILED: gateway returned 401 unauthorized. "
+                "Feature enrichment WILL fail and Gold meta_label_features WILL be "
+                "written with null Greeks unless this is fixed. Check that the "
+                "gateway API key is correct and not rotated.",
+                status_code=status_code,
+                **log_ctx,
+            )
+            return
+
+        self._auth_preflight_ok = True
+        logger.info(
+            "Gateway auth preflight ok",
+            status_code=status_code,
+            **log_ctx,
+        )
 
     async def _check_and_write_loop(self) -> None:
         """Periodically check for completed watches and write labels."""
