@@ -204,6 +204,12 @@ class Settings(BaseSettings):
         default="heber:events:dlq",
         description="Redis stream for failed consumer messages",
     )
+    dlq_fallback_dir: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_DLQ_FALLBACK_DIR"),
+        description="Directory for durable DLQ file fallback when Redis xadd fails; "
+        "defaults to <data_root>/dlq_fallback",
+    )
     redis_claim_idle_ms: int = Field(
         default=60_000,
         description="Minimum idle time before claiming pending stream messages",
@@ -668,6 +674,12 @@ class Settings(BaseSettings):
         if self.gold_root:
             return self.gold_root
         return self.data_root / "gold"
+
+    @property
+    def dlq_fallback_path(self) -> Path:
+        if self.dlq_fallback_dir:
+            return self.dlq_fallback_dir
+        return self.data_root / "dlq_fallback"
 
     @property
     def llm_effective_base_url(self) -> str | None:
