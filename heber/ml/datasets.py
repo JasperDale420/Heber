@@ -449,12 +449,64 @@ class MetaLabelDatasetBuilder:
         return X, y
 
 
+# Greek enrichment columns. If every one of these is null on a row, the
+# enrichment path (gateway → features extractor) failed for that alert and
+# the row would silently corrupt downstream ML training. We quarantine those
+# rows to a sibling partition rather than writing them to the canonical path.
+_REQUIRED_GREEK_COLUMNS: tuple[str, ...] = ("delta", "gamma", "theta", "vega", "iv")
+
+
+def _split_greek_corrupted_rows(
+    partition_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a partition into (clean, corrupted) where corrupted = all Greeks null.
+
+    A row is considered corrupted only when every Greek column listed in
+    ``_REQUIRED_GREEK_COLUMNS`` is null/NA. Rows missing one or two values are
+    kept (some upstream feeds legitimately omit single Greeks).
+    """
+    present_cols = [c for c in _REQUIRED_GREEK_COLUMNS if c in partition_df.columns]
+    if not present_cols:
+        # No Greek columns at all — nothing to validate. Pass through.
+        return partition_df, partition_df.iloc[0:0]
+    all_null_mask = partition_df[present_cols].isna().all(axis=1)
+    clean = partition_df.loc[~all_null_mask].reset_index(drop=True)
+    corrupted = partition_df.loc[all_null_mask].reset_index(drop=True)
+    return clean, corrupted
+
+
+def _write_quarantine_partition(
+    corrupted_df: pd.DataFrame,
+    output_path: Path,
+    dt_str: str,
+) -> Path:
+    """Write quarantined rows under a sibling `_quarantine` partition.
+
+    Quarantined files live at
+    ``<output_path>/_quarantine/all_greeks_null/dt=<dt>/quarantine-<ts>.parquet``
+    so downstream readers (which only read ``dt=`` partitions) never load them.
+    """
+    quarantine_root = output_path / "_quarantine" / "all_greeks_null" / f"dt={dt_str}"
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    quarantine_file = quarantine_root / f"quarantine-{ts}-{uuid4().hex[:8]}.parquet"
+    corrupted_df.to_parquet(quarantine_file, index=False, compression="snappy")
+    return quarantine_file
+
+
 def persist_features_to_gold(
     features_df: pd.DataFrame,
     output_path: Path,
     partition_col: str = "alert_time",
 ) -> None:
     """Persist features DataFrame to Gold layer with date partitioning.
+
+    Rows where ALL Greek enrichment columns (delta/gamma/theta/vega/iv) are
+    null are diverted to a quarantine partition rather than written to the
+    canonical dt=<date>/ path. This is the "fail loud" safety net for the
+    gateway 401 cascade: the write_audit warning was the only previous
+    detector, and it logged but did not block — letting null-Greek rows
+    pollute ML training inputs.
 
     Args:
         features_df: DataFrame with feature rows
@@ -473,6 +525,45 @@ def persist_features_to_gold(
         partition_df = df[df["dt"] == dt_val].drop(columns=["dt"]).reset_index(drop=True)
         dt_str = pd.Timestamp(dt_val).strftime("%Y-%m-%d")
         partition_path = output_path / f"dt={dt_str}"
+
+        # Fail-loud guard: divert rows whose Greek enrichment is fully null
+        # to a quarantine partition. Prevents silent ML corruption when the
+        # gateway returns 401/5xx for an extended window.
+        partition_df, corrupted = _split_greek_corrupted_rows(partition_df)
+        if not corrupted.empty:
+            try:
+                qpath = _write_quarantine_partition(corrupted, output_path, dt_str)
+                logger.error(
+                    "meta_label_features rows quarantined — all Greek columns null",
+                    rows=len(corrupted),
+                    date=dt_str,
+                    quarantine_path=str(qpath),
+                    affected_columns=list(_REQUIRED_GREEK_COLUMNS),
+                    hint=(
+                        "This usually means gateway feature enrichment failed "
+                        "(check heber-watch logs for 401/5xx around this time)."
+                    ),
+                )
+            except Exception as q_exc:
+                # If quarantine fails, drop the rows but never let them reach
+                # the canonical partition.
+                logger.error(
+                    "meta_label_features quarantine write failed — dropping corrupted rows",
+                    rows=len(corrupted),
+                    date=dt_str,
+                    error=str(q_exc),
+                    exc_info=True,
+                )
+
+        if partition_df.empty:
+            # Whole partition was corrupted — nothing to write.
+            logger.warning(
+                "meta_label_features partition fully quarantined",
+                date=dt_str,
+                path=str(partition_path),
+            )
+            continue
+
         partition_path.mkdir(parents=True, exist_ok=True)
 
         # Audit for unexpected null values before writing
