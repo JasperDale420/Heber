@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`MetaLabelScorer` no longer spams "Model not loaded" on every score call** (`heber/ml/inference.py`). Previously the scorer logged a WARNING per `score()` invocation when the model was unavailable — 192 records/day in production at perfectly even intervals (one per request). Behaviour now: a single `meta_model_unavailable` WARNING on startup (or on the first score call if the model went missing later), with `reason` field distinguishing `model_load_failed`, `model_not_configured`, and `model_not_loaded`. Subsequent score calls still return `None` (graceful degradation preserved) but emit nothing, and `MetaLabelScorer._missing_model_skips` counts the silent skips for observability. `initialize()` now also catches `MetaModelTrainer.load` failures so a missing/corrupt model file no longer crashes the service at boot. Regression tests in `tests/test_meta_label_scorer_missing_model_one_shot.py`.
 - **`lag_check_failed` log emit downgraded from ERROR to WARNING** (`heber/bus/backpressure.py`). The `BackpressureMonitor.monitor_loop` is a defensive periodic check that self-recovers on the next tick, so a transient failure (e.g. Redis blip) was logging 237 ERROR records over 13 days and drowning out real production alerts. The `consumer_lag_seconds` Prometheus gauge is the authoritative signal for actual lag problems. Regression test in `tests/test_backpressure_monitor_log_level.py`.
 
 ### Fixed
