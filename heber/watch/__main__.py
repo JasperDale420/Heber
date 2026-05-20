@@ -105,7 +105,10 @@ Environment variables:
         output_path=args.output,
     )
 
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
 
     r = redis.from_url(args.redis)
     resolved_output_path: Path | None = _ensure_writable_output_path(args.output)

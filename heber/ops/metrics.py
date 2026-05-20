@@ -467,12 +467,23 @@ def set_consumer_lag(stream: str, lag_seconds: float) -> None:
 def start_metrics_server(port: int = METRICS_PORT) -> None:
     """Start the Prometheus metrics HTTP server.
 
+    Port-bind failures (``OSError``, e.g. ``EADDRINUSE``) are logged as a
+    WARNING and swallowed so the caller's service can continue running
+    without metrics. Other exception classes are unexpected and re-raised.
+
     Args:
         port: Port to serve metrics on (default: 9100)
     """
     try:
         start_http_server(port)
         logger.info("metrics_server_started", port=port)
+    except OSError as e:
+        logger.warning(
+            "metrics_server_bind_failed",
+            port=port,
+            error=str(e),
+            errno=getattr(e, "errno", None),
+        )
     except Exception as e:
         logger.error("metrics_server_failed", port=port, error=str(e), exc_info=True)
         raise

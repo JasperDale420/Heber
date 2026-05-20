@@ -6,10 +6,13 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
+import structlog
 from fastapi import FastAPI
 
 from heber.backfill import create_backfill_router
 from heber.ops.metrics import start_metrics_server_from_env
+
+logger = structlog.get_logger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -62,7 +65,10 @@ def main(
     metrics_server_starter: Callable[..., int | None] = start_metrics_server_from_env,
 ) -> int:
     """CLI entrypoint for `python -m heber.backfill`."""
-    metrics_server_starter(default_port=9090)
+    try:
+        metrics_server_starter(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     args = _build_parser().parse_args(argv)
     runner = run_server
     if runner is None:
