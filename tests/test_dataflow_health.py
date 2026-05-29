@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from heber.config import Settings
 from heber.ops import dataflow_health as dataflow_health_module
 
 
@@ -107,6 +108,28 @@ def test_dataflow_health_market_closed_skips_gateway_passive_check_when_metric_m
     gateway_check = next(check for check in report["checks"] if check["id"] == "gateway_passive_activity")
     assert gateway_check["status"] == "skipped"
     assert report["overall_status"] == "ok"
+
+
+def test_dataflow_health_market_closed_does_not_collect_filesystem_fallback(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 2, 0, tzinfo=UTC)
+    monkeypatch.setattr(dataflow_health_module, "_collect_redis_signals", lambda _settings: _signals(now)["redis"])
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: False)
+
+    def fail_metrics_collection(_url: str) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
+        raise AssertionError("metrics collection should not run while freshness checks are skipped")
+
+    def fail_filesystem_collection(_settings: Settings) -> dict[str, float | None]:
+        raise AssertionError("filesystem fallback should not run while freshness checks are skipped")
+
+    monkeypatch.setattr(dataflow_health_module, "_fetch_metrics_samples", fail_metrics_collection)
+    monkeypatch.setattr(dataflow_health_module, "_collect_filesystem_feed_timestamps", fail_filesystem_collection)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert report["market_open"] is False
+    bars_check = next(check for check in report["checks"] if check["id"] == "feed_freshness_bars")
+    assert bars_check["status"] == "skipped"
 
 
 def test_dataflow_health_market_open_warns_when_gateway_passive_metric_missing(monkeypatch) -> None:
@@ -227,3 +250,42 @@ def test_latest_file_mtime_handles_file_disappearing_during_scan(tmp_path, monke
     latest = dataflow_health_module._latest_file_mtime(root)
 
     assert latest == stable.stat().st_mtime
+
+
+def test_collect_filesystem_feed_timestamps_avoids_full_feed_scan(tmp_path, monkeypatch) -> None:
+    settings = Settings(data_root=tmp_path)
+    feed_root = settings.silver_path / "feed=bars" / "instrument_type=equity"
+    cold_partition = feed_root / "dt=2026-05-20"
+    old_partition = feed_root / "dt=2026-05-27"
+    mid_partition = feed_root / "dt=2026-05-28"
+    new_partition = feed_root / "dt=2026-05-29"
+    cold_partition.mkdir(parents=True)
+    old_partition.mkdir(parents=True)
+    mid_partition.mkdir(parents=True)
+    new_partition.mkdir(parents=True)
+
+    cold_file = cold_partition / "part-cold.parquet"
+    old_file = old_partition / "part-old.parquet"
+    mid_file = mid_partition / "part-mid.parquet"
+    new_file = new_partition / "part-new.parquet"
+    cold_file.write_text("cold", encoding="utf-8")
+    old_file.write_text("old", encoding="utf-8")
+    mid_file.write_text("mid", encoding="utf-8")
+    new_file.write_text("new", encoding="utf-8")
+    os.utime(cold_file, (3_000_000, 3_000_000))
+    os.utime(old_file, (1_000_000, 1_000_000))
+    os.utime(mid_file, (1_500_000, 1_500_000))
+    os.utime(new_file, (2_000_000, 2_000_000))
+    os.utime(cold_partition, (3_000_000, 3_000_000))
+    os.utime(old_partition, (1_000_000, 1_000_000))
+    os.utime(mid_partition, (1_500_000, 1_500_000))
+    os.utime(new_partition, (2_000_000, 2_000_000))
+
+    def guarded_rglob(path: Path, pattern: str):  # noqa: ANN202
+        raise AssertionError(f"dataflow health must not recursively scan partitioned feeds: {path}:{pattern}")
+
+    monkeypatch.setattr(Path, "rglob", guarded_rglob)
+
+    timestamps = dataflow_health_module._collect_filesystem_feed_timestamps(settings)
+
+    assert timestamps["bars"] == new_file.stat().st_mtime
