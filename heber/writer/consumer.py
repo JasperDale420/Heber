@@ -163,13 +163,15 @@ class EventConsumer:
         attempts: int,
         feed: str = "unknown",
     ) -> bool:
-        """Write failed message details to DLQ stream with file fallback.
+        """Dead-letter a failed message durably.
 
-        Tries Redis ``XADD`` first (3 attempts, exponential backoff). If every
-        attempt fails the event is durably persisted to a JSON file under
-        ``settings.dlq_fallback_path`` and the caller can ACK the source
-        message. Always returns ``True`` — the event is captured one way or
-        the other and never silently dropped.
+        The event is ALWAYS persisted to a JSON file under
+        ``settings.dlq_fallback_path`` first — that file is the durable audit
+        record, because the DLQ stream lives on a cache-mode Redis that evicts
+        entries (LRU/TTL). A best-effort ``XADD`` to the Redis DLQ stream then
+        enqueues it for convenient reprocessing. Returns ``True`` when the event
+        is captured by the file or Redis (caller may ACK); ``False`` only if
+        both fail (caller must not ACK).
         """
         source_message_id = self._decode_string(message_id)
         dlq_event = {
@@ -184,42 +186,48 @@ class EventConsumer:
         }
         error_type = error.split(":", 1)[0] if error else "unknown_error"
 
+        # Durability first: always persist the event to the on-disk fallback
+        # store. The DLQ stream lives on a cache-mode Redis (LRU/TTL eviction),
+        # so the file — not the stream — is the audit record of record. The
+        # Redis XADD below is a best-effort reprocessing queue on top of it.
+        fallback_path = await self._write_dlq_fallback(
+            source_message_id=source_message_id,
+            dlq_event=dlq_event,
+            redis_error=None,
+        )
+
         success, dlq_id, last_exc = await try_xadd_with_retry(
             lambda: self.redis.xadd(settings.redis_dlq_stream_name, dlq_event),
         )
+
+        if fallback_path is None and not success:
+            # Neither the durable file nor Redis captured the event — do not ACK.
+            logger.error(
+                "Failed to write message to DLQ",
+                source_message_id=source_message_id,
+                error=str(last_exc) if last_exc else "unknown",
+                exc_info=last_exc,
+            )
+            return False
+
         if success:
             logger.warning(
                 "Message sent to DLQ",
                 dlq_stream=settings.redis_dlq_stream_name,
                 source_message_id=source_message_id,
                 dlq_message_id=self._decode_string(dlq_id) if dlq_id is not None else None,
+                durable_path=str(fallback_path) if fallback_path is not None else None,
             )
-            record_dlq_event(feed=feed, error_type=error_type)
-            return True
-
-        fallback_path = await self._write_dlq_fallback(
-            source_message_id=source_message_id,
-            dlq_event=dlq_event,
-            redis_error=last_exc,
-        )
-        if fallback_path is not None:
-            logger.critical(
-                "dlq_file_fallback_used",
-                stream=settings.redis_dlq_stream_name,
-                event_id=source_message_id,
+        else:
+            # Redis enqueue failed but the durable file was written — not a loss.
+            logger.warning(
+                "dlq_redis_enqueue_failed_durable_file_written",
+                source_message_id=source_message_id,
                 fallback_path=str(fallback_path),
                 redis_error=str(last_exc) if last_exc else None,
             )
-            record_dlq_event(feed=feed, error_type=error_type)
-            return True
-
-        logger.error(
-            "Failed to write message to DLQ",
-            source_message_id=source_message_id,
-            error=str(last_exc) if last_exc else "unknown",
-            exc_info=last_exc,
-        )
-        return False
+        record_dlq_event(feed=feed, error_type=error_type)
+        return True
 
     async def _write_dlq_fallback(
         self,
