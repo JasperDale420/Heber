@@ -90,8 +90,12 @@ def _check_daily(ctx: CheckContext, rule: FeedRule, now_et: datetime) -> CheckRe
         return None  # before deadline -> not yet in scope
 
     now_utc = now_et.astimezone(UTC)
-    midnight_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
-    count = _window_row_count(ctx, rule.feed, midnight_utc, now_utc)
+    # EOD feeds stamp ts_event at UTC-midnight (00:00Z), so the day window must
+    # start at UTC-midnight of today's date — not ET-midnight (04:00/05:00Z),
+    # which would fall *after* those rows and exclude them (false CRITICAL).
+    today = now_et.date()
+    day_start_utc = datetime(today.year, today.month, today.day, tzinfo=UTC)
+    count = _window_row_count(ctx, rule.feed, day_start_utc, now_utc)
     details = {"feed": rule.feed, "rows": count, "floor": rule.floor, "deadline_et": rule.window_end_et}
     if count < rule.floor:
         msg = f"{rule.feed}: {count} rows today by {rule.window_end_et} ET (floor {rule.floor}) — EOD feed missing"

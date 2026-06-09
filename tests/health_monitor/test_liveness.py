@@ -137,3 +137,28 @@ async def test_reads_prune_by_dt(tmp_path: Path) -> None:
     assert reader.read_silver.call_args_list, "read_silver was never called"
     for call in reader.read_silver.call_args_list:
         assert call.kwargs.get("prune_by_dt") is True
+
+
+@pytest.mark.unit
+async def test_daily_eod_rows_at_utc_midnight_are_counted(tmp_path: Path) -> None:
+    """EOD feeds (e.g. greek_exposure) stamp ts_event at UTC-midnight (00:00Z).
+    The daily window must start at 00:00 UTC, not ET-midnight (04:00/05:00Z), or
+    those rows fall just before the window and are excluded -> false CRITICAL.
+    """
+    row_ts = pd.Timestamp("2026-03-25T00:00:00Z")  # trading day, UTC midnight
+
+    def _read(dataset, time_range=None, columns=None, **_kw):
+        start, end = pd.Timestamp(time_range[0]), pd.Timestamp(time_range[1])
+        present = dataset == "greek_exposure" and start <= row_ts <= end
+        return pd.DataFrame({"ts_event": [row_ts] * (5 if present else 0)})
+
+    reader = MagicMock()
+    reader.read_silver = MagicMock(side_effect=_read)
+    cal = MagicMock()
+    cal.is_trading_day = MagicMock(return_value=True)
+    ctx = make_check_context(tmp_path, calendar=cal, reader=reader, settings_overrides={"alert_floor_overrides": {}})
+
+    results = await run_liveness_checks(ctx, now=EVENING_ET)  # 18:00 ET, past the 17:30 deadline
+    gx = [r for r in results if r.feed == "greek_exposure"]
+    assert len(gx) == 1
+    assert gx[0].status == Status.PASS  # FAILs with an ET-midnight window start
