@@ -96,3 +96,19 @@ them.
 Do not migrate `heber-consumer` until all lower-risk workers have stayed clean
 for at least one full trading day and the Monday check shows no ingestion lag or
 DLQ growth.
+
+## Critical-feed Discord alerting
+
+The `health-monitor` service sends Discord alerts when a must-flow feed stops or
+trickles. The runner sources `.env`, so set these there (no plist edit needed):
+
+```
+HEBER_ALERT_DISCORD_ENABLED=true
+HEBER_ALERT_DISCORD_WEBHOOK_URL=<discord webhook>
+# Optional, after calibration:
+HEBER_ALERT_FLOOR_OVERRIDES={"darkpool": 8, "flow_alerts": 25}
+```
+
+Verify end-to-end: `uv run heber alert-test`.
+Suggest floors from healthy history: `uv run heber alert-calibrate`.
+Requires `HEBER_HEALTH_MONITOR_ENABLED=true` (default).
