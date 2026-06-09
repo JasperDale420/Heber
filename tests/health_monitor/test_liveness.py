@@ -126,3 +126,14 @@ async def test_non_trading_day_empty(tmp_path: Path) -> None:
     ctx = make_check_context(tmp_path, calendar=cal, reader=reader)
     results = await run_liveness_checks(ctx, now=MIDDAY_ET)
     assert results == []
+
+
+@pytest.mark.unit
+async def test_reads_prune_by_dt(tmp_path: Path) -> None:
+    """Liveness reads must prune to the day's partition, not scan a feed's full history."""
+    reader = _reader_returning({"flow_alerts": 50, "darkpool": 50, "bars": 50, "trades": 50})
+    ctx = _ctx(tmp_path, reader)
+    await run_liveness_checks(ctx, now=MIDDAY_ET)
+    assert reader.read_silver.call_args_list, "read_silver was never called"
+    for call in reader.read_silver.call_args_list:
+        assert call.kwargs.get("prune_by_dt") is True

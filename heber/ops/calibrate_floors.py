@@ -53,6 +53,7 @@ def calibrate(days_back: int = 50, ratio: float = 0.3, reader: HeberReader | Non
                 rule.feed,
                 time_range=(f"{ref_day.isoformat()}T00:00:00+00:00", f"{ref_day.isoformat()}T23:59:59+00:00"),
                 columns=["ts_event"],
+                prune_by_dt=True,
             )
         except Exception:
             logger.warning("calibrate_read_error", feed=rule.feed, exc_info=True)

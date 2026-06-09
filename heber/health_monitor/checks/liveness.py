@@ -36,6 +36,7 @@ def _window_row_count(ctx: CheckContext, feed: str, start_utc: datetime, end_utc
             feed,
             time_range=(start_utc.isoformat(), end_utc.isoformat()),
             columns=["ts_event"],
+            prune_by_dt=True,
         )
     except Exception:
         logger.warning("liveness_read_error", feed=feed, exc_info=True)
