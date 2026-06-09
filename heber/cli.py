@@ -154,6 +154,15 @@ def _cmd_health_daily(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_alert_calibrate(args: argparse.Namespace) -> int:
+    """Print suggested per-feed liveness floors from healthy history."""
+    from heber.ops.calibrate_floors import calibrate_json
+
+    print("Suggested HEBER_ALERT_FLOOR_OVERRIDES (paste into .env):")
+    print(calibrate_json(days_back=args.days_back, ratio=args.ratio))
+    return 0
+
+
 def _cmd_alert_test(args: argparse.Namespace) -> int:
     """Send a test message through the Discord notifier."""
     from heber.config import get_settings
@@ -173,6 +182,7 @@ _SUBCOMMAND_HANDLERS = {
     "backfill": _cmd_backfill,
     "health-dataflow": _cmd_health_dataflow,
     "health-daily": _cmd_health_daily,
+    "alert-calibrate": _cmd_alert_calibrate,
     "alert-test": _cmd_alert_test,
 }
 
@@ -227,6 +237,11 @@ def main() -> int:
     health_daily_parser.add_argument("--date", help="Report date (YYYY-MM-DD, default: today)")
     health_daily_parser.add_argument("--force", action="store_true", help="Run even on non-trading days")
     health_daily_parser.add_argument("--verbose", "-v", action="store_true", help="Print full JSON report")
+
+    # Alert calibrate command
+    alert_cal_parser = subparsers.add_parser("alert-calibrate", help="Suggest liveness floors from history")
+    alert_cal_parser.add_argument("--days-back", type=int, default=50, help="Reference day age in days")
+    alert_cal_parser.add_argument("--ratio", type=float, default=0.3, help="Floor as fraction of median rate")
 
     # Alert test command
     alert_test_parser = subparsers.add_parser("alert-test", help="Send a test Discord alert")
