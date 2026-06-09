@@ -5,6 +5,7 @@ import json
 import sys
 
 from heber import __version__
+from heber.ops.notifier import DiscordNotifier
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
@@ -153,6 +154,18 @@ def _cmd_health_daily(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_alert_test(args: argparse.Namespace) -> int:
+    """Send a test message through the Discord notifier."""
+    from heber.config import get_settings
+
+    settings = get_settings()
+    notifier = DiscordNotifier(settings)
+    text = args.message or "✅ Heber alert-test — data-quality alerting is wired up."
+    ok = notifier.send_test(text)
+    print("Sent." if ok else "Failed to send (check HEBER_ALERT_DISCORD_* settings).")
+    return 0 if ok else 1
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
@@ -160,6 +173,7 @@ _SUBCOMMAND_HANDLERS = {
     "backfill": _cmd_backfill,
     "health-dataflow": _cmd_health_dataflow,
     "health-daily": _cmd_health_daily,
+    "alert-test": _cmd_alert_test,
 }
 
 
@@ -213,6 +227,10 @@ def main() -> int:
     health_daily_parser.add_argument("--date", help="Report date (YYYY-MM-DD, default: today)")
     health_daily_parser.add_argument("--force", action="store_true", help="Run even on non-trading days")
     health_daily_parser.add_argument("--verbose", "-v", action="store_true", help="Print full JSON report")
+
+    # Alert test command
+    alert_test_parser = subparsers.add_parser("alert-test", help="Send a test Discord alert")
+    alert_test_parser.add_argument("--message", help="Custom message text", default=None)
 
     args = parser.parse_args()
 
