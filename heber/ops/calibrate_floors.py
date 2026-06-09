@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from heber.health_monitor.feed_registry import DEFAULT_REGISTRY
+from heber.health_monitor.feed_registry import resolved_registry
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -40,12 +40,26 @@ def _bucket_counts(ts_series, ref_day: date, rule, lookback: int) -> list[int]:
     return counts
 
 
-def calibrate(days_back: int = 50, ratio: float = 0.3, reader: HeberReader | None = None) -> dict[str, int]:
-    """Return suggested floors for continuous feeds keyed by feed name."""
+def calibrate(
+    days_back: int = 50,
+    ratio: float = 0.3,
+    reader: HeberReader | None = None,
+    floor_overrides: dict[str, int] | None = None,
+) -> dict[str, int]:
+    """Return suggested floors for continuous feeds keyed by feed name.
+
+    Honors the same floor overrides as the live monitor, so feeds disabled with
+    floor 0 (e.g. bars/trades) are skipped rather than read — keeping calibration
+    fast and scoped to the feeds actually being watched.
+    """
     reader = reader or HeberReader()
+    if floor_overrides is None:
+        from heber.config import get_settings
+
+        floor_overrides = get_settings().alert_floor_overrides
     ref_day = (datetime.now(ET) - timedelta(days=days_back)).date()
     suggestions: dict[str, int] = {}
-    for rule in DEFAULT_REGISTRY:
+    for rule in resolved_registry(floor_overrides):
         if rule.kind != "continuous":
             continue
         try:
