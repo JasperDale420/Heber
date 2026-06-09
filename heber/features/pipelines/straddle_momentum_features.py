@@ -1,7 +1,9 @@
 """Straddle Momentum Pipeline — tracks ATM straddle returns for vol dynamics.
 
 Captures implied-vs-realized volatility dynamics by tracking the trailing return
-of at-the-money (ATM) straddle positions.
+of at-the-money (ATM) straddle positions. The daily ATM straddle value is taken
+from each day's closing (end-of-day) chain snapshot per underlying, not pooled
+across the day's intraday snapshots.
 
 Produces per-ticker daily Gold features:
   - straddle_return_1m   (20-trading-day trailing return of ATM straddle)
@@ -15,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -87,6 +90,27 @@ def _expand_chain_json(option_chain_snapshots: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
 
     return pd.DataFrame(rows)
+
+
+def _select_eod_snapshots(snapshots: pd.DataFrame) -> pd.DataFrame:
+    """Keep only the last (end-of-day) chain snapshot per underlying.
+
+    Silver ``option_chain_snapshot`` captures many intraday snapshots per day,
+    each row carrying a full ``chain_json`` blob. The daily straddle feature only
+    needs one chain per (underlying, day), so we reduce to the latest snapshot
+    per underlying *before* exploding ``chain_json``. This turns the per-day work
+    from "explode every intraday contract" (~12M rows on busy days) into "explode
+    one chain per underlying" — the difference between a pipeline that OOM-killed
+    the poller and one that runs in seconds with bounded memory.
+
+    The straddle value is therefore taken from each day's closing chain rather
+    than pooled across the day's snapshots.
+    """
+    if snapshots.empty or "underlying" not in snapshots.columns or "ts_event" not in snapshots.columns:
+        return snapshots
+    ts = pd.to_datetime(snapshots["ts_event"], utc=True)
+    latest_idx = ts.groupby(snapshots["underlying"]).idxmax()
+    return snapshots.loc[latest_idx]
 
 
 def select_atm_options(
@@ -330,26 +354,76 @@ class StraddleMomentumPipeline:
             lookback_start=bar_start.isoformat(),
         )
 
-        # Load option chain snapshots from Silver
+        # Load option chain snapshots from Silver one day at a time, with a
+        # two-pass read per day to keep peak memory tiny.
+        #
+        # option_chain_snapshot is the largest Silver feed (~12 GB): a handful of
+        # underlyings, but hundreds of intraday snapshots each, every row holding
+        # a full ~4 MB chain_json blob. Materialising a whole day's blobs (~4.5 GB
+        # on busy days) just to keep the closing snapshot OOM-killed the process
+        # — even per-day — in the shared Docker VM. We only need one daily ATM
+        # straddle_value per underlying, so per day we:
+        #   pass 1: read just (underlying, ts_event) — no blobs — to find each
+        #           underlying's closing snapshot time;
+        #   pass 2: read only the closing tail (from the earliest close onward),
+        #           keep each underlying's last snapshot, then explode those.
         logger.info("Loading Silver option_chain_snapshot", start=bar_start.isoformat(), end=end_date.isoformat())
-        option_chain = self.reader.read_silver(
-            "option_chain_snapshot",
-            time_range=(bar_start, end_date),
-        )
-        logger.info("Loaded option chain data", rows=len(option_chain))
+        daily_values: list[pd.DataFrame] = []
+        day = bar_start.date()
+        end_day = end_date.date()
+        while day <= end_day:
+            day_start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+            day_end = day_start + timedelta(hours=23, minutes=59, seconds=59)
+            day += timedelta(days=1)
 
-        if option_chain.empty:
+            # Pass 1 — cheap key read (no chain_json blobs).
+            keys = self.reader.read_silver(
+                "option_chain_snapshot",
+                time_range=(day_start, day_end),
+                columns=["underlying", "ts_event"],
+                prune_by_dt=True,  # open only this day's dt partition, not all 4650 files
+            )
+            if keys.empty:
+                continue
+            ts = pd.to_datetime(keys["ts_event"], utc=True)
+            if "underlying" in keys.columns:
+                # Earliest per-underlying close → lower bound for the tail read.
+                tail_start = ts.groupby(keys["underlying"]).max().min()
+            else:
+                tail_start = ts.max()
+
+            # Pass 2 — read only the closing tail, so we materialise a few chains
+            # instead of every intraday snapshot.
+            chunk = self.reader.read_silver(
+                "option_chain_snapshot",
+                time_range=(tail_start, day_end),
+                prune_by_dt=True,
+            )
+            if chunk.empty:
+                continue
+            if "chain_json" in chunk.columns:
+                # Keep one chain per underlying (its close), then explode. Flat
+                # (already per-contract) schemas skip this and go straight to
+                # select_atm_options.
+                chunk = _select_eod_snapshots(chunk)
+                chunk = _expand_chain_json(chunk)
+            day_values = select_atm_options(chunk)
+            del chunk, keys
+            gc.collect()
+            if not day_values.empty:
+                daily_values.append(day_values)
+
+        if not daily_values:
             logger.warning("No option chain data found")
             return {"status": "no_data", "rows": 0}
 
-        # Expand chain_json blobs into flat per-contract rows (Silver schema)
-        if "chain_json" in option_chain.columns:
-            logger.info("Expanding chain_json into per-contract rows")
-            option_chain = _expand_chain_json(option_chain)
-            logger.info("Expanded option chain", rows=len(option_chain))
-
-        # Select ATM options and compute daily straddle values
-        straddle_values = select_atm_options(option_chain)
+        # Concatenate the small per-day reductions into the full straddle_value
+        # series; dedupe defensively in case a snapshot lands on a day boundary.
+        straddle_values = (
+            pd.concat(daily_values, ignore_index=True)
+            .drop_duplicates(subset=["underlying", "date"])
+            .reset_index(drop=True)
+        )
         logger.info("Computed daily straddle values", rows=len(straddle_values))
 
         if straddle_values.empty:

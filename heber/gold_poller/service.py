@@ -15,6 +15,8 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
+import queue
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -206,6 +208,43 @@ def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     )
 
 
+def _compute_pipeline(entry: dict[str, Any], start_date: date, end_date: date) -> dict[str, Any]:
+    """Instantiate and run a single pipeline synchronously.
+
+    Module-level (not a method) so it can run inside an isolated ``spawn``
+    subprocess, which re-imports this module and reconstructs settings.
+    """
+    settings = get_settings()
+    pipeline = _instantiate_pipeline(entry, settings)
+
+    kwargs: dict[str, Any] = {
+        "start_date": datetime(start_date.year, start_date.month, start_date.day, tzinfo=UTC),
+        "end_date": datetime(end_date.year, end_date.month, end_date.day, tzinfo=UTC),
+    }
+    if entry["datasets"] is not None:
+        kwargs["datasets"] = entry["datasets"]
+
+    return pipeline.run(**kwargs)
+
+
+def _pipeline_subprocess_entry(
+    entry: dict[str, Any],
+    start_date: date,
+    end_date: date,
+    result_q: Any,
+) -> None:
+    """Child-process entrypoint for an isolated pipeline run.
+
+    A hard crash here (OOM SIGKILL, segfault) is contained to this process and
+    leaves no result on the queue — the parent detects the missing payload. Any
+    Python-level error is reported back so the parent can log and continue.
+    """
+    try:
+        result_q.put({"ok": True, "stats": _compute_pipeline(entry, start_date, end_date)})
+    except BaseException as exc:  # noqa: BLE001 - report every failure to the parent
+        result_q.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 class GoldFeaturePoller:
     """Async service that refreshes Gold feature datasets after market close.
 
@@ -341,12 +380,15 @@ class GoldFeaturePoller:
             errors=error_count,
         )
 
-        # Log individual failures for visibility
+        # Log individual failures for visibility — name the Gold datasets left
+        # stale so the alert points straight at the affected downstream data.
+        datasets_by_name = {p["name"]: p.get("gold_datasets", []) for p in pipelines}
         for name, result in results.items():
             if result["status"] == "error":
                 logger.error(
                     "gold_poller_pipeline_failed",
                     pipeline=name,
+                    gold_datasets=datasets_by_name.get(name, []),
                     error=result.get("error", "unknown"),
                     attempts=result.get("attempts", 0),
                 )
@@ -372,10 +414,13 @@ class GoldFeaturePoller:
                     end_date=end_date.isoformat(),
                 )
 
-                # Run the pipeline in a thread to avoid blocking the event loop
-                # (pipelines are synchronous — they do heavy Parquet I/O)
+                # Run the pipeline in an isolated subprocess (awaited via a thread
+                # so the event loop stays responsive). Isolation means a hard crash
+                # — e.g. an OOM SIGKILL the try/except cannot catch — kills only the
+                # child and surfaces here as an exception, instead of killing the
+                # poller and starving every pipeline scheduled after this one.
                 stats = await asyncio.to_thread(
-                    self._execute_pipeline_sync,
+                    self._execute_pipeline_isolated,
                     entry,
                     start_date,
                     end_date,
@@ -438,23 +483,75 @@ class GoldFeaturePoller:
             "error": f"Failed after {max_retries} attempts",
         }
 
-    def _execute_pipeline_sync(
+    def _execute_pipeline_isolated(
         self,
         entry: dict[str, Any],
         start_date: date,
         end_date: date,
     ) -> dict[str, Any]:
-        """Synchronous pipeline execution (runs in thread)."""
-        pipeline = _instantiate_pipeline(entry, self._settings)
+        """Run a pipeline in an isolated subprocess (blocking; call via ``to_thread``).
 
-        kwargs: dict[str, Any] = {
-            "start_date": datetime(start_date.year, start_date.month, start_date.day, tzinfo=UTC),
-            "end_date": datetime(end_date.year, end_date.month, end_date.day, tzinfo=UTC),
-        }
-        if entry["datasets"] is not None:
-            kwargs["datasets"] = entry["datasets"]
+        Containment: a hard crash in the child — most importantly an OOM SIGKILL,
+        which the in-process try/except cannot catch — kills only the child. The
+        parent converts the child's death (or a timeout) into an exception, so the
+        retry/continue logic in ``_run_pipeline`` keeps the run going instead of
+        the whole poller dying and silently starving every pipeline after this one.
+        """
+        timeout = self._settings.gold_poller_pipeline_timeout_seconds
+        ctx = multiprocessing.get_context("spawn")
+        result_q: Any = ctx.Queue()
+        proc = ctx.Process(
+            target=_pipeline_subprocess_entry,
+            args=(entry, start_date, end_date, result_q),
+            name=f"gold-pipeline-{entry['name']}",
+        )
+        proc.start()
 
-        return pipeline.run(**kwargs)
+        payload: dict[str, Any] | None = None
+        timed_out = False
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                # Drain the result first: a fast pipeline may still be winding
+                # down (flushing the queue feeder) when we read its result, so a
+                # delivered payload — not liveness — is what ends the wait.
+                payload = result_q.get(timeout=2.0)
+                break
+            except queue.Empty:
+                if not proc.is_alive():
+                    break  # child died without delivering (e.g. OOM SIGKILL)
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+
+        if timed_out:
+            # Wedged child — kill it so it cannot leak past the run.
+            proc.terminate()
+            proc.join(10)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+            raise TimeoutError(f"pipeline '{entry['name']}' exceeded {timeout}s timeout")
+
+        # Reap the child (it may be exiting after delivering its result).
+        proc.join(5)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(5)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+
+        if payload is None:
+            # Child died before reporting — almost always an OOM SIGKILL (-9).
+            # This is the exact failure mode that used to take down the poller.
+            raise RuntimeError(
+                f"pipeline '{entry['name']}' subprocess died without a result "
+                f"(exitcode={proc.exitcode}); likely OOM-killed"
+            )
+        if not payload.get("ok"):
+            raise RuntimeError(f"pipeline '{entry['name']}' failed: {payload.get('error')}")
+        return payload["stats"]
 
     # ----- Telemetry -----
 

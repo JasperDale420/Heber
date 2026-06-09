@@ -432,6 +432,12 @@ class Settings(BaseSettings):
         default=30.0,
         description="Base backoff between retries (multiplied by attempt number)",
     )
+    gold_poller_pipeline_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=7200,
+        description="Hard wall-clock cap per pipeline; the isolated subprocess is killed past this",
+    )
     gold_poller_project: str = Field(
         default="watch",
         description="Gold project namespace for poller-generated datasets",
