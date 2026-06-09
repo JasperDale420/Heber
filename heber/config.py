@@ -523,6 +523,39 @@ class Settings(BaseSettings):
         description="Rows to sample for zero-leakage audit (0 = full scan)",
     )
 
+    # Critical-feed data-quality alerting (HEBER_ALERT_*)
+    alert_discord_enabled: bool = Field(
+        default=False,
+        description="Enable Discord alerts for critical data-quality failures",
+    )
+    alert_discord_webhook_url: str = Field(
+        default="",
+        description="Discord webhook URL for critical data-quality alerts",
+    )
+    alert_min_severity: str = Field(
+        default="critical",
+        description="Minimum severity to send an alert (critical|warning|info)",
+    )
+    alert_cooldown_seconds: int = Field(
+        default=3600,
+        ge=0,
+        description="Minimum seconds between repeat alerts for the same (check, feed)",
+    )
+    alert_send_recovery: bool = Field(
+        default=True,
+        description="Send a one-line recovery note when a previously-alerting feed returns to healthy",
+    )
+    alert_liveness_check_interval_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Interval (seconds) for the per-feed liveness loop",
+    )
+    alert_floor_overrides: dict[str, int] = Field(
+        default_factory=dict,
+        description="Per-feed floor overrides for liveness (JSON env); floor 0 disables that feed",
+    )
+
     # Quarantine
     quarantine_path: str = Field(default="quarantine")
 
