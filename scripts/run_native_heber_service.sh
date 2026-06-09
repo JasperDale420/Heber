@@ -57,8 +57,12 @@ case "${SERVICE}" in
     export HEBER_METRICS_PORT="${HEBER_METRICS_PORT:-9094}"
     exec uv run python -m heber.writer.compactor
     ;;
+  "alert-check")
+    # One-shot critical-feed liveness check; scheduled via launchd StartInterval.
+    exec uv run heber alert-check
+    ;;
   *)
-    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor}" >&2
+    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor|alert-check}" >&2
     exit 64
     ;;
 esac

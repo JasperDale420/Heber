@@ -26,11 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Critical-feed data-quality alarm: the health monitor now sends a Discord alert
-  the moment a must-flow feed (flow_alerts, darkpool, bars, trades, oi_change,
-  greek_exposure) goes dark or drops to a trickle during the hours it should be
-  flowing. Configured via `HEBER_ALERT_*`. New CLI: `heber alert-test` (verify the
-  webhook) and `heber alert-calibrate` (suggest per-feed floors from history).
+- Critical-feed data-quality alarm: a scheduled `heber alert-check` (run every
+  5 min via its own launchd job) posts a Discord alert the moment a must-flow UW
+  feed (flow_alerts, darkpool, oi_change, greek_exposure) goes dark or drops to a
+  trickle during the hours it should be flowing — catching the kind of silent
+  outage that previously went unnoticed for weeks. Absolute per-feed floors avoid
+  the "boiling-frog" blind spot of rolling baselines; a missing partition counts
+  as zero (not silently skipped); per-feed hourly cooldown plus one-line recovery
+  notes prevent spam. Configured via `HEBER_ALERT_*` (incl.
+  `HEBER_ALERT_FLOOR_OVERRIDES` to focus feeds and set trickle floors). New CLI:
+  `heber alert-test` (verify the webhook), `heber alert-check` (run one cycle),
+  and `heber alert-calibrate` (suggest trickle floors from healthy history). The
+  alarm runs as a fast, isolated scheduled process so the multi-tier health
+  monitor's heavy Tier-2/Tier-3 sweeps can't starve it, and its reads are
+  dt-partition-pruned so they stay fast even on large feeds.
 - **Native LaunchD pilot scaffolding for low-risk Heber workers** — added `scripts/run_native_heber_service.sh`, `scripts/install_native_launchd.sh`, LaunchAgent plists under `launchd/`, and `docs/operations/native-launchd.md` so `dataflow-health`, `health-monitor`, `gold-poller`, and `compactor` can run as local macOS services without moving the ingestion consumer yet. The runner uses host paths (`/Volumes/heber/data`), host service URLs (`localhost`), per-service metrics ports, and explicitly excludes `heber-consumer`, `heber-watch`, and `heber-catalog` from the first migration wave. Regression coverage in `tests/test_native_launchd_pilot.py`.
 - **Durable file fallback for failed DLQ writes** — when both the main processing path and the Redis `XADD` to the DLQ stream fail, the writer consumer (`heber/writer/consumer.py`) and watch consumer (`heber/watch/consumer.py`) now persist the full event payload to a JSON file under `${HEBER_DATA_ROOT}/dlq_fallback/dt=YYYY-MM-DD/` instead of leaving the message pending with only a single log line. The file is written atomically via a tempfile + `os.replace`, named `{stream_basename}_{event_id_hash}.json`, and the use of the fallback is logged at `CRITICAL` with `stream`, `event_id`, and `fallback_path`. The directory is configurable via `HEBER_DLQ_FALLBACK_DIR`. Both consumers log the current day's backlog file count at startup so operators can see accumulated fallback events.
 - **heber-watch gateway auth preflight at boot** — `WatchService.run()` now performs a single auth-required probe against the gateway (`/api/v1/uw/SPY/iv-rank`) before starting the consumer/poller/backfill loops. On `401`, the service emits a `CRITICAL` log explicitly naming the cascade (`Feature enrichment WILL fail and Gold meta_label_features WILL be written with null Greeks unless this is fixed`) and stores `service._auth_preflight_ok = False`. Transport errors log a warning and leave the flag `None` (unknown). The service still starts in all cases — preflight is observational, not gating — so a transient probe failure cannot turn a credential outage into a service outage. Implemented in `heber/watch/writer.py::WatchService._gateway_auth_preflight`. Tests in `tests/test_watch_service_auth_preflight.py`.

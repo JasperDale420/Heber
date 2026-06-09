@@ -99,16 +99,36 @@ DLQ growth.
 
 ## Critical-feed Discord alerting
 
-The `health-monitor` service sends Discord alerts when a must-flow feed stops or
-trickles. The runner sources `.env`, so set these there (no plist edit needed):
+The alarm is the **`alert-check`** service: a one-shot `heber alert-check` that
+runs a single liveness cycle and posts a Discord alert when a must-flow feed
+(flow_alerts, darkpool, oi_change, greek_exposure) goes dark or drops to a
+trickle. It is scheduled via launchd `StartInterval` (every 5 min) rather than a
+long-lived loop, so it runs as a fast, isolated process and is never starved by
+the multi-tier `health-monitor`'s heavy Tier-2/Tier-3 sweeps. Cooldown/recovery
+state lives on disk (`<data_root>/ops/alerts/state.json`), so throttling (one
+alert per feed per hour) works across runs.
+
+The runner sources `.env`, so set these there (no plist edit needed):
 
 ```
 HEBER_ALERT_DISCORD_ENABLED=true
 HEBER_ALERT_DISCORD_WEBHOOK_URL=<discord webhook>
-# Optional, after calibration:
-HEBER_ALERT_FLOOR_OVERRIDES={"darkpool": 8, "flow_alerts": 25}
+# Focus the alarm on the UW feeds (bars/trades are healthy + heavy to read);
+# floor 0 disables a feed. Add calibrated trickle floors here too.
+HEBER_ALERT_FLOOR_OVERRIDES='{"bars":0,"trades":0,"flow_alerts":351}'
 ```
 
-Verify end-to-end: `uv run heber alert-test`.
-Suggest floors from healthy history: `uv run heber alert-calibrate`.
-Requires `HEBER_HEALTH_MONITOR_ENABLED=true` (default).
+Install + start the alarm:
+
+```
+bash scripts/install_native_launchd.sh --start alert-check
+```
+
+- Verify the webhook end-to-end: `uv run heber alert-test`
+- Run one cycle by hand: `uv run heber alert-check`
+- Suggest trickle floors from healthy history: `uv run heber alert-calibrate`
+  (scoped to the feeds you actually watch; disabled feeds are skipped)
+
+The `health-monitor` service (Tier 1/2/3 data-quality checks) is independent and
+optional — it is **not** required for alerting. Note its Tier-3 daily sweep can
+stall on large un-pruned feed reads; run it only if you need those deeper checks.

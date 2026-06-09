@@ -175,6 +175,43 @@ def _cmd_alert_test(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_alert_check(args: argparse.Namespace) -> int:
+    """Run one liveness cycle and dispatch any criticals to Discord, then exit.
+
+    Built to be scheduled (launchd StartInterval) so the alarm runs as a fast,
+    isolated process rather than a loop sharing the multi-tier monitor's event
+    loop. Cooldown/recovery state lives on disk, so throttling works across runs.
+    """
+    import asyncio
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from heber.config import get_settings
+    from heber.health_monitor.calendar import HealthCalendar
+    from heber.health_monitor.checks.liveness import run_liveness_checks
+    from heber.health_monitor.models import CheckContext
+    from heber.reader import HeberReader
+
+    settings = get_settings()
+    ctx = CheckContext(
+        settings=settings,
+        reader=HeberReader(),
+        redis=None,
+        calendar=HealthCalendar(),
+        store=None,
+    )
+    now = datetime.now(ZoneInfo("America/New_York"))
+    results = asyncio.run(run_liveness_checks(ctx, now=now))
+
+    DiscordNotifier(settings).dispatch(results)
+
+    criticals = [r for r in results if r.status.value in ("fail", "error")]
+    print(f"alert-check: {len(results)} checks, {len(criticals)} critical")
+    for r in results:
+        print(f"  {r.status.value.upper():4} {r.feed}: {r.message}")
+    return 0
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
@@ -184,6 +221,7 @@ _SUBCOMMAND_HANDLERS = {
     "health-daily": _cmd_health_daily,
     "alert-calibrate": _cmd_alert_calibrate,
     "alert-test": _cmd_alert_test,
+    "alert-check": _cmd_alert_check,
 }
 
 
@@ -246,6 +284,9 @@ def main() -> int:
     # Alert test command
     alert_test_parser = subparsers.add_parser("alert-test", help="Send a test Discord alert")
     alert_test_parser.add_argument("--message", help="Custom message text", default=None)
+
+    # Alert check command (one-shot; scheduled via launchd StartInterval)
+    subparsers.add_parser("alert-check", help="Run one liveness cycle and alert on criticals")
 
     args = parser.parse_args()
 
