@@ -235,7 +235,6 @@ class Settings(BaseSettings):
     )
 
     # API
-    api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)
     catalog_url: str = Field(
         default="http://localhost:8085/api/v1",
@@ -329,7 +328,13 @@ class Settings(BaseSettings):
     )
 
     # Backfill service
-    backfill_host: str = Field(default="0.0.0.0")
+    backfill_host: str = Field(
+        default="127.0.0.1",
+        description="Bind address for the backfill HTTP service. Loopback by "
+        "default — the catalog/backfill APIs have no authentication, so they "
+        "must not listen on LAN interfaces. Containers override to 0.0.0.0 "
+        "(exposure is controlled by host-side port publishing).",
+    )
     backfill_port: int = Field(default=8080)
     backfill_log_level: str = Field(default="info")
 

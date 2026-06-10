@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Network exposure locked to loopback** (`docker-compose.yml`, `heber/config.py`): the catalog API has no authentication, so nothing unauthenticated may listen on LAN interfaces. All docker-compose published ports (Postgres 5433, catalog 8085, metrics 9090-9093) now bind `127.0.0.1` on the host, and the native backfill service defaults to a loopback bind (`HEBER_BACKFILL_HOST=127.0.0.1`). Containers still bind `0.0.0.0` internally — exposure is controlled at the publish boundary. The unused `api_host` setting was removed. Contract test in `tests/test_api_bind_defaults.py`. If the catalog ever needs to serve other machines, wire up the existing-but-unused token auth in `heber/catalog/access_control.py` first.
+
 ### Fixed
 
 - **Bloom-filter dedupe can no longer silently drop legitimate events** (`heber/ops/reliability.py`, `heber/writer/consumer.py`): the consumer's deduplicator ran Bloom-only, so a false positive was treated as a duplicate — the event was ACKed with status "dropped" and never reached Bronze (audit F-6). Three layers now prevent this: (1) a `RedisDedupeStore` backs the Bloom filter with exact `EXISTS` checks — Bloom-negative events never touch Redis, Bloom hits are verified before dropping; (2) the Bloom filter is sized 256M bits for the observed ~105M events/day and fails OPEN (`bloom_saturated_fail_open`) when its estimated false-positive rate exceeds 1%, instead of degrading into mass drops; (3) the store itself fails open on Redis errors — a duplicate write is recoverable, a dropped event is not. New settings `HEBER_DEDUPE_REDIS_ENABLED` (default true) and `HEBER_DEDUPE_REDIS_TTL_SECONDS`; new metrics `heber_consumer_dedupe_saturated_passes_total` and `heber_consumer_dedupe_store_errors_total`. Tests in `tests/test_dedupe_backing_store.py` and `tests/test_dedupe_bloom_saturation.py`; root `conftest.py` disables the Redis store in tests so they never touch the live event bus.
