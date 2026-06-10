@@ -31,7 +31,7 @@ from heber.ops.metrics import (
     record_ingest_latency,
     start_metrics_server_from_env,
 )
-from heber.ops.reliability import EventDeduplicator
+from heber.ops.reliability import EventDeduplicator, RedisDedupeStore
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
 from heber.writer.dlq_fallback import (
@@ -68,17 +68,29 @@ logger = structlog.get_logger(__name__)
 class EventConsumer:
     """Consumes events from Redis Streams and writes to Lake layers."""
 
-    def __init__(self):
+    def __init__(self, event_deduplicator: EventDeduplicator | None = None):
         self.redis: redis.Redis | None = None
         self.bronze_writer = BronzeWriter()
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-        self.event_deduplicator = EventDeduplicator()
+        self.event_deduplicator = event_deduplicator or EventDeduplicator(
+            backing_store=self._build_dedupe_store(),
+        )
         self._inflight_event_ids: set[str] = set()
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
+
+    @staticmethod
+    def _build_dedupe_store() -> RedisDedupeStore | None:
+        """Build the exact-match dedupe backing store when enabled."""
+        if not settings.dedupe_redis_enabled:
+            return None
+        return RedisDedupeStore(
+            redis_url=settings.redis_url,
+            ttl_seconds=settings.dedupe_redis_ttl_seconds,
+        )
 
     def _claim_event_id(self, event_id: str) -> str | None:
         """Claim an event_id for processing or return a duplicate reason."""

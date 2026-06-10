@@ -222,6 +222,17 @@ class Settings(BaseSettings):
         le=50,
         description="Max messages processed concurrently within each XREADGROUP batch",
     )
+    dedupe_redis_enabled: bool = Field(
+        default=False,
+        description="Verify Bloom-filter dedupe hits against an exact Redis store "
+        "(eliminates false-positive drops, but issues a synchronous Redis SET per "
+        "event on register — evaluate throughput before enabling at full stream volume)",
+    )
+    dedupe_redis_ttl_seconds: int = Field(
+        default=7200,
+        ge=60,
+        description="TTL for exact dedupe keys in Redis (should cover the Bloom rotation window)",
+    )
 
     # API
     api_host: str = Field(default="0.0.0.0")

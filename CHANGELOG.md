@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bloom-filter dedupe can no longer silently drop legitimate events** (`heber/ops/reliability.py`, `heber/writer/consumer.py`): the consumer's deduplicator ran Bloom-only, so a false positive was treated as a duplicate — the event was ACKed with status "dropped" and never reached Bronze (audit F-6). Three layers now prevent this: (1) a `RedisDedupeStore` backs the Bloom filter with exact `EXISTS` checks — Bloom-negative events never touch Redis, Bloom hits are verified before dropping; (2) the Bloom filter is sized 256M bits for the observed ~105M events/day and fails OPEN (`bloom_saturated_fail_open`) when its estimated false-positive rate exceeds 1%, instead of degrading into mass drops; (3) the store itself fails open on Redis errors — a duplicate write is recoverable, a dropped event is not. New settings `HEBER_DEDUPE_REDIS_ENABLED` (default true) and `HEBER_DEDUPE_REDIS_TTL_SECONDS`; new metrics `heber_consumer_dedupe_saturated_passes_total` and `heber_consumer_dedupe_store_errors_total`. Tests in `tests/test_dedupe_backing_store.py` and `tests/test_dedupe_bloom_saturation.py`; root `conftest.py` disables the Redis store in tests so they never touch the live event bus.
+
 ### Removed
 
 - **Kubernetes manifests, Terraform modules, and the CI deploy pipeline removed** (`k8s/` — 26 manifests, `infrastructure/terraform/`, the `push`/`deploy-staging`/`deploy-prod` CI jobs, and their conformance tests): none of it was ever deployed — Terraform was never initialized, the K8s overlays pointed at placeholder URLs, and the CI deploy jobs were gated on a `main` branch that does not exist (the default branch is `master`), so they could never run. The real deployment is docker-compose + launchd on the macOS host (`scripts/deploy.sh`). CI now does Build → Test → Scan and describes reality.
