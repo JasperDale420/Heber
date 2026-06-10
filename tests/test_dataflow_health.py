@@ -16,6 +16,7 @@ def _signals(now: datetime) -> dict:
             "group_exists": True,
             "lag": 0,
             "pending": 0,
+            "stream_len": 100_000,
             "error": None,
         },
         "feeds": {
@@ -36,6 +37,112 @@ def _ok_dlq_check(*_args, **_kwargs) -> dict:
         "threshold": {"max_length": 10_000},
         "message": "DLQ has 0 entries.",
     }
+
+
+def _find_check(report: dict, check_id: str) -> dict:
+    return next(c for c in report["checks"] if c["id"] == check_id)
+
+
+def test_consumer_lag_near_stream_cap_is_critical(monkeypatch) -> None:
+    """When consumer lag approaches the stream length (MAXLEN cap), un-consumed
+    events are being evicted — the silent-data-loss condition from the 2026-06-09
+    option-quote flood. This must surface as a critical failure, not pass silently.
+    """
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 300_000
+    signals["redis"]["stream_len"] = 300_000
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    check = _find_check(report, "consumer_lag")
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
+    assert report["overall_status"] == "fail"
+
+
+def test_consumer_lag_low_is_ok(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "ok"
+
+
+def test_consumer_lag_mid_band_is_warning(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 180_000
+    signals["redis"]["stream_len"] = 300_000  # ratio 0.6 -> warn band (>=0.5, <0.8)
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "warn"
+
+
+def test_consumer_lag_high_ratio_below_floor_stays_ok(monkeypatch) -> None:
+    """A small stream fully behind (ratio ~1.0) but with lag under the absolute
+    floor must NOT alarm — guards against noise on tiny/overnight streams.
+    """
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 200
+    signals["redis"]["stream_len"] = 210  # ratio 0.95 but lag < 5000 floor
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "ok"
+
+
+def test_consumer_lag_unknown_stream_len_is_skipped(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 50_000
+    signals["redis"]["stream_len"] = None  # xlen unavailable -> not evaluable
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "skipped"
+
+
+def test_dlq_flood_escalates_to_critical(monkeypatch) -> None:
+    """A DLQ that has grown into the hundreds of thousands (a rejection flood) must
+    page as critical, not sit at warning like a steady-state trickle.
+    """
+    import heber.writer.dlq_reprocessor as dlq_mod
+
+    monkeypatch.setattr(
+        dlq_mod,
+        "check_dlq_size",
+        lambda **_kwargs: {
+            "id": "dlq_queue_size",
+            "status": "warn",
+            "severity": "warning",
+            "observed": {"dlq_stream": "heber:events:dlq", "length": 250_000},
+            "threshold": {"max_length": 10_000},
+            "message": "DLQ has 250000 entries (exceeds 10000 threshold).",
+        },
+    )
+
+    check = dataflow_health_module._collect_dlq_size_check(Settings())
+
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
 
 
 def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None:

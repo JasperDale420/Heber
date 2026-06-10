@@ -256,7 +256,13 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
         group_exists = False
         lag: int | None = None
         pending: int | None = None
+        stream_len: int | None = None
         groups: list[dict[Any, Any]] = []
+
+        try:
+            stream_len = int(client.xlen(settings.redis_stream_name))
+        except redis.ResponseError:
+            stream_len = None
 
         try:
             groups = cast(list[dict[Any, Any]], client.xinfo_groups(settings.redis_stream_name))
@@ -282,6 +288,7 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
             "group_exists": group_exists,
             "lag": lag,
             "pending": pending,
+            "stream_len": stream_len,
             "error": None,
         }
     except Exception as exc:
@@ -290,6 +297,7 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
             "group_exists": False,
             "lag": None,
             "pending": None,
+            "stream_len": None,
             "error": str(exc),
         }
     finally:
@@ -449,15 +457,86 @@ def _build_gateway_check(
     }
 
 
+# Consumer-lag-vs-stream-length thresholds. When the group's lag is a large
+# fraction of the (MAXLEN-capped) stream length, un-consumed entries are being
+# evicted before the writer reads them — silent cross-feed data loss. This is the
+# failure mode behind the 2026-06-09 option-quote flood (lag pinned at the 300K
+# cap) that the reachability/freshness/DLQ checks all missed.
+_CONSUMER_LAG_WARN_RATIO = 0.5
+_CONSUMER_LAG_FAIL_RATIO = 0.8
+_CONSUMER_LAG_MIN_FLOOR = 5_000
+
+# A DLQ in the hundreds of thousands is a rejection flood, not steady-state
+# trickle — escalate from warning to a critical page.
+_DLQ_CRITICAL_THRESHOLD = 100_000
+
+
+def _build_consumer_lag_check(redis_signal: dict[str, Any]) -> dict[str, Any]:
+    """Alert when consumer lag approaches the stream length (MAXLEN cap)."""
+    lag = redis_signal.get("lag")
+    stream_len = redis_signal.get("stream_len")
+    threshold = {
+        "warn_ratio": _CONSUMER_LAG_WARN_RATIO,
+        "fail_ratio": _CONSUMER_LAG_FAIL_RATIO,
+        "min_lag_floor": _CONSUMER_LAG_MIN_FLOOR,
+    }
+
+    if not redis_signal.get("group_exists") or lag is None or not stream_len or stream_len <= 0:
+        return {
+            "id": "consumer_lag",
+            "status": "skipped",
+            "severity": "critical",
+            "observed": {"lag": lag, "stream_len": stream_len, "lag_ratio": None},
+            "threshold": threshold,
+            "message": "Consumer lag not evaluable (group missing or stream length unknown).",
+        }
+
+    ratio = lag / stream_len
+    if lag >= _CONSUMER_LAG_MIN_FLOOR and ratio >= _CONSUMER_LAG_FAIL_RATIO:
+        status = "fail"
+        message = (
+            f"Consumer lag {lag} is {ratio:.0%} of stream length {stream_len} — "
+            "un-consumed events are being evicted (MAXLEN cap)."
+        )
+    elif lag >= _CONSUMER_LAG_MIN_FLOOR and ratio >= _CONSUMER_LAG_WARN_RATIO:
+        status = "warn"
+        message = f"Consumer lag {lag} is {ratio:.0%} of stream length {stream_len} — approaching eviction."
+    else:
+        status = "ok"
+        message = f"Consumer lag {lag} ({ratio:.0%} of stream length {stream_len})."
+
+    return {
+        "id": "consumer_lag",
+        "status": status,
+        "severity": "critical",
+        "observed": {"lag": lag, "stream_len": stream_len, "lag_ratio": round(ratio, 3)},
+        "threshold": threshold,
+        "message": message,
+    }
+
+
 def _collect_dlq_size_check(active_settings: Settings, threshold: int = 10_000) -> dict[str, Any]:
-    """Check DLQ stream length and return a health check dict."""
+    """Check DLQ stream length and return a health check dict.
+
+    Escalates to a critical failure when the DLQ has grown into a flood
+    (``_DLQ_CRITICAL_THRESHOLD``), rather than staying at warning severity.
+    """
     from heber.writer.dlq_reprocessor import check_dlq_size
 
-    return check_dlq_size(
+    check = check_dlq_size(
         redis_url=active_settings.redis_url,
         dlq_stream_name=active_settings.redis_dlq_stream_name,
         threshold=threshold,
     )
+    length = check.get("observed", {}).get("length")
+    if length is not None and length > _DLQ_CRITICAL_THRESHOLD:
+        check["status"] = "fail"
+        check["severity"] = "critical"
+        check.setdefault("threshold", {})["critical_length"] = _DLQ_CRITICAL_THRESHOLD
+        check["message"] = (
+            f"DLQ has {length} entries (exceeds critical {_DLQ_CRITICAL_THRESHOLD}) — likely a rejection flood."
+        )
+    return check
 
 
 def generate_dataflow_report(
@@ -520,6 +599,8 @@ def generate_dataflow_report(
             "message": "Consumer group exists." if group_exists else "Consumer group is missing.",
         }
     )
+
+    checks.append(_build_consumer_lag_check(redis_signal))
 
     checks.append(
         _build_gateway_check(
