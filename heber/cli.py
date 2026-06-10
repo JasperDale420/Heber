@@ -13,10 +13,8 @@ def _cmd_info(args: argparse.Namespace) -> int:
     print(f"Heber Data Lakehouse v{__version__}")
     if args.verbose:
         print("\nComponents:")
-        print("  - Storage: Apache Iceberg")
-        print("  - Versioning: lakeFS")
-        print("  - Schema Registry: Apicurio")
-        print("  - Catalog: OpenMetadata")
+        print("  - Storage: Parquet (Bronze JSONL.gz / Silver+Gold Parquet)")
+        print("  - Catalog: Postgres (heber.catalog)")
     return 0
 
 

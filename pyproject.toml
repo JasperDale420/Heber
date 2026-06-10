@@ -33,10 +33,7 @@ dependencies = [
     # Feature Store
     "feast>=0.38",
 
-    # Data Versioning (Phase 2: lakeFS)
-    "lakefs>=0.7",
-
-    # Data Quality (Phase 3: Soda Core)
+    # Data Quality (Soda Core)
     "soda-core-duckdb>=3.0",
 
     # Schema Registry (Phase 4: Karapace)
@@ -147,7 +144,6 @@ strict = true
 [[tool.mypy.overrides]]
 module = [
     "heber.core.*",
-    "heber.versioning.*",
     "heber.backtest.*",
     "heber.universe.*",
     "heber.utils.*",

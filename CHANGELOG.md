@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **lakeFS versioning subsystem removed** (`heber/versioning/`, `lakefs` dependency, `HEBER_LAKEFS_*` settings, `lakefs` + `minio` docker-compose services, `heber_lakefs` database): per the 2026-06-10 audit decision, lakeFS was never wired into Gold writes or reads — `HeberReader` versions Gold datasets on the filesystem (`version=` directories). MinIO existed only as the lakeFS/Iceberg blockstore and is removed with it. `heber info --verbose` now reports the real components.
 - **Apache Iceberg subsystem removed** (`heber/storage/`, `pyiceberg` dependency, `HEBER_ICEBERG_*` settings, `docs/iceberg_migration.md`): per the 2026-06-10 audit decision, the Iceberg catalog/writer was never wired into the live write path (`heber/writer/*`), read path (`heber/reader/*`), or gold poller — the lakehouse runs on plain Parquet with the compactor and `HeberReader`'s schema unification. Removing it shrinks the install footprint and the upgrade surface. Revisit Iceberg if multi-writer ACID or time travel becomes a real requirement; git history preserves the implementation.
 
 ### Fixed

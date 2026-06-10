@@ -3,15 +3,6 @@ revision = 3
 requires-python = ">=3.12"
 
 [[package]]
-name = "aenum"
-version = "3.1.16"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/09/7a/61ed58e8be9e30c3fe518899cc78c284896d246d51381bab59b5db11e1f3/aenum-3.1.16.tar.gz", hash = "sha256:bfaf9589bdb418ee3a986d85750c7318d9d2839c1b1a1d6fe8fc53ec201cf140", size = 137693, upload-time = "2026-01-12T22:34:38.819Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/52/6ad8f63ec8da1bf40f96996d25d5b650fdd38f5975f8c813732c47388f18/aenum-3.1.16-py3-none-any.whl", hash = "sha256:9035092855a98e41b66e3d0998bd7b96280e85ceb3a04cc035636138a1943eaf", size = 165627, upload-time = "2025-04-25T03:17:58.89Z" },
-]
-
-[[package]]
 name = "alembic"
 version = "1.18.3"
 source = { registry = "https://pypi.org/simple" }
@@ -679,7 +670,6 @@ dependencies = [
     { name = "filelock" },
     { name = "httpx" },
     { name = "joblib" },
-    { name = "lakefs" },
     { name = "pandas" },
     { name = "prometheus-client" },
     { name = "pyarrow" },
@@ -728,7 +718,6 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.13" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "joblib", specifier = ">=1.3" },
-    { name = "lakefs", specifier = ">=0.7" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pandas", marker = "extra == 'reader'", specifier = ">=2.0" },
@@ -919,34 +908,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/93/a0bd2bd53ab19330e83ecc5652b7774ae86fd2fee19bc05ad220cf9db08b/korean_lunar_calendar-0.3.1.tar.gz", hash = "sha256:eb2c485124a061016926bdea6d89efdf9b9fdbf16db55895b6cf1e5bec17b857", size = 9877, upload-time = "2022-09-16T10:53:25.713Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9c/96/30f3fe51b336bb6da4714f4fdad7bbdce8f13af79af2eb75e22908f3f9f4/korean_lunar_calendar-0.3.1-py3-none-any.whl", hash = "sha256:392757135c492c4f42a604e6038042953c35c6f449dda5f27e3f86a7f9c943e5", size = 9033, upload-time = "2022-09-16T10:53:23.771Z" },
-]
-
-[[package]]
-name = "lakefs"
-version = "0.15.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "lakefs-sdk" },
-    { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/15/20979a8cdb889011197c206046ea6263ac33558b4e9bbf8f220fb719ec3b/lakefs-0.15.0.tar.gz", hash = "sha256:3ad6721d1176442d5b16eeca650a2617b42dbe160ad4cd3e6120ff9b0bb35894", size = 33410, upload-time = "2026-01-14T16:24:37.343Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/1d/2635d0af294cf399ad5acdfc29f4f0bf6ac73aa287c18183583e7f9c8c7a/lakefs-0.15.0-py3-none-any.whl", hash = "sha256:25675ab4760600cc8d8e6b90f2664a071bc2fe52ee2e300298b468406eaf035f", size = 38554, upload-time = "2026-01-14T16:24:36.46Z" },
-]
-
-[[package]]
-name = "lakefs-sdk"
-version = "1.76.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aenum" },
-    { name = "pydantic" },
-    { name = "python-dateutil" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/37/ad/58af71249e7411a14411960efedab358cc0a3ad522461102e4aeaff128c5/lakefs_sdk-1.76.0.tar.gz", hash = "sha256:e7c4d385c32811b5cdfc18abd667cf0bfd62037ba9517ef1e2e9203f12917a63", size = 138323, upload-time = "2026-01-21T08:53:37.023Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/60/684a69027edc208751028a069ae684a2d3610c371a71183e1c1abeb6fe7a/lakefs_sdk-1.76.0-py3-none-any.whl", hash = "sha256:050074321e2e4aecc5490ed09219069e746275eb6d479254b38db8c313e76923", size = 243532, upload-time = "2026-01-21T08:53:35.102Z" },
 ]
 
 [[package]]

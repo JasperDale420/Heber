@@ -136,17 +136,6 @@ class LLMConfig(NamedTuple):
     effective_base_url: str | None
 
 
-class LakeFSConfig(NamedTuple):
-    """Grouped view of LakeFS versioning settings."""
-
-    endpoint: str
-    access_key: str
-    secret_key: str
-    default_repo: str
-    storage_namespace_base: str
-    storage_namespace_template: str | None
-
-
 class Settings(BaseSettings):
     """Heber application settings loaded from environment."""
 
@@ -637,32 +626,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_PASSWORD", "SCHEMA_REGISTRY_PASSWORD"),
     )
 
-    # LakeFS versioning
-    lakefs_endpoint: str = Field(
-        default="http://localhost:8000",
-        validation_alias=AliasChoices("HEBER_LAKEFS_ENDPOINT", "LAKEFS_ENDPOINT"),
-    )
-    lakefs_access_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("HEBER_LAKEFS_ACCESS_KEY", "LAKEFS_ACCESS_KEY"),
-    )
-    lakefs_secret_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("HEBER_LAKEFS_SECRET_KEY", "LAKEFS_SECRET_KEY"),
-    )
-    lakefs_default_repo: str = Field(
-        default="heber-gold",
-        validation_alias=AliasChoices("HEBER_LAKEFS_DEFAULT_REPO", "LAKEFS_DEFAULT_REPO"),
-    )
-    lakefs_storage_namespace_base: str = Field(
-        default="s3://heber-lakehouse",
-        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_BASE", "LAKEFS_STORAGE_NAMESPACE_BASE"),
-    )
-    lakefs_storage_namespace_template: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_TEMPLATE", "LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
-    )
-
     @property
     def bronze_path(self) -> Path:
         return self.data_root / "bronze"
@@ -828,18 +791,6 @@ class Settings(BaseSettings):
             api_key=self.llm_api_key,
             qwen_region=self.llm_qwen_region,
             effective_base_url=self.llm_effective_base_url,
-        )
-
-    @property
-    def lakefs(self) -> LakeFSConfig:
-        """Grouped LakeFS versioning settings."""
-        return LakeFSConfig(
-            endpoint=self.lakefs_endpoint,
-            access_key=self.lakefs_access_key,
-            secret_key=self.lakefs_secret_key,
-            default_repo=self.lakefs_default_repo,
-            storage_namespace_base=self.lakefs_storage_namespace_base,
-            storage_namespace_template=self.lakefs_storage_namespace_template,
         )
 
 
