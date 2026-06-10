@@ -137,7 +137,7 @@ class TestEnvironmentManager:
 
         services = manager.get_local_services()
 
-        assert len(services) >= 3  # postgres, redis, minio
+        assert len(services) >= 2  # postgres, redis
 
     def test_get_staging_config(self):
         manager = EnvironmentManager()

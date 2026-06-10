@@ -1,4 +1,9 @@
-"""Regression tests for Docker/Kubernetes runtime entrypoints."""
+"""Regression tests for Docker runtime entrypoints.
+
+The deployment target is docker-compose + launchd on the host (the former
+Kubernetes manifests were removed 2026-06-10 — they were never deployed),
+so these contracts are enforced against docker-compose.yml.
+"""
 
 from __future__ import annotations
 
@@ -10,12 +15,15 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _compose_services() -> dict:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    return compose["services"]
+
+
 def test_legacy_missing_modules_are_not_referenced() -> None:
     files = [
         ROOT / "Dockerfile",
-        ROOT / "k8s/base/deployments/consumer.yaml",
-        ROOT / "k8s/base/deployments/compactor.yaml",
-        ROOT / "k8s/base/deployments/backfill.yaml",
+        ROOT / "docker-compose.yml",
     ]
     contents = "\n".join(path.read_text(encoding="utf-8") for path in files)
 
@@ -36,30 +44,30 @@ def test_runtime_entrypoint_modules_exist() -> None:
     assert not missing, f"Missing runtime modules: {missing}"
 
 
-def test_base_deployments_reference_valid_python_entrypoints() -> None:
-    deployment_files = [
-        ROOT / "k8s/base/deployments/catalog.yaml",
-        ROOT / "k8s/base/deployments/consumer.yaml",
-        ROOT / "k8s/base/deployments/compactor.yaml",
-        ROOT / "k8s/base/deployments/backfill.yaml",
-    ]
+def test_compose_services_reference_valid_python_entrypoints() -> None:
+    """Every `python -m <module>` compose command must resolve to a real module.
 
+    Catches the rename-the-module-but-not-the-compose-file drift that
+    previously shipped containers crash-looping on ModuleNotFoundError.
+    """
     missing_modules: list[str] = []
-    for path in deployment_files:
-        deployment = yaml.safe_load(path.read_text(encoding="utf-8"))
-        container = deployment["spec"]["template"]["spec"]["containers"][0]
-        command = container["command"]
+    checked = 0
 
-        assert command[:2] == ["python", "-m"], f"Unexpected command shape in {path}: {command!r}"
+    for name, service in _compose_services().items():
+        command = service.get("command")
+        if not isinstance(command, list) or command[:2] != ["python", "-m"]:
+            continue
+        checked += 1
 
         runtime_module = command[2]
         if runtime_module == "uvicorn":
             app_module = command[3].split(":", 1)[0]
             if importlib.util.find_spec(app_module) is None:
-                missing_modules.append(f"{path.name}:{app_module}")
+                missing_modules.append(f"{name}:{app_module}")
             continue
 
         if importlib.util.find_spec(runtime_module) is None:
-            missing_modules.append(f"{path.name}:{runtime_module}")
+            missing_modules.append(f"{name}:{runtime_module}")
 
-    assert not missing_modules, f"Deployments reference missing Python modules: {missing_modules}"
+    assert checked >= 5, f"Expected at least 5 python -m services in compose, found {checked}"
+    assert not missing_modules, f"Compose services reference missing Python modules: {missing_modules}"

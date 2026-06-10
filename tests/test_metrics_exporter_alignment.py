@@ -1,26 +1,19 @@
-"""Regression tests for metrics exporter and deployment scrape alignment."""
+"""Regression tests for metrics exporter wiring in service entrypoints.
+
+Previously this also checked Kubernetes scrape annotations; the K8s
+manifests were removed 2026-06-10 (never deployed). The durable invariant
+is that every long-running service entrypoint starts the Prometheus
+metrics server.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def test_scraped_deployments_map_to_metrics_enabled_entrypoints() -> None:
-    deployments = {
-        "catalog": ROOT / "k8s/base/deployments/catalog.yaml",
-        "consumer": ROOT / "k8s/base/deployments/consumer.yaml",
-        "compactor": ROOT / "k8s/base/deployments/compactor.yaml",
-        "backfill": ROOT / "k8s/base/deployments/backfill.yaml",
-    }
-
+def test_service_entrypoints_start_metrics_server() -> None:
     source_files = {
         "catalog": ROOT / "heber/catalog/api.py",
         "consumer": ROOT / "heber/writer/consumer.py",
@@ -28,17 +21,6 @@ def test_scraped_deployments_map_to_metrics_enabled_entrypoints() -> None:
         "backfill": ROOT / "heber/backfill/__main__.py",
     }
 
-    for name, deployment_path in deployments.items():
-        deployment = _load_yaml(deployment_path)
-        template = deployment["spec"]["template"]
-        annotations = template["metadata"]["annotations"]
-        container = template["spec"]["containers"][0]
-
-        assert annotations.get("prometheus.io/scrape") == "true", f"{name} scrape annotation missing"
-        assert annotations.get("prometheus.io/port") == "9090", f"{name} scrape port drifted"
-        assert any(port["containerPort"] == 9090 for port in container.get("ports", [])), (
-            f"{name} no longer exposes metrics container port"
-        )
-
-        source = source_files[name].read_text(encoding="utf-8")
+    for name, path in source_files.items():
+        source = path.read_text(encoding="utf-8")
         assert "start_metrics_server_from_env" in source, f"{name} entrypoint does not start metrics server"
