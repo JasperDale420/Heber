@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from heber.config import Settings
 from heber.ops import dataflow_health as dataflow_health_module
 
 
@@ -15,6 +16,7 @@ def _signals(now: datetime) -> dict:
             "group_exists": True,
             "lag": 0,
             "pending": 0,
+            "stream_len": 100_000,
             "error": None,
         },
         "feeds": {
@@ -35,6 +37,112 @@ def _ok_dlq_check(*_args, **_kwargs) -> dict:
         "threshold": {"max_length": 10_000},
         "message": "DLQ has 0 entries.",
     }
+
+
+def _find_check(report: dict, check_id: str) -> dict:
+    return next(c for c in report["checks"] if c["id"] == check_id)
+
+
+def test_consumer_lag_near_stream_cap_is_critical(monkeypatch) -> None:
+    """When consumer lag approaches the stream length (MAXLEN cap), un-consumed
+    events are being evicted — the silent-data-loss condition from the 2026-06-09
+    option-quote flood. This must surface as a critical failure, not pass silently.
+    """
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 300_000
+    signals["redis"]["stream_len"] = 300_000
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    check = _find_check(report, "consumer_lag")
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
+    assert report["overall_status"] == "fail"
+
+
+def test_consumer_lag_low_is_ok(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "ok"
+
+
+def test_consumer_lag_mid_band_is_warning(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 180_000
+    signals["redis"]["stream_len"] = 300_000  # ratio 0.6 -> warn band (>=0.5, <0.8)
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "warn"
+
+
+def test_consumer_lag_high_ratio_below_floor_stays_ok(monkeypatch) -> None:
+    """A small stream fully behind (ratio ~1.0) but with lag under the absolute
+    floor must NOT alarm — guards against noise on tiny/overnight streams.
+    """
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 200
+    signals["redis"]["stream_len"] = 210  # ratio 0.95 but lag < 5000 floor
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "ok"
+
+
+def test_consumer_lag_unknown_stream_len_is_skipped(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"]["lag"] = 50_000
+    signals["redis"]["stream_len"] = None  # xlen unavailable -> not evaluable
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert _find_check(report, "consumer_lag")["status"] == "skipped"
+
+
+def test_dlq_flood_escalates_to_critical(monkeypatch) -> None:
+    """A DLQ that has grown into the hundreds of thousands (a rejection flood) must
+    page as critical, not sit at warning like a steady-state trickle.
+    """
+    import heber.writer.dlq_reprocessor as dlq_mod
+
+    monkeypatch.setattr(
+        dlq_mod,
+        "check_dlq_size",
+        lambda **_kwargs: {
+            "id": "dlq_queue_size",
+            "status": "warn",
+            "severity": "warning",
+            "observed": {"dlq_stream": "heber:events:dlq", "length": 250_000},
+            "threshold": {"max_length": 10_000},
+            "message": "DLQ has 250000 entries (exceeds 10000 threshold).",
+        },
+    )
+
+    check = dataflow_health_module._collect_dlq_size_check(Settings())
+
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
 
 
 def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None:
@@ -107,6 +215,28 @@ def test_dataflow_health_market_closed_skips_gateway_passive_check_when_metric_m
     gateway_check = next(check for check in report["checks"] if check["id"] == "gateway_passive_activity")
     assert gateway_check["status"] == "skipped"
     assert report["overall_status"] == "ok"
+
+
+def test_dataflow_health_market_closed_does_not_collect_filesystem_fallback(monkeypatch) -> None:
+    now = datetime(2026, 2, 12, 2, 0, tzinfo=UTC)
+    monkeypatch.setattr(dataflow_health_module, "_collect_redis_signals", lambda _settings: _signals(now)["redis"])
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: False)
+
+    def fail_metrics_collection(_url: str) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
+        raise AssertionError("metrics collection should not run while freshness checks are skipped")
+
+    def fail_filesystem_collection(_settings: Settings) -> dict[str, float | None]:
+        raise AssertionError("filesystem fallback should not run while freshness checks are skipped")
+
+    monkeypatch.setattr(dataflow_health_module, "_fetch_metrics_samples", fail_metrics_collection)
+    monkeypatch.setattr(dataflow_health_module, "_collect_filesystem_feed_timestamps", fail_filesystem_collection)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    assert report["market_open"] is False
+    bars_check = next(check for check in report["checks"] if check["id"] == "feed_freshness_bars")
+    assert bars_check["status"] == "skipped"
 
 
 def test_dataflow_health_market_open_warns_when_gateway_passive_metric_missing(monkeypatch) -> None:
@@ -227,3 +357,42 @@ def test_latest_file_mtime_handles_file_disappearing_during_scan(tmp_path, monke
     latest = dataflow_health_module._latest_file_mtime(root)
 
     assert latest == stable.stat().st_mtime
+
+
+def test_collect_filesystem_feed_timestamps_avoids_full_feed_scan(tmp_path, monkeypatch) -> None:
+    settings = Settings(data_root=tmp_path)
+    feed_root = settings.silver_path / "feed=bars" / "instrument_type=equity"
+    cold_partition = feed_root / "dt=2026-05-20"
+    old_partition = feed_root / "dt=2026-05-27"
+    mid_partition = feed_root / "dt=2026-05-28"
+    new_partition = feed_root / "dt=2026-05-29"
+    cold_partition.mkdir(parents=True)
+    old_partition.mkdir(parents=True)
+    mid_partition.mkdir(parents=True)
+    new_partition.mkdir(parents=True)
+
+    cold_file = cold_partition / "part-cold.parquet"
+    old_file = old_partition / "part-old.parquet"
+    mid_file = mid_partition / "part-mid.parquet"
+    new_file = new_partition / "part-new.parquet"
+    cold_file.write_text("cold", encoding="utf-8")
+    old_file.write_text("old", encoding="utf-8")
+    mid_file.write_text("mid", encoding="utf-8")
+    new_file.write_text("new", encoding="utf-8")
+    os.utime(cold_file, (3_000_000, 3_000_000))
+    os.utime(old_file, (1_000_000, 1_000_000))
+    os.utime(mid_file, (1_500_000, 1_500_000))
+    os.utime(new_file, (2_000_000, 2_000_000))
+    os.utime(cold_partition, (3_000_000, 3_000_000))
+    os.utime(old_partition, (1_000_000, 1_000_000))
+    os.utime(mid_partition, (1_500_000, 1_500_000))
+    os.utime(new_partition, (2_000_000, 2_000_000))
+
+    def guarded_rglob(path: Path, pattern: str):  # noqa: ANN202
+        raise AssertionError(f"dataflow health must not recursively scan partitioned feeds: {path}:{pattern}")
+
+    monkeypatch.setattr(Path, "rglob", guarded_rglob)
+
+    timestamps = dataflow_health_module._collect_filesystem_feed_timestamps(settings)
+
+    assert timestamps["bars"] == new_file.stat().st_mtime
