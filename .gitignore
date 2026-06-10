@@ -58,3 +58,6 @@ debug/
 
 # Sourcegraph SCIP indexes (build artifact)
 *.scip
+
+# Claude Code agent worktrees (embedded git repos — never commit)
+.claude/worktrees/
