@@ -10,7 +10,7 @@ import asyncio
 import json
 import random
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -271,6 +271,12 @@ class AlertFeatures:
         ]
 
 
+# LRU bound for the in-process gateway response cache. Sized to comfortably
+# hold one trading day of distinct endpoint|symbol|params keys at current
+# alert volume while capping worst-case memory.
+RESPONSE_CACHE_MAX_ENTRIES = 4096
+
+
 class AlertFeatureExtractor:
     """Extracts features from flow alerts at arrival time.
 
@@ -296,6 +302,7 @@ class AlertFeatureExtractor:
         retry_jitter_seconds: float = 0.1,
         max_concurrent_requests: int = 8,
         cache_ttl_seconds: float = 30.0,
+        response_cache_max_entries: int = RESPONSE_CACHE_MAX_ENTRIES,
         auth_failure_threshold: int = 5,
         auth_failure_window_seconds: float = 120.0,
         request_timeout_seconds: float = 10.0,
@@ -312,6 +319,7 @@ class AlertFeatureExtractor:
             retry_jitter_seconds: Random jitter added to backoff delays.
             max_concurrent_requests: Max in-flight upstream requests.
             cache_ttl_seconds: TTL for in-process request cache.
+            response_cache_max_entries: LRU size bound for the request cache.
             auth_failure_threshold: Fail-fast threshold for HTTP 401 in rolling window.
             auth_failure_window_seconds: Rolling window for auth failure counting.
             request_timeout_seconds: Default HTTP timeout for enrichment requests.
@@ -329,12 +337,13 @@ class AlertFeatureExtractor:
         self.retry_jitter_seconds = max(0.0, float(retry_jitter_seconds))
         self.max_concurrent_requests = max(1, int(max_concurrent_requests))
         self.cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
+        self.response_cache_max_entries = max(1, int(response_cache_max_entries))
         self.auth_failure_threshold = max(1, int(auth_failure_threshold))
         self.auth_failure_window_seconds = max(1.0, float(auth_failure_window_seconds))
         self.request_timeout_seconds = max(1.0, float(request_timeout_seconds))
         self.request_timeout_option_chain_seconds = max(1.0, float(request_timeout_option_chain_seconds))
         self._request_semaphore = asyncio.Semaphore(self.max_concurrent_requests)
-        self._response_cache: dict[str, tuple[float, dict]] = {}
+        self._response_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
         self._auth_failure_timestamps: deque[float] = deque()
 
     async def extract(self, alert: FlowAlertRecord) -> AlertFeatures:
@@ -476,12 +485,19 @@ class AlertFeatureExtractor:
         if time.monotonic() - cached_at > self.cache_ttl_seconds:
             self._response_cache.pop(key, None)
             return None
+        self._response_cache.move_to_end(key)
         return payload
 
     def _cache_set(self, key: str, payload: dict) -> None:
         if self.cache_ttl_seconds <= 0:
             return
         self._response_cache[key] = (time.monotonic(), payload)
+        self._response_cache.move_to_end(key)
+        # LRU bound: TTL eviction alone is lazy (only fires on a hit), so
+        # distinct endpoint|symbol|params keys would otherwise accumulate
+        # for the life of the process.
+        while len(self._response_cache) > self.response_cache_max_entries:
+            self._response_cache.popitem(last=False)
 
     def _record_auth_failure(self) -> int:
         now = time.monotonic()
