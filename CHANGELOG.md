@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Apache Iceberg subsystem removed** (`heber/storage/`, `pyiceberg` dependency, `HEBER_ICEBERG_*` settings, `docs/iceberg_migration.md`): per the 2026-06-10 audit decision, the Iceberg catalog/writer was never wired into the live write path (`heber/writer/*`), read path (`heber/reader/*`), or gold poller — the lakehouse runs on plain Parquet with the compactor and `HeberReader`'s schema unification. Removing it shrinks the install footprint and the upgrade surface. Revisit Iceberg if multi-writer ACID or time travel becomes a real requirement; git history preserves the implementation.
+
 ### Fixed
 
 - **`heber backfill --since/--until` no longer crashes on naive datetimes** (`heber/writer/transformer.py`): the CLI parses `--since`/`--until` as naive datetimes, but `_transform_feed` compared them against UTC-aware partition dates, raising `TypeError: can't compare offset-naive and offset-aware datetimes` on every date-filtered backfill. `_transform_feed` now normalizes naive bounds to UTC before comparison. Regression test in `tests/test_transformer_dedup.py::test_transform_since_accepts_naive_datetime`.

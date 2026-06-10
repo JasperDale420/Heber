@@ -136,17 +136,6 @@ class LLMConfig(NamedTuple):
     effective_base_url: str | None
 
 
-class IcebergConfig(NamedTuple):
-    """Grouped view of Iceberg catalog settings."""
-
-    catalog_type: str
-    catalog_uri: str
-    warehouse: str
-    s3_endpoint: str | None
-    s3_access_key: str | None
-    s3_secret_key: str | None
-
-
 class LakeFSConfig(NamedTuple):
     """Grouped view of LakeFS versioning settings."""
 
@@ -648,32 +637,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_PASSWORD", "SCHEMA_REGISTRY_PASSWORD"),
     )
 
-    # Iceberg catalog
-    iceberg_catalog_type: str = Field(
-        default="sql",
-        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_TYPE", "ICEBERG_CATALOG_TYPE"),
-    )
-    iceberg_catalog_uri: str = Field(
-        default="sqlite:///iceberg_catalog.db",
-        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_URI", "ICEBERG_CATALOG_URI"),
-    )
-    iceberg_warehouse: str = Field(
-        default="s3://heber-lakehouse/warehouse",
-        validation_alias=AliasChoices("HEBER_ICEBERG_WAREHOUSE", "ICEBERG_WAREHOUSE"),
-    )
-    iceberg_s3_endpoint: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ENDPOINT", "ICEBERG_S3_ENDPOINT"),
-    )
-    iceberg_s3_access_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ACCESS_KEY", "ICEBERG_S3_ACCESS_KEY"),
-    )
-    iceberg_s3_secret_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_SECRET_KEY", "ICEBERG_S3_SECRET_KEY"),
-    )
-
     # LakeFS versioning
     lakefs_endpoint: str = Field(
         default="http://localhost:8000",
@@ -865,18 +828,6 @@ class Settings(BaseSettings):
             api_key=self.llm_api_key,
             qwen_region=self.llm_qwen_region,
             effective_base_url=self.llm_effective_base_url,
-        )
-
-    @property
-    def iceberg(self) -> IcebergConfig:
-        """Grouped Iceberg catalog settings."""
-        return IcebergConfig(
-            catalog_type=self.iceberg_catalog_type,
-            catalog_uri=self.iceberg_catalog_uri,
-            warehouse=self.iceberg_warehouse,
-            s3_endpoint=self.iceberg_s3_endpoint,
-            s3_access_key=self.iceberg_s3_access_key,
-            s3_secret_key=self.iceberg_s3_secret_key,
         )
 
     @property

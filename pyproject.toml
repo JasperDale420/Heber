@@ -33,9 +33,6 @@ dependencies = [
     # Feature Store
     "feast>=0.38",
 
-    # Table Format (Phase 1: Iceberg)
-    "pyiceberg[s3,pyarrow]>=0.7",
-
     # Data Versioning (Phase 2: lakeFS)
     "lakefs>=0.7",
 
@@ -44,7 +41,6 @@ dependencies = [
 
     # Schema Registry (Phase 4: Karapace)
     "python-schema-registry-client>=2.6",
-
 
 
     # Observability
