@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Silver `short_data` production restored** (`heber/writer/ingest_contracts.py`): the 2026-05-20 "67 reference/metadata feeds → Bronze-only" reconciliation wrongly swept `short_data` into `BRONZE_ONLY_SILVER_DATASETS`, even though it has a typed Silver Arrow schema (`heber/schemas/silver.py`) and is the normalized dataset for the actively-polled `short_interest` / `short_volume` feeds. From 2026-05-20 the Silver writer skipped it — Silver `short_data` stopped at `dt=2026-05-20` while Bronze `short_interest` kept arriving through 06-09 (~3 weeks of missing Silver). Removed `short_data` from the Bronze-only set; it stays in `CONTRACTED_RAW_FEEDS`, so no `silver_feed_uncontracted` DLQ noise returns and well-formed payloads now type cleanly into Silver. Restores forward Silver production; the 2026-05-21→06-09 historical gap can be rebuilt with `heber backfill --feed short_interest --since 2026-05-21 --until 2026-06-09` (and `--feed short_volume`; raw feed names, dedup-safe). Regression test `tests/test_ingest_feed_contract_matrix.py::test_short_data_feeds_route_to_silver_not_bronze_only`. NOTE: 7 other feeds (`etf_metadata`, `forex`, `option_contract`, `politician_trades`, `screener_result`, `seasonality`, `stock_fundamentals`) sit in the Bronze-only set despite having typed Silver schemas, but have no active producer today — flagged for a separate audit.
+
 ### Changed
 
 - **Dataflow health reports no longer waste time on after-hours freshness probes** — `heber.ops.dataflow_health` now skips metrics polling and filesystem freshness fallback when the market is closed because those checks are reported as skipped anyway. When market-hours metrics are missing, the filesystem fallback now inspects recent Silver date partitions by directory activity instead of recursively walking entire feed trees. This keeps the native `dataflow-health` LaunchD pilot writing reports promptly on startup while preserving market-hours fallback coverage. Regression coverage in `tests/test_dataflow_health.py`.
