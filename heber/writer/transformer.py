@@ -146,6 +146,14 @@ class BronzeToSilverTransformer:
         """Transform all data for a single feed."""
         total = 0
 
+        # The CLI parses --since/--until as naive datetimes, but the partition
+        # dates below are UTC-aware. Normalize so the comparison never raises
+        # "can't compare offset-naive and offset-aware datetimes".
+        if since is not None and since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        if until is not None and until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+
         for dt_dir in feed_dir.iterdir():
             if not dt_dir.is_dir() or not dt_dir.name.startswith("dt="):
                 continue

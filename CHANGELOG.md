@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`heber backfill --since/--until` no longer crashes on naive datetimes** (`heber/writer/transformer.py`): the CLI parses `--since`/`--until` as naive datetimes, but `_transform_feed` compared them against UTC-aware partition dates, raising `TypeError: can't compare offset-naive and offset-aware datetimes` on every date-filtered backfill. `_transform_feed` now normalizes naive bounds to UTC before comparison. Regression test in `tests/test_transformer_dedup.py::test_transform_since_accepts_naive_datetime`.
+
 ### Added
 
 - **Dataflow-health alerts on consumer-lag-vs-stream-cap and DLQ floods** (`heber/ops/dataflow_health.py`): a new `consumer_lag` check fails (critical) when the consumer group's lag reaches a high fraction of the stream length — ≥80% → fail, ≥50% → warn, with a 5,000 absolute floor to avoid noise on small/overnight streams. This is the silent cross-feed data-loss condition behind the 2026-06-09 option-quote flood (lag pinned at the ~300K MAXLEN cap → un-consumed events of other feeds evicted before they were written), which the existing reachability / consumer-group / feed-freshness / DLQ-size checks all failed to surface. The DLQ-size check now also escalates from warning to **critical** when the DLQ exceeds 100,000 entries (a rejection flood vs a steady-state trickle). `_collect_redis_signals` now reports `stream_len` via `XLEN`. Tests in `tests/test_dataflow_health.py`.
