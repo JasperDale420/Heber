@@ -164,7 +164,6 @@ Step-by-step recovery: [`docs/operations/troubleshooting.md`](./operations/troub
 
 ## Infrastructure & Cost
 
-- `infrastructure/` — Terraform for cloud deploys (not the default path).
-- `k8s/` — Kubernetes manifests.
+- Deployment is docker-compose + launchd on a single macOS host. The former Terraform/Kubernetes templates were removed 2026-06-10 (never deployed); recover from git history if a cloud migration ever starts.
 - Capacity / cost notes: [`docs/operations/cost-estimates.md`](./operations/cost-estimates.md).
 - Network topology: [`docs/operations/network-topology.md`](./operations/network-topology.md).
