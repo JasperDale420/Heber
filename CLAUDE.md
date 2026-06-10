@@ -237,7 +237,7 @@ Uses `structlog` via `heber/ops/logging.py`. JSON output in production, human-re
 
 - `empire-core` and `empire-schemas` are editable path deps from `../empire-core` and `../empire-schemas`
 - Ruff config extends `ruff-base.toml` (local copy, not monorepo root)
-- Python >= 3.12, mypy strict on `reader`, `config`, `core`, `backtest`, `universe`, `utils`
+- Python >= 3.12, mypy strict on `reader`, `config`, `core`, `universe`, `utils`
 
 ## Commit & Changelog Discipline
 

@@ -141,7 +141,6 @@ strict = true
 [[tool.mypy.overrides]]
 module = [
     "heber.core.*",
-    "heber.backtest.*",
     "heber.universe.*",
     "heber.utils.*",
 ]

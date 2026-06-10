@@ -182,9 +182,9 @@ Legacy uppercase-named files (`ARCHITECTURE.md`, `RUNBOOK.md`, `API_REFERENCE.md
 The `heber/` package contains the core logic:
 
 - **Core**: `catalog`, `bus`, `models`, `config`
-- **Lake**: `writer`, `storage` (Iceberg)
+- **Lake**: `writer` (Bronze JSONL.gz, Silver/Gold Parquet)
 - **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
-- **Intelligence**: `ml` (meta-labeling), `backtest`, `universe`
+- **Intelligence**: `ml` (meta-labeling), `universe`
 - **Serving**: `reader`, `watch` (real-time)
 - **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
 
