@@ -13,40 +13,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-heber_catalog}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/postgres/data:/var/lib/postgresql/data
-      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     ports:
       - "5433:5432"
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-heber} -d $${POSTGRES_DB:-heber_catalog}" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 120s
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-    restart: always
-
-  # Apicurio Registry - Schema Registry (Phase 4)
-  # Note: Karapace requires Kafka; Apicurio supports PostgreSQL standalone mode
-  apicurio-registry:
-    image: apicurio/apicurio-registry-sql:2.5.11.Final
-    container_name: heber-apicurio
-    environment:
-      REGISTRY_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heber_apicurio
-      REGISTRY_DATASOURCE_USERNAME: heber
-      REGISTRY_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-heber_dev_password}
-      QUARKUS_HTTP_PORT: 8081
-      QUARKUS_LOG_LEVEL: INFO
-    ports:
-      - "18081:8081" # Schema Registry API (Confluent-compatible at /api/ccompat/v7)
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8081/health/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5

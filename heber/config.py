@@ -612,20 +612,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HEBER_OPENMETADATA_API_KEY", "OPENMETADATA_API_KEY"),
     )
 
-    # Schema Registry
-    schema_registry_url: str = Field(
-        default="http://localhost:8081",
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_URL", "SCHEMA_REGISTRY_URL"),
-    )
-    schema_registry_user: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_USER", "SCHEMA_REGISTRY_USER"),
-    )
-    schema_registry_password: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_PASSWORD", "SCHEMA_REGISTRY_PASSWORD"),
-    )
-
     @property
     def bronze_path(self) -> Path:
         return self.data_root / "bronze"

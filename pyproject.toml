@@ -36,9 +36,6 @@ dependencies = [
     # Data Quality (Soda Core)
     "soda-core-duckdb>=3.0",
 
-    # Schema Registry (Phase 4: Karapace)
-    "python-schema-registry-client>=2.6",
-
 
     # Observability
     "structlog>=24.1.0",
@@ -159,7 +156,6 @@ module = [
     "soda.*",
     "lakefs",
     "lakefs.*",
-    "schema_registry.*",
     "exchange_calendars",
     "exchange_calendars.*",
     "feast",
