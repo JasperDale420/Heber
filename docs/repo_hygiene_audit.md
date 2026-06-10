@@ -1,5 +1,7 @@
 # Heber Repository Hygiene Audit
 
+> ⚠️ **STALE — superseded by [audit-2026-06-10.md](audit-2026-06-10.md).** Several findings below are obsolete as of 2026-06-10: the Prometheus metric-collision that blocked pytest is fixed (full suite collects and passes), and the `heber/hotstore/` ClickHouse findings reference code that no longer exists. Verify against the current tree before acting on anything here.
+
 > **Date**: 2026-02-07
 > **Scope**: Full codebase — 85 source files, 63 test files, 24,495 LOC (Python)
 > **Tools used**: ruff, bandit, detect-secrets, pytest, docker compose, git
