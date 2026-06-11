@@ -230,7 +230,15 @@ class Settings(BaseSettings):
         default=False,
         description="Verify Bloom-filter dedupe hits against an exact Redis store "
         "(eliminates false-positive drops, but issues a synchronous Redis SET per "
-        "event on register — evaluate throughput before enabling at full stream volume)",
+        "event on register). Kept OFF: benchmarked against the live Data-Gateway "
+        "event bus (redis://localhost:6379, ~4.5k ops/s real traffic, "
+        "scripts/debug/bench_dedupe_store.py), synchronous register added "
+        "~2.1-5.6 ms/event (170-680% overhead at 1,215 ev/s avg, far over the 5% "
+        "gate). A pipelined batch-100 register was ~10-12 us/event when the bus was "
+        "idle but degraded to ~375-400 us/event under contention — 5.2% to 188% at "
+        "the 5,000 ev/s peak — so even batched registration does not reliably clear "
+        "the <10 us/event (5% at peak) gate. False-positive drops are instead "
+        "absorbed by Bloom saturation fail-open plus exact dedupe in the compactor",
     )
     dedupe_redis_ttl_seconds: int = Field(
         default=7200,

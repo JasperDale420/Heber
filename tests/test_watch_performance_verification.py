@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from heber.watch.manager import WatchManager
@@ -55,6 +55,10 @@ class TestWatchPerformanceVerification(unittest.IsolatedAsyncioTestCase):
         # But here we mock the manager directly to check calls to it
 
         manager = MagicMock(spec=WatchManager)
+        # Anchor to a single now so alert_time/window_end are internally consistent
+        # and immune to midnight/leap-year/DST boundaries (timedelta is calendar-safe;
+        # .replace(hour=..)/.replace(year=..) was not).
+        now = datetime.now(UTC)
         # Setup active watches
         watches = [
             AlertWatch(
@@ -67,11 +71,9 @@ class TestWatchPerformanceVerification(unittest.IsolatedAsyncioTestCase):
                 strike=100.0,
                 entry_price=1.0,
                 spot_at_alert=100.0,
-                # Make alert time 1 hour ago so it's due
-                alert_time=datetime.now(UTC).replace(
-                    hour=datetime.now(UTC).hour - 1 if datetime.now(UTC).hour > 0 else 23
-                ),
-                window_end=datetime.now(UTC).replace(year=datetime.now(UTC).year + 1),
+                # Alert time 1 hour ago so it's due
+                alert_time=now - timedelta(hours=1),
+                window_end=now + timedelta(days=365),
                 horizon=WatchHorizon.INTRADAY,
                 tp_threshold=0.1,
                 sl_threshold=0.1,

@@ -24,15 +24,16 @@ repos:
   #         - types-requests
 
   # ---------------------------------------------------------------------------
-  # Bandit: Security vulnerability scanner
+  # Bandit: Security vulnerability scanner (high severity + high confidence only)
   # ---------------------------------------------------------------------------
-  # NOTE: Commented out to prevent blocking commits on existing warnings.
-  # - repo: https://github.com/PyCQA/bandit
-  #   rev: 1.8.3
-  #   hooks:
-  #     - id: bandit
-  #       args: [-c, pyproject.toml, -r, .]
-  #       additional_dependencies: ["bandit[toml]"]
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml, -r, heber, --severity-level, high, --confidence-level, high]
+        additional_dependencies: ["bandit[toml]"]
+        pass_filenames: false
+        always_run: true
 
   # ---------------------------------------------------------------------------
   # Detect-secrets: Prevent accidental secret commits
