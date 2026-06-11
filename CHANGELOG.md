@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Deep behavioral test coverage for the zero-leakage money path**: `tests/test_heber_reader_edge_cases.py` (54 tests — asof_join boundary semantics, late `ts_available`, tolerance/gap/out-of-order handling, `prune_by_dt` partition boundaries, batched-vs-unbatched equivalence, string-encoding fragment unification, macOS sidecar/`.tmp` skip behavior; reader coverage now 80%), `tests/test_normalizer_coercion.py` (every Bronze→Silver coercion branch), and `tests/test_label_availability_math.py` (label availability math incl. DST-crossing windows). One real reader bug surfaced and documented as strict xfails: the int64/float64 fragment-unification fallback in `_open_dataset_safe` is unreachable for same-partition conflicts, so such reads silently return an empty DataFrame.
+- **Pipeline result-shape contract test** (`tests/test_pipeline_result_contract.py`) and watch enrichment-failure tests (`tests/test_watch_enrichment_failures.py`).
+- **Dedupe-store benchmark** (`scripts/debug/bench_dedupe_store.py`): measures sync vs pipelined Redis registration overhead against the <5% enablement gate. As measured (Docker-bridged Redis), synchronous registration costs 300%+ overhead at average volume — the exact dedupe store stays default-off pending a native-Redis re-measurement.
+
 ### Changed
 
+- **Heber refuses to start in `staging`/`prod` with the built-in development Postgres password** (`heber/config.py`): set `HEBER_POSTGRES_PASSWORD` or a full `HEBER_POSTGRES_URL` in non-dev environments; `dev` behavior unchanged. Tests in `tests/test_config_credential_guard.py`.
+- **Feature pipelines share one base module and one result contract** (`heber/features/pipelines/base.py`): the duplicated `ensure_ts_available`/`ensure_instrument_key` helpers are defined once; every pipeline `run()` now returns the nested `{dataset: {"status", "rows", ...}}` shape, and the gold poller's flat→nested compatibility adapter was replaced with a loud contract-violation error. (`trend_scan` keeps its intentionally different forward-buffer `ts_available` stamping — documented in base.py.)
+- **Watch enrichment failures are visible to callers** (`heber/watch/features.py`): `AlertFeatures.enrichment_failures` lists which enrichment steps failed, so a partially-enriched row is distinguishable from a complete one (field excluded from the Gold parquet schema). Enrichment `except` blocks narrowed from bare `Exception` to payload-interpretation errors — truly unexpected exceptions now propagate instead of being swallowed. `backfill_uw_fields()` split into per-strategy functions and `extract()` converted to a data-driven enrichment table (pure refactor, behavior identical).
+- **Docs consolidated**: superseded UPPERCASE docs carry banners in `docs/legacy/` pointing at their lowercase successors; repo-root debug scripts live in `scripts/debug/`; README links verified against the post-prune tree.
 - **Network exposure locked to loopback** (`docker-compose.yml`, `heber/config.py`): the catalog API has no authentication, so nothing unauthenticated may listen on LAN interfaces. All docker-compose published ports (Postgres 5433, catalog 8085, metrics 9090-9093) now bind `127.0.0.1` on the host, and the native backfill service defaults to a loopback bind (`HEBER_BACKFILL_HOST=127.0.0.1`). Containers still bind `0.0.0.0` internally — exposure is controlled at the publish boundary. The unused `api_host` setting was removed. Contract test in `tests/test_api_bind_defaults.py`. If the catalog ever needs to serve other machines, wire up the existing-but-unused token auth in `heber/catalog/access_control.py` first.
 
 ### Fixed
