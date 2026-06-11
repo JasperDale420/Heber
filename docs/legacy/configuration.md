@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../configuration-guide.md`](../configuration-guide.md). Kept for historical reference only.**
+
 # Configuration
 
 Heber uses `pydantic-settings` with the `HEBER_` prefix and loads `.env` by default. See `heber/config.py` for authoritative defaults.

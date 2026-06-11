@@ -169,13 +169,12 @@ Supporting / topic-specific docs:
 - `docs/data_contract.md` — canonical EventEnvelope and feed schema detail
 - `docs/silver_gold_scope.md` — Silver keep/drop matrix + Gold input plan
 - `docs/labeling_strategy.md` — ML labeling strategy (triple-barrier, meta-labeling)
-- `docs/schema_registry.md` — schema registry usage
-- `docs/iceberg_migration.md` — Iceberg migration status
+- `docs/MIGRATION_GUIDE.md` — Parquet schema-evolution / migration notes
 - `docs/schemaaudit.md` — schema audit between Data Gateway and Heber
 - `docs/operations/` — runbooks (deployment, monitoring, backup/DR, daily ops, troubleshooting)
 - `.env.example` — required environment variable template
 
-Legacy uppercase-named files (`ARCHITECTURE.md`, `RUNBOOK.md`, `API_REFERENCE.md`, `DATA_CONTRACTS.md`, `DEPLOYMENT.md`, `MIGRATION_GUIDE.md`, `configuration.md`, `sdk.md`) are still present for historical references; new contributors should read the standard set above.
+Superseded docs live under `docs/legacy/` (`ARCHITECTURE.md`, `RUNBOOK.md`, `API_REFERENCE.md`, `DATA_CONTRACTS.md`, `DEPLOYMENT.md`, `catalog_api.md`, `configuration.md`, `sdk.md`) for historical reference; each carries a banner pointing at its current successor. New contributors should read the standard set above.
 
 ## Repository Structure
 

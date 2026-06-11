@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../api-reference.md`](../api-reference.md). Kept for historical reference only.**
+
 # API_REFERENCE
 
 ## Authentication

@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../deployment-guide.md`](../deployment-guide.md). Kept for historical reference only.**
+
 # DEPLOYMENT
 
 ## Prerequisites

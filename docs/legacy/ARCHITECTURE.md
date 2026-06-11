@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../system-architecture.md`](../system-architecture.md). Kept for historical reference only.**
+
 # Architecture
 
 Related docs:

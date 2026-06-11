@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../operations/runbook.md`](../operations/runbook.md) and [`../deployment-guide.md`](../deployment-guide.md). Kept for historical reference only.**
+
 # RUNBOOK
 
 ## Service Overview

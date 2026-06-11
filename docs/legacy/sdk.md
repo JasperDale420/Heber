@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by the HeberReader section of [`../api-reference.md`](../api-reference.md). Kept for historical reference only.**
+
 # Heber Reader
 
 The `HeberReader` is the canonical thin filesystem reader for the Heber Data Lakehouse. It provides **safe, point-in-time correct** access to Silver and Gold data via direct pyarrow.dataset reads with predicate pushdown — no HTTP, no lakeFS, no Catalog API required.

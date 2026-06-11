@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by [`../data_contract.md`](../data_contract.md). Kept for historical reference only.**
+
 # DATA_CONTRACTS
 
 ## Overview

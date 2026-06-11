@@ -1,3 +1,5 @@
+> **Legacy doc — superseded by the Catalog REST section of [`../api-reference.md`](../api-reference.md). Kept for historical reference only.**
+
 # Catalog API
 
 Reference for the Heber Catalog service (`heber/catalog/api.py`).
