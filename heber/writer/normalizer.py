@@ -191,7 +191,10 @@ def _coerce_timestamp(value: Any) -> datetime | None:
             pass
         if stripped.isdigit():
             return _coerce_timestamp(int(stripped))
-        return datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))
+        parsed = datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     return None
 
 
