@@ -273,8 +273,9 @@ class TestTrendScanPipeline:
         pipeline = TrendScanPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-31", dry_run=True)
 
-        assert stats["status"] == "no_data"
-        assert stats["rows"] == 0
+        result = stats["trend_scan_features"]
+        assert result["status"] == "no_data"
+        assert result["rows"] == 0
 
     def test_pipeline_dry_run_does_not_write(self) -> None:
         """Pipeline dry run should compute but not call write_gold."""
@@ -286,8 +287,9 @@ class TestTrendScanPipeline:
         pipeline = TrendScanPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-02-28", dry_run=True)
 
-        assert stats["status"] == "success"
-        assert stats["rows"] > 0
+        result = stats["trend_scan_features"]
+        assert result["status"] == "success"
+        assert result["rows"] > 0
         mock_reader.write_gold.assert_not_called()
 
     def test_pipeline_writes_on_real_run(self) -> None:
@@ -301,7 +303,7 @@ class TestTrendScanPipeline:
         pipeline = TrendScanPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-02-28", dry_run=False)
 
-        assert stats["status"] == "success"
+        assert stats["trend_scan_features"]["status"] == "success"
         mock_reader.write_gold.assert_called_once()
         call_kwargs = mock_reader.write_gold.call_args
         assert (
@@ -319,7 +321,8 @@ class TestTrendScanPipeline:
         pipeline = TrendScanPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-02-28", dry_run=True)
 
-        assert "tickers" in stats
-        assert "horizon_distribution" in stats
-        assert "mean_abs_t_value" in stats
-        assert stats["mean_abs_t_value"] > 0
+        result = stats["trend_scan_features"]
+        assert "tickers" in result
+        assert "horizon_distribution" in result
+        assert "mean_abs_t_value" in result
+        assert result["mean_abs_t_value"] > 0

@@ -17,31 +17,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 30  # Need 20 trading days + buffer for rolling window
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
-    """Add instrument_key if missing."""
-    if "instrument_key" not in df.columns and symbol_col in df.columns:
-        df["instrument_key"] = df[symbol_col].apply(lambda s: s if ":" in str(s) else f"equity:{s}")
-    return df
 
 
 def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFrame:
@@ -112,8 +99,8 @@ def compute_flow_normalization_features(flow_alerts: pd.DataFrame) -> pd.DataFra
     result = result.rename(columns={"underlying": "symbol"})
     result["ts_event"] = pd.to_datetime(result["date"], utc=True)
 
-    result = _ensure_instrument_key(result)
-    result = _ensure_ts_available(result)
+    result = ensure_instrument_key(result)
+    result = ensure_ts_available(result)
 
     # Select final columns
     output_cols = [

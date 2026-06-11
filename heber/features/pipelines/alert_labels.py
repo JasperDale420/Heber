@@ -182,7 +182,7 @@ class AlertLabelsPipeline:
 
         if flow_alerts.empty:
             logger.warning("No flow alerts found in date range")
-            return {"status": "no_data", "alerts_count": 0}
+            return {self.output_dataset: {"status": "no_data", "rows": 0, "alerts_count": 0}}
 
         logger.info("Loaded flow alerts", count=len(flow_alerts))
 
@@ -201,7 +201,7 @@ class AlertLabelsPipeline:
 
         if daily_bars.empty:
             logger.error("No bars found for symbols")
-            return {"status": "no_bars", "alerts_count": len(flow_alerts)}
+            return {self.output_dataset: {"status": "no_bars", "rows": 0, "alerts_count": len(flow_alerts)}}
 
         logger.info("Loaded daily bars", count=len(daily_bars))
 
@@ -265,11 +265,13 @@ class AlertLabelsPipeline:
         stats["alerts_count"] = len(flow_alerts)
         stats["labels_count"] = len(labels)
         stats["status"] = "success"
-        stats["output_path"] = str(output_path) if output_path else None
+        stats["rows"] = len(labels)
+        stats["path"] = str(output_path) if output_path else None
+        stats["output_path"] = stats["path"]
 
         logger.info("Pipeline complete", **stats)
 
-        return stats
+        return {self.output_dataset: stats}
 
     def _add_contract_labels(
         self,
@@ -583,15 +585,16 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
-    print(f"\nPipeline complete: {stats['status']}")
-    print(f"  Alerts: {stats.get('alerts_count', 0)}")
-    print(f"  Labels: {stats.get('labels_count', 0)}")
-    if stats.get("underlying_win_rate") is not None:
-        print(f"  Underlying win rate: {stats['underlying_win_rate']:.1%}")
-    if stats.get("contract_win_rate") is not None:
-        print(f"  Contract win rate: {stats['contract_win_rate']:.1%}")
-    if stats.get("output_path"):
-        print(f"  Output: {stats['output_path']}")
+    info = stats.get(args.output, {})
+    print(f"\nPipeline complete: {info.get('status', 'unknown')}")
+    print(f"  Alerts: {info.get('alerts_count', 0)}")
+    print(f"  Labels: {info.get('labels_count', 0)}")
+    if info.get("underlying_win_rate") is not None:
+        print(f"  Underlying win rate: {info['underlying_win_rate']:.1%}")
+    if info.get("contract_win_rate") is not None:
+        print(f"  Contract win rate: {info['contract_win_rate']:.1%}")
+    if info.get("output_path"):
+        print(f"  Output: {info['output_path']}")
 
 
 if __name__ == "__main__":

@@ -271,7 +271,7 @@ class ExcursionAnalyticsPipeline:
 
         if df.empty:
             logger.warning("No excursion data computed")
-            return {"status": "no_data", "rows": 0}
+            return {"excursion_analytics": {"status": "no_data", "rows": 0}}
 
         # Filter to requested date range
         if "ts_event" in df.columns:
@@ -281,7 +281,7 @@ class ExcursionAnalyticsPipeline:
 
         if df.empty:
             logger.warning("No excursion data in requested date range after filtering")
-            return {"status": "no_data", "rows": 0}
+            return {"excursion_analytics": {"status": "no_data", "rows": 0}}
 
         # Write to Gold
         if not dry_run:
@@ -297,10 +297,12 @@ class ExcursionAnalyticsPipeline:
             output_path = None
 
         return {
-            "status": "success",
-            "rows": len(df),
-            "systems": int(df["system"].nunique()),
-            "path": str(output_path) if output_path else None,
+            "excursion_analytics": {
+                "status": "success",
+                "rows": len(df),
+                "systems": int(df["system"].nunique()),
+                "path": str(output_path) if output_path else None,
+            }
         }
 
 
@@ -325,11 +327,12 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("EXCURSION ANALYTICS PIPELINE RESULTS")
     print("=" * 60)
-    print(f"  Status:  {stats.get('status', 'unknown')}")
-    print(f"  Rows:    {stats.get('rows', 0)}")
-    print(f"  Systems: {stats.get('systems', 0)}")
-    if stats.get("path"):
-        print(f"  Output:  {stats['path']}")
+    info = stats.get("excursion_analytics", {})
+    print(f"  Status:  {info.get('status', 'unknown')}")
+    print(f"  Rows:    {info.get('rows', 0)}")
+    print(f"  Systems: {info.get('systems', 0)}")
+    if info.get("path"):
+        print(f"  Output:  {info['path']}")
     print()
 
 

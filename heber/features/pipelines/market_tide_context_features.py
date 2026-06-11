@@ -12,12 +12,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_market_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -25,19 +26,6 @@ logger = structlog.get_logger(__name__)
 LOOKBACK_DAYS = 10
 INSTRUMENT_KEY = "market:tide_context"
 MOMENTUM_WINDOW = 5
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_market_instrument_key(df: pd.DataFrame) -> pd.DataFrame:
-    """Set instrument_key to the market-level tide context key."""
-    df["instrument_key"] = INSTRUMENT_KEY
-    return df
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +213,8 @@ class MarketTideContextPipeline:
         merged = merged[merged["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         # Add Gold schema columns
-        merged = _ensure_ts_available(merged)
-        merged = _ensure_market_instrument_key(merged)
+        merged = ensure_ts_available(merged)
+        merged = ensure_market_instrument_key(merged, INSTRUMENT_KEY)
 
         if not dry_run:
             output_path = self.reader.write_gold(

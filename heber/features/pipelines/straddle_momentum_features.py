@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -33,13 +34,6 @@ logger = structlog.get_logger(__name__)
 LOOKBACK_DAYS = 70  # Calendar days for 3-month (~60 trading day) lookback
 STRADDLE_WINDOW_1M = 20  # Trading days for 1-month straddle return
 STRADDLE_WINDOW_3M = 60  # Trading days for 3-month straddle return
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
 
 
 def _expand_chain_json(option_chain_snapshots: pd.DataFrame) -> pd.DataFrame:
@@ -415,7 +409,7 @@ class StraddleMomentumPipeline:
 
         if not daily_values:
             logger.warning("No option chain data found")
-            return {"status": "no_data", "rows": 0}
+            return {"straddle_momentum_features": {"status": "no_data", "rows": 0}}
 
         # Concatenate the small per-day reductions into the full straddle_value
         # series; dedupe defensively in case a snapshot lands on a day boundary.
@@ -428,7 +422,7 @@ class StraddleMomentumPipeline:
 
         if straddle_values.empty:
             logger.warning("No ATM straddle values computed")
-            return {"status": "no_data", "rows": 0}
+            return {"straddle_momentum_features": {"status": "no_data", "rows": 0}}
 
         # Compute trailing returns
         features = compute_straddle_returns(straddle_values)
@@ -436,7 +430,7 @@ class StraddleMomentumPipeline:
 
         if features.empty:
             logger.warning("No straddle returns computed")
-            return {"status": "no_data", "rows": 0}
+            return {"straddle_momentum_features": {"status": "no_data", "rows": 0}}
 
         # Filter to requested date range
         features["ts_event"] = pd.to_datetime(features["ts_event"], utc=True)
@@ -445,10 +439,10 @@ class StraddleMomentumPipeline:
 
         if features.empty:
             logger.warning("No features within date range after filtering")
-            return {"status": "no_data", "rows": 0}
+            return {"straddle_momentum_features": {"status": "no_data", "rows": 0}}
 
         # Add Gold schema columns
-        features = _ensure_ts_available(features)
+        features = ensure_ts_available(features)
 
         if not dry_run:
             output_path = self.reader.write_gold(
@@ -476,7 +470,7 @@ class StraddleMomentumPipeline:
         }
 
         logger.info("Straddle momentum pipeline complete", **stats)
-        return stats
+        return {"straddle_momentum_features": stats}
 
 
 def main() -> None:
@@ -500,15 +494,16 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("STRADDLE MOMENTUM PIPELINE RESULTS")
     print("=" * 60)
-    print(f"  Status: {stats.get('status', 'unknown')}")
-    print(f"  Rows: {stats.get('rows', 0)}")
-    print(f"  Tickers: {stats.get('tickers', 0)}")
-    if stats.get("mean_return_1m") is not None:
-        print(f"  Mean 1M return: {stats['mean_return_1m']:.4f}")
-    if stats.get("mean_return_3m") is not None:
-        print(f"  Mean 3M return: {stats['mean_return_3m']:.4f}")
-    if stats.get("path"):
-        print(f"  Output: {stats['path']}")
+    info = stats.get("straddle_momentum_features", {})
+    print(f"  Status: {info.get('status', 'unknown')}")
+    print(f"  Rows: {info.get('rows', 0)}")
+    print(f"  Tickers: {info.get('tickers', 0)}")
+    if info.get("mean_return_1m") is not None:
+        print(f"  Mean 1M return: {info['mean_return_1m']:.4f}")
+    if info.get("mean_return_3m") is not None:
+        print(f"  Mean 3M return: {info['mean_return_3m']:.4f}")
+    if info.get("path"):
+        print(f"  Output: {info['path']}")
     print()
 
 

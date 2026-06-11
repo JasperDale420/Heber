@@ -18,13 +18,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -141,20 +142,6 @@ def _resample_bars_to_daily(bars: pd.DataFrame) -> pd.DataFrame:
 
     logger.info("Daily bars ready", total_rows=len(daily), symbols=daily["instrument_key"].nunique())
     return daily
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
-    """Add instrument_key if missing."""
-    if "instrument_key" not in df.columns and symbol_col in df.columns:
-        df["instrument_key"] = df[symbol_col].apply(lambda s: s if ":" in str(s) else f"equity:{s}")
-    return df
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +264,7 @@ def compute_flow_features(
     result = result.rename(columns={"underlying": "symbol", "date": "ts_event"})
     result["ts_event"] = pd.to_datetime(result["ts_event"], utc=True)
 
-    return _ensure_instrument_key(_ensure_ts_available(result))
+    return ensure_instrument_key(ensure_ts_available(result))
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +334,7 @@ def compute_momentum_features(bars: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    return _ensure_ts_available(out)
+    return ensure_ts_available(out)
 
 
 def _compute_rsi(prices: pd.Series, period: int) -> pd.Series:
@@ -448,7 +435,7 @@ def compute_volatility_features(bars: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    return _ensure_ts_available(out)
+    return ensure_ts_available(out)
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +514,7 @@ def compute_microstructure_features(quotes: pd.DataFrame) -> pd.DataFrame:
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
     agg["symbol"] = agg["instrument_key"].str.replace(r"^equity:", "", regex=True)
 
-    return _ensure_instrument_key(_ensure_ts_available(agg), symbol_col="instrument_key")
+    return ensure_instrument_key(ensure_ts_available(agg), symbol_col="instrument_key")
 
 
 # ---------------------------------------------------------------------------

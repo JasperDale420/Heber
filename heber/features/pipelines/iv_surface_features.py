@@ -14,32 +14,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 2  # Extra history for computing iv_change_1d
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
-    """Add instrument_key if missing."""
-    if "instrument_key" not in df.columns and symbol_col in df.columns:
-        df["instrument_key"] = df[symbol_col].apply(lambda s: s if ":" in str(s) else f"equity:{s}")
-    return df
 
 
 def compute_iv_surface_features(iv_data: pd.DataFrame) -> pd.DataFrame:
@@ -135,8 +122,8 @@ def compute_iv_surface_features(iv_data: pd.DataFrame) -> pd.DataFrame:
     out = out.drop(columns=["near_iv"])
 
     # Ensure required columns
-    out = _ensure_instrument_key(out)
-    out = _ensure_ts_available(out)
+    out = ensure_instrument_key(out)
+    out = ensure_ts_available(out)
 
     logger.info(
         "iv_surface_features_computed",

@@ -426,19 +426,19 @@ class GoldFeaturePoller:
                     end_date,
                 )
 
-                # Normalize the result shape. Pipelines disagree on whether to
-                # return {gold_name: {"status": ..., "rows": N}} (used by
-                # darkpool / oi_momentum / iv_surface / flow_toxicity / etc.)
-                # or a flat {"status": ..., "rows": N, ...} (used by
-                # sector_flow / trend_scan / flow_context / straddle_momentum /
-                # ticker_base_rates / excursion_analytics / alert_labels).
-                # The flat shape made `total_rows` always 0 and the
-                # `pipeline_done` log report `["status","rows","path"]` as the
-                # "datasets" list, masking real successes (e.g. sector_flow
-                # writing 17,107 rows on 2026-04-28 was reported as 0).
-                if isinstance(stats, dict) and "status" in stats and isinstance(stats.get("status"), str):
-                    wrapper_key = (entry.get("gold_datasets") or [entry["name"]])[0]
-                    stats = {wrapper_key: stats}
+                # Every pipeline `run()` returns the single nested result shape:
+                # {gold_dataset_name: {"status", "rows", "path"}}. A flat
+                # {"status": ..., "rows": N} at the top level is a contract
+                # violation — historically it made `total_rows` always 0 and
+                # logged `["status","rows","path"]` as the "datasets" list,
+                # masking real successes. Reject it loudly instead of silently
+                # papering over it.
+                if isinstance(stats, dict) and "status" in stats:
+                    raise ValueError(
+                        f"pipeline '{entry['name']}' returned a flat result "
+                        f"{{'status': ...}}; pipelines must return the nested shape "
+                        f"{{gold_dataset_name: {{'status', 'rows', 'path'}}}}"
+                    )
 
                 total_rows = sum(s.get("rows", 0) for s in stats.values() if isinstance(s, dict))
                 error_datasets = [k for k, v in stats.items() if isinstance(v, dict) and v.get("status") == "error"]

@@ -16,30 +16,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
-    """Add instrument_key if missing."""
-    if "instrument_key" not in df.columns and symbol_col in df.columns:
-        df["instrument_key"] = df[symbol_col].apply(lambda s: s if ":" in str(s) else f"equity:{s}")
-    return df
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +90,7 @@ def compute_darkpool_features(darkpool: pd.DataFrame) -> pd.DataFrame:
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
 
-    return _ensure_ts_available(agg)
+    return ensure_ts_available(agg)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +198,7 @@ def compute_greek_exposure_features(greek: pd.DataFrame) -> pd.DataFrame:
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
 
-    return _ensure_ts_available(agg)
+    return ensure_ts_available(agg)
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +323,13 @@ def compute_options_sentiment_features(
         sector_out["instrument_key"] = "sector:" + sector_out["sector"].astype(str)
         sector_out = sector_out.rename(columns={"date": "ts_event"})
         sector_out["ts_event"] = pd.to_datetime(sector_out["ts_event"], utc=True)
-        sector_out = _ensure_ts_available(sector_out)
+        sector_out = ensure_ts_available(sector_out)
         # We'll append these after the main result
 
     # Finalize per-symbol result
     result = result.rename(columns={"date": "ts_event"})
     result["ts_event"] = pd.to_datetime(result["ts_event"], utc=True)
-    result = _ensure_ts_available(result)
+    result = ensure_ts_available(result)
 
     # Append sector rows if present
     if not sector_part.empty:
@@ -393,7 +380,7 @@ def compute_ftd_features(ftd: pd.DataFrame) -> pd.DataFrame:
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
 
-    return _ensure_ts_available(agg)
+    return ensure_ts_available(agg)
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +499,7 @@ class MarketIntelPipeline:
                     continue
 
                 # Ensure instrument_key for all rows
-                df = _ensure_instrument_key(df)
+                df = ensure_instrument_key(df)
 
                 # Filter to requested date range only
                 if "ts_event" in df.columns:
