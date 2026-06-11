@@ -5,8 +5,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Fallback Postgres password used only when HEBER_POSTGRES_PASSWORD is unset.
+# Safe for local dev; a model validator rejects it outside the dev environment.
+DEV_POSTGRES_PASSWORD = "heber_dev_password"  # pragma: allowlist secret — dev-only fallback, rejected outside dev
 
 # ---------------------------------------------------------------------------
 # Typed section accessors (NamedTuples)
@@ -159,7 +163,7 @@ class Settings(BaseSettings):
     # Postgres (Catalog)
     postgres_url: str = Field(
         default_factory=lambda: (
-            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', 'heber_dev_password')}"
+            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', DEV_POSTGRES_PASSWORD)}"
             f"@localhost:5433/heber_catalog"
         ),
         description="PostgreSQL connection URL for Catalog DB",
@@ -627,6 +631,22 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("HEBER_OPENMETADATA_API_KEY", "OPENMETADATA_API_KEY"),
     )
+
+    @model_validator(mode="after")
+    def _reject_default_postgres_password_outside_dev(self) -> "Settings":
+        """Fail fast if a non-dev environment still uses the dev Postgres password.
+
+        The ``postgres_url`` default falls back to ``DEV_POSTGRES_PASSWORD`` when
+        ``HEBER_POSTGRES_PASSWORD`` is unset. That fallback is convenient for local
+        development but must never reach staging/prod, so we refuse to start.
+        """
+        if self.environment != "dev" and DEV_POSTGRES_PASSWORD in self.postgres_url:
+            raise ValueError(
+                f"Refusing to start in environment='{self.environment}' with the default "
+                f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "
+                f"HEBER_POSTGRES_URL) to real credentials for non-dev environments."
+            )
+        return self
 
     @property
     def bronze_path(self) -> Path:

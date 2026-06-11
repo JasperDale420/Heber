@@ -21,6 +21,9 @@ def test_resolve_gateway_api_key_raises_when_missing_in_prod(monkeypatch: pytest
     from heber.config import get_settings
 
     monkeypatch.setenv("HEBER_ENVIRONMENT", "prod")
+    # Satisfy the non-dev credential guard so this test reaches the
+    # gateway-key check it actually targets.
+    monkeypatch.setenv("HEBER_POSTGRES_PASSWORD", "test-prod-password")
     get_settings.cache_clear()
     try:
         with pytest.raises(ValueError, match="HEBER_WATCH_GATEWAY_API_KEY"):
