@@ -8,10 +8,12 @@ correct ACK/DLQ routing behavior.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
+import heber.writer.consumer as consumer_module
 from heber.writer.consumer import EventConsumer
 
 
@@ -66,8 +68,9 @@ async def test_concurrent_processing_faster_than_serial() -> None:
 
 
 @pytest.mark.asyncio
-async def test_error_isolation_between_concurrent_messages() -> None:
+async def test_error_isolation_between_concurrent_messages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """One failing message does not block or corrupt others."""
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
     consumer = EventConsumer()
     redis = _StubRedis()
     consumer.redis = redis
@@ -101,8 +104,17 @@ async def test_error_isolation_between_concurrent_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dlq_failure_under_concurrency_leaves_message_pending() -> None:
-    """Failed DLQ write under concurrency leaves the message in pending."""
+async def test_dlq_failure_under_concurrency_leaves_message_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Total DLQ failure (Redis and durable file) leaves the message in pending."""
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+    def _fail_fallback(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise OSError("disk full")
+
+    monkeypatch.setattr(consumer_module, "write_dlq_fallback_file", _fail_fallback)
+
     consumer = EventConsumer()
     redis = _StubRedis()
     redis.fail_xadd = True

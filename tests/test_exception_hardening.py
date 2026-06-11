@@ -498,11 +498,14 @@ class TestConsumerSendToDlq:
     """Verify _send_to_dlq catches redis errors."""
 
     @pytest.mark.asyncio
-    async def test_redis_error_returns_false(self):
-        """RedisError from xadd is caught and returns False."""
+    async def test_redis_error_falls_back_to_durable_file(self, monkeypatch, tmp_path):
+        """RedisError from xadd is caught; the durable file captures the event so True is returned."""
         import redis.asyncio as redis_async
 
+        import heber.writer.consumer as consumer_module
         from heber.writer.consumer import EventConsumer
+
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
 
         consumer = EventConsumer()
         consumer.redis = AsyncMock()
@@ -515,7 +518,8 @@ class TestConsumerSendToDlq:
             attempts=1,
             feed="bars",
         )
-        assert result is False
+        assert result is True
+        assert len(list(tmp_path.rglob("*.json"))) == 1
 
 
 # ===================================================================

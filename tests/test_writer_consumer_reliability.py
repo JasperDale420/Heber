@@ -72,7 +72,8 @@ async def test_recover_pending_messages_claims_and_acks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_stream_messages_moves_failures_to_dlq() -> None:
+async def test_process_stream_messages_moves_failures_to_dlq(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
     consumer = EventConsumer()
     redis = _StubRedis()
     consumer.redis = redis

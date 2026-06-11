@@ -794,8 +794,11 @@ class TestSendToDlq:
     """Tests for _send_to_dlq."""
 
     @pytest.mark.asyncio
-    async def test_send_to_dlq_success(self):
+    async def test_send_to_dlq_success(self, monkeypatch, tmp_path):
         """Successfully sends to DLQ and returns True."""
+        import heber.writer.consumer as consumer_module
+
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
         consumer = EventConsumer()
 
         class FakeRedis:
@@ -807,9 +810,18 @@ class TestSendToDlq:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_send_to_dlq_failure(self):
-        """Returns False when DLQ write fails."""
+    async def test_send_to_dlq_failure(self, monkeypatch, tmp_path):
+        """Returns False only when both Redis and the durable file fallback fail."""
         import redis.asyncio as aioredis
+
+        import heber.writer.consumer as consumer_module
+
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+        def _fail_fallback(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(consumer_module, "write_dlq_fallback_file", _fail_fallback)
 
         consumer = EventConsumer()
 
