@@ -92,9 +92,7 @@ from heber.ops.metrics import (
 )
 from heber.ops.reliability import (
     BloomFilter,
-    DeadLetterQueue,
     DeduplicationResult,
-    DLQEvent,
     EventDeduplicator,
 )
 from heber.ops.tracing import (
@@ -115,8 +113,6 @@ __all__ = [
     # Reliability (§12.1-12.4)
     "BloomFilter",
     "EventDeduplicator",
-    "DeadLetterQueue",
-    "DLQEvent",
     "DeduplicationResult",
     # Logging (§12.3, §12.5.5)
     "bind_context",
