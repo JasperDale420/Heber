@@ -114,12 +114,21 @@ def write_dlq_fallback_file(
 
 
 def count_fallback_files_for_today(fallback_root: Path, *, now: datetime | None = None) -> int:
-    """Return the number of fallback files in today's partition (or 0 if missing)."""
+    """Return the number of fallback files in today's partition (or 0 if missing).
+
+    Name filters run before any ``stat`` call: on Apple Silicon Docker bind
+    mounts, ``stat()`` on ``._*`` AppleDouble sidecar files raises EPERM,
+    which would otherwise abort the whole scan.
+    """
     timestamp = now or datetime.now(UTC)
     partition_dir = fallback_root / f"dt={timestamp.strftime('%Y-%m-%d')}"
     if not partition_dir.is_dir():
         return 0
-    return sum(1 for entry in partition_dir.iterdir() if entry.is_file() and entry.suffix == ".json")
+    return sum(
+        1
+        for entry in partition_dir.iterdir()
+        if entry.suffix == ".json" and not entry.name.startswith("._") and entry.is_file()
+    )
 
 
 def log_fallback_backlog(fallback_root: Path, *, service: str) -> None:

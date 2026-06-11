@@ -78,6 +78,28 @@ def test_count_fallback_files_for_today_counts_only_json(tmp_path) -> None:
     assert count_fallback_files_for_today(tmp_path) == 2
 
 
+def test_count_fallback_files_skips_appledouble_sidecars(tmp_path, monkeypatch) -> None:
+    """On Apple Silicon Docker bind mounts, stat() on ``._*`` AppleDouble
+    sidecar files raises EPERM — the scan must filter them by name before
+    any stat call instead of aborting."""
+    from pathlib import Path
+
+    write_dlq_fallback_file(tmp_path, "stream", "evt-a", {})
+    today_dir = next(p for p in tmp_path.iterdir() if p.name.startswith("dt="))
+    (today_dir / "._heber_events_dlq_deadbeef.json").write_text("sidecar")
+
+    original_is_file = Path.is_file
+
+    def eperm_on_sidecars(self, *args, **kwargs):
+        if self.name.startswith("._"):
+            raise PermissionError(1, "Operation not permitted", str(self))
+        return original_is_file(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_file", eperm_on_sidecars)
+
+    assert count_fallback_files_for_today(tmp_path) == 1
+
+
 @pytest.mark.asyncio
 async def test_try_xadd_with_retry_succeeds_on_second_attempt() -> None:
     sleep_calls: list[float] = []
