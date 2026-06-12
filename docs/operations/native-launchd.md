@@ -11,6 +11,7 @@ The first native candidates are:
 - `heber-health-monitor`
 - `heber-gold-poller`
 - `heber-compactor`
+- `heber-massive-daily`
 
 Do not migrate `heber-consumer` in this first pilot. It owns the Redis consumer
 group that writes Bronze and Silver, so running Docker and native copies at the
@@ -132,3 +133,66 @@ bash scripts/install_native_launchd.sh --start alert-check
 The `health-monitor` service (Tier 1/2/3 data-quality checks) is independent and
 optional — it is **not** required for alerting. Note its Tier-3 daily sweep can
 stall on large un-pruned feed reads; run it only if you need those deeper checks.
+
+## Massive Daily Raw Sync
+
+The `massive-daily` service is a one-shot `heber massive-daily` run scheduled
+through launchd. It keeps the Massive raw archive current under:
+
+```text
+/Volumes/heber/data/_vendor_raw/massive
+```
+
+It downloads the publishable U.S. stock aggregate files for each missing trading
+day:
+
+- `us_stocks_sip/day_aggs_v1/YYYY/MM/YYYY-MM-DD.csv.gz`
+- `us_stocks_sip/minute_aggs_v1/YYYY/MM/YYYY-MM-DD.csv.gz`
+
+It also captures raw daily REST pages for:
+
+- splits by `execution_date`
+- dividends by `ex_dividend_date`
+- the active U.S. stock ticker snapshot for that date
+
+Massive publishes finalized stock flat files around 11:00 AM ET on the next
+calendar day, so the LaunchAgent runs at 9:15 AM Pacific / 12:15 PM Eastern. It
+also has `RunAtLoad=true`, so after a reboot it runs when the user logs back in.
+The command scans the archive and catches up missing trading days, so rerunning
+or recovering after a missed schedule is safe.
+
+Credentials are read from `.env` by `scripts/run_native_heber_service.sh`:
+
+```bash
+MASSIVE_S3_ACCESS_KEY_ID=<flat-file access key>
+MASSIVE_S3_SECRET_ACCESS_KEY=<flat-file secret>
+MASSIVE_API_KEY=<rest api key for splits/dividends/tickers>
+```
+
+The S3 env names can also be the standard AWS names:
+
+```bash
+AWS_ACCESS_KEY_ID=<flat-file access key>
+AWS_SECRET_ACCESS_KEY=<flat-file secret>
+```
+
+Install and start it:
+
+```bash
+cd /Users/jacobmcmillan/Empire/Heber
+scripts/install_native_launchd.sh --start massive-daily
+launchctl print gui/$(id -u)/com.empire.heber.massive-daily
+```
+
+Run one date by hand:
+
+```bash
+uv run heber massive-daily --date 2026-06-10
+```
+
+Logs are:
+
+```text
+/Users/jacobmcmillan/Empire/Heber/logs/native/massive-daily.out.log
+/Users/jacobmcmillan/Empire/Heber/logs/native/massive-daily.err.log
+```

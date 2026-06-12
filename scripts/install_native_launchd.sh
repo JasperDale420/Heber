@@ -17,6 +17,7 @@ Services:
   gold-poller
   compactor
   alert-check
+  massive-daily
 
 By default this installs plists without starting them. Pass --start to load and
 kickstart the selected services after copying the plist files.
@@ -38,7 +39,7 @@ for arg in "$@"; do
       usage
       exit 0
       ;;
-    dataflow-health|health-monitor|gold-poller|compactor|alert-check)
+    dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily)
       services+=("${arg}")
       ;;
     *)

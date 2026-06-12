@@ -19,6 +19,7 @@ HEBER_REDIS_URL="${HEBER_REDIS_URL:-redis://localhost:6379}"
 DATA_GATEWAY_URL="${DATA_GATEWAY_URL:-http://localhost:8080}"
 HEBER_POSTGRES_URL="${HEBER_POSTGRES_URL:-postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@localhost:5433/heber_catalog}"
 HEBER_NATIVE_LOG_DIR="${HEBER_NATIVE_LOG_DIR:-${PROJECT_DIR}/logs/native}"
+MASSIVE_ARCHIVE_ROOT="${MASSIVE_ARCHIVE_ROOT:-${HEBER_DATA_ROOT}/_vendor_raw/massive}"
 
 export HEBER_DATA_ROOT
 export HEBER_VOLUME_ROOT
@@ -29,6 +30,7 @@ export HEBER_GOLD_PATH="${HEBER_GOLD_PATH:-${HEBER_DATA_ROOT}/gold}"
 export HEBER_HEALTH_CONSUMER_METRICS_URL="${HEBER_HEALTH_CONSUMER_METRICS_URL:-http://localhost:9090/metrics}"
 export HEBER_HEALTH_WATCH_METRICS_URL="${HEBER_HEALTH_WATCH_METRICS_URL:-http://localhost:9091/metrics}"
 export HEBER_HEALTH_REPORT_DIR="${HEBER_HEALTH_REPORT_DIR:-${HEBER_DATA_ROOT}/ops/dataflow-health}"
+export MASSIVE_ARCHIVE_ROOT
 export PYTHONUNBUFFERED=1
 
 mkdir -p "${HEBER_NATIVE_LOG_DIR}" "${HEBER_HEALTH_REPORT_DIR}"
@@ -61,8 +63,12 @@ case "${SERVICE}" in
     # One-shot critical-feed liveness check; scheduled via launchd StartInterval.
     exec uv run heber alert-check
     ;;
+  "massive-daily")
+    # One-shot Massive raw archive sync; scheduled after next-day flat-file publish.
+    exec uv run heber massive-daily --archive-root "${MASSIVE_ARCHIVE_ROOT}"
+    ;;
   *)
-    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor|alert-check}" >&2
+    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily}" >&2
     exit 64
     ;;
 esac
