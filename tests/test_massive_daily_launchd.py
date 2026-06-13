@@ -30,6 +30,20 @@ def test_install_script_accepts_massive_daily_service() -> None:
     assert "dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily" in text
 
 
+def test_native_runner_has_massive_rest_backlog_service() -> None:
+    text = (ROOT / "scripts" / "run_native_heber_service.sh").read_text(encoding="utf-8")
+
+    assert '"massive-rest-backlog")' in text
+    assert "scripts/massive_rest_backlog_sweep.py" in text
+    assert "massive_rest_backlog" in text
+
+
+def test_install_script_accepts_massive_rest_backlog_service() -> None:
+    text = (ROOT / "scripts" / "install_native_launchd.sh").read_text(encoding="utf-8")
+
+    assert "massive-rest-backlog" in text
+
+
 def test_massive_daily_launchagent_runs_after_login_restart_and_retries_failures() -> None:
     plist = _load_massive_plist()
 
@@ -45,3 +59,15 @@ def test_massive_daily_launchagent_runs_after_login_restart_and_retries_failures
     assert plist["StartCalendarInterval"] == {"Hour": 9, "Minute": 15}
     assert plist["StandardOutPath"].endswith("logs/native/massive-daily.out.log")
     assert plist["StandardErrorPath"].endswith("logs/native/massive-daily.err.log")
+
+
+def test_massive_rest_backlog_launchagent_restarts_until_complete() -> None:
+    with (ROOT / "launchd" / "com.empire.heber.massive-rest-backlog.plist").open("rb") as handle:
+        plist = cast(dict[str, Any], plistlib.load(handle))
+
+    assert plist["Label"] == "com.empire.heber.massive-rest-backlog"
+    assert plist["RunAtLoad"] is True
+    assert plist["KeepAlive"] == {"SuccessfulExit": False}
+    assert plist["ThrottleInterval"] >= 300
+    assert plist["StandardOutPath"].endswith("logs/native/massive-rest-backlog.out.log")
+    assert plist["StandardErrorPath"].endswith("logs/native/massive-rest-backlog.err.log")

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.heber.massive-rest-backlog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Heber-massive/scripts/run_native_heber_service.sh</string>
+        <string>massive-rest-backlog</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Heber-massive</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>1800</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber-massive/logs/native/massive-rest-backlog.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber-massive/logs/native/massive-rest-backlog.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/jacobmcmillan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HEBER_PROJECT_DIR</key>
+        <string>/Users/jacobmcmillan/Empire/Heber-massive</string>
+    </dict>
+</dict>
+</plist>
