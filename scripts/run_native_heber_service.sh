@@ -21,6 +21,9 @@ HEBER_POSTGRES_URL="${HEBER_POSTGRES_URL:-postgresql+asyncpg://heber:${POSTGRES_
 HEBER_NATIVE_LOG_DIR="${HEBER_NATIVE_LOG_DIR:-${PROJECT_DIR}/logs/native}"
 MASSIVE_ARCHIVE_ROOT="${MASSIVE_ARCHIVE_ROOT:-${HEBER_DATA_ROOT}/_vendor_raw/massive}"
 MASSIVE_REST_BACKLOG_ROOT="${MASSIVE_REST_BACKLOG_ROOT:-${MASSIVE_ARCHIVE_ROOT}/massive_rest_backlog}"
+MASSIVE_TICKER_META_ROOT="${MASSIVE_TICKER_META_ROOT:-${MASSIVE_ARCHIVE_ROOT}/massive_ticker_meta}"
+MASSIVE_TICKER_META_WORKERS="${MASSIVE_TICKER_META_WORKERS:-4}"
+MASSIVE_DELISTED_DETAILS_WORKERS="${MASSIVE_DELISTED_DETAILS_WORKERS:-4}"
 
 export HEBER_DATA_ROOT
 export HEBER_VOLUME_ROOT
@@ -33,6 +36,7 @@ export HEBER_HEALTH_WATCH_METRICS_URL="${HEBER_HEALTH_WATCH_METRICS_URL:-http://
 export HEBER_HEALTH_REPORT_DIR="${HEBER_HEALTH_REPORT_DIR:-${HEBER_DATA_ROOT}/ops/dataflow-health}"
 export MASSIVE_ARCHIVE_ROOT
 export MASSIVE_REST_BACKLOG_ROOT
+export MASSIVE_TICKER_META_ROOT
 export PYTHONUNBUFFERED=1
 
 mkdir -p "${HEBER_NATIVE_LOG_DIR}" "${HEBER_HEALTH_REPORT_DIR}"
@@ -43,6 +47,15 @@ if [[ ! -d "${HEBER_DATA_ROOT}" ]]; then
 fi
 
 cd "${PROJECT_DIR}"
+
+source_massive_env() {
+  if [[ -z "${MASSIVE_API_KEY:-}" && -f "/Users/jacobmcmillan/Empire/Data-Gateway/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "/Users/jacobmcmillan/Empire/Data-Gateway/.env"
+    set +a
+  fi
+}
 
 case "${SERVICE}" in
   "dataflow-health")
@@ -71,16 +84,26 @@ case "${SERVICE}" in
     ;;
   "massive-rest-backlog")
     # One-shot Massive REST backlog sync; launchd restarts it until every dataset has a .done marker.
-    if [[ -z "${MASSIVE_API_KEY:-}" && -f "/Users/jacobmcmillan/Empire/Data-Gateway/.env" ]]; then
-      set -a
-      # shellcheck disable=SC1091
-      source "/Users/jacobmcmillan/Empire/Data-Gateway/.env"
-      set +a
-    fi
+    source_massive_env
     exec uv run python scripts/massive_rest_backlog_sweep.py --out-root "${MASSIVE_REST_BACKLOG_ROOT}"
     ;;
+  "massive-ticker-meta")
+    # Per-ticker details and symbol-change events for the captured active/inactive equity universe.
+    source_massive_env
+    exec uv run python heber/backfill/massive/ticker_meta_sweep.py \
+      --corp-root "${MASSIVE_ARCHIVE_ROOT}/massive_corp_actions" \
+      --out "${MASSIVE_TICKER_META_ROOT}" \
+      --workers "${MASSIVE_TICKER_META_WORKERS}"
+    ;;
+  "massive-delisted-details")
+    # Historical ticker details for delisted equities as of their last listed day.
+    source_massive_env
+    exec uv run python heber/backfill/massive/delisted_details_sweep.py \
+      --corp-root "${MASSIVE_ARCHIVE_ROOT}/massive_corp_actions" \
+      --workers "${MASSIVE_DELISTED_DETAILS_WORKERS}"
+    ;;
   *)
-    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily|massive-rest-backlog}" >&2
+    echo "Usage: $0 {dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily|massive-rest-backlog|massive-ticker-meta|massive-delisted-details}" >&2
     exit 64
     ;;
 esac
