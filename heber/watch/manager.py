@@ -186,7 +186,7 @@ class WatchManager:
         data_list = self.redis.mget(keys)
 
         watches = []
-        for data in data_list:
+        for key, data in zip(keys, data_list, strict=False):
             if data:
                 try:
                     watch = AlertWatch.model_validate_json(data)
@@ -194,7 +194,12 @@ class WatchManager:
                     if watch.status == WatchStatus.WATCHING:
                         watches.append(watch)
                 except Exception as e:
-                    logger.warning("Failed to deserialize watch during bulk fetch", error=str(e))
+                    logger.warning(
+                        "Failed to deserialize watch during bulk fetch",
+                        watch_key=key,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
         return watches
 
@@ -289,7 +294,10 @@ class WatchManager:
         updated_count = 0
 
         for watch, price, timestamp in updates:
-            # Common update logic (duplicate of update_watch_price logic but optimized for loop)
+            current = self.get_watch(watch.watch_id)
+            if current is None or current.status != WatchStatus.WATCHING:
+                continue
+
             current_return: float | None = None
             mfe = watch.mfe
             mae = watch.mae
@@ -384,6 +392,7 @@ class WatchManager:
         """Add a price snapshot for a watch."""
         key = WatchKeys.snapshots_key(snapshot.watch_id)
         self.redis.rpush(key, snapshot.model_dump_json())
+        self.redis.expire(key, 86400 * 7)  # 7-day TTL prevents unbounded Redis growth
 
     async def add_snapshot_async(self, snapshot: WatchSnapshot) -> None:
         """Async wrapper for add_snapshot."""
@@ -465,11 +474,17 @@ class WatchManager:
         else:
             self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
 
-        # Add to symbol index
-        self.redis.sadd(
-            WatchKeys.by_symbol_key(watch.occ_symbol),
-            watch.watch_id,
-        )
+        # Keep symbol index synchronized with status transitions.
+        if watch.status == WatchStatus.WATCHING:
+            self.redis.sadd(
+                WatchKeys.by_symbol_key(watch.occ_symbol),
+                watch.watch_id,
+            )
+        else:
+            self.redis.srem(
+                WatchKeys.by_symbol_key(watch.occ_symbol),
+                watch.watch_id,
+            )
 
     def get_stats(self) -> dict[str, Any]:
         """Get watch list statistics."""

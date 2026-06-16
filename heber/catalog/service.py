@@ -1,6 +1,9 @@
 """Catalog service business logic."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +20,7 @@ from heber.catalog.db import (
 class CatalogService:
     """Business logic for Catalog operations."""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     # Dataset operations
@@ -58,8 +61,8 @@ class CatalogService:
         storage_root: str,
         description: str | None = None,
         path_template: str | None = None,
-        partition_cols: list | None = None,
-        primary_keys: list | None = None,
+        partition_cols: list[str] | None = None,
+        primary_keys: list[str] | None = None,
     ) -> Dataset:
         """Create a new dataset."""
         dataset = Dataset(
@@ -111,11 +114,13 @@ class CatalogService:
         instrument_key: str,
         instrument_type: str,
         canonical_symbol: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> InstrumentRegistry:
         """Create or update instrument."""
         existing = await self.get_instrument(instrument_key)
         if existing:
+            existing.instrument_type = instrument_type
+            existing.canonical_symbol = canonical_symbol
             for key, value in kwargs.items():
                 if hasattr(existing, key) and value is not None:
                     setattr(existing, key, value)
@@ -174,7 +179,7 @@ class CatalogService:
         if coverage:
             coverage.dt_min = min(coverage.dt_min, dt_min)
             coverage.dt_max = max(coverage.dt_max, dt_max)
-            if approx_row_count:
+            if approx_row_count is not None:
                 coverage.approx_row_count = (coverage.approx_row_count or 0) + approx_row_count
             coverage.last_updated_ts = datetime.now(UTC)
         else:

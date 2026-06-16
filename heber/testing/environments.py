@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class EnvironmentType(str, Enum):
+class EnvironmentType(StrEnum):
     """Test environment types (PRD §52.1)."""
 
     LOCAL = "local"

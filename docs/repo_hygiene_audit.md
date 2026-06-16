@@ -39,7 +39,7 @@ Config: line-length=120, target=py311, rules: E, F, I, UP, B.
 
 Mypy is commented out in `.pre-commit-config.yaml` due to 495+ type errors in the existing codebase. Type coverage should be addressed incrementally.
 
-**Fix needed**: Triage the 495+ errors, enable mypy on a per-module basis starting with `heber/config.py`, `heber/models/`, and `heber/sdk/`.
+**Fix needed**: Triage the 495+ errors, enable mypy on a per-module basis starting with `heber/config.py`, `heber/models/`, and `heber/reader/`.
 
 ---
 

@@ -29,11 +29,16 @@ def test_resolve_storage_namespace_uses_template_when_provided() -> None:
 
 def test_get_repo_creation_uses_resolved_storage_namespace(monkeypatch) -> None:
     created: dict[str, str] = {}
-    attempts = {"count": 0}
 
     class _FakeRepo:
+        """Fake repo whose .metadata raises to simulate a non-existent repo."""
+
         def __init__(self, repo_name: str) -> None:
             self.repo_name = repo_name
+
+        @property
+        def metadata(self):
+            raise RuntimeError("repo missing")
 
         def create(self, storage_namespace: str, default_branch: str) -> _FakeRepo:
             created["repo_name"] = self.repo_name
@@ -42,9 +47,6 @@ def test_get_repo_creation_uses_resolved_storage_namespace(monkeypatch) -> None:
             return self
 
     def _repository_factory(repo_name: str, client=None):  # noqa: ANN001
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise RuntimeError("repo missing")
         return _FakeRepo(repo_name)
 
     fake_lakefs = SimpleNamespace(

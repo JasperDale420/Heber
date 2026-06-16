@@ -63,6 +63,8 @@ from heber.ops.lifecycle import (
     mark_canary_unhealthy,
 )
 from heber.ops.logging import (
+    bind_context,
+    clear_context,
     configure_logging,
     get_logger,
     log_batch_written,
@@ -70,6 +72,7 @@ from heber.ops.logging import (
     log_error,
     log_event_received,
     log_retry,
+    unbind_context,
 )
 from heber.ops.metrics import (
     record_api_request,
@@ -116,13 +119,16 @@ __all__ = [
     "DLQEvent",
     "DeduplicationResult",
     # Logging (§12.3, §12.5.5)
+    "bind_context",
+    "clear_context",
     "configure_logging",
     "get_logger",
-    "log_event_received",
     "log_batch_written",
-    "log_error",
     "log_dlq_event",
+    "log_error",
+    "log_event_received",
     "log_retry",
+    "unbind_context",
     # Metrics (§12.5.1-12.5.3)
     "start_metrics_server",
     "start_metrics_server_from_env",

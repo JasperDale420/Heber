@@ -147,6 +147,38 @@ def test_compactor_recovers_from_stale_self_lock(tmp_path: Path) -> None:
     assert not (partition / ".compaction.lock").exists()
 
 
+def test_scan_and_compact_skips_macos_resource_fork_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """rglob walk must skip names starting with `.` so PermissionError on
+    macOS AppleDouble files (`._foo`) cannot abort the cycle. Same class
+    of bug as commit 8af04ef fixed for the catalog.
+    """
+    layer_path = tmp_path / "silver"
+    real_partition = layer_path / "feed=bars" / "instrument_type=equity" / "dt=2026-04-28"
+    real_partition.mkdir(parents=True)
+    _write_parquet(real_partition / "part-1.parquet", [{"event_id": "evt-1"}])
+    _write_parquet(real_partition / "part-2.parquet", [{"event_id": "evt-2"}])
+
+    # Simulate macOS AppleDouble resource-fork files at multiple levels.
+    (layer_path / "._feed=bars").touch()
+    (real_partition / "._part-1.parquet").touch()
+
+    original_is_dir = Path.is_dir
+
+    def strict_is_dir(self: Path, *args, **kwargs):  # noqa: ANN002,ANN003
+        if self.name.startswith("._"):
+            raise PermissionError(f"Operation not permitted: {self}")
+        return original_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(compactor_module.Path, "is_dir", strict_is_dir)
+    monkeypatch.setattr(compactor_module.settings, "data_root", tmp_path)
+
+    compactor = Compactor()
+    result = compactor.scan_and_compact("silver")
+
+    assert result["partitions_scanned"] == 1
+    assert result["files_merged"] == 2
+
+
 def test_compactor_skips_unstatable_files_without_crashing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-02-08"
     partition.mkdir(parents=True)

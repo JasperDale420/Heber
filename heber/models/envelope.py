@@ -4,6 +4,8 @@ This module provides a compatible EventEnvelope model that accepts events
 from Data-Gateway while adding Heber-specific extensions for zero-leakage.
 """
 
+from __future__ import annotations
+
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -30,11 +32,14 @@ class Lineage(BaseModel):
 
 
 # Instrument key patterns per PRD §6.2
-INSTRUMENT_KEY_PATTERNS = {
+INSTRUMENT_KEY_PATTERNS: dict[str, re.Pattern[str]] = {
     "equity": re.compile(r"^equity:[A-Z0-9]+(?:[.-][A-Z0-9]+)*$"),
     "crypto": re.compile(r"^crypto:[A-Z]{2,10}-[A-Z]{2,10}$"),
     "forex": re.compile(r"^forex:[A-Z]{3}-[A-Z]{3}$"),
     "option": re.compile(r"^option:OCC:[A-Z]{1,6}\d{6}[CP]\d{8}$"),
+    # Macro indicators: lowercase snake_case segments separated by colons.
+    # e.g. macro:treasury_yield:2year, macro:cpi, macro:fed_funds_rate
+    "macro": re.compile(r"^macro:[a-z][a-z0-9_]*(?::[a-z0-9_]+)*$"),
 }
 
 
@@ -119,7 +124,7 @@ class EventEnvelope(BaseModel):
             return None
         return self.ts_available + timedelta(milliseconds=self.processing_delay_ms)
 
-    def with_ts_available(self, ts: datetime) -> "EventEnvelope":
+    def with_ts_available(self, ts: datetime) -> EventEnvelope:
         """Return a copy with ts_available set."""
         return self.model_copy(update={"ts_available": ts})
 

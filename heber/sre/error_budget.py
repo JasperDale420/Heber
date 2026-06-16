@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class BudgetState(str, Enum):
+class BudgetState(StrEnum):
     """Error budget states (PRD §38.2)."""
 
     HEALTHY = "healthy"  # > 50% remaining
@@ -89,7 +89,7 @@ DEFAULT_POLICIES: dict[BudgetState, BudgetPolicy] = {
 }
 
 
-class DeployRisk(str, Enum):
+class DeployRisk(StrEnum):
     """Deploy risk level (PRD §38.4)."""
 
     STANDARD = "standard"  # 0-1% budget cost

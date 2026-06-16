@@ -20,8 +20,14 @@ docker compose down
 ## Health Checks
 
 ```bash
+# Real-time dataflow verification
 curl -s http://localhost:8085/health
 heber health-dataflow --mode manual --window-seconds 900
+
+# End-of-day health report (7 checks: partitions, cross-feed, Soda, fill rate, zero-leakage, DLQ, Gold)
+heber health-daily
+heber health-daily --date 2026-03-09 --verbose  # specific date, full JSON
+heber health-daily --force                       # run on non-trading days
 ```
 
 ## Monitoring & Alerting
@@ -29,6 +35,7 @@ heber health-dataflow --mode manual --window-seconds 900
 - Consumer metrics: `http://localhost:9090/metrics`
 - Watch metrics: `http://localhost:9091/metrics`
 - Dataflow JSON reports: `/data/ops/dataflow-health`
+- Daily health reports: `/Volumes/heber/data/ops/daily-health`
 
 ## Common Issues & Troubleshooting
 

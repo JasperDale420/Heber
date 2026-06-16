@@ -32,7 +32,7 @@ def parse_duration(duration_str: str) -> timedelta:
     Raises:
         ValueError: If format is invalid
     """
-    match = re.match(r"(\d+)([Mwdhms])", duration_str)
+    match = re.match(r"^(\d+)([Mwdhms])$", duration_str.strip())
     if not match:
         raise ValueError(f"Invalid duration format: {duration_str}")
 

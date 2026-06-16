@@ -2,44 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pandas as pd
+
 from heber.config import Settings
-from heber.sdk import client as sdk_client
-
-
-class _StubResponse:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self):
-        return self._payload
-
-
-class _RecordingHttpClient:
-    def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        self.base_url = kwargs.get("base_url")
-        self.calls: list[tuple[str, str]] = []
-
-    def get(self, path, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append(("GET", path))
-        if path == "datasets":
-            return _StubResponse({"data": []})
-        if path == "datasets/bars":
-            return _StubResponse({"data": {"dataset_name": "bars"}})
-        if path == "datasets/bars/versions":
-            return _StubResponse({"data": []})
-        return _StubResponse({"data": []})
-
-    def post(self, path, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append(("POST", path))
-        if path == "instruments/lookup":
-            return _StubResponse({"data": [{"instrument_key": "equity:AAPL"}]})
-        return _StubResponse({"data": []})
-
-    def close(self) -> None:
-        return None
+from heber.reader import HeberReader
 
 
 def test_settings_defaults_for_api_and_catalog_url(monkeypatch) -> None:
@@ -68,34 +36,24 @@ def test_settings_accept_legacy_feast_repo_path_env(monkeypatch) -> None:
     assert str(settings.feast_repo_path) == "/tmp/custom-feast"
 
 
-def test_heber_client_uses_settings_catalog_url_by_default(monkeypatch) -> None:
-    monkeypatch.setattr(sdk_client.settings, "api_port", 8080)
-    monkeypatch.setattr(sdk_client.settings, "catalog_url", "http://localhost:8085/api/v1")
-
-    client = sdk_client.HeberClient()
-    assert client.catalog_url == "http://localhost:8085/api/v1"
+def test_heber_reader_uses_data_root(tmp_path: Path) -> None:
+    reader = HeberReader(tmp_path)
+    assert reader._root == tmp_path
 
 
-def test_heber_client_uses_relative_catalog_paths(monkeypatch) -> None:
-    created_clients: list[_RecordingHttpClient] = []
+def test_heber_reader_returns_empty_when_path_missing(tmp_path: Path) -> None:
+    reader = HeberReader(tmp_path)
+    df = reader.read_silver("nonexistent_feed")
+    assert isinstance(df, pd.DataFrame)
+    assert df.empty
 
-    def _client_factory(*args, **kwargs):  # noqa: ANN002, ANN003
-        instance = _RecordingHttpClient(*args, **kwargs)
-        created_clients.append(instance)
-        return instance
 
-    monkeypatch.setattr(sdk_client.httpx, "Client", _client_factory)
+def test_heber_reader_context_manager(tmp_path: Path) -> None:
+    with HeberReader(tmp_path) as reader:
+        assert reader._root == tmp_path
 
-    client = sdk_client.HeberClient(catalog_url="http://localhost:8085/api/v1")
-    _ = client.list_datasets()
-    _ = client.get_dataset("bars")
-    resolved = client.resolve_instrument("AAPL")
-    client.close()
 
-    assert resolved == "equity:AAPL"
-    assert len(created_clients) == 1
-    assert created_clients[0].calls == [
-        ("GET", "datasets"),
-        ("GET", "datasets/bars"),
-        ("POST", "instruments/lookup"),
-    ]
+def test_heber_reader_list_gold_versions_empty(tmp_path: Path) -> None:
+    reader = HeberReader(tmp_path)
+    versions = reader.list_gold_versions("no_such_dataset")
+    assert versions == []

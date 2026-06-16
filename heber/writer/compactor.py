@@ -22,6 +22,16 @@ logger = structlog.get_logger(__name__)
 # Target file size in bytes (256 MB)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
+# Maximum files to compact in a single pass to prevent OOM on large partitions.
+MAX_FILES_PER_BATCH = 50
+
+# Maximum total compressed bytes to read in a single compaction batch.
+# Feeds with large embedded JSON (e.g. option_chain_snapshot with chain_json) can
+# expand 5-10x in memory, so keep this budget conservative to avoid OOM in Docker.
+# At ~14 MB/file compressed and ~6x expansion: 50 MB → ~300 MB uncompressed,
+# ~600 MB with concat copy — safe under typical 4 GB Docker Desktop limits.
+MAX_BATCH_COMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
+
 
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
@@ -52,7 +62,7 @@ class Compactor:
                 )
                 try:
                     lock_path.unlink(missing_ok=True)
-                except Exception as e:
+                except OSError as e:
                     logger.warning(
                         "Failed to remove stale compaction lock",
                         partition=str(partition_path),
@@ -70,7 +80,7 @@ class Compactor:
             return
         try:
             lock_path.unlink(missing_ok=True)
-        except Exception as e:
+        except OSError as e:
             logger.warning("Failed to release compaction lock", lock_path=str(lock_path), error=str(e))
 
     def _dataset_label(self, partition_path: Path) -> str:
@@ -82,7 +92,7 @@ class Compactor:
                     return part.split("=", 1)[1]
             if rel.parts:
                 return rel.parts[0]
-        except Exception:
+        except ValueError:
             pass
         return "unknown"
 
@@ -91,7 +101,7 @@ class Compactor:
         """Read lock owner PID from lock file."""
         try:
             first_line = lock_path.read_text(encoding="utf-8").splitlines()[0]
-        except Exception:
+        except (OSError, IndexError, UnicodeDecodeError):
             return None
         for token in first_line.split():
             if token.startswith("pid="):
@@ -261,10 +271,11 @@ class Compactor:
             )
             return None
 
-    def _collect_small_files(self, partition_path: Path) -> list[Path] | None:
+    def _collect_small_files(self, partition_path: Path) -> tuple[list[Path], dict[Path, int]] | None:
         """Collect compactable parquet files below the target size threshold.
 
-        Returns list of small file paths, or None if there aren't enough files to compact.
+        Returns (small_file_paths, size_cache) tuple, or None if there aren't enough files to compact.
+        The size_cache maps each file to its byte size, avoiding repeated stat() calls.
         """
         parquet_files = self._list_compactable_parquet_files(partition_path)
         if len(parquet_files) <= 1:
@@ -279,18 +290,60 @@ class Compactor:
         if len(sized_files) <= 1:
             return None
 
-        small_files = [path for path, size in sized_files if size < TARGET_FILE_SIZE]
+        small_files = [path for path, size in sized_files if 0 < size < TARGET_FILE_SIZE]
+        skipped_empty = [path for path, size in sized_files if size == 0]
+        for empty_path in skipped_empty:
+            logger.warning("compactor_skip_empty_file", path=str(empty_path))
         if len(small_files) <= 1:
             return None
 
-        total_size = sum(size for _, size in sized_files)
+        # Cap batch size to prevent OOM on partitions with many small files.
+        if len(small_files) > MAX_FILES_PER_BATCH:
+            logger.info(
+                "compactor_batch_capped",
+                partition=str(partition_path),
+                total_files=len(small_files),
+                batch_size=MAX_FILES_PER_BATCH,
+            )
+            small_files = small_files[:MAX_FILES_PER_BATCH]
+
+        # Build size cache from already-computed sizes to avoid repeated stat() calls.
+        size_cache = {path: size for path, size in sized_files}
+
+        # Cap total compressed bytes to prevent OOM on feeds with large embedded data
+        # (e.g. option_chain_snapshot chain_json expands ~6x from compressed size).
+        running_bytes = 0
+        byte_capped_files: list[Path] = []
+        for f in small_files:
+            file_size = size_cache.get(f)
+            if file_size is None:
+                continue
+            if running_bytes + file_size > MAX_BATCH_COMPRESSED_BYTES and byte_capped_files:
+                logger.info(
+                    "compactor_byte_budget_capped",
+                    partition=str(partition_path),
+                    total_files=len(small_files),
+                    included_files=len(byte_capped_files),
+                    included_bytes=running_bytes,
+                    budget_bytes=MAX_BATCH_COMPRESSED_BYTES,
+                )
+                break
+            byte_capped_files.append(f)
+            running_bytes += file_size
+        small_files = byte_capped_files
+
+        if len(small_files) <= 1:
+            return None
+
+        total_size = running_bytes
         logger.info(
             "Compacting partition",
             partition=str(partition_path),
             files=len(small_files),
             total_bytes=total_size,
         )
-        return small_files
+
+        return small_files, size_cache
 
     def _merge_tables_to_parquet(
         self,
@@ -312,6 +365,14 @@ class Compactor:
         # 2. Combine into a single table
         combined_table = pa.concat_tables(aligned_tables)
 
+        # 2b. Cast string columns to large_string to avoid 32-bit offset overflow
+        # during sort_by/take on partitions with large string data.
+        for i, field in enumerate(combined_table.schema):
+            if pa.types.is_string(field.type):
+                combined_table = combined_table.set_column(
+                    i, field.name, combined_table.column(i).cast(pa.large_string())
+                )
+
         # 3. Fast path: If empty or no event_id, just write it
         if combined_table.num_rows == 0:
             return 0
@@ -319,23 +380,24 @@ class Compactor:
         has_event_id = "event_id" in combined_table.schema.names
         has_ts_ingest = "ts_ingest" in combined_table.schema.names
 
-        # 4. Deduplication
+        # 4. Deduplication — pure PyArrow, no Pandas roundtrip
         if has_event_id:
-            df = combined_table.to_pandas()
-            initial_rows = len(df)
+            initial_rows = combined_table.num_rows
 
-            # Sort so we keep the earliest ts_ingest if present
+            # Sort by ts_ingest ascending so take(keep_indices) preserves earliest duplicate
             if has_ts_ingest:
-                df = df.sort_values("ts_ingest", ascending=True)
+                combined_table = combined_table.sort_by([("ts_ingest", "ascending")])
 
-            # Drop duplicates keeping the first (earliest)
-            df = df.drop_duplicates(subset=["event_id"], keep="first")
+            event_ids = combined_table.column("event_id").to_pylist()
+            seen: set[str] = set()
+            keep_indices: list[int] = []
+            for i, eid in enumerate(event_ids):
+                if eid not in seen:
+                    seen.add(eid)
+                    keep_indices.append(i)
 
-            # Restore original sort if needed (optional, but good for predictable layout)
-            if has_ts_ingest:
-                df = df.sort_index()
-
-            deduped_rows = len(df)
+            final_table = combined_table.take(keep_indices)
+            deduped_rows = final_table.num_rows
             duplicates_removed = initial_rows - deduped_rows
 
             if duplicates_removed > 0:
@@ -348,13 +410,17 @@ class Compactor:
                 from heber.ops.metrics import compactor_dedupe_drops_total
 
                 compactor_dedupe_drops_total.labels(dataset=dataset).inc(duplicates_removed)
-
-            final_table = pa.Table.from_pandas(df, schema=unified_schema, preserve_index=False)
         else:
             final_table = combined_table
 
-        # 5. Write out
-        with pq.ParquetWriter(temp_path, unified_schema, compression="snappy") as writer:
+        # 5. Write out.
+        # use_dictionary=False ensures compacted files use plain string types
+        # for low-cardinality columns (feed, instrument_type, provider, source).
+        # This prevents schema merge failures when pyarrow.dataset reads a
+        # directory containing files from both the real-time writer and the
+        # compactor — mixed string vs dictionary<string, int32> encoding is
+        # otherwise incompatible.
+        with pq.ParquetWriter(temp_path, final_table.schema, compression="snappy", use_dictionary=False) as writer:
             writer.write_table(final_table, row_group_size=250_000)
 
         return final_table.num_rows
@@ -372,9 +438,10 @@ class Compactor:
         dataset = self._dataset_label(partition_path)
 
         try:
-            small_files = self._collect_small_files(partition_path)
-            if small_files is None:
+            result = self._collect_small_files(partition_path)
+            if result is None:
                 return 0
+            small_files, size_cache = result
 
             source_tables = [self._normalize_dict_columns(pq.ParquetFile(f).read()) for f in small_files]
 
@@ -386,9 +453,17 @@ class Compactor:
 
             merged_rows = self._merge_tables_to_parquet(source_tables, unified_schema, temp_path, dataset)
 
+            if merged_rows == 0:
+                logger.info(
+                    "compaction_skipped_zero_rows",
+                    partition=str(partition_path),
+                    source_files=len(small_files),
+                )
+                return 0
+
             temp_path.replace(merged_path)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0
-            source_bytes = sum(f.stat().st_size for f in small_files if f.exists())
+            source_bytes = sum(size_cache.get(f, 0) for f in small_files)
             reclaimed = max(source_bytes - merged_size, 0)
 
             for f in small_files:
@@ -410,7 +485,7 @@ class Compactor:
             )
             return len(small_files)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — multi-step compaction must preserve sources on any failure
             record_compaction(
                 dataset=dataset,
                 status="error",
@@ -440,8 +515,13 @@ class Compactor:
         partitions_scanned = 0
         files_merged = 0
 
-        # Walk through all partitions (directories containing .parquet files)
+        # Walk through all partitions (directories containing .parquet files).
+        # Skip names starting with "." so macOS AppleDouble resource-fork
+        # files (._foo) on exFAT/NTFS volumes don't raise PermissionError
+        # from the is_dir() stat call. Mirrors the catalog fix in 8af04ef.
         for partition_path in layer_path.rglob("*"):
+            if partition_path.name.startswith("."):
+                continue
             if partition_path.is_dir():
                 parquet_files = self._list_compactable_parquet_files(partition_path)
                 if parquet_files:
@@ -463,7 +543,7 @@ class Compactor:
         while self.running:
             try:
                 # Compact Silver layer
-                result = self.scan_and_compact("silver")
+                result = await asyncio.to_thread(self.scan_and_compact, "silver")
                 logger.info("Compaction cycle complete", **result)
 
                 # Wait for next cycle
@@ -472,7 +552,7 @@ class Compactor:
             except asyncio.CancelledError:
                 logger.info("Compactor cancelled")
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — top-level event loop must not crash
                 logger.error("Compactor error", error=str(e), exc_info=True)
                 await asyncio.sleep(60)  # Back off on error
 
@@ -489,7 +569,10 @@ async def main():
     from heber.ops.logging import configure_logging
 
     configure_logging(service_name="heber-compactor", log_level=settings.log_level, json_output=True)
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     compactor = Compactor()
 
     loop = asyncio.get_event_loop()

@@ -306,6 +306,8 @@ class BarrierChecker:
             return WatchStatus.HIT_TP, int(tp_first) + 1
         elif sl_first < tp_first:
             return WatchStatus.HIT_SL, int(sl_first) + 1
+        elif tp_first != float("inf"):
+            return WatchStatus.HIT_TP, int(tp_first) + 1
         else:
             return WatchStatus.WATCHING, None
 
@@ -325,7 +327,7 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         # Identifiers
         "alert_id": outcome.alert_id,
         "watch_id": outcome.watch_id,
-        "instrument_key": outcome.alert_id,  # For Feast entity
+        "instrument_key": f"option:OCC:{outcome.occ_symbol}" if outcome.occ_symbol else f"equity:{outcome.underlying}",
         # Contract info
         "occ_symbol": outcome.occ_symbol,
         "underlying": outcome.underlying,

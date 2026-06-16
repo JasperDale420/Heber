@@ -8,6 +8,8 @@ URNs provide a stable identifier for datasets:
 Path templates translate URNs to actual file system paths.
 """
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -37,7 +39,7 @@ class DatasetURN:
     project: str | None = None  # For gold datasets
 
     @classmethod
-    def parse(cls, urn: str) -> "DatasetURN":
+    def parse(cls, urn: str) -> DatasetURN:
         """Parse a URN string into components.
 
         Args:
@@ -77,7 +79,7 @@ class DatasetURN:
 
 
 # Path templates per layer (PRD §11.4)
-PATH_TEMPLATES = {
+PATH_TEMPLATES: dict[str, str] = {
     "bronze": "{layer}/provider={provider}/feed={feed}/dt={dt}/hour={hour}/",
     "silver": "{layer}/feed={feed}/instrument_type={instrument_type}/dt={dt}/",
     "silver_hourly": "{layer}/feed={feed}/instrument_type={instrument_type}/dt={dt}/hour={hour}/",

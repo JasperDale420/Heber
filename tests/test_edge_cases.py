@@ -11,8 +11,6 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from heber.sdk.client import HeberClient
-
 
 class TestClockSkew:
     """Tests for clock skew scenarios (PRD §49.3).
@@ -109,8 +107,7 @@ class TestClockSkew:
         # Trade at -2h should NOT see quote with ts_event=-3h if ts_available=-1h
         # This is the zero-leakage guarantee
 
-        HeberClient()
-        # Note: In real usage, this would use client.asof_join()
+        # Note: In real usage this would use HeberReader().asof_join()
         # For unit test, we verify the logic manually
 
         trade_time = trades["ts_event"].iloc[0]  # -2h

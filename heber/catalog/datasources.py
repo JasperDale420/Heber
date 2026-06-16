@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 import structlog
@@ -32,7 +32,7 @@ class ProviderPriority(int, Enum):
     TERTIARY = 3
 
 
-class StorageBoundary(str, Enum):
+class StorageBoundary(StrEnum):
     """Storage boundary (PRD §56)."""
 
     HEBER = "heber"  # Structured data (Silver layer)
@@ -266,8 +266,8 @@ class ProviderRegistry:
     def __init__(
         self,
         providers: list[DataProvider] | None = None,
-    ):
-        self.providers = {p.name: p for p in (providers or DEFAULT_PROVIDERS)}
+    ) -> None:
+        self.providers: dict[str, DataProvider] = {p.name: p for p in (providers or DEFAULT_PROVIDERS)}
 
     def get(self, name: str) -> DataProvider | None:
         """Get provider by name."""
@@ -293,9 +293,9 @@ class DatasetCatalog:
         self,
         datasets: list[DatasetSpec] | None = None,
         data_types: list[DataTypeSpec] | None = None,
-    ):
-        self.datasets = {d.name: d for d in (datasets or DEFAULT_DATASETS)}
-        self.data_types = {d.name: d for d in (data_types or DEFAULT_DATA_TYPES)}
+    ) -> None:
+        self.datasets: dict[str, DatasetSpec] = {d.name: d for d in (datasets or DEFAULT_DATASETS)}
+        self.data_types: dict[str, DataTypeSpec] = {d.name: d for d in (data_types or DEFAULT_DATA_TYPES)}
 
     def get(self, name: str) -> DatasetSpec | None:
         """Get dataset by name."""

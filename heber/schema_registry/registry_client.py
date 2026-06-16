@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from enum import Enum
-from functools import lru_cache
-from typing import Any
+from enum import StrEnum
+from typing import Any, cast
 
 import structlog
 from prometheus_client import Counter
@@ -27,7 +26,7 @@ schema_operations = Counter(
 )
 
 
-class CompatibilityLevel(str, Enum):
+class CompatibilityLevel(StrEnum):
     """Schema compatibility levels for evolution."""
 
     BACKWARD = "BACKWARD"  # New schema can read old data
@@ -39,7 +38,7 @@ class CompatibilityLevel(str, Enum):
     NONE = "NONE"  # No compatibility checking
 
 
-class SchemaType(str, Enum):
+class SchemaType(StrEnum):
     """Supported schema types."""
 
     AVRO = "AVRO"
@@ -165,12 +164,12 @@ class SchemaRegistryClient:
 
         try:
             if schema_type == SchemaType.AVRO:
-                from schema_registry.serializers import AvroSchema
+                from schema_registry.serializers import AvroSchema  # type: ignore[attr-defined]
 
                 avro_schema = AvroSchema(schema_str)
                 schema_id = client.register(subject, avro_schema)
             elif schema_type == SchemaType.JSON:
-                from schema_registry.serializers import JsonSchema
+                from schema_registry.serializers import JsonSchema  # type: ignore[attr-defined]
 
                 json_schema = JsonSchema(schema_str)
                 schema_id = client.register(subject, json_schema)
@@ -190,7 +189,7 @@ class SchemaRegistryClient:
                 schema_type=schema_type.value,
             )
 
-            return schema_id
+            return cast(int, schema_id)
 
         except Exception as e:
             schema_operations.labels(
@@ -233,7 +232,7 @@ class SchemaRegistryClient:
         """
         client = self._get_client()
         result = client.get_by_id(schema_id)
-        return json.loads(result.raw_schema) if hasattr(result, "raw_schema") else result
+        return cast(dict[str, Any], json.loads(result.raw_schema) if hasattr(result, "raw_schema") else result)
 
     def list_subjects(self) -> list[str]:
         """List all registered subjects.
@@ -242,7 +241,7 @@ class SchemaRegistryClient:
             List of subject names
         """
         client = self._get_client()
-        return client.get_subjects()
+        return cast(list[str], client.get_subjects())
 
     def list_versions(self, subject: str) -> list[int]:
         """List all versions for a subject.
@@ -254,7 +253,7 @@ class SchemaRegistryClient:
             List of version numbers
         """
         client = self._get_client()
-        return client.get_versions(subject)
+        return cast(list[int], client.get_versions(subject))
 
     def check_compatibility(
         self,
@@ -281,15 +280,15 @@ class SchemaRegistryClient:
 
         try:
             if schema_type == SchemaType.AVRO:
-                from schema_registry.serializers import AvroSchema
+                from schema_registry.serializers import AvroSchema  # type: ignore[attr-defined]
 
                 avro_schema = AvroSchema(schema_str)
-                return client.test_compatibility(subject, avro_schema)
+                return cast(bool, client.test_compatibility(subject, avro_schema))
             elif schema_type == SchemaType.JSON:
-                from schema_registry.serializers import JsonSchema
+                from schema_registry.serializers import JsonSchema  # type: ignore[attr-defined]
 
                 json_schema = JsonSchema(schema_str)
-                return client.test_compatibility(subject, json_schema)
+                return cast(bool, client.test_compatibility(subject, json_schema))
             else:
                 raise ValueError(f"Unsupported schema type: {schema_type}")
 
@@ -330,20 +329,7 @@ class SchemaRegistryClient:
             List of deleted version numbers
         """
         client = self._get_client()
-        return client.delete_subject(subject)
-
-
-# Singleton
-_client: SchemaRegistryClient | None = None
-
-
-@lru_cache(maxsize=1)
-def get_schema_registry() -> SchemaRegistryClient:
-    """Get the singleton schema registry client."""
-    global _client
-    if _client is None:
-        _client = SchemaRegistryClient()
-    return _client
+        return cast(list[int], client.delete_subject(subject))
 
 
 # =============================================================================

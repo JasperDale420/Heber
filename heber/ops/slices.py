@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class SliceStatus(str, Enum):
+class SliceStatus(StrEnum):
     """Implementation slice status."""
 
     NOT_STARTED = "not_started"
@@ -177,7 +177,7 @@ class SliceManager:
                 "in_progress": status.get("in_progress", 0),
                 "not_started": status.get("not_started", 0),
                 "blocked": status.get("blocked", 0),
-                "progress": f"{completed / total * 100:.0f}%",
+                "progress": f"{(completed / total * 100) if total > 0 else 0:.0f}%",
             },
             "ready_slices": [s.to_dict() for s in self.get_ready_slices()],
             "slices": self.list_all(),

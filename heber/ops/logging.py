@@ -1,110 +1,82 @@
-"""Structured logging configuration per PRD §12.3 and §12.5.5.
+"""Structured logging configuration for Heber.
 
-Provides:
-- JSON structured logs with required fields
-- Log levels: DEBUG, INFO, WARNING, ERROR
-- Service/instance identification
-- Trace context propagation
+Delegates base configuration to empire_core.logger (daily file rotation,
+error log, service name injection). Provides Heber-specific structured
+log helpers for event processing, batch writes, DLQ, and retries.
 """
 
-import logging
-import os
-from datetime import UTC, datetime
-from typing import Any
+from __future__ import annotations
+
+from datetime import datetime
 
 import structlog
+from empire_core.logger import (
+    bind_context,
+    clear_context,
+    get_logger,
+    log_error,
+    log_retry,
+    setup_logging,
+    unbind_context,
+)
+
+# Re-export empire_core helpers so existing `from heber.ops.logging import ...` keeps working
+__all__ = [
+    "bind_context",
+    "clear_context",
+    "configure_logging",
+    "get_logger",
+    "log_batch_written",
+    "log_dlq_event",
+    "log_error",
+    "log_event_received",
+    "log_retry",
+    "unbind_context",
+]
 
 
-def get_instance_id() -> str:
-    """Get unique instance identifier."""
-    from heber.config import get_settings
-
-    return get_settings().instance_id
-
-
-def get_service_name() -> str:
-    """Get service name."""
-    from heber.config import get_settings
-
-    return get_settings().service_name
-
-
-def add_timestamp(
-    logger: Any,
-    method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
-    """Add ISO timestamp to log event."""
-    event_dict["ts"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    return event_dict
-
-
-def add_service_context(
-    logger: Any,
-    method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
-    """Add service context per PRD §12.5.5."""
-    event_dict["service"] = get_service_name()
-    event_dict["instance_id"] = get_instance_id()
-    return event_dict
+_VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 def configure_logging(
     service_name: str | None = None,
     log_level: str = "INFO",
     json_output: bool = True,
+    *,
+    force: bool = True,
 ) -> None:
-    """Configure structured logging per PRD §12.3 and §12.5.5.
+    """Configure Heber logging via empire_core.
 
     Args:
-        service_name: Override service name
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        json_output: If True, output JSON; otherwise, dev-friendly format
+        service_name: Override service name (default: "heber").
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+        json_output: Ignored; empire_core uses EMPIRE_LOG_FORMAT env var.
+        force: Re-run ``empire_core.setup_logging`` even if the global
+            ``_configured`` flag is already set (default ``True``). Without
+            this, a second service starting in the same Python process
+            (e.g. a CLI shelling into multiple service modules, an embedded
+            test harness, or any code path that imports two services) would
+            silently inherit the *first* service's log filename and
+            ``service=`` field, leaking the wrong service name into the
+            wrong daily log file. Set ``force=False`` only if you are sure
+            the caller has already done the right setup.
+
+    Raises:
+        ValueError: If ``log_level`` is not a recognised stdlib log level name.
     """
-    if service_name:
-        os.environ["SERVICE_NAME"] = service_name  # Keep env sync for child processes
-
-    normalized_level = log_level.strip().upper()
-    level_value = logging.getLevelName(normalized_level)
-    if not isinstance(level_value, int):
-        valid_levels = "DEBUG, INFO, WARNING, ERROR, CRITICAL"
-        raise ValueError(f"Invalid log level '{log_level}'. Expected one of: {valid_levels}.")
-
-    # Keep stdlib and structlog filtering aligned for consistent behavior.
-    logging.getLogger().setLevel(level_value)
-
-    # Shared processors
-    shared_processors = [
-        structlog.stdlib.add_log_level,
-        add_timestamp,
-        add_service_context,
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-    ]
-
-    if json_output:
-        # Production: JSON output per PRD §12.5.5
-        processors = shared_processors + [structlog.processors.JSONRenderer()]
-    else:
-        # Development: Console-friendly output
-        processors = shared_processors + [structlog.dev.ConsoleRenderer()]
-
-    structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(level_value),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
+    normalised = log_level.upper()
+    if normalised not in _VALID_LOG_LEVELS:
+        raise ValueError(f"Invalid log level: {log_level!r}. Must be one of: {', '.join(sorted(_VALID_LOG_LEVELS))}")
+    setup_logging(
+        service_name or "heber",
+        level=normalised,
+        force=force,
     )
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
-    """Get a configured logger instance."""
-    return structlog.get_logger(name)
-
-
-# Log event helpers for common operations (PRD §12.3)
+# ---------------------------------------------------------------------------
+# Domain-specific log helpers
+# ---------------------------------------------------------------------------
 
 
 def log_event_received(
@@ -119,7 +91,7 @@ def log_event_received(
     schema_version: str = "v1",
     quality_flags: list[str] | None = None,
 ) -> None:
-    """Log gateway event receipt per PRD §12.3."""
+    """Log gateway event receipt."""
     logger.info(
         "event_received",
         event_id=event_id,
@@ -143,7 +115,7 @@ def log_batch_written(
     duration_ms: float,
     ingest_lag_ms: float | None = None,
 ) -> None:
-    """Log batch write per PRD §12.3."""
+    """Log batch write completion."""
     logger.info(
         "batch_written",
         feed=feed,
@@ -152,23 +124,6 @@ def log_batch_written(
         rows_written=rows_written,
         duration_ms=duration_ms,
         ingest_lag_ms=ingest_lag_ms,
-    )
-
-
-def log_error(
-    logger: structlog.stdlib.BoundLogger,
-    error: Exception,
-    operation: str,
-    **context: Any,
-) -> None:
-    """Log error with context."""
-    logger.error(
-        "error",
-        operation=operation,
-        error_type=type(error).__name__,
-        error_message=str(error),
-        **context,
-        exc_info=True,
     )
 
 
@@ -188,23 +143,4 @@ def log_dlq_event(
         provider=provider,
         error_type=error_type,
         attempts=attempts,
-    )
-
-
-def log_retry(
-    logger: structlog.stdlib.BoundLogger,
-    operation: str,
-    attempt: int,
-    max_retries: int,
-    delay_seconds: float,
-    error: str,
-) -> None:
-    """Log retry attempt."""
-    logger.warning(
-        "retry",
-        operation=operation,
-        attempt=attempt,
-        max_retries=max_retries,
-        delay_seconds=delay_seconds,
-        error=error,
     )

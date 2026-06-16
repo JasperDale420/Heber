@@ -10,7 +10,7 @@ Provides:
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -25,7 +25,7 @@ _start_time = time.time()
 _startup_complete = False
 
 
-class HealthStatus(str, Enum):
+class HealthStatus(StrEnum):
     """Health check status."""
 
     OK = "ok"
@@ -33,7 +33,7 @@ class HealthStatus(str, Enum):
     ERROR = "error"
 
 
-class ReadinessStatus(str, Enum):
+class ReadinessStatus(StrEnum):
     """Readiness status."""
 
     READY = "ready"
@@ -50,7 +50,7 @@ class HealthCheck:
     latency_ms: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        result = {"status": self.status.value}
+        result: dict[str, Any] = {"status": self.status.value}
         if self.message:
             result["message"] = self.message
         if self.latency_ms is not None:
@@ -173,7 +173,7 @@ def check_readiness() -> ReadinessResponse:
                 message=str(e),
             )
             all_ok = False
-            logger.warning("dependency_check_failed", name=name, error=str(e))
+            logger.warning("dependency_check_failed", name=name, error=str(e), exc_info=True)
 
     status = ReadinessStatus.READY if all_ok else ReadinessStatus.NOT_READY
 

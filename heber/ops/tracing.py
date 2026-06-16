@@ -113,7 +113,7 @@ def configure_tracing(
             sampling_rate=rate,
         )
     except Exception as e:
-        logger.error("tracing_setup_failed", error=str(e))
+        logger.error("tracing_setup_failed", error=str(e), exc_info=True)
 
 
 def get_tracer(name: str = "heber") -> Any:

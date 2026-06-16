@@ -1,14 +1,14 @@
 # =============================================================================
 # Heber Multi-Stage Dockerfile per PRD §19
 # =============================================================================
-# Base image: python:3.14-slim-bookworm
+# Base image: python:3.13-slim-bookworm
 # Security: Non-root user, minimal dependencies, no cache layers
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS builder
+FROM python:3.13-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,24 +17,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+WORKDIR /workspace/Heber
 
 # Install uv for fast dependency management
 RUN pip install --no-cache-dir uv
 
 # Copy only dependency files first (better layer caching)
-COPY pyproject.toml uv.lock README.md ./
-COPY heber/ ./heber/
+COPY Heber/pyproject.toml Heber/uv.lock Heber/README.md /workspace/Heber/
+COPY Heber/heber/ /workspace/Heber/heber/
+COPY empire-core/ /workspace/empire-core/
+COPY empire-schemas/ /workspace/empire-schemas/
 
 # Install pinned runtime dependencies from lockfile, then install project package
 RUN uv export --frozen --no-dev --no-emit-project --format requirements.txt --output-file requirements.txt \
     && uv pip install --target=/build/deps -r requirements.txt \
+    && uv pip install --target=/build/deps /workspace/empire-core --no-deps \
+    && uv pip install --target=/build/deps /workspace/empire-schemas --no-deps \
     && uv pip install --target=/build/deps -e . --no-deps
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal production image
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:3.13-slim-bookworm AS runtime
 
 # Labels per OCI spec
 LABEL org.opencontainers.image.source="https://github.com/jacobmcmillan/heber"
@@ -54,8 +58,8 @@ WORKDIR /app
 COPY --from=builder /build/deps /app/deps
 
 # Copy application code
-COPY heber/ /app/heber/
-COPY features/ /app/features/
+COPY Heber/heber/ /app/heber/
+COPY Heber/features/ /app/features/
 
 # Set Python path to include deps
 ENV PYTHONPATH=/app/deps:/app
@@ -109,3 +113,9 @@ CMD ["python", "-m", "heber.backfill"]
 # -----------------------------------------------------------------------------
 FROM runtime AS hotloader
 CMD ["python", "-m", "heber.writer.hotstore"]
+
+# -----------------------------------------------------------------------------
+# Stage 9 (optional): Gold Feature Poller service
+# -----------------------------------------------------------------------------
+FROM runtime AS gold-poller
+CMD ["python", "-m", "heber.gold_poller"]

@@ -8,6 +8,7 @@ feeds (bars, quotes, trades) and alternative data feeds.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -19,8 +20,25 @@ from heber.writer.ingest_contracts import normalize_payload_for_feed, resolve_fe
 
 logger = structlog.get_logger(__name__)
 
+
+class SilverNormalizationError(ValueError):
+    """Non-retryable validation error while preparing a Silver row."""
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+class MissingInstrumentIdentifierError(SilverNormalizationError):
+    """Raised when a feed cannot produce a required instrument identifier."""
+
+
+class InvalidInstrumentKeyError(SilverNormalizationError):
+    """Raised when a normalized event still has an invalid instrument key."""
+
+
 OCC_PATTERN = re.compile(r"([A-Z]{1,6}\d{6}[CP]\d{8})")
-SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}$")
+SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}(\.[A-Z])?$")
 EQUITY_EXTENDED_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$")
 UNDERLYING_PATTERN = re.compile(r"^[A-Z]{1,6}$")
 CRYPTO_SYMBOL_PATTERN = re.compile(r"^[A-Z]{2,10}-[A-Z]{2,10}$")
@@ -92,15 +110,35 @@ def _normalize_flow_alert(
 
 
 def _normalize_congress_insider(
+    feed: str,
     symbol: str | None,
     payload: dict[str, Any],
-) -> tuple[str | None, str, str] | None:
-    """Normalize symbol for congress_trades/insider_trades feeds."""
+) -> tuple[str, str, str]:
+    """Normalize symbol for congress_trades/insider_trades feeds.
+
+    When the upstream provider sends an empty ticker (common with
+    UnusualWhales bulk insider-trades endpoints), falls back to
+    ``"UNKNOWN"`` so the record can proceed through Silver normalization
+    rather than being rejected at the instrument-key stage.  Records
+    with genuinely missing required fields will still be caught by
+    ``enforce_required_non_null_fields`` downstream.
+    """
     if symbol is None:
         symbol = _normalize_symbol(payload.get("ticker")) or _normalize_symbol(payload.get("symbol"))
     if symbol is not None:
         return symbol, "equity", f"equity:{symbol}"
-    return None
+
+    # Fallback: use UNKNOWN sentinel so record is not rejected here.
+    # The required-field check (insider_name, trade_type, trade_date) will
+    # still reject truly empty records, but records with partial data can
+    # proceed to Silver.
+    logger.debug(
+        "congress_insider_missing_symbol_fallback",
+        feed=feed,
+        payload_ticker=payload.get("ticker"),
+        payload_symbol=payload.get("symbol"),
+    )
+    return "UNKNOWN", "equity", "equity:UNKNOWN"
 
 
 def _normalize_news(
@@ -138,7 +176,8 @@ def _normalize_sector_tide(
 
 
 # Dispatch table: feed → normalizer function
-_FEED_NORMALIZERS: dict[str, Any] = {
+_FeedNormalizer = Callable[[str | None, dict[str, Any], str], tuple[str | None, str, str]]
+_FEED_NORMALIZERS: dict[str, _FeedNormalizer] = {
     "flow_alerts": _normalize_flow_alert,
     "market_tide": _normalize_market_tide,
     "sector_tide": _normalize_sector_tide,
@@ -159,8 +198,7 @@ def _normalize_by_feed(
         return normalizer(symbol, payload, instrument_key)
 
     if canonical_feed in {"congress_trades", "insider_trades"}:
-        result = _normalize_congress_insider(symbol, payload)
-        return result if result is not None else (symbol, instrument_type, instrument_key)
+        return _normalize_congress_insider(canonical_feed, symbol, payload)
 
     if canonical_feed == "news":
         result = _normalize_news(symbol, payload)
@@ -199,7 +237,7 @@ def _collect_quality_flags(
 def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
     """Normalize feed alias, payload, symbol, and instrument key for Silver writes."""
     canonical_feed = resolve_feed_alias(envelope.feed)
-    payload = normalize_payload_for_feed(canonical_feed, envelope.payload)
+    payload = normalize_payload_for_feed(canonical_feed, envelope.payload, ts_event=envelope.ts_event)
 
     symbol = _normalize_symbol(envelope.symbol)
     instrument_type = envelope.instrument_type.lower().strip()
@@ -228,9 +266,17 @@ def normalize_envelope_for_silver(envelope: EventEnvelope) -> EventEnvelope:
 
     # For mapped feeds, strict key validation remains mandatory after synthesis.
     if resolve_silver_feed(envelope.feed) is not None and not normalized.is_valid_instrument_key():
-        raise ValueError(
+        raise InvalidInstrumentKeyError(
             f"Invalid instrument_key format for instrument_type "
-            f"{normalized.instrument_type}: {normalized.instrument_key}"
+            f"{normalized.instrument_type}: {normalized.instrument_key}",
+            details={
+                "feed": canonical_feed,
+                "instrument_type": normalized.instrument_type,
+                "instrument_key": normalized.instrument_key,
+                "payload_symbol": payload.get("symbol"),
+                "payload_ticker": payload.get("ticker"),
+                "symbol": normalized.symbol,
+            },
         )
 
     return normalized

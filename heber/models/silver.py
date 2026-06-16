@@ -4,6 +4,8 @@ All Silver datasets include the shared base columns plus dataset-specific fields
 These Pydantic models are used for validation and documentation.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import date, datetime
 from typing import Any, ClassVar
@@ -64,6 +66,10 @@ class SilverBase(BaseModel):
         # V6
         "ETFMetadataRecord": "v6",
         "ETFSectorWeightsRecord": "v6",
+        # V7 - Real-time market status
+        "LULDRecord": "v7",
+        "TradingStatusRecord": "v7",
+        "TradeCorrectionRecord": "v7",
     }
 
     @model_validator(mode="before")
@@ -173,6 +179,13 @@ class FlowAlertRecord(SilverBase):
     all_opening_trades: bool | None = None
     total_size: int | None = None
     expiry_count: int | None = None
+    sentiment: str | None = None
+
+    # GEX / VEX enrichment from UWPoller
+    gex: float | None = None
+    vex: float | None = None
+    max_pain_strike: float | None = None
+    max_pain_distance_pct: float | None = None
 
 
 class DarkpoolTradeRecord(SilverBase):
@@ -258,10 +271,11 @@ class GreeksRecord(SilverBase):
 
 
 class ChainSnapshotRecord(SilverBase):
-    """Silver option_chain_snapshots schema (PRD §8.7.8, snapshot stream).
+    """Legacy contract-level chain slice retained for older consumers.
 
-    One row per contract per snapshot. Snapshot cadence is typically 5-15 minutes.
-    Primary key: (snapshot_id, instrument_key) or (underlying, snapshot_id, occ_symbol)
+    The canonical Heber `option_chain_snapshot` dataset is represented by
+    `OptionChainSnapshotRecord` below and stores one row per underlying snapshot
+    with the full chain serialized in `chain_json`.
     """
 
     # Snapshot identification
@@ -414,6 +428,11 @@ class EarningsRecord(SilverBase):
     revenue_estimate: float | None = None
     revenue_actual: float | None = None
 
+    # Earnings reaction fields
+    is_s_p_500: bool | None = None
+    post_earnings_close: float | None = None
+    reaction: float | None = None
+
 
 class CorporateActionRecord(SilverBase):
     """Corporate action (splits, dividends, mergers)."""
@@ -437,6 +456,12 @@ class MostActiveRecord(SilverBase):
     volume: int
     trade_count: int
 
+    # Additional market data fields
+    vwap: float | None = None
+    price: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
+
 
 class MoverRecord(SilverBase):
     """Top gainer/loser data."""
@@ -445,6 +470,9 @@ class MoverRecord(SilverBase):
     change: float
     percent_change: float
     direction: str = Field(..., description="gainer or loser")
+
+    # Additional fields
+    volume: int | None = None
 
 
 class ScreenerResultRecord(SilverBase):
@@ -472,6 +500,10 @@ class IVRankRecord(SilverBase):
     current_iv: float | None = None
     one_year_high: float | None = None
     one_year_low: float | None = None
+
+    # Additional fields
+    close: float | None = None
+    date: str | None = None
 
 
 class IVTermStructureRecord(SilverBase):
@@ -503,6 +535,20 @@ class OIChangeRecord(SilverBase):
     put_oi: int
     call_oi_change: int
     put_oi_change: int
+
+    # Additional UW OI fields
+    last_ask: float | None = None
+    last_bid: float | None = None
+    last_fill: float | None = None
+    percentage_of_total: float | None = None
+    prev_ask_volume: int | None = None
+    prev_bid_volume: int | None = None
+    prev_multi_leg_volume: int | None = None
+    prev_total_premium: float | None = None
+    last_date: str | None = None
+    prev_mid_volume: int | None = None
+    prev_neutral_volume: int | None = None
+    prev_stock_multi_leg_volume: int | None = None
 
 
 class ETFHoldingRecord(SilverBase):
@@ -602,6 +648,9 @@ class InsiderTradeRecord(SilverBase):
     value: float | None = None
     shares_owned_after: float | None = None
     filing_date: date | None = None
+
+    # Additional fields
+    stock_price: float | None = None
 
 
 class InsiderFlowRecord(SilverBase):
@@ -760,10 +809,11 @@ class OptionHistoryRecord(SilverBase):
 
 
 class OptionChainSnapshotRecord(SilverBase):
-    """Point-in-time snapshot of option chain."""
+    """One row per underlying snapshot with the full chain stored in `chain_json`."""
 
     snapshot_ts: datetime
     underlying: str
+    underlying_price: float | None = None
     expiry: date
     chain_json: str = Field(..., description="JSON of full chain data")
     total_call_volume: float | None = None
@@ -830,6 +880,56 @@ class ETFSectorWeightsRecord(SilverBase):
     weight_name: str = Field(..., description="Technology, Healthcare, USA, etc.")
     weight_pct: float
     change_pct: float | None = None
+
+
+# ==============================================================================
+# Real-time Market Status Schemas (LULD, Trading Status, Trade Corrections)
+# ==============================================================================
+
+
+class LULDRecord(SilverBase):
+    """Limit Up / Limit Down price band data.
+
+    Primary key: (instrument_key, ts_event)
+    """
+
+    timestamp: datetime
+    upper_limit: float
+    lower_limit: float
+    indicator: str | None = None
+
+
+class TradingStatusRecord(SilverBase):
+    """Trading halt/resume status updates.
+
+    Primary key: (instrument_key, ts_event)
+    """
+
+    timestamp: datetime
+    status_code: str
+    status_message: str | None = None
+    reason_code: str | None = None
+    reason_message: str | None = None
+    tape: str | None = None
+
+
+class TradeCorrectionRecord(SilverBase):
+    """Trade correction/cancellation records.
+
+    Primary key: (instrument_key, ts_event, original_trade_id)
+    """
+
+    timestamp: datetime
+    exchange: str | None = None
+    original_trade_id: str
+    original_price: float
+    original_size: int
+    original_conditions: str | None = Field(None, description="JSON-serialized list")
+    corrected_trade_id: str | None = None
+    corrected_price: float | None = None
+    corrected_size: int | None = None
+    corrected_conditions: str | None = Field(None, description="JSON-serialized list")
+    tape: str | None = None
 
 
 class NewsArticleRecord(SilverBase):

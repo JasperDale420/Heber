@@ -11,6 +11,7 @@ import asyncio
 import json
 import signal
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,14 +24,21 @@ from heber.models.envelope import EventEnvelope
 from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
     record_batch_processed,
+    record_dedupe_drop,
     record_dlq_event,
     record_event_processed,
     record_event_received,
     record_ingest_latency,
     start_metrics_server_from_env,
 )
+from heber.ops.reliability import EventDeduplicator
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.writer.bronze import BronzeWriter
+from heber.writer.dlq_fallback import (
+    log_fallback_backlog,
+    try_xadd_with_retry,
+    write_dlq_fallback_file,
+)
 from heber.writer.ingest_contracts import (
     DLQ_REASON_UNCONTRACTED,
     PAYLOAD_ALLOWED_FIELDS,
@@ -41,7 +49,11 @@ from heber.writer.ingest_contracts import (
     resolve_feed_alias,
     resolve_silver_feed,
 )
-from heber.writer.key_normalization import normalize_envelope_for_silver
+from heber.writer.key_normalization import (
+    InvalidInstrumentKeyError,
+    SilverNormalizationError,
+    normalize_envelope_for_silver,
+)
 from heber.writer.normalizer import (
     MissingRequiredFieldsError,
     enforce_required_non_null_fields,
@@ -62,13 +74,30 @@ class EventConsumer:
         self.silver_writer = SilverWriter()
         self.running = False
         self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        self.event_deduplicator = EventDeduplicator()
+        self._inflight_event_ids: set[str] = set()
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
+        self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
+
+    def _claim_event_id(self, event_id: str) -> str | None:
+        """Claim an event_id for processing or return a duplicate reason."""
+        if event_id in self._inflight_event_ids:
+            return "inflight_duplicate"
+
+        dedupe_result = self.event_deduplicator.check(event_id)
+        if dedupe_result.is_duplicate:
+            return dedupe_result.reason
+
+        self._inflight_event_ids.add(event_id)
+        return None
 
     async def connect(self):
         """Connect to Redis."""
         self.redis = redis.from_url(settings.redis_url)
         logger.info("Connected to Redis", url=settings.redis_url)
+
+        log_fallback_backlog(settings.dlq_fallback_path, service="heber-consumer")
 
         # Create consumer group if it doesn't exist
         try:
@@ -117,6 +146,15 @@ class EventConsumer:
                 normalized[key_str] = str(value)
         return json.dumps(normalized, default=str)
 
+    @staticmethod
+    def _extract_payload_value(message_data: dict) -> Any | None:
+        return (
+            message_data.get(b"data")
+            or message_data.get("data")
+            or message_data.get(b"payload")
+            or message_data.get("payload")
+        )
+
     async def _send_to_dlq(
         self,
         message_id: str | bytes,
@@ -125,42 +163,101 @@ class EventConsumer:
         attempts: int,
         feed: str = "unknown",
     ) -> bool:
-        """Write failed message details to DLQ stream."""
-        try:
-            dlq_event = {
-                "source_stream": settings.redis_stream_name,
-                "source_group": settings.redis_consumer_group,
-                "source_message_id": self._decode_string(message_id),
-                "consumer_name": self.consumer_name,
-                "attempts": str(attempts),
-                "error": error,
-                "failed_at": datetime.now(UTC).isoformat(),
-                "payload": self._serialize_message_data(message_data),
-            }
-            dlq_id = await self.redis.xadd(settings.redis_dlq_stream_name, dlq_event)
-            logger.warning(
-                "Message sent to DLQ",
-                dlq_stream=settings.redis_dlq_stream_name,
-                source_message_id=dlq_event["source_message_id"],
-                dlq_message_id=self._decode_string(dlq_id),
-            )
-            error_type = error.split(":", 1)[0] if error else "unknown_error"
-            record_dlq_event(feed=feed, error_type=error_type)
-            return True
-        except Exception as exc:
+        """Dead-letter a failed message durably.
+
+        The event is ALWAYS persisted to a JSON file under
+        ``settings.dlq_fallback_path`` first — that file is the durable audit
+        record, because the DLQ stream lives on a cache-mode Redis that evicts
+        entries (LRU/TTL). A best-effort ``XADD`` to the Redis DLQ stream then
+        enqueues it for convenient reprocessing. Returns ``True`` when the event
+        is captured by the file or Redis (caller may ACK); ``False`` only if
+        both fail (caller must not ACK).
+        """
+        source_message_id = self._decode_string(message_id)
+        dlq_event = {
+            "source_stream": settings.redis_stream_name,
+            "source_group": settings.redis_consumer_group,
+            "source_message_id": source_message_id,
+            "consumer_name": self.consumer_name,
+            "attempts": str(attempts),
+            "error": error,
+            "failed_at": datetime.now(UTC).isoformat(),
+            "payload": self._serialize_message_data(message_data),
+        }
+        error_type = error.split(":", 1)[0] if error else "unknown_error"
+
+        # Durability first: always persist the event to the on-disk fallback
+        # store. The DLQ stream lives on a cache-mode Redis (LRU/TTL eviction),
+        # so the file — not the stream — is the audit record of record. The
+        # Redis XADD below is a best-effort reprocessing queue on top of it.
+        fallback_path = await self._write_dlq_fallback(
+            source_message_id=source_message_id,
+            dlq_event=dlq_event,
+            redis_error=None,
+        )
+
+        success, dlq_id, last_exc = await try_xadd_with_retry(
+            lambda: self.redis.xadd(settings.redis_dlq_stream_name, dlq_event),
+        )
+
+        if fallback_path is None and not success:
+            # Neither the durable file nor Redis captured the event — do not ACK.
             logger.error(
                 "Failed to write message to DLQ",
-                source_message_id=self._decode_string(message_id),
-                error=str(exc),
-                exc_info=True,
+                source_message_id=source_message_id,
+                error=str(last_exc) if last_exc else "unknown",
+                exc_info=last_exc,
             )
             return False
 
+        if success:
+            logger.warning(
+                "Message sent to DLQ",
+                dlq_stream=settings.redis_dlq_stream_name,
+                source_message_id=source_message_id,
+                dlq_message_id=self._decode_string(dlq_id) if dlq_id is not None else None,
+                durable_path=str(fallback_path) if fallback_path is not None else None,
+            )
+        else:
+            # Redis enqueue failed but the durable file was written — not a loss.
+            logger.warning(
+                "dlq_redis_enqueue_failed_durable_file_written",
+                source_message_id=source_message_id,
+                fallback_path=str(fallback_path),
+                redis_error=str(last_exc) if last_exc else None,
+            )
+        record_dlq_event(feed=feed, error_type=error_type)
+        return True
+
+    async def _write_dlq_fallback(
+        self,
+        source_message_id: str,
+        dlq_event: dict[str, Any],
+        redis_error: Exception | None,
+    ) -> Any | None:
+        """Persist a DLQ event to the on-disk fallback dir; return the path or None."""
+        try:
+            return await asyncio.to_thread(
+                write_dlq_fallback_file,
+                settings.dlq_fallback_path,
+                settings.redis_dlq_stream_name,
+                source_message_id,
+                dlq_event,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001 — last-resort fallback must not crash consumer
+            logger.error(
+                "dlq_file_fallback_failed",
+                stream=settings.redis_dlq_stream_name,
+                source_message_id=source_message_id,
+                redis_error=str(redis_error) if redis_error else None,
+                fallback_error=str(fallback_exc),
+                exc_info=True,
+            )
+            return None
+
     def _parse_and_validate_envelope(self, event_data: dict) -> EventEnvelope:
         """Parse event data dict into a validated EventEnvelope."""
-        payload_str = (
-            event_data.get(b"data") or event_data.get("data") or event_data.get(b"payload") or event_data.get("payload")
-        )
+        payload_str = self._extract_payload_value(event_data)
         if payload_str is None:
             raise ValueError(f"No 'data' or 'payload' field in event: {list(event_data.keys())}")
 
@@ -229,6 +326,9 @@ class EventConsumer:
         feed = "unknown"
         provider = "unknown"
         bronze_written = False
+        envelope: EventEnvelope | None = None
+        claimed_event_id = False
+        register_success = False
         try:
             envelope = self._parse_and_validate_envelope(event_data)
             feed = envelope.feed
@@ -245,6 +345,20 @@ class EventConsumer:
             )
 
             self._validate_payload_schema(envelope)
+
+            dedupe_reason = self._claim_event_id(envelope.event_id)
+            if dedupe_reason is not None:
+                record_dedupe_drop(feed=feed)
+                logger.info(
+                    "consumer_dedupe_dropped",
+                    event_id=envelope.event_id,
+                    feed=envelope.feed,
+                    provider=envelope.provider,
+                    reason=dedupe_reason,
+                )
+                record_event_processed(feed=feed, provider=provider, status="dropped")
+                return True, None, True
+            claimed_event_id = True
 
             self.bronze_writer.write(envelope)
             bronze_written = True
@@ -272,6 +386,7 @@ class EventConsumer:
                     reason="bronze_only_feed_policy",
                 )
                 record_event_processed(feed=feed, provider=provider, status="success")
+                register_success = True
                 return True, None, True
 
             self._write_silver_candidates(envelope)
@@ -282,19 +397,23 @@ class EventConsumer:
                 feed=envelope.feed,
             )
             record_event_processed(feed=feed, provider=provider, status="success")
+            register_success = True
             return True, None, True
         except UnmappedFeedError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             return False, str(exc), False
-        except (json.JSONDecodeError, MissingRequiredFieldsError, ValidationError) as exc:
+        except json.JSONDecodeError as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
-            if bronze_written:
-                logger.warning(
-                    "silver_normalization_failed",
-                    feed=feed,
-                    provider=provider,
-                    error=str(exc),
-                )
+            logger.error(
+                "Failed to parse event",
+                error=str(exc),
+                event_data=str(event_data)[:200],
+            )
+            return False, str(exc), False
+        except (SilverNormalizationError, MissingRequiredFieldsError) as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            if bronze_written and envelope is not None:
+                self._log_silver_validation_failure(envelope, exc)
             else:
                 logger.error(
                     "Failed to parse event",
@@ -302,7 +421,18 @@ class EventConsumer:
                     event_data=str(event_data)[:200],
                 )
             return False, str(exc), False
-        except Exception as exc:
+        except ValidationError as exc:
+            record_event_processed(feed=feed, provider=provider, status="error")
+            if bronze_written and envelope is not None:
+                self._log_silver_validation_failure(envelope, exc)
+            else:
+                logger.error(
+                    "Failed to parse event",
+                    error=str(exc),
+                    event_data=str(event_data)[:200],
+                )
+            return False, str(exc), False
+        except Exception as exc:  # noqa: BLE001 — catch-all after specific handlers for unexpected errors
             record_event_processed(feed=feed, provider=provider, status="error")
             logger.error(
                 "Failed to process event",
@@ -311,6 +441,11 @@ class EventConsumer:
                 exc_info=True,
             )
             return False, str(exc), not bronze_written
+        finally:
+            if envelope is not None and claimed_event_id:
+                self._inflight_event_ids.discard(envelope.event_id)
+                if register_success:
+                    self.event_deduplicator.register(envelope.event_id)
 
     def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
@@ -344,12 +479,7 @@ class EventConsumer:
 
     @staticmethod
     def _extract_feed_from_message(message_data: dict) -> str:
-        payload_str = (
-            message_data.get(b"data")
-            or message_data.get("data")
-            or message_data.get(b"payload")
-            or message_data.get("payload")
-        )
+        payload_str = EventConsumer._extract_payload_value(message_data)
         if payload_str is None:
             return "unknown"
         if isinstance(payload_str, bytes):
@@ -358,7 +488,7 @@ class EventConsumer:
             return str(payload_str.get("feed") or "unknown")
         try:
             event_dict = json.loads(payload_str)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return "unknown"
         return str(event_dict.get("feed") or "unknown")
 
@@ -391,7 +521,7 @@ class EventConsumer:
                     "Unexpected error processing message",
                     message_id=mid_str,
                     error=str(result),
-                    exc_info=True,
+                    exc_info=result,
                 )
                 failed_ids.append(mid_str)
                 continue
@@ -505,8 +635,54 @@ class EventConsumer:
         """Enforce canonical instrument-key format before writes."""
         if envelope.is_valid_instrument_key():
             return
-        raise ValueError(
-            f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}"
+        raise InvalidInstrumentKeyError(
+            f"Invalid instrument_key format for instrument_type {envelope.instrument_type}: {envelope.instrument_key}",
+            details={
+                "feed": envelope.feed,
+                "instrument_type": envelope.instrument_type,
+                "instrument_key": envelope.instrument_key,
+                "symbol": envelope.symbol,
+            },
+        )
+
+    @staticmethod
+    def _should_emit_validation_warning(occurrence_count: int) -> bool:
+        """Emit the first and milestone repeats for a repeated Silver validation failure."""
+        return occurrence_count in {1, 10, 100} or occurrence_count % 1000 == 0
+
+    def _log_silver_validation_failure(self, envelope: EventEnvelope, error: Exception) -> None:
+        """Log a bounded warning for malformed upstream data rejected from Silver."""
+        if len(self._silver_validation_warning_counts) > 10000:
+            self._silver_validation_warning_counts.clear()
+        signature = (
+            envelope.provider,
+            envelope.feed,
+            type(error).__name__,
+            str(error)[:120],
+        )
+        occurrence_count = self._silver_validation_warning_counts.get(signature, 0) + 1
+        self._silver_validation_warning_counts[signature] = occurrence_count
+
+        if not self._should_emit_validation_warning(occurrence_count):
+            return
+
+        details = getattr(error, "details", {})
+        if not isinstance(details, Mapping):
+            details = {}
+
+        logger.warning(
+            "silver_validation_failed",
+            event_id=envelope.event_id,
+            provider=envelope.provider,
+            feed=details.get("feed", envelope.feed),
+            error_type=type(error).__name__,
+            error=str(error),
+            occurrence_count=occurrence_count,
+            instrument_type=details.get("instrument_type", envelope.instrument_type),
+            instrument_key=details.get("instrument_key", envelope.instrument_key),
+            symbol=details.get("symbol", envelope.symbol),
+            payload_symbol=details.get("payload_symbol"),
+            payload_ticker=details.get("payload_ticker"),
         )
 
     def _write_silver_candidate(self, source_envelope: EventEnvelope, candidate: EventEnvelope) -> None:
@@ -561,7 +737,31 @@ class EventConsumer:
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice
-            except Exception as e:
+            except redis.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    logger.warning(
+                        "Consumer group missing — recreating after Redis restart",
+                        stream=settings.redis_stream_name,
+                        group=settings.redis_consumer_group,
+                    )
+                    try:
+                        await self.redis.xgroup_create(
+                            name=settings.redis_stream_name,
+                            groupname=settings.redis_consumer_group,
+                            id="0",
+                            mkstream=True,
+                        )
+                        logger.info(
+                            "consumer_group_auto_created",
+                            stream=settings.redis_stream_name,
+                            group=settings.redis_consumer_group,
+                        )
+                    except redis.ResponseError as create_err:
+                        if "BUSYGROUP" not in str(create_err):
+                            raise
+                    continue
+                raise  # Re-raise non-NOGROUP ResponseErrors to the general handler
+            except Exception as e:  # noqa: BLE001 — top-level consumer loop must not crash
                 error_streak += 1
                 delay = calculate_retry_delay(
                     attempt=error_streak,
@@ -601,13 +801,13 @@ class EventConsumer:
         ok = True
         try:
             self.bronze_writer.flush_if_needed()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Bronze flush failed", error=str(e), exc_info=True)
             ok = False
 
         try:
             self.silver_writer.flush_if_needed()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Silver flush failed", error=str(e), exc_info=True)
             ok = False
 
@@ -699,7 +899,10 @@ class EventConsumer:
 async def main():
     """Entry point for the consumer."""
     configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
-    start_metrics_server_from_env(default_port=9090)
+    try:
+        start_metrics_server_from_env(default_port=9090)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
     consumer = EventConsumer()
 
     # Handle signals

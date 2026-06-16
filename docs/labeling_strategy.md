@@ -168,18 +168,10 @@ This ensures you never use information that wasn't available at prediction time.
 
 ### Train/Test Split
 
-```python
-# heber/firewall/validation.py
-from heber.firewall.validation import validate_train_test_split
+Ensure train/test splits respect purge and embargo windows:
 
-# purge_window / embargo_window are seconds
-validate_train_test_split(
-    train_end=train_end,
-    test_start=test_start,
-    purge_window=purge_seconds,
-    embargo_window=embargo_seconds,
-)
-```
+- **Purge window**: gap between last training label and first test sample
+- **Embargo window**: additional buffer after test period to avoid indirect leakage
 
 - **Purge**: Remove training samples whose label windows overlap test period
 - **Embargo**: Additional buffer after test period to avoid indirect leakage
@@ -193,5 +185,5 @@ validate_train_test_split(
 ## See Also
 
 - [Watch Service](../heber/watch/) - Implementation of barrier labeling
-- [Zero-Leakage Firewall](../heber/firewall/) - Point-in-time correctness
+- [HeberReader](sdk.md) - Zero-leakage enforcement via `read_asof()` predicate pushdown
 - [Feature Store](../heber/feast/) - Feast integration for features

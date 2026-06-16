@@ -145,14 +145,13 @@ class SnapshotPoller:
                 "errors": 1,
             }
 
-        if quotes:
-            record_watch_gateway_request(
-                component="poller",
-                endpoint="alpaca_options_quotes",
-                outcome="success",
-                status_code=200,
-                duration_seconds=0.0,
-            )
+        record_watch_gateway_request(
+            component="poller",
+            endpoint="alpaca_options_quotes",
+            outcome="success",
+            status_code=200,
+            duration_seconds=0.0,
+        )
 
         snapshots, updates = self._build_updates_from_quotes(quotes, symbol_to_watches)
 

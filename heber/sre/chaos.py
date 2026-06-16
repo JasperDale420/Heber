@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -18,7 +18,7 @@ logger = structlog.get_logger(__name__)
 STEP_ESTABLISH_BASELINE = "Establish baseline metrics"
 
 
-class ExperimentFrequency(str, Enum):
+class ExperimentFrequency(StrEnum):
     """Chaos experiment frequency (PRD §41.3)."""
 
     WEEKLY = "weekly"
@@ -27,7 +27,7 @@ class ExperimentFrequency(str, Enum):
     ANNUALLY = "annually"
 
 
-class ExperimentScope(str, Enum):
+class ExperimentScope(StrEnum):
     """Scope of chaos experiment."""
 
     SINGLE_POD = "single_pod"
@@ -37,14 +37,14 @@ class ExperimentScope(str, Enum):
     DR_DRILL = "dr_drill"
 
 
-class Environment(str, Enum):
+class Environment(StrEnum):
     """Target environment for chaos."""
 
     STAGING = "staging"
     PRODUCTION = "production"
 
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(StrEnum):
     """Status of a chaos experiment run."""
 
     PENDING = "pending"
@@ -307,7 +307,7 @@ class ChaosRegistry:
 
     def get_schedule(self) -> dict[str, list[str]]:
         """Get experiment schedule by frequency."""
-        schedule = {f.value: [] for f in ExperimentFrequency}
+        schedule: dict[str, list[str]] = {f.value: [] for f in ExperimentFrequency}
         for exp in self.experiments.values():
             schedule[exp.frequency.value].append(exp.name)
         return schedule

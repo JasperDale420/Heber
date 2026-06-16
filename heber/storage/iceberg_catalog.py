@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
@@ -33,7 +33,7 @@ from pyiceberg.types import (
 logger = structlog.get_logger(__name__)
 
 
-class IcebergCatalogType(str, Enum):
+class IcebergCatalogType(StrEnum):
     """Supported Iceberg catalog backends."""
 
     SQL = "sql"  # PostgreSQL-based (recommended for production)

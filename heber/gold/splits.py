@@ -6,6 +6,7 @@ ML experiments with proper embargo periods to prevent leakage.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -26,11 +27,11 @@ class DateRange:
     start: datetime
     end: datetime
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.start >= self.end:
             raise ValueError(f"start must be before end: {self.start} >= {self.end}")
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[datetime]:
         return iter((self.start, self.end))
 
     def duration(self) -> timedelta:
@@ -45,7 +46,7 @@ class TrainTestSplit:
     test: DateRange
     embargo_days: int = 0
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[DateRange]:
         return iter((self.train, self.test))
 
 
@@ -112,6 +113,9 @@ def walk_forward_splits(
     step_delta = parse_duration(step)
     embargo_delta = parse_duration(embargo)
     embargo_days = embargo_delta.days
+
+    if step_delta == timedelta(0):
+        raise ValueError(f"step must be non-zero, got {step!r}")
 
     splits: list[TrainTestSplit] = []
     current_start = start

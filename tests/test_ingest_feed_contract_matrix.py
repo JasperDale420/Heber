@@ -4,10 +4,89 @@ from datetime import UTC, datetime
 
 from heber.models.envelope import EventEnvelope
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import REQUIRED_NON_NULL_FIELDS, resolve_feed_alias
+from heber.writer.ingest_contracts import (
+    REQUIRED_NON_NULL_FIELDS,
+    is_bronze_only_feed,
+    is_contracted_feed,
+    resolve_feed_alias,
+)
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.normalizer import envelope_to_silver_row
 from heber.writer.transformer import BronzeToSilverTransformer
+
+# Reference / metadata feed names that were previously emitting
+# ``silver_feed_uncontracted`` warnings and being routed to DLQ.  Sourced from
+# 13 days of heber-catalog error logs (3,350 warnings across 67 unique feeds).
+# Each name must now satisfy ``is_contracted_feed`` (no uncontracted warning)
+# AND ``is_bronze_only_feed`` (no Silver typing attempted).
+PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS: tuple[str, ...] = (
+    "13f",
+    "account",
+    "alerts",
+    "assets",
+    "balance-sheet",
+    "calendar",
+    "cash-flow",
+    "clock",
+    "company",
+    "concept",
+    "congress",
+    "congress-trading",
+    "contract",
+    "corporate-actions",
+    "crypto",
+    "economic",
+    "estimates",
+    "etf_metadata",
+    "executives",
+    "fda-calendar",
+    "filings",
+    "fixed-income",
+    "forex",
+    "frames",
+    "fund-ownership",
+    "income-statement",
+    "index",
+    "indicator",
+    "insider",
+    "insider-sentiment",
+    "insider-transactions",
+    "institution_holdings",
+    "listing-status",
+    "lobbying",
+    "logos",
+    "market",
+    "meta",
+    "metrics",
+    "mutual-fund",
+    "option-contract",
+    "option_contract",
+    "orders",
+    "orders:by_client_order_id",
+    "ownership",
+    "patterns",
+    "peers",
+    "politician_trades",
+    "portfolio",
+    "positions",
+    "price-target",
+    "recommendations",
+    "screener_result",
+    "search",
+    "seasonality",
+    "sectors",
+    "sentiment",
+    "social-sentiment",
+    "stock",
+    "stock_fundamentals",
+    "stocks",
+    "support-resistance",
+    "ticker",
+    "upgrade-downgrade",
+    "usa-spending",
+    "watchlists",
+    "{symbol}",
+)
 
 NOW = datetime(2026, 2, 11, 14, 30, tzinfo=UTC)
 
@@ -101,6 +180,52 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                     "x": "OPRA",
                     "i": "opt-trade-1",
                     "z": "C",
+                },
+            ),
+        ),
+        (
+            "option_chain_snapshot",
+            "option_chain_snapshot",
+            _envelope(
+                feed="option_chain_snapshot",
+                provider="alpaca",
+                instrument_type="equity",
+                instrument_key="equity:SPY",
+                symbol="SPY",
+                payload={
+                    "timestamp": "2026-02-11T14:30:00Z",
+                    "underlying": "SPY",
+                    "underlying_price": 600.5,
+                    "expiry": "2026-02-11",
+                    "chain_json": {
+                        "data": {
+                            "contracts": [
+                                {
+                                    "contract_symbol": "SPY260211C00600000",
+                                    "underlying": "SPY",
+                                    "expiration": "2026-02-11",
+                                    "strike": 600.0,
+                                    "option_type": "call",
+                                    "bid": 2.0,
+                                    "ask": 2.1,
+                                    "last": 2.05,
+                                    "volume": 1000,
+                                    "open_interest": 2500,
+                                    "delta": 0.51,
+                                    "gamma": 0.09,
+                                    "theta": -0.02,
+                                    "vega": 0.04,
+                                    "iv": 0.24,
+                                    "timestamp": "2026-02-11T14:30:00Z",
+                                }
+                            ]
+                        }
+                    },
+                    "total_call_volume": 1000.0,
+                    "total_put_volume": 500.0,
+                    "total_call_oi": 2500.0,
+                    "total_put_oi": 1750.0,
+                    "atm_iv": 0.24,
                 },
             ),
         ),
@@ -470,6 +595,22 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
                 },
             ),
         ),
+        (
+            "treasury_yields",
+            "treasury_yields",
+            _envelope(
+                feed="treasury_yields",
+                provider="alphavantage",
+                instrument_type="macro",
+                instrument_key="macro:treasury_yield:2year",
+                symbol="TREASURY_2YEAR",
+                payload={
+                    "date": "2026-04-27",
+                    "maturity": "2year",
+                    "yield_pct": 3.78,
+                },
+            ),
+        ),
     ]
 
 
@@ -507,3 +648,43 @@ def test_live_and_backfill_paths_produce_equivalent_rows_for_shared_feeds() -> N
 
         for required_field in REQUIRED_NON_NULL_FIELDS[live_row["feed"]]:
             assert backfill_row[required_field] == live_row[required_field]
+
+
+def test_previously_uncontracted_feeds_now_route_to_bronze_only() -> None:
+    """Regression: 67 reference/metadata feeds that emitted ``silver_feed_uncontracted``
+    in 13 days of production logs (3,350 warnings) must now pass the contracted gate
+    AND be flagged Bronze-only.  Adding to ``CONTRACTED_RAW_FEEDS`` silences the DLQ;
+    adding the canonical name to ``BRONZE_ONLY_SILVER_DATASETS`` skips Silver typing.
+    """
+    not_contracted: list[str] = []
+    not_bronze_only: list[str] = []
+    for feed in PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS:
+        if not is_contracted_feed(feed):
+            not_contracted.append(feed)
+        if not is_bronze_only_feed(feed):
+            not_bronze_only.append(feed)
+    assert not not_contracted, f"Still uncontracted (would emit silver_feed_uncontracted): {not_contracted}"
+    assert not not_bronze_only, f"Not flagged as Bronze-only (would attempt Silver write): {not_bronze_only}"
+
+
+def test_short_data_feeds_route_to_silver_not_bronze_only() -> None:
+    """Regression: short_interest / short_volume / short_data carry a typed Silver
+    schema (short_date, short_interest, days_to_cover, short_percent_float) and must
+    NOT be Bronze-only. The 2026-05-20 67-feed reconciliation swept ``short_data``
+    into ``BRONZE_ONLY_SILVER_DATASETS`` despite the existing schema, silently
+    halting Silver ``short_data`` production (last partition 2026-05-20) while Bronze
+    ``short_interest`` kept arriving through 06-09.
+    """
+    assert "short_data" in SILVER_SCHEMAS
+    for feed in ("short_data", "short_interest", "short_volume"):
+        assert resolve_feed_alias(feed) == "short_data"
+        assert not is_bronze_only_feed(feed), f"{feed} must route to Silver, not Bronze-only"
+
+
+def test_option_chain_snapshot_preserves_underlying_price() -> None:
+    _, _, envelope = next(case for case in _cases() if case[0] == "option_chain_snapshot")
+
+    normalized = normalize_envelope_for_silver(envelope)
+    row = envelope_to_silver_row(normalized)
+
+    assert row["underlying_price"] == 600.5

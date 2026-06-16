@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class GateType(str, Enum):
+class GateType(StrEnum):
     """Types of CI gates."""
 
     PR_MERGE = "pr_merge"
@@ -24,7 +24,7 @@ class GateType(str, Enum):
     PROD_DEPLOY = "prod_deploy"
 
 
-class TestCategory(str, Enum):
+class TestCategory(StrEnum):
     """Test categories (PRD §45.4)."""
 
     __test__ = False

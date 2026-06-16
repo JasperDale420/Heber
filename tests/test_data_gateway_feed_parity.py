@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import CONTRACTED_RAW_FEEDS, resolve_feed_alias
+from heber.writer.ingest_contracts import (
+    BRONZE_ONLY_SILVER_DATASETS,
+    CONTRACTED_RAW_FEEDS,
+    resolve_feed_alias,
+)
 
 
 def _data_gateway_root() -> Path:
@@ -40,8 +44,8 @@ def _extract_stream_feeds(stream_path: Path) -> set[str]:
     raise AssertionError("Could not extract MESSAGE_TYPE_TO_DATA_TYPE from stream.py")
 
 
-def _extract_uw_poller_feeds(uw_poller_path: Path) -> set[str]:
-    source = uw_poller_path.read_text(encoding="utf-8")
+def _extract_wrap_event_feeds(source_path: Path) -> set[str]:
+    source = source_path.read_text(encoding="utf-8")
     module = ast.parse(source)
 
     feeds: set[str] = set()
@@ -105,11 +109,13 @@ def test_all_emitted_data_gateway_feeds_map_to_silver_contract() -> None:
 
     stream_file = dg_root / "gateway" / "core" / "stream.py"
     uw_poller_file = dg_root / "gateway" / "core" / "uw_poller.py"
+    option_capture_file = dg_root / "gateway" / "core" / "option_capture.py"
     backfill_file = dg_root / "gateway" / "core" / "backfill.py"
 
     emitted_feeds = (
         _extract_stream_feeds(stream_file)
-        | _extract_uw_poller_feeds(uw_poller_file)
+        | _extract_wrap_event_feeds(uw_poller_file)
+        | _extract_wrap_event_feeds(option_capture_file)
         | _extract_backfill_feeds(backfill_file)
     )
 
@@ -119,6 +125,9 @@ def test_all_emitted_data_gateway_feeds_map_to_silver_contract() -> None:
     unmapped = []
     for feed in sorted(emitted_feeds):
         canonical = resolve_feed_alias(feed)
+        if canonical in BRONZE_ONLY_SILVER_DATASETS:
+            # Bronze-only contracted feeds intentionally lack a Silver schema.
+            continue
         if canonical not in SILVER_SCHEMAS:
             unmapped.append((feed, canonical))
 

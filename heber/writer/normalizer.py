@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
-from functools import lru_cache
 from typing import Any
 
 import pyarrow as pa
@@ -47,6 +46,10 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
     schema = SILVER_SCHEMAS[silver_feed]
     target_to_source = _target_to_source_map(silver_feed)
 
+    ts_available = envelope.ts_available or envelope.ts_ingest
+    if envelope.ts_event is not None and ts_available < envelope.ts_event:
+        ts_available = envelope.ts_event
+
     row: dict[str, Any] = {
         "event_id": envelope.event_id,
         "provider": envelope.provider,
@@ -56,7 +59,7 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
         "symbol": envelope.symbol,
         "ts_event": envelope.ts_event,
         "ts_ingest": envelope.ts_ingest,
-        "ts_available": envelope.ts_available or envelope.ts_ingest,
+        "ts_available": ts_available,
         "source": envelope.source,
         "schema_version": envelope.schema_version,
         "quality_flags": envelope.quality_flags,
@@ -105,14 +108,22 @@ def missing_required_non_null_fields(feed: str, row: Mapping[str, Any]) -> list[
     return sorted(missing)
 
 
-@lru_cache(maxsize=64)
-def _target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
+def _build_target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
     mapping = FIELD_MAPPINGS.get(feed, {})
     target_to_source: dict[str, list[str]] = {}
     for source_name, target_name in mapping.items():
         target_to_source.setdefault(target_name, []).append(source_name)
-    # Return tuples so the result is hashable/cacheable
     return {k: tuple(v) for k, v in target_to_source.items()}
+
+
+# Pre-compute at module load — FIELD_MAPPINGS is static so lru_cache adds no value
+_TARGET_TO_SOURCE_MAPS: dict[str, dict[str, tuple[str, ...]]] = {
+    feed: _build_target_to_source_map(feed) for feed in FIELD_MAPPINGS
+}
+
+
+def _target_to_source_map(feed: str) -> dict[str, tuple[str, ...]]:
+    return _TARGET_TO_SOURCE_MAPS.get(feed, {})
 
 
 def _coerce_value(value: Any, arrow_type: pa.DataType) -> Any:
@@ -135,7 +146,7 @@ def _coerce_value(value: Any, arrow_type: pa.DataType) -> Any:
         if pa.types.is_string(arrow_type):
             return _coerce_string(value)
         return value
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -171,6 +182,13 @@ def _coerce_timestamp(value: Any) -> datetime | None:
         return datetime.fromtimestamp(epoch, tz=UTC)
     if isinstance(value, str):
         stripped = value.strip()
+        # Try float-epoch (handles "1710000000.5")
+        try:
+            numeric = float(stripped)
+            if numeric > 1e9:
+                return datetime.fromtimestamp(numeric, tz=UTC)
+        except (ValueError, OverflowError, OSError):
+            pass
         if stripped.isdigit():
             return _coerce_timestamp(int(stripped))
         return datetime.fromisoformat(stripped.replace("Z", _UTC_OFFSET_SUFFIX))
@@ -313,7 +331,7 @@ def explode_aggregate_payload(
         return [envelope]
 
     match_feed = feed_override or envelope.feed
-    config = _AGGREGATE_FEED_CONFIG.get(match_feed)  # type: ignore[arg-type]
+    config = _AGGREGATE_FEED_CONFIG.get(match_feed)
     if config is None:
         return [envelope]
 
