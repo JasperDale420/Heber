@@ -165,6 +165,28 @@ class TestTransformerDedup:
         # Only evt-003 should have been written
         assert records == 1
 
+    def test_transform_since_accepts_naive_datetime(self, tmp_path: Path) -> None:
+        """`heber backfill --since/--until` parses naive datetimes; the date
+        filter must compare them against UTC-aware partition dates without
+        raising 'can't compare offset-naive and offset-aware datetimes'.
+        """
+        from datetime import datetime
+
+        bronze_dir = tmp_path / "bronze"
+        silver_dir = tmp_path / "silver"
+        _write_bronze_file(bronze_dir, "flow_alerts", "2026-03-10", [_make_envelope("evt-old", "AAPL")])
+        _write_bronze_file(bronze_dir, "flow_alerts", "2026-03-12", [_make_envelope("evt-new", "TSLA")])
+
+        transformer = BronzeToSilverTransformer(bronze_path=bronze_dir, silver_path=silver_dir)
+        records = transformer.transform(
+            feed="flow_alerts",
+            provider="unusual_whales",
+            since=datetime(2026, 3, 11),  # naive, exactly as the CLI produces
+        )
+
+        # 2026-03-10 is before `since` and filtered out; only 2026-03-12 processed.
+        assert records == 1
+
     def test_deduplicates_within_batch(self, tmp_path: Path) -> None:
         """Transformer deduplicates events within the same Bronze file."""
         bronze_dir = tmp_path / "bronze"
