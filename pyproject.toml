@@ -14,7 +14,7 @@ dependencies = [
     "pydantic-settings>=2.0",
 
     # API
-    "fastapi>=0.109",
+    "fastapi>=0.137.1",
     "uvicorn[standard]>=0.27",
 
     # Database

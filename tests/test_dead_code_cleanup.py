@@ -105,7 +105,7 @@ class TestSchemaRegistryModuleAfterCleanup:
         tree = ast.parse(src)
         names = set()
         for node in ast.iter_child_nodes(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 names.add(node.name)
             elif isinstance(node, ast.ClassDef):
                 names.add(node.name)
