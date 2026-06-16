@@ -30,10 +30,63 @@ EOF
 
 cat > ../empire-core/empire_core/logger.py << 'EOF'
 """CI stub — delegates to structlog."""
+import logging
+import os
+import sys
+
 import structlog
 
-def setup_logging(*a, **kw):
-    pass
+_configured = False
+_service_name = "unknown"
+
+def _inject_service_name(logger, method_name, event_dict):
+    if "service" not in event_dict:
+        event_dict["service"] = _service_name
+    return event_dict
+
+def _rename_event_to_message(logger, method_name, event_dict):
+    if "event" in event_dict:
+        event_dict["message"] = event_dict.pop("event")
+    return event_dict
+
+def _upcase_level(logger, method_name, event_dict):
+    if "level" in event_dict:
+        event_dict["level"] = event_dict["level"].upper()
+    return event_dict
+
+def setup_logging(service_name="unknown", level="INFO", *, force=False, **kw):
+    global _configured, _service_name
+    force = force or "PYTEST_CURRENT_TEST" in os.environ
+    if _configured and not force:
+        return
+
+    _service_name = service_name
+    level_name = os.environ.get("EMPIRE_LOG_LEVEL", level).upper()
+    level_number = getattr(logging, level_name, logging.INFO)
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            _upcase_level,
+            _inject_service_name,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            _rename_event_to_message,
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logging.basicConfig(format="%(message)s", handlers=[handler], level=level_number, force=force)
+    logging.getLogger().setLevel(level_number)
+    _configured = True
 
 def get_logger(name=None):
     return structlog.get_logger(name)

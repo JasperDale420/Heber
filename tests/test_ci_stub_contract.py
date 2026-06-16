@@ -8,7 +8,10 @@ import sys
 from pathlib import Path
 
 
-def test_ci_empire_core_stub_exports_logger_helpers(tmp_path: Path) -> None:
+def test_ci_empire_core_stub_matches_logger_contract(
+    tmp_path: Path,
+    capsys,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workspace = tmp_path / "Heber"
     workspace.mkdir()
@@ -42,3 +45,13 @@ def test_ci_empire_core_stub_exports_logger_helpers(tmp_path: Path) -> None:
         assert callable(getattr(logger_module, helper_name))
 
     assert callable(heber_logging_module.unbind_context)
+
+    heber_logging_module.configure_logging(service_name="heber-ci-stub", log_level="INFO")
+    test_logger = heber_logging_module.get_logger("test.ci_stub_contract")
+    test_logger.debug("debug_should_be_filtered")
+    test_logger.info("info_should_be_emitted")
+
+    output = capsys.readouterr().out
+    assert '"service": "heber-ci-stub"' in output
+    assert '"message": "info_should_be_emitted"' in output
+    assert "debug_should_be_filtered" not in output
