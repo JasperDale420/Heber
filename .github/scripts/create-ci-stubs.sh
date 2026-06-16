@@ -39,10 +39,13 @@ def get_logger(name=None):
     return structlog.get_logger(name)
 
 def bind_context(**kw):
-    pass
+    structlog.contextvars.bind_contextvars(**kw)
 
 def clear_context():
-    pass
+    structlog.contextvars.clear_contextvars()
+
+def unbind_context(*keys):
+    structlog.contextvars.unbind_contextvars(*keys)
 
 def log_error(logger, exc, *a, **kw):
     logger.error(str(exc), exc_info=True)
