@@ -107,6 +107,89 @@ def test_get_watches_for_symbol_supports_redis_byte_ids() -> None:
     assert by_symbol[0].watch_id == watch.watch_id
 
 
+class _CountingRedis(_BytesRedis):
+    """Redis stub that counts mget/get calls for batching assertions."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mget_calls = 0
+        self.get_calls = 0
+
+    def get(self, key: str) -> bytes | None:
+        self.get_calls += 1
+        return super().get(key)
+
+    def mget(self, keys: list[str]) -> list[bytes | None]:
+        self.mget_calls += 1
+        return super().mget(keys)
+
+
+def _create_watch_for_symbol(manager: WatchManager, alert_id: str, occ_symbol: str):
+    return manager.create_watch(
+        alert_id=alert_id,
+        occ_symbol=occ_symbol,
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.5,
+        spot_at_alert=190.0,
+        alert_time=datetime.now(UTC),
+        horizon=WatchHorizon.SWING,
+        tp_threshold=0.25,
+        sl_threshold=0.15,
+    )
+
+
+def test_get_watches_for_symbol_batches_redis_with_mget() -> None:
+    redis_client = _CountingRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    occ_symbol = "AAPL260220C00100000"
+    created = [_create_watch_for_symbol(manager, f"alert-{i}", occ_symbol) for i in range(5)]
+
+    redis_client.mget_calls = 0
+    redis_client.get_calls = 0
+
+    by_symbol = manager.get_watches_for_symbol(occ_symbol)
+
+    assert redis_client.mget_calls == 1
+    assert redis_client.get_calls == 0
+    assert len(by_symbol) == len(created)
+    assert {watch.watch_id for watch in by_symbol} == {watch.watch_id for watch in created}
+
+
+def test_get_watches_for_symbol_skips_malformed_payloads() -> None:
+    redis_client = _CountingRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+    occ_symbol = "AAPL260220C00100000"
+    good = _create_watch_for_symbol(manager, "alert-good", occ_symbol)
+
+    bad_id = "not-a-real-watch"
+    redis_client.sadd(WatchKeys.by_symbol_key(occ_symbol), bad_id)
+    redis_client.set(WatchKeys.watch_key(bad_id), b"{not-json")
+
+    redis_client.mget_calls = 0
+    redis_client.get_calls = 0
+
+    by_symbol = manager.get_watches_for_symbol(occ_symbol)
+
+    assert redis_client.mget_calls == 1
+    assert redis_client.get_calls == 0
+    assert len(by_symbol) == 1
+    assert by_symbol[0].watch_id == good.watch_id
+
+
+def test_get_watches_for_symbol_empty_index_skips_mget() -> None:
+    redis_client = _CountingRedis()
+    manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
+
+    by_symbol = manager.get_watches_for_symbol("AAPL260220C00100000")
+
+    assert by_symbol == []
+    assert redis_client.mget_calls == 0
+    assert redis_client.get_calls == 0
+
+
 def test_update_watch_price_handles_zero_entry_price() -> None:
     manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
     watch = _create_zero_entry_watch(manager)
