@@ -30,7 +30,7 @@ def test_backfill_main_invokes_server_runner_with_app() -> None:
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8099
     assert calls["log_level"] == "warning"
-    paths = {route.path for route in calls["app"].routes}  # type: ignore[attr-defined]
+    paths = {route.path for route in calls["app"].routes if getattr(route, "path", None) is not None}  # type: ignore[attr-defined]
     assert "/health" in paths
     assert "/ready" in paths
-    assert any(path.startswith("/backfill") for path in paths)
+    assert str(calls["app"].url_path_for("create_backfill")) == "/backfill"  # type: ignore[attr-defined]
