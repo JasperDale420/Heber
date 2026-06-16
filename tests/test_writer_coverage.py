@@ -807,9 +807,16 @@ class TestSendToDlq:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_send_to_dlq_failure(self):
-        """Returns False when DLQ write fails."""
+    async def test_send_to_dlq_redis_failure_uses_file_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        """Returns True when Redis DLQ fails but durable fallback succeeds."""
         import redis.asyncio as aioredis
+
+        import heber.writer.consumer as consumer_module
+        import heber.writer.dlq_fallback as dlq_fallback_module
 
         consumer = EventConsumer()
 
@@ -818,8 +825,16 @@ class TestSendToDlq:
                 raise aioredis.RedisError("DLQ unavailable")
 
         consumer.redis = FakeRedis()
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
+
         result = await consumer._send_to_dlq("1-0", {"data": "{}"}, "test_error", 3, feed="bars")
-        assert result is False
+        assert result is True
+        assert len(list(tmp_path.rglob("*.json"))) == 1
 
 
 class TestWriteSilverCandidates:
@@ -1713,3 +1728,50 @@ class TestEnvelopeToSilverRow:
         envelope = _make_envelope(ts_available=None)
         row = envelope_to_silver_row(envelope)
         assert row["ts_available"] == envelope.ts_ingest
+
+    def test_ts_available_clamped_to_ts_event_when_provider_is_future_dated(self):
+        """When ts_event > ts_ingest (provider future-dated batch), ts_available
+        must be clamped up to ts_event so the zero-leakage invariant holds.
+
+        UnusualWhales flow_alerts emits ts_event 5-11s in the future relative
+        to ts_ingest (window-end timestamps). Without this clamp, Silver rows
+        violate `ts_available >= ts_event` and Gold pipelines reject them.
+        """
+        ts_ingest = NOW
+        ts_event = NOW + timedelta(seconds=10)
+        envelope = _make_envelope(
+            ts_event=ts_event,
+            ts_ingest=ts_ingest,
+            ts_available=None,
+        )
+        row = envelope_to_silver_row(envelope)
+        assert row["ts_available"] >= row["ts_event"], (
+            f"zero-leakage violated: ts_available={row['ts_available']} < ts_event={row['ts_event']}"
+        )
+        assert row["ts_available"] == ts_event
+
+    def test_ts_available_clamped_when_explicit_ts_available_predates_event(self):
+        """Explicit ts_available earlier than ts_event must still be clamped up."""
+        ts_ingest = NOW
+        ts_event = NOW + timedelta(seconds=10)
+        ts_available = NOW + timedelta(milliseconds=50)
+        envelope = _make_envelope(
+            ts_event=ts_event,
+            ts_ingest=ts_ingest,
+            ts_available=ts_available,
+        )
+        row = envelope_to_silver_row(envelope)
+        assert row["ts_available"] == ts_event
+
+    def test_ts_available_unchanged_when_already_after_event(self):
+        """When ts_available is already >= ts_event, it must not be changed."""
+        ts_ingest = NOW
+        ts_event = NOW
+        ts_available = NOW + timedelta(seconds=5)
+        envelope = _make_envelope(
+            ts_event=ts_event,
+            ts_ingest=ts_ingest,
+            ts_available=ts_available,
+        )
+        row = envelope_to_silver_row(envelope)
+        assert row["ts_available"] == ts_available

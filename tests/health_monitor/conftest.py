@@ -66,7 +66,9 @@ def make_check_context(
     kwargs = {"data_root": str(tmp_path)}
     if settings_overrides:
         kwargs.update(settings_overrides)
-    settings = Settings(**kwargs)
+    # _env_file=None keeps the fixture hermetic — otherwise a developer's local
+    # .env (e.g. HEBER_ALERT_FLOOR_OVERRIDES) leaks into test Settings.
+    settings = Settings(_env_file=None, **kwargs)
 
     return CheckContext(
         settings=settings,

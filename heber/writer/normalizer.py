@@ -46,6 +46,10 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
     schema = SILVER_SCHEMAS[silver_feed]
     target_to_source = _target_to_source_map(silver_feed)
 
+    ts_available = envelope.ts_available or envelope.ts_ingest
+    if envelope.ts_event is not None and ts_available < envelope.ts_event:
+        ts_available = envelope.ts_event
+
     row: dict[str, Any] = {
         "event_id": envelope.event_id,
         "provider": envelope.provider,
@@ -55,7 +59,7 @@ def envelope_to_silver_row(envelope: EventEnvelope) -> dict[str, Any]:
         "symbol": envelope.symbol,
         "ts_event": envelope.ts_event,
         "ts_ingest": envelope.ts_ingest,
-        "ts_available": envelope.ts_available or envelope.ts_ingest,
+        "ts_available": ts_available,
         "source": envelope.source,
         "schema_version": envelope.schema_version,
         "quality_flags": envelope.quality_flags,

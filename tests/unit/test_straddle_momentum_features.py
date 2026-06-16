@@ -6,6 +6,7 @@ Pipeline class tests use mocked HeberReader.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -14,6 +15,8 @@ import pytest
 
 from heber.features.pipelines.straddle_momentum_features import (
     StraddleMomentumPipeline,
+    _expand_chain_json,
+    _select_eod_snapshots,
     compute_straddle_returns,
     select_atm_options,
 )
@@ -120,6 +123,113 @@ def _make_straddle_values(
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _per_day_reader(chain: pd.DataFrame):
+    """Return a ``read_silver`` side_effect that slices ``chain`` to the requested
+    ``time_range`` — simulates per-partition (per-day) Silver reads.
+    """
+
+    def _read(dataset: str, time_range=None, columns=None, **kwargs) -> pd.DataFrame:
+        if time_range is None:
+            return chain.copy()
+        start = pd.to_datetime(time_range[0], utc=True)
+        end = pd.to_datetime(time_range[1], utc=True)
+        ts = pd.to_datetime(chain["ts_event"], utc=True)
+        return chain[(ts >= start) & (ts <= end)].copy()
+
+    return _read
+
+
+def _make_chain_json_snapshots(
+    underlyings: list[str],
+    dates: list[str],
+    snaps_per_day: int = 3,
+    atm_strike: float = 100.0,
+) -> pd.DataFrame:
+    """Build ``option_chain_snapshot`` rows in the real ``chain_json`` schema.
+
+    Emits ``snaps_per_day`` intraday snapshots per (underlying, date). Each
+    snapshot's ATM straddle mid rises with the snapshot index, so the closing
+    (last) snapshot is identifiable: at index ``s`` the ATM mid is ``5 + s``.
+    """
+    rows = []
+    for u in underlyings:
+        for d in dates:
+            for s in range(snaps_per_day):
+                ts = pd.Timestamp(d, tz="UTC") + pd.Timedelta(hours=10 + s)
+                mid = 5.0 + s
+                contracts = [
+                    {
+                        "strike": atm_strike,
+                        "option_type": "call",
+                        "delta": 0.5,
+                        "bid": mid - 0.1,
+                        "ask": mid + 0.1,
+                        "contract_symbol": f"{u}_C_ATM",
+                    },
+                    {
+                        "strike": atm_strike,
+                        "option_type": "put",
+                        "delta": -0.5,
+                        "bid": mid - 0.1,
+                        "ask": mid + 0.1,
+                        "contract_symbol": f"{u}_P_ATM",
+                    },
+                    {
+                        "strike": atm_strike + 10,
+                        "option_type": "call",
+                        "delta": 0.2,
+                        "bid": 1.0,
+                        "ask": 1.2,
+                        "contract_symbol": f"{u}_C_OTM",
+                    },
+                    {
+                        "strike": atm_strike - 10,
+                        "option_type": "put",
+                        "delta": -0.2,
+                        "bid": 1.0,
+                        "ask": 1.2,
+                        "contract_symbol": f"{u}_P_OTM",
+                    },
+                ]
+                rows.append(
+                    {
+                        "underlying": u,
+                        "ts_event": ts,
+                        "chain_json": json.dumps({"data": {"contracts": contracts}}),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+# ===========================================================================
+# _select_eod_snapshots (end-of-day chain reduction)
+# ===========================================================================
+
+
+class TestSelectEodSnapshots:
+    """The straddle value is taken from each day's closing chain per underlying."""
+
+    def test_keeps_one_latest_snapshot_per_underlying(self) -> None:
+        snaps = _make_chain_json_snapshots(["AAPL", "MSFT"], ["2026-01-02"], snaps_per_day=3)
+        eod = _select_eod_snapshots(snaps)
+
+        assert len(eod) == 2  # one per underlying
+        # Closing snapshot is the s=2 row → hour 12
+        assert {pd.to_datetime(t, utc=True).hour for t in eod["ts_event"]} == {12}
+
+    def test_eod_chain_drives_daily_straddle_value(self) -> None:
+        # 3 intraday snapshots: ATM mid 5, 6, 7 → EOD straddle = 7 + 7 = 14.
+        snaps = _make_chain_json_snapshots(["AAPL"], ["2026-01-02"], snaps_per_day=3)
+        vals = select_atm_options(_expand_chain_json(_select_eod_snapshots(snaps)))
+
+        assert len(vals) == 1
+        assert vals.iloc[0]["straddle_value"] == pytest.approx(14.0)
+
+    def test_passthrough_without_required_columns(self) -> None:
+        df = pd.DataFrame({"foo": [1, 2]})
+        pd.testing.assert_frame_equal(_select_eod_snapshots(df), df)
 
 
 # ===========================================================================
@@ -356,10 +466,53 @@ class TestStraddleMomentumPipeline:
         chain = _make_option_chain(["AAPL"], periods=70, start="2024-10-01")
 
         mock_reader = MagicMock()
-        mock_reader.read_silver.return_value = chain
+        mock_reader.read_silver.side_effect = _per_day_reader(chain)
 
         pipeline = StraddleMomentumPipeline(reader=mock_reader)
         pipeline.run(start_date="2025-01-01", end_date="2025-03-31", dry_run=True)
 
         # May or may not have data depending on date filtering, but should not write
         mock_reader.write_gold.assert_not_called()
+
+    def test_pipeline_loads_incrementally(self) -> None:
+        """Pipeline must read option_chain_snapshot one day at a time to bound peak
+        memory — never load the whole lookback window in a single read.
+
+        Regression for the gold-poller OOM: loading the full ~71-day window of the
+        12 GB option_chain_snapshot feed at once exhausted the Docker VM, killing the
+        poller before the pipelines after straddle_momentum could run.
+        """
+        chain = _make_option_chain(["AAPL"], periods=70, start="2024-10-01")
+
+        mock_reader = MagicMock()
+        mock_reader.read_silver.side_effect = _per_day_reader(chain)
+
+        pipeline = StraddleMomentumPipeline(reader=mock_reader)
+        pipeline.run(start_date="2025-01-01", end_date="2025-03-31", dry_run=True)
+
+        # Many per-day reads, not a single bulk read over the full span.
+        assert mock_reader.read_silver.call_count > 30
+
+        # Every read must be a bounded (<= ~1 day) window — never the multi-month span.
+        for call in mock_reader.read_silver.call_args_list:
+            time_range = call.kwargs.get("time_range")
+            if time_range is None and len(call.args) > 1:
+                time_range = call.args[1]
+            span = pd.to_datetime(time_range[1], utc=True) - pd.to_datetime(time_range[0], utc=True)
+            assert span <= pd.Timedelta(days=1, seconds=1)
+
+    def test_pipeline_runs_chain_json_eod_path(self) -> None:
+        """End-to-end through the real chain_json schema: per-day reads → EOD
+        snapshot reduction → expand → reduce → trailing returns."""
+        dates = pd.bdate_range("2024-10-01", periods=75, tz="UTC")
+        snaps = _make_chain_json_snapshots(["AAPL"], [d.date().isoformat() for d in dates], snaps_per_day=3)
+
+        mock_reader = MagicMock()
+        mock_reader.read_silver.side_effect = _per_day_reader(snaps)
+
+        pipeline = StraddleMomentumPipeline(reader=mock_reader)
+        stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-10", dry_run=True)
+
+        assert stats["status"] == "success"
+        assert stats["rows"] > 0
+        assert mock_reader.read_silver.call_count > 30  # per-day reads, not one bulk read

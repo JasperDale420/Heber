@@ -111,6 +111,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
     base = Path(root)
     if not base.exists():
         return []
+    if base.is_file():
+        if (
+            base.suffix == ".parquet"
+            and not base.name.startswith("._")
+            and not any(part.startswith("._") for part in base.parts)
+        ):
+            return [str(base)]
+        return []
     files: list[str] = []
     for f in base.rglob("*.parquet"):
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
@@ -416,6 +424,7 @@ class HeberReader:
         asof_time: str | datetime | None = None,
         columns: list[str] | None = None,
         batch_size: int | None = None,
+        prune_by_dt: bool = False,
     ) -> pd.DataFrame:
         """Read Silver layer data with optional point-in-time correctness.
 
@@ -442,6 +451,15 @@ class HeberReader:
             ``Scanner`` to cap peak memory.  Batches are concatenated into a
             single table at the end.  Default ``None`` reads all matching rows
             at once (original behaviour).
+        prune_by_dt:
+            When ``True`` and ``time_range`` is set, also push a predicate on the
+            ``dt`` hive partition (``dt`` between the start/end *dates*) so PyArrow
+            skips non-matching partition directories instead of opening every
+            file to evaluate the ``ts_event`` filter.  Safe because Silver writes
+            ``dt = ts_event.strftime("%Y-%m-%d")`` (see ``heber/writer/utils.py``),
+            so the partition date always equals the event date; the ``ts_event``
+            predicate still trims precisely within boundary partitions.  Off by
+            default to preserve existing behaviour for callers that don't opt in.
 
         Returns
         -------
@@ -483,6 +501,12 @@ class HeberReader:
         if time_range and "ts_event" in schema_names:
             exprs.append(ds.field("ts_event") >= _to_utc(time_range[0]))
             exprs.append(ds.field("ts_event") <= _to_utc(time_range[1]))
+
+        if prune_by_dt and time_range and "dt" in schema_names:
+            # Hive dt partition is an ISO date string (dt=YYYY-MM-DD); ISO dates
+            # sort lexically, so string comparison prunes partition directories.
+            exprs.append(ds.field("dt") >= _to_utc(time_range[0]).as_py().date().isoformat())
+            exprs.append(ds.field("dt") <= _to_utc(time_range[1]).as_py().date().isoformat())
 
         if asof_time and "ts_available" in schema_names:
             exprs.append(ds.field("ts_available") <= _to_utc(asof_time))

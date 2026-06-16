@@ -37,6 +37,9 @@ INSTRUMENT_KEY_PATTERNS: dict[str, re.Pattern[str]] = {
     "crypto": re.compile(r"^crypto:[A-Z]{2,10}-[A-Z]{2,10}$"),
     "forex": re.compile(r"^forex:[A-Z]{3}-[A-Z]{3}$"),
     "option": re.compile(r"^option:OCC:[A-Z]{1,6}\d{6}[CP]\d{8}$"),
+    # Macro indicators: lowercase snake_case segments separated by colons.
+    # e.g. macro:treasury_yield:2year, macro:cpi, macro:fed_funds_rate
+    "macro": re.compile(r"^macro:[a-z][a-z0-9_]*(?::[a-z0-9_]+)*$"),
 }
 
 

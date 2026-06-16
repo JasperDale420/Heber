@@ -181,7 +181,11 @@ async def test_process_flow_alert_negative_backoff_is_clamped(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_handle_message_keeps_pending_when_dlq_write_fails() -> None:
+async def test_handle_message_falls_back_to_disk_when_dlq_write_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import heber.writer.dlq_fallback as dlq_fallback_module
+
     redis_client = _RedisDlqFailure()
     consumer = AlertWatchConsumer(
         redis_client,
@@ -194,9 +198,18 @@ async def test_handle_message_keeps_pending_when_dlq_write_fails() -> None:
     # _is_flow_alert is sync; override with lambda to keep deterministic.
     consumer._is_flow_alert = lambda data: True  # type: ignore[method-assign]
 
+    monkeypatch.setattr(watch_consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
+
     should_ack = await consumer._handle_message("2-0", {b"data": b"{}"})
 
-    assert should_ack is False
+    assert should_ack is True
+    fallback_files = list(tmp_path.rglob("*.json"))
+    assert len(fallback_files) == 1
 
 
 @pytest.mark.asyncio

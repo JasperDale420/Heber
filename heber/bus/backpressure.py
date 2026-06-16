@@ -531,7 +531,11 @@ class BackpressureMonitor:
                 try:
                     await self.check_lag(stream, group)
                 except Exception as e:  # noqa: BLE001 — monitoring loop must not crash
-                    logger.error("lag_check_failed", stream=stream.value, error=str(e), exc_info=True)
+                    # WARNING (not ERROR): the monitor is defensive and self-recovers on the
+                    # next tick. Persistent failure surfaces via the absent
+                    # `consumer_lag_seconds` metric and a real alert there, not by spamming
+                    # error logs every check_interval.
+                    logger.warning("lag_check_failed", stream=stream.value, error=str(e), exc_info=True)
 
             await asyncio.sleep(self.check_interval)
 

@@ -65,7 +65,10 @@ Environment variables:
         disabled=list(settings.gold_poller_disabled_pipeline_set),
     )
 
-    start_metrics_server_from_env(default_port=9091)
+    try:
+        start_metrics_server_from_env(default_port=9091)
+    except Exception as exc:
+        logger.warning("metrics_server_startup_skipped", error=str(exc))
 
     shutdown_event = asyncio.Event()
 

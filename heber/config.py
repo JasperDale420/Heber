@@ -204,6 +204,12 @@ class Settings(BaseSettings):
         default="heber:events:dlq",
         description="Redis stream for failed consumer messages",
     )
+    dlq_fallback_dir: Path | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HEBER_DLQ_FALLBACK_DIR"),
+        description="Directory for durable DLQ file fallback when Redis xadd fails; "
+        "defaults to <data_root>/dlq_fallback",
+    )
     redis_claim_idle_ms: int = Field(
         default=60_000,
         description="Minimum idle time before claiming pending stream messages",
@@ -426,6 +432,12 @@ class Settings(BaseSettings):
         default=30.0,
         description="Base backoff between retries (multiplied by attempt number)",
     )
+    gold_poller_pipeline_timeout_seconds: int = Field(
+        default=1800,
+        ge=60,
+        le=7200,
+        description="Hard wall-clock cap per pipeline; the isolated subprocess is killed past this",
+    )
     gold_poller_project: str = Field(
         default="watch",
         description="Gold project namespace for poller-generated datasets",
@@ -509,6 +521,39 @@ class Settings(BaseSettings):
         default=0,
         ge=0,
         description="Rows to sample for zero-leakage audit (0 = full scan)",
+    )
+
+    # Critical-feed data-quality alerting (HEBER_ALERT_*)
+    alert_discord_enabled: bool = Field(
+        default=False,
+        description="Enable Discord alerts for critical data-quality failures",
+    )
+    alert_discord_webhook_url: str = Field(
+        default="",
+        description="Discord webhook URL for critical data-quality alerts",
+    )
+    alert_min_severity: str = Field(
+        default="critical",
+        description="Minimum severity to send an alert (critical|warning|info)",
+    )
+    alert_cooldown_seconds: int = Field(
+        default=3600,
+        ge=0,
+        description="Minimum seconds between repeat alerts for the same (check, feed)",
+    )
+    alert_send_recovery: bool = Field(
+        default=True,
+        description="Send a one-line recovery note when a previously-alerting feed returns to healthy",
+    )
+    alert_liveness_check_interval_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        description="Interval (seconds) for the per-feed liveness loop",
+    )
+    alert_floor_overrides: dict[str, int] = Field(
+        default_factory=dict,
+        description="Per-feed floor overrides for liveness (JSON env); floor 0 disables that feed",
     )
 
     # Quarantine
@@ -668,6 +713,12 @@ class Settings(BaseSettings):
         if self.gold_root:
             return self.gold_root
         return self.data_root / "gold"
+
+    @property
+    def dlq_fallback_path(self) -> Path:
+        if self.dlq_fallback_dir:
+            return self.dlq_fallback_dir
+        return self.data_root / "dlq_fallback"
 
     @property
     def llm_effective_base_url(self) -> str | None:

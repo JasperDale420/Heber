@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import CONTRACTED_RAW_FEEDS, resolve_feed_alias
+from heber.writer.ingest_contracts import (
+    BRONZE_ONLY_SILVER_DATASETS,
+    CONTRACTED_RAW_FEEDS,
+    resolve_feed_alias,
+)
 
 
 def _data_gateway_root() -> Path:
@@ -121,6 +125,9 @@ def test_all_emitted_data_gateway_feeds_map_to_silver_contract() -> None:
     unmapped = []
     for feed in sorted(emitted_feeds):
         canonical = resolve_feed_alias(feed)
+        if canonical in BRONZE_ONLY_SILVER_DATASETS:
+            # Bronze-only contracted feeds intentionally lack a Silver schema.
+            continue
         if canonical not in SILVER_SCHEMAS:
             unmapped.append((feed, canonical))
 

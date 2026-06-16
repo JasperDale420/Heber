@@ -13,6 +13,10 @@ from heber.watch.features import AlertFeatures, persist_features_to_gold
 
 
 def _sample_features() -> AlertFeatures:
+    # Populate Greeks so the row passes the fail-loud guard in
+    # persist_features_to_gold (which quarantines rows where ALL of
+    # delta/gamma/theta/vega/iv are null — the documented gateway-401
+    # cascade fingerprint).
     return AlertFeatures(
         alert_id="a1",
         alert_time=datetime(2026, 2, 7, 15, 0, tzinfo=UTC),
@@ -32,6 +36,11 @@ def _sample_features() -> AlertFeatures:
         aggressor="ask",
         spot_price=200.0,
         contract_price=1.25,
+        delta=0.55,
+        gamma=0.02,
+        theta=-0.05,
+        vega=0.10,
+        iv=0.30,
     )
 
 

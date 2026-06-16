@@ -42,6 +42,8 @@ def configure_logging(
     service_name: str | None = None,
     log_level: str = "INFO",
     json_output: bool = True,
+    *,
+    force: bool = True,
 ) -> None:
     """Configure Heber logging via empire_core.
 
@@ -49,6 +51,15 @@ def configure_logging(
         service_name: Override service name (default: "heber").
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
         json_output: Ignored; empire_core uses EMPIRE_LOG_FORMAT env var.
+        force: Re-run ``empire_core.setup_logging`` even if the global
+            ``_configured`` flag is already set (default ``True``). Without
+            this, a second service starting in the same Python process
+            (e.g. a CLI shelling into multiple service modules, an embedded
+            test harness, or any code path that imports two services) would
+            silently inherit the *first* service's log filename and
+            ``service=`` field, leaking the wrong service name into the
+            wrong daily log file. Set ``force=False`` only if you are sure
+            the caller has already done the right setup.
 
     Raises:
         ValueError: If ``log_level`` is not a recognised stdlib log level name.
@@ -59,6 +70,7 @@ def configure_logging(
     setup_logging(
         service_name or "heber",
         level=normalised,
+        force=force,
     )
 
 
