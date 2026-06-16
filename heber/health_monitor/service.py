@@ -24,6 +24,7 @@ from heber.health_monitor.calendar import HealthCalendar
 from heber.health_monitor.metrics import record_check
 from heber.health_monitor.models import CheckContext, CheckResult
 from heber.health_monitor.store import HealthStore
+from heber.ops.notifier import DiscordNotifier
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -60,6 +61,8 @@ class HealthMonitorService:
         self._redis: Any = None
         self._ctx: CheckContext | None = None
         self._last_tier3_date: date | None = None
+        self._notifier: DiscordNotifier | None = None
+        self._last_alert_ts: datetime | None = None
 
     async def start(self) -> None:
         """Create Redis connection, build CheckContext, launch tier loops."""
@@ -81,11 +84,15 @@ class HealthMonitorService:
             store=self._store,
         )
 
+        if self._settings.alert_discord_enabled:
+            self._notifier = DiscordNotifier(self._settings)
+
         self._running = True
         self._tasks = [
             asyncio.create_task(self._tier1_loop(), name="health-tier1"),
             asyncio.create_task(self._tier2_loop(), name="health-tier2"),
             asyncio.create_task(self._tier3_loop(), name="health-tier3"),
+            asyncio.create_task(self._liveness_loop(), name="health-liveness"),
         ]
 
         logger.info(
@@ -221,6 +228,41 @@ class HealthMonitorService:
 
         return True
 
+    # ----- Liveness: per-feed critical alarm (short interval, market days) -----
+
+    async def _liveness_loop(self) -> None:
+        """Run per-feed liveness checks and route criticals to Discord."""
+        from heber.health_monitor.checks.liveness import run_liveness_checks
+
+        interval = self._settings.alert_liveness_check_interval_seconds
+        assert self._ctx is not None
+
+        while self._running:
+            try:
+                now_et = datetime.now(ET)
+                if self._calendar.is_trading_day(now_et.date()):
+                    t0 = time.monotonic()
+                    results = await run_liveness_checks(self._ctx, now=now_et)
+                    elapsed = time.monotonic() - t0
+                    self._record_and_store(results, elapsed, "liveness")
+                    await self._maybe_alert(results)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error("health_liveness_error", exc_info=True)
+
+            await asyncio.sleep(interval)
+
+    async def _maybe_alert(self, results: list[CheckResult]) -> None:
+        """Dispatch results to the Discord notifier off the event loop."""
+        if self._notifier is None:
+            return
+        try:
+            await asyncio.to_thread(self._notifier.dispatch, results)
+            self._last_alert_ts = datetime.now(ET)
+        except Exception:
+            logger.error("health_alert_dispatch_error", exc_info=True)
+
     # ----- Shared helpers -----
 
     def _record_and_store(self, results: list[CheckResult], elapsed: float, tier: str) -> None:
@@ -254,6 +296,8 @@ class HealthMonitorService:
             "last_tier3_date": self._last_tier3_date.isoformat() if self._last_tier3_date else None,
             "tier1_interval": self._settings.health_stream_check_interval_seconds,
             "tier2_interval": self._settings.health_partition_check_interval_seconds,
+            "alerting_enabled": self._notifier is not None,
+            "last_alert_ts": self._last_alert_ts.isoformat() if self._last_alert_ts else None,
         }
 
 

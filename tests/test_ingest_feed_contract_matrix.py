@@ -76,7 +76,6 @@ PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS: tuple[str, ...] = (
     "seasonality",
     "sectors",
     "sentiment",
-    "short_data",
     "social-sentiment",
     "stock",
     "stock_fundamentals",
@@ -666,6 +665,20 @@ def test_previously_uncontracted_feeds_now_route_to_bronze_only() -> None:
             not_bronze_only.append(feed)
     assert not not_contracted, f"Still uncontracted (would emit silver_feed_uncontracted): {not_contracted}"
     assert not not_bronze_only, f"Not flagged as Bronze-only (would attempt Silver write): {not_bronze_only}"
+
+
+def test_short_data_feeds_route_to_silver_not_bronze_only() -> None:
+    """Regression: short_interest / short_volume / short_data carry a typed Silver
+    schema (short_date, short_interest, days_to_cover, short_percent_float) and must
+    NOT be Bronze-only. The 2026-05-20 67-feed reconciliation swept ``short_data``
+    into ``BRONZE_ONLY_SILVER_DATASETS`` despite the existing schema, silently
+    halting Silver ``short_data`` production (last partition 2026-05-20) while Bronze
+    ``short_interest`` kept arriving through 06-09.
+    """
+    assert "short_data" in SILVER_SCHEMAS
+    for feed in ("short_data", "short_interest", "short_volume"):
+        assert resolve_feed_alias(feed) == "short_data"
+        assert not is_bronze_only_feed(feed), f"{feed} must route to Silver, not Bronze-only"
 
 
 def test_option_chain_snapshot_preserves_underlying_price() -> None:

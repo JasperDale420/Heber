@@ -162,8 +162,8 @@ async def test_send_to_dlq_writes_file_when_redis_always_fails(
     monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
     monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _noop_sleep)
 
-    critical_mock = MagicMock()
-    monkeypatch.setattr(consumer_module.logger, "critical", critical_mock)
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
 
     moved = await consumer._send_to_dlq(
         message_id="42-0",
@@ -184,26 +184,26 @@ async def test_send_to_dlq_writes_file_when_redis_always_fails(
     payload_body = json.loads(content["payload"])
     assert payload_body["data"] == '{"foo":"bar"}'
 
-    critical_mock.assert_called_once()
-    log_event_name = critical_mock.call_args.args[0]
-    assert log_event_name == "dlq_file_fallback_used"
-    assert critical_mock.call_args.kwargs["event_id"] == "42-0"
-    assert "fallback_path" in critical_mock.call_args.kwargs
+    # Redis enqueue failed but durability is intact (file written) -> WARNING, not loss.
+    assert any(
+        call.args and call.args[0] == "dlq_redis_enqueue_failed_durable_file_written"
+        for call in warning_mock.call_args_list
+    )
 
 
 @pytest.mark.asyncio
-async def test_send_to_dlq_skips_fallback_when_redis_succeeds_on_retry(
+async def test_send_to_dlq_writes_durable_file_even_when_redis_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
+    """Durability: every dead-lettered event is persisted to the on-disk store,
+    even when the Redis ``XADD`` succeeds. The DLQ stream lives on a cache-mode
+    Redis (LRU/TTL eviction), so the file is the audit record of record."""
     consumer = EventConsumer()
-    flaky = _FlakyRedis(fail_count=1)
+    flaky = _FlakyRedis(fail_count=1)  # fails once, then XADD succeeds
     consumer.redis = flaky
     monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
     monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _noop_sleep)
-
-    critical_mock = MagicMock()
-    monkeypatch.setattr(consumer_module.logger, "critical", critical_mock)
 
     moved = await consumer._send_to_dlq(
         message_id="7-0",
@@ -214,9 +214,11 @@ async def test_send_to_dlq_skips_fallback_when_redis_succeeds_on_retry(
     )
 
     assert moved is True
-    assert flaky.calls == 2
-    assert list(tmp_path.rglob("*.json")) == []
-    critical_mock.assert_not_called()
+    assert flaky.calls == 2  # XADD retried and succeeded
+    fallback_files = list(tmp_path.rglob("*.json"))
+    assert len(fallback_files) == 1  # durable file written despite XADD success
+    content = json.loads(fallback_files[0].read_text())
+    assert content["source_message_id"] == "7-0"
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +265,8 @@ async def test_watch_dead_letter_writes_file_when_redis_always_fails(
     monkeypatch.setattr(watch_consumer_module.settings, "dlq_fallback_dir", tmp_path)
     monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _noop_sleep)
 
-    critical_mock = MagicMock()
-    monkeypatch.setattr(watch_consumer_module.logger, "critical", critical_mock)
+    warning_mock = MagicMock()
+    monkeypatch.setattr(watch_consumer_module.logger, "warning", warning_mock)
 
     ackable = await consumer._dead_letter_message(
         msg_id="9-1",
@@ -281,17 +283,19 @@ async def test_watch_dead_letter_writes_file_when_redis_always_fails(
     assert content["origin_message_id"] == "9-1"
     assert content["error"] == "processing_failed"
 
-    critical_mock.assert_called_once()
-    log_event_name = critical_mock.call_args.args[0]
-    assert log_event_name == "dlq_file_fallback_used"
-    assert critical_mock.call_args.kwargs["event_id"] == "9-1"
+    # Redis enqueue failed but durability is intact (file written) -> WARNING.
+    assert any(
+        call.args and call.args[0] == "dlq_redis_enqueue_failed_durable_file_written"
+        for call in warning_mock.call_args_list
+    )
 
 
 @pytest.mark.asyncio
-async def test_watch_dead_letter_skips_fallback_when_redis_succeeds_on_retry(
+async def test_watch_dead_letter_writes_durable_file_even_when_redis_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
+    """Durability: watch DLQ events are persisted to disk even when XADD succeeds."""
     flaky = _FlakySyncRedis(fail_count=1)
     consumer = AlertWatchConsumer(
         flaky,
@@ -303,9 +307,6 @@ async def test_watch_dead_letter_skips_fallback_when_redis_succeeds_on_retry(
     monkeypatch.setattr(watch_consumer_module.settings, "dlq_fallback_dir", tmp_path)
     monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _noop_sleep)
 
-    critical_mock = MagicMock()
-    monkeypatch.setattr(watch_consumer_module.logger, "critical", critical_mock)
-
     ackable = await consumer._dead_letter_message(
         msg_id="3-3",
         data={b"data": b"{}"},
@@ -314,9 +315,11 @@ async def test_watch_dead_letter_skips_fallback_when_redis_succeeds_on_retry(
     )
 
     assert ackable is True
-    assert flaky.calls == 2
-    assert list(tmp_path.rglob("*.json")) == []
-    critical_mock.assert_not_called()
+    assert flaky.calls == 2  # XADD retried and succeeded
+    fallback_files = list(tmp_path.rglob("*.json"))
+    assert len(fallback_files) == 1  # durable file written despite XADD success
+    content = json.loads(fallback_files[0].read_text())
+    assert content["origin_message_id"] == "3-3"
 
 
 def test_log_fallback_backlog_emits_info(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

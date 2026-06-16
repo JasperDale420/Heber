@@ -243,8 +243,9 @@ BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset(
         "cash-flow",
         "income-statement",
         "stock_fundamentals",
-        # Misc options / shorts variants pending a typed Silver schema.
-        "short_data",
+        # Misc variant pending a typed Silver schema. (short_data was removed here:
+        # it has a typed Silver schema and was wrongly swept into this set by the
+        # 2026-05-20 reconciliation, halting Silver short_data production.)
         "alerts",
     }
 )

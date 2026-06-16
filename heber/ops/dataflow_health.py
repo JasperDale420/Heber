@@ -16,7 +16,7 @@ import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import redis
 import structlog
@@ -30,6 +30,8 @@ logger = structlog.get_logger(__name__)
 _PROM_METRIC_RE = re.compile(
     r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$"
 )
+_DT_PARTITION_RE = re.compile(r"^dt=(?P<date>\d{4}-\d{2}-\d{2})$")
+_MAX_RECENT_FEED_PARTITIONS = 3
 
 _FEED_SEVERITY: dict[str, str] = {
     "bars": "critical",
@@ -136,6 +138,45 @@ def _safe_stat_mtime(path: Path) -> float | None:
         return None
 
 
+def _safe_iterdir(path: Path) -> list[Path]:
+    try:
+        return list(path.iterdir())
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        logger.warning(
+            "dataflow_health_filesystem_list_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        return []
+
+
+def _dt_partition_sort_key(path: Path) -> tuple[str, str]:
+    match = _DT_PARTITION_RE.match(path.name)
+    if match is None:
+        return ("", str(path))
+    return (match.group("date"), str(path))
+
+
+def _recent_dt_partitions(root: Path, max_partitions: int = _MAX_RECENT_FEED_PARTITIONS) -> list[Path]:
+    partitions: list[Path] = []
+
+    for child in _safe_iterdir(root):
+        if child.name.startswith(".") or not child.is_dir():
+            continue
+        if _DT_PARTITION_RE.match(child.name):
+            partitions.append(child)
+            continue
+        for grandchild in _safe_iterdir(child):
+            if grandchild.name.startswith(".") or not grandchild.is_dir():
+                continue
+            if _DT_PARTITION_RE.match(grandchild.name):
+                partitions.append(grandchild)
+
+    return sorted(partitions, key=_dt_partition_sort_key, reverse=True)[:max_partitions]
+
+
 def _latest_file_mtime(root: Path) -> float | None:
     if not root.exists():
         return None
@@ -156,13 +197,43 @@ def _latest_file_mtime(root: Path) -> float | None:
     return latest
 
 
+def _latest_partition_activity_mtime(partition: Path) -> float | None:
+    latest = _safe_stat_mtime(partition)
+    for child in _safe_iterdir(partition):
+        if child.name.startswith("."):
+            continue
+        mtime = _safe_stat_mtime(child)
+        if mtime is not None and (latest is None or mtime > latest):
+            latest = mtime
+    return latest
+
+
+def _latest_feed_file_mtime(root: Path) -> float | None:
+    if not root.exists():
+        return None
+
+    if root.is_file():
+        return _latest_file_mtime(root)
+
+    recent_partitions = _recent_dt_partitions(root)
+    if not recent_partitions:
+        return _latest_file_mtime(root)
+
+    latest: float | None = None
+    for partition in recent_partitions:
+        mtime = _latest_partition_activity_mtime(partition)
+        if mtime is not None and (latest is None or mtime > latest):
+            latest = mtime
+    return latest
+
+
 def _collect_filesystem_feed_timestamps(settings: Settings) -> dict[str, float | None]:
     feed_paths = {
         "bars": settings.silver_path / "feed=bars",
         "trades": settings.silver_path / "feed=trades",
         "flow_alerts": settings.silver_path / "feed=flow_alerts",
     }
-    return {feed: _latest_file_mtime(path) for feed, path in feed_paths.items()}
+    return {feed: _latest_feed_file_mtime(path) for feed, path in feed_paths.items()}
 
 
 def _decode_redis_field(value: Any) -> str:
@@ -185,10 +256,16 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
         group_exists = False
         lag: int | None = None
         pending: int | None = None
+        stream_len: int | None = None
         groups: list[dict[Any, Any]] = []
 
         try:
-            groups = client.xinfo_groups(settings.redis_stream_name)
+            stream_len = int(client.xlen(settings.redis_stream_name))
+        except redis.ResponseError:
+            stream_len = None
+
+        try:
+            groups = cast(list[dict[Any, Any]], client.xinfo_groups(settings.redis_stream_name))
         except redis.ResponseError as exc:
             stream_missing = "no such key" in str(exc).lower()
             if not stream_missing:
@@ -211,6 +288,7 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
             "group_exists": group_exists,
             "lag": lag,
             "pending": pending,
+            "stream_len": stream_len,
             "error": None,
         }
     except Exception as exc:
@@ -219,6 +297,7 @@ def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
             "group_exists": False,
             "lag": None,
             "pending": None,
+            "stream_len": None,
             "error": str(exc),
         }
     finally:
@@ -231,9 +310,16 @@ def _collect_runtime_signals(
     consumer_metrics_url: str,
     watch_metrics_url: str,
     settings: Settings,
+    collect_metrics: bool = True,
 ) -> dict[str, Any]:
-    consumer_samples, consumer_error = _fetch_metrics_samples(consumer_metrics_url)
-    watch_samples, watch_error = _fetch_metrics_samples(watch_metrics_url)
+    if collect_metrics:
+        consumer_samples, consumer_error = _fetch_metrics_samples(consumer_metrics_url)
+        watch_samples, watch_error = _fetch_metrics_samples(watch_metrics_url)
+    else:
+        consumer_samples = None
+        watch_samples = None
+        consumer_error = None
+        watch_error = None
 
     feed_metric_sources = {
         "bars": _metric_max(
@@ -258,7 +344,6 @@ def _collect_runtime_signals(
     return {
         "redis": _collect_redis_signals(settings),
         "feeds": feed_metric_sources,
-        "filesystem_feeds": _collect_filesystem_feed_timestamps(settings),
         "gateway_last_success": gateway_last_success,
         "metrics": {
             "consumer_url": consumer_metrics_url,
@@ -372,15 +457,86 @@ def _build_gateway_check(
     }
 
 
+# Consumer-lag-vs-stream-length thresholds. When the group's lag is a large
+# fraction of the (MAXLEN-capped) stream length, un-consumed entries are being
+# evicted before the writer reads them — silent cross-feed data loss. This is the
+# failure mode behind the 2026-06-09 option-quote flood (lag pinned at the 300K
+# cap) that the reachability/freshness/DLQ checks all missed.
+_CONSUMER_LAG_WARN_RATIO = 0.5
+_CONSUMER_LAG_FAIL_RATIO = 0.8
+_CONSUMER_LAG_MIN_FLOOR = 5_000
+
+# A DLQ in the hundreds of thousands is a rejection flood, not steady-state
+# trickle — escalate from warning to a critical page.
+_DLQ_CRITICAL_THRESHOLD = 100_000
+
+
+def _build_consumer_lag_check(redis_signal: dict[str, Any]) -> dict[str, Any]:
+    """Alert when consumer lag approaches the stream length (MAXLEN cap)."""
+    lag = redis_signal.get("lag")
+    stream_len = redis_signal.get("stream_len")
+    threshold = {
+        "warn_ratio": _CONSUMER_LAG_WARN_RATIO,
+        "fail_ratio": _CONSUMER_LAG_FAIL_RATIO,
+        "min_lag_floor": _CONSUMER_LAG_MIN_FLOOR,
+    }
+
+    if not redis_signal.get("group_exists") or lag is None or not stream_len or stream_len <= 0:
+        return {
+            "id": "consumer_lag",
+            "status": "skipped",
+            "severity": "critical",
+            "observed": {"lag": lag, "stream_len": stream_len, "lag_ratio": None},
+            "threshold": threshold,
+            "message": "Consumer lag not evaluable (group missing or stream length unknown).",
+        }
+
+    ratio = lag / stream_len
+    if lag >= _CONSUMER_LAG_MIN_FLOOR and ratio >= _CONSUMER_LAG_FAIL_RATIO:
+        status = "fail"
+        message = (
+            f"Consumer lag {lag} is {ratio:.0%} of stream length {stream_len} — "
+            "un-consumed events are being evicted (MAXLEN cap)."
+        )
+    elif lag >= _CONSUMER_LAG_MIN_FLOOR and ratio >= _CONSUMER_LAG_WARN_RATIO:
+        status = "warn"
+        message = f"Consumer lag {lag} is {ratio:.0%} of stream length {stream_len} — approaching eviction."
+    else:
+        status = "ok"
+        message = f"Consumer lag {lag} ({ratio:.0%} of stream length {stream_len})."
+
+    return {
+        "id": "consumer_lag",
+        "status": status,
+        "severity": "critical",
+        "observed": {"lag": lag, "stream_len": stream_len, "lag_ratio": round(ratio, 3)},
+        "threshold": threshold,
+        "message": message,
+    }
+
+
 def _collect_dlq_size_check(active_settings: Settings, threshold: int = 10_000) -> dict[str, Any]:
-    """Check DLQ stream length and return a health check dict."""
+    """Check DLQ stream length and return a health check dict.
+
+    Escalates to a critical failure when the DLQ has grown into a flood
+    (``_DLQ_CRITICAL_THRESHOLD``), rather than staying at warning severity.
+    """
     from heber.writer.dlq_reprocessor import check_dlq_size
 
-    return check_dlq_size(
+    check = check_dlq_size(
         redis_url=active_settings.redis_url,
         dlq_stream_name=active_settings.redis_dlq_stream_name,
         threshold=threshold,
     )
+    length = check.get("observed", {}).get("length")
+    if length is not None and length > _DLQ_CRITICAL_THRESHOLD:
+        check["status"] = "fail"
+        check["severity"] = "critical"
+        check.setdefault("threshold", {})["critical_length"] = _DLQ_CRITICAL_THRESHOLD
+        check["message"] = (
+            f"DLQ has {length} entries (exceeds critical {_DLQ_CRITICAL_THRESHOLD}) — likely a rejection flood."
+        )
+    return check
 
 
 def generate_dataflow_report(
@@ -395,6 +551,7 @@ def generate_dataflow_report(
     active_settings = settings or get_settings()
     now_utc = _normalize_utc(now)
     now_unixtime = now_utc.timestamp()
+    market_open = _is_market_open(now_utc)
 
     consumer_url = consumer_metrics_url or active_settings.health_consumer_metrics_url
     watch_url = watch_metrics_url or active_settings.health_watch_metrics_url
@@ -402,10 +559,17 @@ def generate_dataflow_report(
         consumer_metrics_url=consumer_url,
         watch_metrics_url=watch_url,
         settings=active_settings,
+        collect_metrics=market_open,
     )
 
     checks: list[dict[str, Any]] = []
-    market_open = _is_market_open(now_utc)
+
+    feed_signals = signals.get("feeds", {})
+    fs_fallback = signals.get("filesystem_feeds")
+    if fs_fallback is None:
+        fs_fallback = {"bars": None, "trades": None, "flow_alerts": None}
+        if market_open and any(feed_signals.get(feed) is None for feed in ("bars", "trades", "flow_alerts")):
+            fs_fallback = _collect_filesystem_feed_timestamps(active_settings)
 
     redis_signal = signals.get("redis", {})
     redis_ok = bool(redis_signal.get("ok"))
@@ -436,6 +600,8 @@ def generate_dataflow_report(
         }
     )
 
+    checks.append(_build_consumer_lag_check(redis_signal))
+
     checks.append(
         _build_gateway_check(
             signals.get("gateway_last_success"),
@@ -445,8 +611,6 @@ def generate_dataflow_report(
         )
     )
 
-    feed_signals = signals.get("feeds", {})
-    fs_fallback = signals.get("filesystem_feeds", {})
     for feed in ("bars", "trades", "flow_alerts"):
         checks.append(
             _freshness_check(

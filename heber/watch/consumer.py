@@ -222,13 +222,14 @@ class AlertWatchConsumer:
         return normalized
 
     async def _dead_letter_message(self, msg_id: str, data: dict, attempts: int, error: str) -> bool:
-        """Write failed message to DLQ stream with on-disk fallback.
+        """Dead-letter a failed watch message durably.
 
-        Attempts a Redis ``XADD`` with bounded exponential backoff (3 attempts).
-        On exhaustion, persists the event to a JSON file under
-        ``settings.dlq_fallback_path`` so the message is captured durably and
-        the caller can ACK. Always returns ``True`` — the message is never
-        silently lost.
+        The event is ALWAYS persisted to a JSON file under
+        ``settings.dlq_fallback_path`` first — that file is the durable audit
+        record, because the DLQ stream lives on a cache-mode Redis that evicts
+        entries (LRU/TTL). A best-effort ``XADD`` to the Redis DLQ stream then
+        enqueues it for reprocessing. Returns ``True`` when captured by the file
+        or Redis (caller may ACK); ``False`` only if both fail.
         """
         dlq_payload = {
             "origin_stream": self.stream_name,
@@ -239,20 +240,10 @@ class AlertWatchConsumer:
             "payload": json.dumps(self._normalize_stream_data(data), default=str),
         }
 
-        async def _xadd() -> Any:
-            return await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
-
-        success, _result, last_exc = await try_xadd_with_retry(_xadd)
-        if success:
-            logger.error(
-                "Watch message dead-lettered",
-                stream=self.dlq_stream_name,
-                msg_id=msg_id,
-                attempts=attempts,
-                error=error,
-            )
-            return True
-
+        # Durability first: always write the on-disk audit record. The DLQ
+        # stream lives on a cache-mode Redis (LRU/TTL eviction), so the file —
+        # not the stream — is the record of last resort.
+        fallback_path: Any | None = None
         try:
             fallback_path = await asyncio.to_thread(
                 write_dlq_fallback_file,
@@ -266,19 +257,41 @@ class AlertWatchConsumer:
                 "dlq_file_fallback_failed",
                 stream=self.dlq_stream_name,
                 msg_id=msg_id,
-                redis_error=str(last_exc) if last_exc else None,
                 fallback_error=str(fallback_exc),
                 exc_info=True,
             )
+
+        async def _xadd() -> Any:
+            return await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+
+        success, _result, last_exc = await try_xadd_with_retry(_xadd)
+
+        if fallback_path is None and not success:
+            logger.error(
+                "Failed to write watch message to DLQ",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                error=str(last_exc) if last_exc else "unknown",
+            )
             return False
 
-        logger.critical(
-            "dlq_file_fallback_used",
-            stream=self.dlq_stream_name,
-            event_id=msg_id,
-            fallback_path=str(fallback_path),
-            redis_error=str(last_exc) if last_exc else None,
-        )
+        if success:
+            logger.error(
+                "Watch message dead-lettered",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                attempts=attempts,
+                error=error,
+                durable_path=str(fallback_path) if fallback_path is not None else None,
+            )
+        else:
+            logger.warning(
+                "dlq_redis_enqueue_failed_durable_file_written",
+                stream=self.dlq_stream_name,
+                msg_id=msg_id,
+                fallback_path=str(fallback_path),
+                redis_error=str(last_exc) if last_exc else None,
+            )
         return True
 
     async def _process_flow_alert_with_retries(self, msg_id: str, data: dict) -> bool:
