@@ -3,7 +3,10 @@
 See PRD Section 11.7 for API contract.
 """
 
+from __future__ import annotations
+
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -34,7 +37,8 @@ engine = create_async_engine(
     settings.postgres_url,
     echo=False,
     pool_pre_ping=True,
-    pool_size=5,
+    pool_size=20,
+    max_overflow=10,
     pool_recycle=300,
 )
 async_session = async_sessionmaker(engine, expire_on_commit=False)
@@ -79,7 +83,10 @@ async def lifespan(app: FastAPI):
     configure_logging(service_name="heber-catalog", log_level=settings.log_level, json_output=True)
 
     if settings.metrics_port:
-        start_metrics_server_from_env(default_port=9090)
+        try:
+            start_metrics_server_from_env(default_port=9090)
+        except Exception as exc:
+            logger.warning("metrics_server_startup_skipped", error=str(exc))
 
     if _should_auto_create_catalog_tables():
         async with engine.begin() as conn:
@@ -117,7 +124,6 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("catalog_periodic_scan_stopped")
-            raise
 
 
 app = FastAPI(
@@ -126,9 +132,6 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
-
-from collections.abc import AsyncGenerator
 
 
 # Dependency for database session
@@ -154,7 +157,7 @@ class DatasetResponse(BaseModel):
     description: str | None
     storage_root: str
     path_template: str | None
-    partition_cols: list | None
+    partition_cols: list[str] | None
     is_active: bool
 
 
@@ -191,7 +194,7 @@ class FeedMappingResponse(BaseModel):
 
 # Health check
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "healthy", "service": "heber-catalog"}
 
 
@@ -201,7 +204,7 @@ async def health():
 async def list_datasets(
     layer: str | None = Query(None, description="Filter by layer (bronze|silver|gold)"),
     service: CatalogService = Depends(get_service),
-):
+) -> DatasetListResponse:
     datasets = await service.list_datasets(layer=layer)
     return DatasetListResponse(
         data=[
@@ -223,7 +226,7 @@ async def list_datasets(
 
 @app.get("/datasets/{name}", response_model=DatasetDetailResponse, include_in_schema=False)
 @app.get("/api/v1/datasets/{name}", response_model=DatasetDetailResponse)
-async def get_dataset(name: str, service: CatalogService = Depends(get_service)):
+async def get_dataset(name: str, service: CatalogService = Depends(get_service)) -> DatasetDetailResponse:
     dataset = await service.get_dataset(name)
     if not dataset:
         raise HTTPException(status_code=404, detail=f"Dataset '{name}' not found")
@@ -244,7 +247,7 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
 
 @app.get("/datasets/{name}/versions", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/versions")
-async def get_dataset_versions(name: str, service: CatalogService = Depends(get_service)):
+async def get_dataset_versions(name: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     versions = await service.get_dataset_versions(name)
     return {
         "data": [
@@ -262,18 +265,23 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
 
 @app.get("/datasets/{name}/coverage", include_in_schema=False)
 @app.get("/api/v1/datasets/{name}/coverage")
-async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_service)):
+async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     coverage = await service.get_coverage(name)
+    data = []
+    for c in coverage:
+        record: dict[str, Any] = {
+            "instrument_key": c.instrument_key,
+            "dt_min": c.dt_min,
+            "dt_max": c.dt_max,
+            "approx_row_count": c.approx_row_count,
+        }
+        # Per-date records (instrument_key="dt:YYYY-MM-DD") also
+        # expose a flat "dt" field for downstream day-counting.
+        if c.instrument_key and c.instrument_key.startswith("dt:"):
+            record["dt"] = str(c.dt_min)
+        data.append(record)
     return {
-        "data": [
-            {
-                "instrument_key": c.instrument_key,
-                "dt_min": c.dt_min,
-                "dt_max": c.dt_max,
-                "approx_row_count": c.approx_row_count,
-            }
-            for c in coverage
-        ],
+        "data": data,
         "meta": {"ts": datetime.now(UTC)},
     }
 
@@ -293,36 +301,13 @@ def _instrument_response(inst: Any) -> InstrumentResponse:
     )
 
 
-@app.get("/api/v1/instruments/{key}")
-async def get_instrument(key: str, service: CatalogService = Depends(get_service)):
-    instrument = await service.get_instrument(key)
-    if not instrument:
-        raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
-    return {
-        "data": _instrument_response(instrument),
-        "meta": {"ts": datetime.now(UTC)},
-    }
-
-
-@app.post("/api/v1/instruments/lookup")
-async def lookup_instruments(
-    request: InstrumentLookupRequest,
-    service: CatalogService = Depends(get_service),
-):
-    instruments = await service.lookup_instruments(request.symbols)
-    return {
-        "data": [_instrument_response(i) for i in instruments],
-        "meta": {"ts": datetime.now(UTC)},
-    }
-
-
 @app.get("/api/v1/instruments/search")
 async def search_instruments(
     instrument_type: str | None = Query(None),
     symbol_prefix: str | None = Query(None),
     limit: int = Query(100, le=1000),
     service: CatalogService = Depends(get_service),
-):
+) -> dict[str, Any]:
     instruments = await service.search_instruments(
         instrument_type=instrument_type,
         symbol_prefix=symbol_prefix,
@@ -334,10 +319,33 @@ async def search_instruments(
     }
 
 
+@app.post("/api/v1/instruments/lookup")
+async def lookup_instruments(
+    request: InstrumentLookupRequest,
+    service: CatalogService = Depends(get_service),
+) -> dict[str, Any]:
+    instruments = await service.lookup_instruments(request.symbols)
+    return {
+        "data": [_instrument_response(i) for i in instruments],
+        "meta": {"ts": datetime.now(UTC)},
+    }
+
+
+@app.get("/api/v1/instruments/{key}")
+async def get_instrument(key: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
+    instrument = await service.get_instrument(key)
+    if not instrument:
+        raise HTTPException(status_code=404, detail=f"Instrument '{key}' not found")
+    return {
+        "data": _instrument_response(instrument),
+        "meta": {"ts": datetime.now(UTC)},
+    }
+
+
 # Feed mapping endpoints
 @app.get("/feeds", include_in_schema=False)
 @app.get("/api/v1/feeds")
-async def list_feeds(service: CatalogService = Depends(get_service)):
+async def list_feeds(service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     mappings = await service.list_feed_mappings()
     return {
         "data": [
@@ -358,7 +366,7 @@ async def resolve_feed(
     provider: str = Query(...),
     feed: str = Query(...),
     service: CatalogService = Depends(get_service),
-):
+) -> dict[str, Any]:
     silver_dataset = await service.resolve_feed(provider, feed)
     if not silver_dataset:
         raise HTTPException(
@@ -378,7 +386,7 @@ async def get_dataset_version(
     name: str,
     version: str,
     service: CatalogService = Depends(get_service),
-):
+) -> dict[str, Any]:
     """Get specific schema version for a dataset."""
     versions = await service.get_dataset_versions(name)
     target = next((v for v in versions if v.schema_version == version), None)
@@ -407,8 +415,8 @@ class DatasetCreateRequest(BaseModel):
     description: str | None = None
     storage_root: str
     path_template: str | None = None
-    partition_cols: list | None = None
-    primary_keys: list | None = None
+    partition_cols: list[str] | None = None
+    primary_keys: list[str] | None = None
 
 
 @app.post("/datasets", status_code=201, include_in_schema=False)
@@ -416,18 +424,23 @@ class DatasetCreateRequest(BaseModel):
 async def create_dataset(
     request: DatasetCreateRequest,
     service: CatalogService = Depends(get_service),
-):
+) -> dict[str, Any]:
     """Create a new dataset in the catalog."""
-    dataset = await service.create_dataset(
-        dataset_name=request.dataset_name,
-        layer=request.layer,
-        owner=request.owner,
-        description=request.description,
-        storage_root=request.storage_root,
-        path_template=request.path_template,
-        partition_cols=request.partition_cols,
-        primary_keys=request.primary_keys,
-    )
+    try:
+        dataset = await service.create_dataset(
+            name=request.dataset_name,
+            layer=request.layer,
+            owner=request.owner,
+            description=request.description,
+            storage_root=request.storage_root,
+            path_template=request.path_template,
+            partition_cols=request.partition_cols,
+            primary_keys=request.primary_keys,
+        )
+    except Exception as exc:
+        if "IntegrityError" in type(exc).__name__ or "UniqueViolation" in str(type(exc).__mro__):
+            raise HTTPException(status_code=409, detail=f"Dataset '{request.dataset_name}' already exists")
+        raise
     return {
         "data": {"dataset_name": dataset.dataset_name},
         "meta": {"ts": datetime.now(UTC)},
@@ -452,7 +465,7 @@ async def upsert_instrument(
     key: str,
     request: InstrumentUpsertRequest,
     service: CatalogService = Depends(get_service),
-):
+) -> dict[str, Any]:
     """Upsert an instrument in the registry."""
     instrument = await service.upsert_instrument(
         instrument_key=key,
@@ -483,11 +496,11 @@ class BackfillRequest(BaseModel):
 
 
 # In-memory backfill jobs (use Redis/DB in production)
-_backfill_jobs: dict = {}
+_backfill_jobs: dict[str, dict[str, Any]] = {}
 
 
 @app.post("/api/v1/backfill", status_code=201)
-async def create_backfill(request: BackfillRequest):
+async def create_backfill(request: BackfillRequest) -> dict[str, Any]:
     """Create a new backfill job."""
     from uuid import uuid4
 
@@ -510,7 +523,7 @@ async def create_backfill(request: BackfillRequest):
 
 
 @app.get("/api/v1/backfill/{id}")
-async def get_backfill(id: str):
+async def get_backfill(id: str) -> dict[str, Any]:
     """Get backfill job status."""
     job = _backfill_jobs.get(id)
     if not job:
@@ -525,7 +538,7 @@ async def get_backfill(id: str):
 async def list_backfills(
     status: str | None = Query(None),
     limit: int = Query(50, le=100),
-):
+) -> dict[str, Any]:
     """List backfill jobs."""
     jobs = list(_backfill_jobs.values())
     if status:
@@ -536,8 +549,49 @@ async def list_backfills(
     }
 
 
+# Health Monitor summary endpoint
+@app.get("/api/v1/health/summary")
+async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
+    """Return latest health check results and trend data."""
+    from datetime import date, timedelta
+
+    import pandas as pd
+
+    from heber.health_monitor.store import HealthStore
+
+    store = HealthStore()
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+
+    frames: list[pd.DataFrame] = []
+    current = start
+    while current <= today:
+        df = store.read_results(current)
+        if len(df) > 0:
+            frames.append(df)
+        current += timedelta(days=1)
+
+    if not frames:
+        return {"checks": [], "summary": {"total": 0, "pass": 0, "warn": 0, "fail": 0, "error": 0}}
+
+    all_results = pd.concat(frames, ignore_index=True)
+    latest = all_results.sort_values("ts_checked").groupby(["check_name", "feed"]).last().reset_index()
+    summary = latest["status"].value_counts().to_dict()
+
+    return {
+        "checks": latest.to_dict(orient="records"),
+        "summary": {
+            "total": len(latest),
+            "pass": summary.get("pass", 0),
+            "warn": summary.get("warn", 0),
+            "fail": summary.get("fail", 0),
+            "error": summary.get("error", 0),
+        },
+    }
+
+
 # Error codes (PRD §11.7.5)
-ERROR_CODES = {
+ERROR_CODES: dict[int, str] = {
     400: "INVALID_REQUEST",
     401: "UNAUTHORIZED",
     403: "FORBIDDEN",
@@ -549,7 +603,7 @@ ERROR_CODES = {
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc: HTTPException):
+async def http_exception_handler(request: Any, exc: HTTPException) -> Any:
     """Convert HTTP exceptions to PRD-compliant error format."""
     from fastapi.responses import JSONResponse
 

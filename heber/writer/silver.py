@@ -103,16 +103,33 @@ class SilverWriter:
         self.buffers[partition_key].append(row)
 
     def flush_if_needed(self) -> None:
-        """Flush buffers if conditions are met."""
+        """Flush buffers if conditions are met.
+
+        A partition is flushed when:
+        - It reaches ``silver_max_rows_per_file`` (hard cap), OR
+        - It has at least ``silver_min_rows_per_flush`` rows, OR
+        - The time since last flush exceeds ``silver_max_flush_time_seconds``
+          (safety valve — ensures data is eventually persisted even at low volume).
+
+        The min-rows gate prevents creating tiny parquet files during backfill,
+        where a single XREADGROUP batch scatters records across hundreds of
+        date partitions with only 2-4 rows each.
+        """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
+        time_triggered = elapsed >= settings.silver_max_flush_time_seconds
 
         flushed = False
-        for partition_key, rows in self.buffers.items():
+        for partition_key in list(self.buffers):
+            rows = self.buffers[partition_key]
+            if not rows:
+                continue
             should_flush = (
-                len(rows) >= settings.silver_max_rows_per_file or elapsed >= settings.silver_max_flush_time_seconds
+                len(rows) >= settings.silver_max_rows_per_file
+                or len(rows) >= settings.silver_min_rows_per_flush
+                or time_triggered
             )
-            if should_flush and rows:
+            if should_flush:
                 self._flush_partition(partition_key, rows)
                 self.buffers[partition_key] = []
                 flushed = True
@@ -157,6 +174,6 @@ class SilverWriter:
             record_write(
                 layer="silver", dataset=feed, rows=len(rows), bytes_written=bytes_written, duration_seconds=duration
             )
-        except Exception:
+        except (OSError, pa.ArrowTypeError, pa.ArrowInvalid):
             record_write_error(layer="silver", error_type="flush_failed")
             raise

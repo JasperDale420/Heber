@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -15,7 +15,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class ResourceType(str, Enum):
+class ResourceType(StrEnum):
     """Resource types for capacity planning."""
 
     CPU = "cpu"
@@ -25,7 +25,7 @@ class ResourceType(str, Enum):
     IOPS = "iops"
 
 
-class ScalingAction(str, Enum):
+class ScalingAction(StrEnum):
     """Scaling actions."""
 
     SCALE_UP = "scale_up"

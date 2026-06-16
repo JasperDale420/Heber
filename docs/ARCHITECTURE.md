@@ -8,7 +8,7 @@ Related docs:
 
 ## Overview
 
-Heber is a lakehouse for market and intelligence data with a strict **zero-leakage** contract. The system ingests events from Data Gateway, writes raw and normalized lake layers, registers datasets in a catalog, and exposes read access through the SDK and API.
+Heber is a lakehouse for market and intelligence data with a strict **zero-leakage** contract. The system ingests events from Data Gateway, writes raw and normalized lake layers, registers datasets in a catalog, and exposes read access through the `HeberReader` and CLI.
 
 ## Data Flow
 
@@ -17,7 +17,7 @@ Data Gateway -> Redis Streams -> heber-consumer -> Bronze (JSONL.gz) + Silver (P
                                             v
                                     heber-catalog (Postgres)
                                             v
-                                     SDK + CLI
+                                  HeberReader + CLI
                                             v
                                  Hot Store (ClickHouse)
 ```
@@ -82,17 +82,15 @@ See `heber/catalog/db.py` for the canonical schema.
 
 ## Hot Store (ClickHouse)
 
-Low-latency access to recent quotes/trades/bars for dashboards and signals. The SDK uses lake data for backtests and research.
+Low-latency access to recent quotes/trades/bars for dashboards and signals. The `HeberReader` uses lake data for backtests and research.
 
-## Zero-Leakage Firewall (`heber.firewall`)
+## Zero-Leakage Enforcement
 
-Ensures point-in-time correctness for all research data access. The firewall prevents:
+Point-in-time correctness is enforced directly in `HeberReader.read_asof()` via predicate pushdown. The `ts_available <= asof_time` filter is pushed into the pyarrow dataset scan before `to_table()`, preventing:
 
 1. **Transport Leakage**: Using data before it physically arrived (`ts_available`).
 2. **Revision Leakage**: Using corrected data that wasn't available at the query time.
-3. **lookahead**: Enforced via `asof_join` and `read_asof` primitives.
-
-All `HeberClient` reads for historical analysis must pass through the firewall.
+3. **Lookahead**: Enforced via `asof_join` and `read_asof` primitives.
 
 ## Universe Management (`heber.universe`)
 
@@ -112,15 +110,15 @@ Provides reproducible experiment tracking and data loading:
 
 ## OSS Migration Components
 
-These modules are present but not yet wired into `HeberClient`:
+These modules are present but not yet wired into `HeberReader`:
 
 - **Iceberg**: `heber/storage/iceberg_catalog.py`, `heber/storage/iceberg_writer.py`
 - **Schema Registry**: `heber/schema/registry_client.py` (Confluent-compatible API)
-- **Versioning**: `heber/versioning/` (lakeFS client; used by SDK for Gold version tags)
+- **Versioning**: lakeFS integration (not yet implemented; Gold versions use filesystem discovery)
 
 ## Repository Map (Top-Level)
 
-- `heber/` - core services, SDK, and storage logic
+- `heber/` - core services, reader, and storage logic
   - `backfill/` - historical data backfilling service
   - `backtest/` - ML experiment tracking and data loading
   - `bus/` - Redis streams event bus utilities
@@ -128,7 +126,7 @@ These modules are present but not yet wired into `HeberClient`:
   - `catalog/` - metadata and dataset registry (Postgres)
   - `feast/` - feature store definitions
   - `features/` - feature view definitions
-  - `firewall/` - zero-leakage read enforcement (`ts_available`)
+  - (firewall enforcement is built into `HeberReader.read_asof()` via predicate pushdown)
   - `gold/` - ML feature/label generation logic
   - `hotstore/` - ClickHouse writer and query helpers
   - `ml/` - meta-labeling and model training
@@ -137,12 +135,12 @@ These modules are present but not yet wired into `HeberClient`:
   - `quality/` - data quality checks (Soda)
   - `retention/` - data retention policy enforcement
   - `schema/` - schema registry client
-  - `sdk/` - public python client (`HeberClient`)
+  - `reader/` - canonical thin filesystem reader (`HeberReader`)
   - `sre/` - site reliability engineering scripts
   - `storage/` - Iceberg/lakeFS storage adapters
   - `universe/` - instrument universe management and survivor bias handling
   - `watch/` - real-time flow alert tracking
   - `writer/` - Bronze/Silver lake writers
-- `docs/` - SDK docs, ops runbooks, and provider endpoints
+- `docs/` - reader docs, ops runbooks, and provider endpoints
 - `k8s/`, `infrastructure/` - deployment manifests and Terraform
 - `scripts/` - volume init, docker build/push, backups

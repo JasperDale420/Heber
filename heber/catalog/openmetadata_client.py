@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
@@ -37,7 +37,7 @@ catalog_operation_duration = Histogram(
 )
 
 
-class TableType(str, Enum):
+class TableType(StrEnum):
     """Table type classification."""
 
     REGULAR = "Regular"
@@ -231,7 +231,7 @@ class OpenMetadataCatalog:
 
         except Exception as e:
             catalog_operations.labels(operation="register_table", status="error").inc()
-            logger.error("table_registration_failed", error=str(e))
+            logger.error("table_registration_failed", error=str(e), exc_info=True)
             raise
 
     def get_table(self, fqn: str) -> TableMetadata | None:
@@ -329,7 +329,7 @@ class OpenMetadataCatalog:
 
         except Exception as e:
             catalog_operations.labels(operation="add_lineage", status="error").inc()
-            logger.error("lineage_add_failed", error=str(e))
+            logger.error("lineage_add_failed", error=str(e), exc_info=True)
             raise
 
     def get_lineage(self, table_fqn: str, direction: str = "both") -> list[LineageEdge]:
@@ -435,13 +435,7 @@ class MockOpenMetadataClient:
 
 
 # Singleton
-_catalog: OpenMetadataCatalog | None = None
-
-
 @lru_cache(maxsize=1)
 def get_catalog() -> OpenMetadataCatalog:
     """Get the singleton catalog instance."""
-    global _catalog
-    if _catalog is None:
-        _catalog = OpenMetadataCatalog()
-    return _catalog
+    return OpenMetadataCatalog()

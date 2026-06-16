@@ -90,7 +90,7 @@ class ScanResult:
 class SodaQualityScanner:
     """Data quality scanner using Soda Core.
 
-    This replaces custom DataQualityValidator with Soda's SodaCL checks.
+    Uses Soda's SodaCL checks for data quality validation.
 
     Example:
         scanner = SodaQualityScanner()
@@ -179,7 +179,7 @@ data_source heber_silver:
                 passed=len(scan.get_checks_pass()),
                 warned=len(scan.get_checks_warn()),
                 failed=len(scan.get_checks_fail()),
-                errors=scan.has_error_logs(),
+                errors=1 if scan.has_error_logs() else 0,
                 duration_seconds=duration,
                 timestamp=datetime.now(UTC),
                 details=[
@@ -212,7 +212,7 @@ data_source heber_silver:
         except Exception as e:
             duration = (datetime.now(UTC) - start_time).total_seconds()
             quality_scans.labels(dataset=dataset, status="error").inc()
-            logger.error("soda_scan_failed", dataset=dataset, error=str(e))
+            logger.error("soda_scan_failed", dataset=dataset, error=str(e), exc_info=True)
 
             return ScanResult(
                 dataset=dataset,
@@ -249,15 +249,3 @@ data_source heber_silver:
             results[dataset] = self.scan(dataset)
 
         return results
-
-
-# Singleton
-_scanner: SodaQualityScanner | None = None
-
-
-def get_quality_scanner() -> SodaQualityScanner:
-    """Get the singleton quality scanner instance."""
-    global _scanner
-    if _scanner is None:
-        _scanner = SodaQualityScanner()
-    return _scanner

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import heber.writer.consumer as consumer_module
+import heber.writer.dlq_fallback as dlq_fallback_module
 from heber.models.envelope import EventEnvelope
 from heber.writer.consumer import EventConsumer
 
@@ -37,6 +38,16 @@ class _StubRedis:
             raise RuntimeError("dlq unavailable")
         self.added.append((stream, payload))
         return "9-0"
+
+
+def test_extract_payload_value_prefers_data_over_payload() -> None:
+    consumer = EventConsumer()
+    message_data = {
+        b"data": b"primary",
+        "payload": "secondary",
+    }
+
+    assert consumer._extract_payload_value(message_data) == b"primary"
 
 
 @pytest.mark.asyncio
@@ -88,11 +99,20 @@ async def test_process_stream_messages_moves_failures_to_dlq() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
+async def test_process_stream_messages_falls_back_to_disk_when_dlq_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     consumer = EventConsumer()
     redis = _StubRedis()
     redis.fail_xadd = True
     consumer.redis = redis
+
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
 
     consumer._process_with_retry = AsyncMock(return_value=(False, "boom", 3))
 
@@ -102,8 +122,10 @@ async def test_process_stream_messages_keeps_pending_when_dlq_fails() -> None:
         ]
     )
 
-    assert ack_ids == []
-    assert failed_ids == ["2-0"]
+    assert ack_ids == ["2-0"]
+    assert failed_ids == []
+    fallback_files = list(tmp_path.rglob("*.json"))
+    assert len(fallback_files) == 1
 
 
 def test_process_event_rejects_invalid_instrument_key() -> None:
@@ -133,6 +155,53 @@ def test_process_event_rejects_invalid_instrument_key() -> None:
     assert retryable is False
     consumer.bronze_writer.write.assert_called_once()
     consumer.silver_writer.write.assert_not_called()
+
+
+def test_process_event_rate_limits_repeated_insider_identifier_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    warning_mock = MagicMock()
+    error_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+    monkeypatch.setattr(consumer_module.logger, "error", error_mock)
+
+    now = datetime(2026, 2, 7, 16, 0, tzinfo=UTC)
+    envelope = {
+        "event_id": "evt-empty-insider",
+        "provider": "unusual_whales",
+        "feed": "insider_trades",
+        "source": "rest",
+        "instrument_type": "equity",
+        "instrument_key": "equity:",
+        "symbol": "",
+        "ts_event": now.isoformat(),
+        "ts_ingest": now.isoformat(),
+        "payload": {
+            "ticker": "",
+            "owner_name": "John Exec",
+            "transaction_date": "2026-02-01",
+        },
+    }
+
+    for _ in range(2):
+        success, error, retryable = consumer._process_event_once({"data": json.dumps(envelope)})
+        assert success is False
+        # With empty ticker, normalization falls back to UNKNOWN sentinel.
+        # The record then fails at required-field validation (missing trade_type).
+        assert "missing_required_fields:insider_trades:" in error
+        assert retryable is False
+
+    consumer.bronze_writer.write.assert_called()
+    consumer.silver_writer.write.assert_not_called()
+    error_mock.assert_not_called()
+
+    silver_validation_logs = [
+        call for call in warning_mock.call_args_list if call.args and call.args[0] == "silver_validation_failed"
+    ]
+    assert len(silver_validation_logs) == 1
+    assert silver_validation_logs[0].kwargs["occurrence_count"] == 1
 
 
 @pytest.mark.asyncio

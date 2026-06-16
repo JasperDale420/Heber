@@ -9,7 +9,8 @@ This module is the single source of truth for:
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from heber.schemas.silver import SILVER_SCHEMAS
@@ -31,6 +32,8 @@ FEED_ALIASES: dict[str, str] = {
     "crypto_bars": "bars",
     "crypto_trades": "trades",
     "crypto_quotes": "quotes",
+    "daily_bars": "bars",
+    "updated_bars": "bars",
     "institutions": "institution_holdings",
     "filings": "news",
 }
@@ -57,6 +60,7 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "option_trades",
     "option_bars",
     "option_quotes",
+    "option_chain_snapshot",
     "crypto_bars",
     "crypto_trades",
     "crypto_quotes",
@@ -64,15 +68,187 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "darkpool_ticker",
     "institutions",
     "earnings",
+    "treasury_yields",
+    "daily_bars",
+    "updated_bars",
+    "lulds",
+    "statuses",
+    "corrections",
+    # Phase 3: Cerberus advanced strategies
+    "iv_term_structure",
+    "etf_tide",
+    "auctions",
+    # Reference / metadata feeds — contracted-but-Bronze-only.
+    # Listed here so `is_contracted_feed` passes the routing gate (no
+    # `silver_feed_uncontracted` DLQ).  Each canonical name appears in
+    # ``BRONZE_ONLY_SILVER_DATASETS`` below so the Silver writer skips them.
+    # Re-classify to typed Silver later by adding an Arrow schema in
+    # ``heber/schemas/silver.py`` and removing the canonical name from the
+    # Bronze-only set.
+    "filings",
+    "institution_holdings",
+    "13f",
+    "account",
+    "alerts",
+    "assets",
+    "balance-sheet",
+    "calendar",
+    "cash-flow",
+    "clock",
+    "company",
+    "concept",
+    "congress",
+    "congress-trading",
+    "contract",
+    "corporate-actions",
+    "crypto",
+    "economic",
+    "estimates",
+    "etf_metadata",
+    "executives",
+    "fda-calendar",
+    "fixed-income",
+    "forex",
+    "frames",
+    "fund-ownership",
+    "income-statement",
+    "index",
+    "indicator",
+    "insider",
+    "insider-sentiment",
+    "insider-transactions",
+    "listing-status",
+    "lobbying",
+    "logos",
+    "market",
+    "meta",
+    "metrics",
+    "mutual-fund",
+    "option-contract",
+    "option_contract",
+    "orders",
+    "orders:by_client_order_id",
+    "ownership",
+    "patterns",
+    "peers",
+    "politician_trades",
+    "portfolio",
+    "positions",
+    "price-target",
+    "recommendations",
+    "screener_result",
+    "search",
+    "seasonality",
+    "sectors",
+    "sentiment",
+    "short_data",
+    "social-sentiment",
+    "stock",
+    "stock_fundamentals",
+    "stocks",
+    "support-resistance",
+    "ticker",
+    "upgrade-downgrade",
+    "usa-spending",
+    "watchlists",
+    "{symbol}",
 )
 
 # Backwards-compatible name used by tests and docs for gateway feed inventory.
 DATA_GATEWAY_FEEDS: tuple[str, ...] = CONTRACTED_RAW_FEEDS
 
 # Feeds to persist in Bronze but skip Silver by default until an active Gold use-case exists.
-# Currently empty — all contracted feeds get Silver normalization. Add canonical Silver
-# dataset names here to gate them out of Silver writes.
-BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset({"news", "institution_holdings"})
+# Each entry must be the canonical (post-FEED_ALIASES) feed name.  ``is_bronze_only_feed``
+# resolves aliases before lookup, so raw feed names that alias into one of these are also
+# silenced.  See ``CONTRACTED_RAW_FEEDS`` above for the matching raw-name allowlist.
+BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset(
+    {
+        # Already Bronze-only since Phase 2 — news bodies and 13F holdings have
+        # no time-series shape that warrants Silver typing.
+        "news",
+        "institution_holdings",
+        # ── Reference / metadata feeds (UnusualWhales REST endpoint names) ──
+        # Account, watchlists, portfolio: user-account REST endpoints, not market data.
+        "account",
+        "watchlists",
+        "portfolio",
+        "positions",
+        "orders",
+        "orders:by_client_order_id",
+        # Calendar / clock / market-state: trading-day metadata.
+        "calendar",
+        "clock",
+        "fda-calendar",
+        "market",
+        "listing-status",
+        # Reference data lookups: per-symbol point-in-time metadata snapshots.
+        "company",
+        "executives",
+        "logos",
+        "meta",
+        "metrics",
+        "assets",
+        "stock",
+        "stocks",
+        "ticker",
+        "{symbol}",  # template placeholder leaking from the gateway router
+        "search",
+        "concept",
+        "contract",
+        "option-contract",
+        "option_contract",
+        "mutual-fund",
+        # Sector / index / ETF metadata: slow-moving descriptive data.
+        "sectors",
+        "index",
+        "etf_metadata",
+        "fund-ownership",
+        # Government / political: lobbying disclosures, congressional trades index,
+        # USASpending federal contracts.  Keep raw blobs; promote to Silver if a
+        # strategy actually consumes them.
+        "13f",
+        "lobbying",
+        "usa-spending",
+        "congress",
+        "congress-trading",
+        "politician_trades",
+        # Insider activity (variant feeds — canonical typed feed is ``insider_trades``).
+        "insider",
+        "insider-sentiment",
+        "insider-transactions",
+        "ownership",
+        # Corporate actions / filings / earnings estimates: row-per-event metadata.
+        "corporate-actions",
+        "estimates",
+        "upgrade-downgrade",
+        "price-target",
+        "recommendations",
+        # Sentiment, social, screener, peers, patterns: per-symbol scoring snapshots.
+        "sentiment",
+        "social-sentiment",
+        "screener_result",
+        "peers",
+        "patterns",
+        "support-resistance",
+        "indicator",
+        "seasonality",
+        # Cross-asset reference (forex, crypto, fixed income, economic, frames).
+        "forex",
+        "crypto",
+        "fixed-income",
+        "economic",
+        "frames",
+        # Fundamentals: balance sheet / cash flow / income statement / fundamentals snapshot.
+        "balance-sheet",
+        "cash-flow",
+        "income-statement",
+        "stock_fundamentals",
+        # Misc variant pending a typed Silver schema. (short_data was removed here:
+        # it has a typed Silver schema and was wrongly swept into this set by the
+        # 2026-05-20 reconciliation, halting Silver short_data production.)
+        "alerts",
+    }
+)
 
 # Required and allowed payload keys for schema validation.
 # Required keys trigger a warning when missing; unexpected keys (outside
@@ -132,6 +308,10 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
         "total_size",
         "expiry_count",
         "sentiment",
+        "gex",
+        "vex",
+        "max_pain_strike",
+        "max_pain_distance_pct",
     },
     "market_tide": {
         "timestamp",
@@ -143,16 +323,207 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
         "call_put_ratio",
         "provider",
     },
+    "oi_change": {
+        "timestamp",
+        "symbol",
+        "date",
+        "call_oi",
+        "put_oi",
+        "call_oi_change",
+        "put_oi_change",
+        "avg_price",
+        "prev_oi",
+        "last_oi",
+        "option_symbol",
+        "volume",
+        "trades",
+        "provider",
+        # New fields
+        "last_ask",
+        "last_bid",
+        "last_fill",
+        "percentage_of_total",
+        "prev_ask_volume",
+        "prev_bid_volume",
+        "prev_multi_leg_volume",
+        "prev_total_premium",
+        "last_date",
+        "prev_mid_volume",
+        "prev_neutral_volume",
+        "prev_stock_multi_leg_volume",
+    },
+    "iv_rank": {
+        "timestamp",
+        "symbol",
+        "iv_rank",
+        "iv_percentile",
+        "current_iv",
+        "one_year_high",
+        "one_year_low",
+        "provider",
+        # New fields
+        "close",
+        "date",
+    },
+    "insider_trades": {
+        "timestamp",
+        "symbol",
+        "id",
+        "transaction_id",
+        "filing_id",
+        "owner_name",
+        "insider_name",
+        "officer_title",
+        "insider_title",
+        "insider_relationship",
+        "transaction_code",
+        "transaction_type",
+        "trade_type",
+        "transaction_date",
+        "trade_date",
+        "amount",
+        "shares",
+        "price",
+        "value",
+        "shares_owned",
+        "shares_owned_after",
+        "filing_date",
+        "is_10b5_1",
+        "is_director",
+        "is_officer",
+        "is_ten_percent_owner",
+        "provider",
+        # New fields
+        "stock_price",
+    },
+    "earnings": {
+        "timestamp",
+        "symbol",
+        "earnings_date",
+        "report_date",
+        "date",
+        "time",
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "expected_move",
+        "expected_move_perc",
+        "pre_earnings_close",
+        "prior_close",
+        "has_options",
+        "market_cap",
+        "sector",
+        "provider",
+        # New fields
+        "is_s_p_500",
+        "post_earnings_close",
+        "reaction",
+    },
+    "option_chain_snapshot": {
+        "timestamp",
+        "symbol",
+        "snapshot_ts",
+        "underlying",
+        "underlying_price",
+        "expiry",
+        "expiration",
+        "chain_json",
+        "total_call_volume",
+        "total_put_volume",
+        "total_call_oi",
+        "total_put_oi",
+        "atm_iv",
+        "occ_symbol",
+        "contract_symbol",
+        "strike",
+        "put_call",
+        "option_type",
+        "bid",
+        "ask",
+        "last",
+        "volume",
+        "open_interest",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "rho",
+        "iv",
+        "provider",
+        # New fields
+        "bid_size",
+        "ask_size",
+        "last_trade_size",
+    },
+    "most_active": {
+        "timestamp",
+        "symbol",
+        "volume",
+        "trade_count",
+        "provider",
+        # New fields
+        "vwap",
+        "price",
+        "change",
+        "change_percent",
+    },
+    "mover": {
+        "timestamp",
+        "symbol",
+        "price",
+        "change",
+        "percent_change",
+        "direction",
+        "provider",
+        # New fields
+        "volume",
+    },
+    "lulds": {
+        "timestamp",
+        "symbol",
+        "upper_limit",
+        "lower_limit",
+        "indicator",
+        "provider",
+    },
+    "statuses": {
+        "timestamp",
+        "symbol",
+        "status_code",
+        "status_message",
+        "reason_code",
+        "reason_message",
+        "tape",
+        "provider",
+    },
+    "corrections": {
+        "timestamp",
+        "symbol",
+        "exchange",
+        "original_trade_id",
+        "original_price",
+        "original_size",
+        "original_conditions",
+        "corrected_trade_id",
+        "corrected_price",
+        "corrected_size",
+        "corrected_conditions",
+        "tape",
+        "provider",
+    },
 }
 
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
+    "borrow_cost",
     "flow",
     "greeks",
     "gex",
     "stock_fundamentals",
     "option_contract",
+    "option_trades",
     "screener_result",
     "institution_holdings",
     "politician_trades",
@@ -179,6 +550,9 @@ LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
     "most_active",
     "corporate_action",
     "orderbook",
+    "lulds",
+    "statuses",
+    "corrections",
 )
 
 # Field mappings: payload field -> Silver schema field
@@ -206,6 +580,10 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "ask_size": "ask_sz",
         "bx": "bid_exchange",
         "ax": "ask_exchange",
+        "c": "conditions",
+        "conditions": "conditions",
+        "z": "tape",
+        "tape": "tape",
     },
     "trades": {
         # Short Alpaca WebSocket keys
@@ -214,12 +592,19 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "x": "exchange",
         "i": "trade_id",
         "z": "tape",
+        "c": "conditions",
+        "tks": "taker_side",
         # Full-name keys from Alpaca REST / aggregate payloads
         "price": "price",
         "size": "size",
         "exchange": "exchange",
         "trade_id": "trade_id",
         "tape": "tape",
+        "conditions": "conditions",
+        "taker_side": "taker_side",
+        # Code-table disambiguation (SIP vs OPRA)
+        "exchange_type": "exchange_type",
+        "condition_type": "condition_type",
     },
     # Options Flow
     "flow_alerts": {
@@ -238,6 +623,8 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "tracking_id": "print_id",
         "ask": "nbbo_ask",
         "bid": "nbbo_bid",
+        "nbbo_bid_quantity": "nbbo_bid_size",
+        "nbbo_ask_quantity": "nbbo_ask_size",
         "ext_hour_sold_codes": "ext_hours",
     },
     # Sentiment
@@ -245,16 +632,21 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "market_tide": {
         "net_call_premium": "total_call_premium",
         "net_put_premium": "total_put_premium",
+        "date": "tide_date",
     },
     # Core Analytics
     "greek_exposure": {},
     "max_pain": {},
     "net_premium_tick": {},
-    "hottest_chain": {},
+    "hottest_chain": {
+        "option_type": "put_call",
+    },
     # Reference Data
     "earnings": {
         "report_date": "earnings_date",
         "date": "earnings_date",
+        "expected_move_perc": "expected_move_pct",
+        "pre_earnings_close": "prior_close",
     },
     "corporate_action": {},
     # Screeners
@@ -263,10 +655,13 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "screener_result": {},
     # Advanced Analytics
     "iv_rank": {},
-    "iv_term_structure": {},
+    "iv_term_structure": {
+        "days_to_expiry": "dte",
+    },
     "volatility_stats": {},
     "oi_change": {
         "date": "oi_date",
+        "last_oi": "prev_oi",
     },
     # ETF Feeds
     "etf_holding": {},
@@ -298,7 +693,9 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "id": "news_id",
         "published_at": "ts_published",
         "created_at": "ts_published",
+        "updated_at": "ts_updated",
         "source": "source_name",
+        "content": "body",
     },
     "orderbook": {
         "bids": "bids_json",
@@ -319,6 +716,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "transaction_date": "trade_date",
         "date": "trade_date",
         "filed_at_date": "disclosure_date",
+        "description": "asset_description",
     },
     "insider_trades": {
         "id": "filing_id",
@@ -330,6 +728,7 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "transaction_date": "trade_date",
         "amount": "shares",
         "is_10b5_1": "insider_relationship",
+        "shares_owned": "shares_owned_after",
     },
     "insider_flow": {},
     "institution_holdings": {
@@ -375,6 +774,11 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "date": "indicator_date",
         "time": "indicator_time",
     },
+    "treasury_yields": {
+        "date": "date",
+        "maturity": "maturity",
+        "yield_pct": "yield_pct",
+    },
     # Options Deep Data
     "option_history": {
         "contract_symbol": "occ_symbol",
@@ -382,6 +786,9 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     },
     "option_chain_snapshot": {
         "timestamp": "snapshot_ts",
+        "contract_symbol": "occ_symbol",
+        "expiration": "expiry",
+        "option_type": "put_call",
     },
     "volume_profile": {
         "contract_symbol": "occ_symbol",
@@ -407,6 +814,19 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
     "forex": {
         "currency_pair": "pair",
     },
+    # Borrow Cost
+    "borrow_cost": {
+        "available_shares": "short_shares_available",
+    },
+    # Option Trades (dedicated schema)
+    "option_trades": {
+        "option_chain_id": "option_symbol",
+        "flow_alert_id": "trade_id",
+    },
+    # Real-time market status feeds
+    "lulds": {},
+    "statuses": {},
+    "corrections": {},
 }
 
 # ML-facing required fields for emitted Data-Gateway feeds.
@@ -422,13 +842,18 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "greek_exposure": {"call_gamma"},
     "iv_rank": {"iv_rank"},
     "oi_change": {"oi_date", "call_oi", "put_oi"},
-    "historic_option_volume": {"hov_date", "expiry", "volume"},
+    "historic_option_volume": {"hov_date", "volume"},
+    "option_chain_snapshot": {"snapshot_ts", "underlying", "chain_json"},
     "short_data": {"short_date", "short_interest"},
     "ftd": {"ftd_date", "quantity"},
     "congress_trades": {"politician_name", "trade_type", "trade_date"},
     "insider_trades": {"insider_name", "trade_type", "trade_date"},
     "earnings": {"earnings_date"},
     "institution_holdings": {"institution_name", "value", "quarter_end"},
+    "treasury_yields": {"date", "maturity", "yield_pct"},
+    "lulds": {"upper_limit", "lower_limit"},
+    "statuses": {"status_code"},
+    "corrections": {"original_trade_id", "original_price", "original_size"},
 }
 REQUIRED_NON_NULL_FIELDS = REQUIRED_FIELDS_BY_FEED
 
@@ -465,8 +890,22 @@ def is_bronze_only_feed(feed: str) -> bool:
     return canonical in BRONZE_ONLY_SILVER_DATASETS
 
 
-def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Apply feed-specific payload normalization before column mapping."""
+def normalize_payload_for_feed(
+    feed: str, payload: dict[str, Any], *, ts_event: datetime | None = None
+) -> dict[str, Any]:
+    """Apply feed-specific payload normalization before column mapping.
+
+    Parameters
+    ----------
+    feed:
+        Canonical Silver feed name.
+    payload:
+        Raw provider payload dict.
+    ts_event:
+        Event timestamp from the envelope.  Used to derive missing date
+        fields when the upstream provider sends empty strings (common for
+        UnusualWhales per-symbol aggregate endpoints).
+    """
     normalized = dict(payload)
 
     if feed == "news":
@@ -480,10 +919,11 @@ def normalize_payload_for_feed(feed: str, payload: dict[str, Any]) -> dict[str, 
     elif feed == "flow_alerts":
         _normalize_flow_payload(normalized)
     elif feed == "short_data":
-        if "short_interest" not in normalized and "short_volume" in normalized:
-            normalized["short_interest"] = normalized.get("short_volume")
-        if "short_percent_float" not in normalized and "short_ratio" in normalized:
-            normalized["short_percent_float"] = normalized.get("short_ratio")
+        _normalize_short_data_payload(normalized, ts_event=ts_event)
+    elif feed == "oi_change":
+        _normalize_oi_change_payload(normalized, ts_event=ts_event)
+    elif feed == "historic_option_volume":
+        _normalize_hov_payload(normalized, ts_event=ts_event)
 
     return normalized
 
@@ -559,7 +999,7 @@ def _normalize_tide_payload(payload: dict[str, Any], call_key: str, put_key: str
     call_premium = _to_decimal_or_none(payload.get(call_key))
     put_premium = _to_decimal_or_none(payload.get(put_key))
     if payload.get("call_put_ratio") is None and call_premium is not None and put_premium not in (None, Decimal("0")):
-        payload["call_put_ratio"] = float(call_premium / put_premium)
+        payload["call_put_ratio"] = float(call_premium / put_premium)  # type: ignore[operator]
 
 
 def _normalize_flow_payload(payload: dict[str, Any]) -> None:
@@ -570,6 +1010,52 @@ def _normalize_flow_payload(payload: dict[str, Any]) -> None:
             payload["put_call"] = "C"
         elif lowered.startswith("p"):
             payload["put_call"] = "P"
+
+
+def _normalize_short_data_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize short_data / short_interest payload.
+
+    UW sends ``short_volume`` and ``short_ratio`` as the provider field names;
+    remap to the canonical Silver names.  When the ``date`` field is empty
+    (common for UW per-symbol endpoints), derive it from ``ts_event``.
+    """
+    if "short_interest" not in payload and "short_volume" in payload:
+        payload["short_interest"] = payload.get("short_volume")
+    if "short_percent_float" not in payload and "short_ratio" in payload:
+        payload["short_percent_float"] = payload.get("short_ratio")
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _normalize_oi_change_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize oi_change payload.
+
+    When the ``date`` field is empty (common for UW aggregate endpoints),
+    derive it from ``ts_event`` so that the ``oi_date`` Silver field is populated.
+    """
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _normalize_hov_payload(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Normalize historic_option_volume payload.
+
+    When the ``date`` field is empty, derive it from ``ts_event`` so the
+    ``hov_date`` Silver field is populated.
+    """
+    _backfill_empty_date(payload, ts_event=ts_event)
+
+
+def _backfill_empty_date(payload: dict[str, Any], *, ts_event: datetime | None = None) -> None:
+    """Set ``payload["date"]`` from *ts_event* when the field is missing or blank.
+
+    Many UnusualWhales per-symbol aggregate endpoints omit the ``date`` field
+    (sending ``""``).  Deriving the date from the event timestamp keeps the
+    Silver pipeline from rejecting otherwise valid rows.
+    """
+    date_val = payload.get("date")
+    if date_val is not None and str(date_val).strip():
+        return  # Already has a real date — nothing to do
+    if ts_event is not None:
+        payload["date"] = ts_event.strftime("%Y-%m-%d")
 
 
 def _parse_amount_range(raw: Any) -> tuple[float, float] | None:
@@ -593,7 +1079,7 @@ def _to_decimal_or_none(value: Any) -> Decimal | None:
         return None
     try:
         return Decimal(str(value))
-    except Exception:
+    except (TypeError, ValueError, InvalidOperation):
         return None
 
 

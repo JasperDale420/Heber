@@ -15,3 +15,10 @@ alert = Entity(
     description="Individual flow alert from Unusual Whales",
     join_keys=["alert_id"],
 )
+
+# Entity for market-wide (non-ticker) features
+market = Entity(
+    name="market",
+    description="Market-level aggregate features (no per-ticker key)",
+    join_keys=["market_id"],
+)

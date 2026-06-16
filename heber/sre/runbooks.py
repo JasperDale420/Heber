@@ -6,7 +6,7 @@ Structured runbook definitions for incident response.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -14,7 +14,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class IncidentSeverity(str, Enum):
+class IncidentSeverity(StrEnum):
     """Incident severity levels (PRD §40.3)."""
 
     P1_CRITICAL = "P1"  # Data loss risk or total outage

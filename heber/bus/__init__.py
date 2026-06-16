@@ -14,11 +14,12 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from enum import StrEnum
+from typing import Any, cast
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
+from redis.exceptions import RedisError, ResponseError
 
 logger = structlog.get_logger(__name__)
 
@@ -27,7 +28,7 @@ logger = structlog.get_logger(__name__)
 STREAM_NAMESPACE = "heber:events"
 
 
-class StreamName(str, Enum):
+class StreamName(StrEnum):
     """Canonical stream names.
 
     Covers all entries in ``bus.streams.DEFAULT_STREAMS`` plus the DLQ.
@@ -182,7 +183,7 @@ class EventBus(ABC):
         pass
 
     @abstractmethod
-    async def consume(
+    def consume(
         self,
         config: ConsumerConfig,
     ) -> AsyncIterator[list[Message]]:
@@ -279,7 +280,7 @@ class RedisEventBus(EventBus):
                 stream=stream.value,
                 group=group_name,
             )
-        except Exception as e:
+        except ResponseError as e:
             # Group already exists is OK
             if "BUSYGROUP" in str(e):
                 logger.debug("consumer_group_exists", stream=stream.value, group=group_name)
@@ -304,7 +305,7 @@ class RedisEventBus(EventBus):
             stream=stream.value,
             message_id=message_id,
         )
-        return message_id
+        return cast(str, message_id)
 
     async def consume(
         self,
@@ -334,11 +335,11 @@ class RedisEventBus(EventBus):
             except asyncio.CancelledError:
                 logger.info("consumer_cancelled", stream=config.stream.value)
                 raise  # Re-raise per Python best practice
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — top-level consume loop must not crash
                 logger.error("consume_error", error=str(e), exc_info=True)
                 await asyncio.sleep(1)
 
-    def _parse_stream_results(self, results: list) -> list[Message]:
+    def _parse_stream_results(self, results: list[Any]) -> list[Message]:
         """Parse XREADGROUP results into Message objects."""
         messages = []
         for stream_name, stream_messages in results:
@@ -352,7 +353,7 @@ class RedisEventBus(EventBus):
         self,
         msg_id: str,
         stream_name: str,
-        msg_data: dict,
+        msg_data: dict[str, Any],
     ) -> Message:
         """Parse a single message, deserializing JSON fields."""
         parsed_data = {}
@@ -411,7 +412,7 @@ class RedisEventBus(EventBus):
                             )
 
             return claimed_messages
-        except Exception as e:
+        except RedisError as e:
             logger.debug("claim_error", error=str(e))
             return []
 
@@ -431,15 +432,15 @@ class RedisEventBus(EventBus):
             else:
                 count = 0
             consumer_lag.labels(stream=stream.value, group=group_name).set(count)
-            return count
-        except Exception:
+            return cast(int, count)
+        except RedisError:
             return 0
 
 
 class InMemoryEventBus(EventBus):
     """In-memory event bus for testing."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._streams: dict[str, list[Message]] = {}
         self._groups: dict[str, dict[str, set[str]]] = {}  # stream -> group -> acked_ids
         self._consumers: dict[str, int] = {}  # group -> offset
@@ -501,7 +502,7 @@ class InMemoryEventBus(EventBus):
                     offset = self._consumers.get(config.group_name, 0)
 
                     # Get unacked messages
-                    batch = []
+                    batch: list[Message] = []
                     for _i, msg in enumerate(stream_msgs[offset:], start=offset):
                         if msg.id not in acked and len(batch) < config.batch_size:
                             batch.append(msg)
@@ -533,7 +534,7 @@ class InMemoryEventBus(EventBus):
             return len([m for m in stream_msgs if m.id not in acked])
 
 
-def create_event_bus(bus_type: str = "redis", **kwargs) -> EventBus:
+def create_event_bus(bus_type: str = "redis", **kwargs: Any) -> EventBus:
     """Factory function to create event bus.
 
     Args:

@@ -104,7 +104,7 @@ echo "Test instance available at: ${ENDPOINT}"
 
 # Run validation queries
 echo "Running validation queries..."
-PGPASSWORD="${PG_PASSWORD:-}" psql -h "${ENDPOINT}" -U heber -d heber -c "
+PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "${ENDPOINT}" -U heber -d heber_catalog -c "
 SELECT COUNT(*) as dataset_count FROM datasets;
 SELECT COUNT(*) as partition_count FROM partitions;
 SELECT MAX(created_at) as latest_partition FROM partitions;

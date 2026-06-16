@@ -5,6 +5,7 @@ import json
 import sys
 
 from heber import __version__
+from heber.ops.notifier import DiscordNotifier
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
@@ -19,15 +20,35 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_research_artifact(feed_dir) -> bool:
+    """Return True for non-Heber-managed feed dirs (Atlas hypothesis materializations).
+
+    Atlas writes hypothesis outputs directly to ``silver/feed=atlas_features_*/``
+    with an ``_atlas_materialization_meta.json`` marker. They share storage but
+    are NOT Bronze→Silver pipeline outputs and pollute dataset listings/audits.
+    """
+    if (feed_dir / "_atlas_materialization_meta.json").exists():
+        return True
+    if feed_dir.name.startswith("feed=atlas_features_"):
+        return True
+    return False
+
+
 def _cmd_datasets(args: argparse.Namespace) -> int:
     """Handle the 'datasets' subcommand."""
     try:
-        from heber.sdk.client import HeberClient
+        from heber.config import settings
 
-        client = HeberClient()
-        datasets = client.list_datasets(layer=args.layer)
-        for ds in datasets:
-            print(f"  {ds.get('name', ds)}")
+        layer = args.layer or "silver"
+        base = settings.data_root / layer
+        if not base.exists():
+            print(f"No {layer} data found at {base}", file=sys.stderr)
+            return 1
+        feeds = sorted(
+            {p.name.split("=")[1] for p in base.glob("feed=*") if p.is_dir() and not _is_research_artifact(p)}
+        )
+        for feed in feeds:
+            print(f"  {feed}")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -37,10 +58,10 @@ def _cmd_datasets(args: argparse.Namespace) -> int:
 def _cmd_versions(args: argparse.Namespace) -> int:
     """Handle the 'versions' subcommand."""
     try:
-        from heber.sdk.client import HeberClient
+        from heber.reader import HeberReader
 
-        client = HeberClient()
-        versions = client.list_gold_versions(args.dataset)
+        reader = HeberReader()
+        versions = reader.list_gold_versions(args.dataset)
         for v in versions:
             print(f"  {v}")
     except Exception as e:
@@ -104,12 +125,103 @@ def _cmd_health_dataflow(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_health_daily(args: argparse.Namespace) -> int:
+    """Handle the 'health-daily' subcommand."""
+    from datetime import datetime
+
+    from heber.ops.daily_health import run_daily_health
+
+    try:
+        report_date = datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else None
+        report = run_daily_health(
+            report_date=report_date,
+            force=args.force,
+            verbose=args.verbose,
+        )
+        if args.verbose:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            status = report["overall_status"]
+            rd = report.get("report_date", "unknown")
+            summary = report.get("summary", {})
+            ok, w, f = summary.get("ok", 0), summary.get("warn", 0), summary.get("fail", 0)
+            print(f"{rd}: {status} (ok={ok} warn={w} fail={f})")
+        return 0 if report["overall_status"] in ("ok", "skipped") else 1
+    except KeyboardInterrupt:
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_alert_calibrate(args: argparse.Namespace) -> int:
+    """Print suggested per-feed liveness floors from healthy history."""
+    from heber.ops.calibrate_floors import calibrate_json
+
+    print("Suggested HEBER_ALERT_FLOOR_OVERRIDES (paste into .env):")
+    print(calibrate_json(days_back=args.days_back, ratio=args.ratio))
+    return 0
+
+
+def _cmd_alert_test(args: argparse.Namespace) -> int:
+    """Send a test message through the Discord notifier."""
+    from heber.config import get_settings
+
+    settings = get_settings()
+    notifier = DiscordNotifier(settings)
+    text = args.message or "✅ Heber alert-test — data-quality alerting is wired up."
+    ok = notifier.send_test(text)
+    print("Sent." if ok else "Failed to send (check HEBER_ALERT_DISCORD_* settings).")
+    return 0 if ok else 1
+
+
+def _cmd_alert_check(args: argparse.Namespace) -> int:
+    """Run one liveness cycle and dispatch any criticals to Discord, then exit.
+
+    Built to be scheduled (launchd StartInterval) so the alarm runs as a fast,
+    isolated process rather than a loop sharing the multi-tier monitor's event
+    loop. Cooldown/recovery state lives on disk, so throttling works across runs.
+    """
+    import asyncio
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from heber.config import get_settings
+    from heber.health_monitor.calendar import HealthCalendar
+    from heber.health_monitor.checks.liveness import run_liveness_checks
+    from heber.health_monitor.models import CheckContext
+    from heber.reader import HeberReader
+
+    settings = get_settings()
+    ctx = CheckContext(
+        settings=settings,
+        reader=HeberReader(),
+        redis=None,
+        calendar=HealthCalendar(),
+        store=None,
+    )
+    now = datetime.now(ZoneInfo("America/New_York"))
+    results = asyncio.run(run_liveness_checks(ctx, now=now))
+
+    DiscordNotifier(settings).dispatch(results)
+
+    criticals = [r for r in results if r.status.value in ("fail", "error")]
+    print(f"alert-check: {len(results)} checks, {len(criticals)} critical")
+    for r in results:
+        print(f"  {r.status.value.upper():4} {r.feed}: {r.message}")
+    return 0
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
     "versions": _cmd_versions,
     "backfill": _cmd_backfill,
     "health-dataflow": _cmd_health_dataflow,
+    "health-daily": _cmd_health_daily,
+    "alert-calibrate": _cmd_alert_calibrate,
+    "alert-test": _cmd_alert_test,
+    "alert-check": _cmd_alert_check,
 }
 
 
@@ -157,6 +269,24 @@ def main() -> int:
     health_dataflow_parser.add_argument("--loop", action="store_true")
     health_dataflow_parser.add_argument("--interval-seconds", type=int, default=s.health_interval_seconds)
     health_dataflow_parser.add_argument("--mode", choices=["manual", "scheduled"], default="manual")
+
+    # Daily health report
+    health_daily_parser = subparsers.add_parser("health-daily", help="Run daily end-of-day health report")
+    health_daily_parser.add_argument("--date", help="Report date (YYYY-MM-DD, default: today)")
+    health_daily_parser.add_argument("--force", action="store_true", help="Run even on non-trading days")
+    health_daily_parser.add_argument("--verbose", "-v", action="store_true", help="Print full JSON report")
+
+    # Alert calibrate command
+    alert_cal_parser = subparsers.add_parser("alert-calibrate", help="Suggest liveness floors from history")
+    alert_cal_parser.add_argument("--days-back", type=int, default=50, help="Reference day age in days")
+    alert_cal_parser.add_argument("--ratio", type=float, default=0.3, help="Floor as fraction of median rate")
+
+    # Alert test command
+    alert_test_parser = subparsers.add_parser("alert-test", help="Send a test Discord alert")
+    alert_test_parser.add_argument("--message", help="Custom message text", default=None)
+
+    # Alert check command (one-shot; scheduled via launchd StartInterval)
+    subparsers.add_parser("alert-check", help="Run one liveness cycle and alert on criticals")
 
     args = parser.parse_args()
 

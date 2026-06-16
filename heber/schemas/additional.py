@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -62,7 +62,7 @@ class DailyBar:
 # =============================================================================
 
 
-class OptionType(str, Enum):
+class OptionType(StrEnum):
     """Option type."""
 
     CALL = "call"
@@ -158,7 +158,7 @@ class OptionTrade:
 # =============================================================================
 
 
-class TransactionType(str, Enum):
+class TransactionType(StrEnum):
     """Transaction type for trades."""
 
     BUY = "buy"

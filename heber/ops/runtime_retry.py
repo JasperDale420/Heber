@@ -46,7 +46,11 @@ def calculate_retry_delay(
     normalized_base = max(0.05, base_seconds)
     normalized_max = max(normalized_base, max_seconds)
 
-    delay = min(normalized_max, normalized_base * (2 ** (normalized_attempt - 1)))
+    # Cap exponent to avoid OverflowError when error_streak grows unbounded.
+    # Beyond ~ceil(log2(max/base))+1 the result is always clamped to max anyway.
+    max_useful_exp = 30  # 2^30 ≈ 1 billion — well beyond any practical max_seconds
+    capped_exp = min(normalized_attempt - 1, max_useful_exp)
+    delay = min(normalized_max, normalized_base * (2.0**capped_exp))
     if jitter_ratio > 0:
         delay += random.uniform(0.0, delay * jitter_ratio)
     return delay

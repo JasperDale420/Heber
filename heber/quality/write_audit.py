@@ -63,6 +63,41 @@ EXPECTED_NON_NULL: dict[tuple[str, str], list[str]] = {
         "call_charm",
         "put_charm",
     ],
+    ("silver", "historic_option_volume"): [
+        "hov_date",
+        "volume",
+        "ts_event",
+    ],
+    # option_chain_snapshot stores one row per underlying snapshot with the
+    # full chain serialized in `chain_json`. The Arrow schema also carries
+    # per-contract columns (occ_symbol, strike, bid, ask, etc.) for legacy
+    # ChainSnapshotRecord compatibility; those are LEGITIMATELY null in the
+    # canonical dataset. Restrict the audit to the actually-required fields
+    # per REQUIRED_FIELDS_BY_FEED["option_chain_snapshot"] in ingest_contracts.
+    ("silver", "option_chain_snapshot"): [
+        "snapshot_ts",
+        "underlying",
+        "chain_json",
+    ],
+    # oi_change canonical record: oi_date + call/put OI and OI-change. Other
+    # UW detail fields (last_ask/last_bid/avg_price/prev_*) are optional and
+    # often absent for aggregate rows.
+    ("silver", "oi_change"): [
+        "oi_date",
+        "call_oi",
+        "put_oi",
+        "call_oi_change",
+        "put_oi_change",
+    ],
+    # darkpool: NBBO context (nbbo_bid_size, nbbo_ask_size, sale_cond_codes,
+    # trade_code) is sometimes absent from the upstream feed for off-hours
+    # or low-quality prints. Required is symbol/price/size/ts.
+    ("silver", "darkpool"): [
+        "underlying",
+        "price",
+        "size",
+        "ts_event",
+    ],
     # Gold feature datasets
     ("gold", "meta_label_features"): [
         "alert_id",
@@ -104,7 +139,7 @@ def audit_null_fields(
 ) -> dict[str, int]:
     """Inspect a DataFrame for null values and log warnings.
 
-    Supports pandas DataFrames, Polars DataFrames, and PyArrow Tables.
+    Supports pandas DataFrames and PyArrow Tables.
     Does not raise — this is observe-and-continue.
 
     Args:
@@ -165,20 +200,12 @@ def _compute_null_counts(
 ) -> dict[str, int]:
     """Compute null counts for columns in the data.
 
-    Works with pandas, Polars, and PyArrow.
+    Works with pandas and PyArrow.
     """
     import pandas as pd
 
     if isinstance(data, pd.DataFrame):
         return _pandas_null_counts(data, columns)
-
-    try:
-        import polars as pl
-
-        if isinstance(data, pl.DataFrame):
-            return _polars_null_counts(data, columns)
-    except ImportError:
-        pass
 
     try:
         import pyarrow as pa
@@ -206,21 +233,6 @@ def _pandas_null_counts(
     return report
 
 
-def _polars_null_counts(
-    df: Any,
-    columns: list[str] | None,
-) -> dict[str, int]:
-    """Compute null counts for a Polars DataFrame."""
-    cols = columns if columns else df.columns
-    existing = [c for c in cols if c in df.columns]
-    report: dict[str, int] = {}
-    for col in existing:
-        null_count = df[col].null_count()
-        if null_count > 0:
-            report[col] = null_count
-    return report
-
-
 def _arrow_null_counts(
     table: Any,
     columns: list[str] | None,
@@ -243,5 +255,5 @@ def _row_count(data: Any) -> int:
     if hasattr(data, "__len__"):
         return len(data)
     if hasattr(data, "num_rows"):
-        return data.num_rows
+        return int(data.num_rows)
     return 0

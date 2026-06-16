@@ -16,7 +16,7 @@ Audit Pass 1 (2026-02-05, files reviewed directly):
 - codebase.md
 - heber/config.py
 - heber/models/envelope.py
-- heber/sdk/client.py
+- heber/reader/core.py
 - heber/writer/consumer.py
 - heber/writer/bronze.py
 - heber/writer/silver.py
@@ -319,7 +319,7 @@ Audit Pass 30 (2026-02-06, files reviewed directly):
 - docs/data_contract.md
 - heber/firewall/validation.py
 - heber/schemas/silver.py
-- heber/sdk/client.py
+- heber/reader/core.py
 - heber/watch/writer.py
 
 Audit Pass 31 (2026-02-06, files reviewed directly):
@@ -1272,7 +1272,7 @@ Evidence: `pyproject.toml` restricts `testpaths` to `tests`, while there are mul
 Recommendation: Expand `testpaths` to include `heber` or move internal tests into `tests/` with a consistent naming convention. Add a minimal CI check that confirms expected test modules are collected.
 
 **TD-002: SDK default catalog URL uses port 8080 but docker-compose exposes 8085.**
-Evidence: `heber/config.py` defaults `api_port` to 8080 and `heber/sdk/client.py` uses `settings.api_port`. `docker-compose.yml` maps catalog 8080 to host 8085 and `README.md` advertises 8085. This mismatch breaks the default SDK in a typical docker-compose local setup.
+Evidence: `heber/config.py` defaults `api_port` to 8080 and `heber/reader/core.py` uses `settings.api_port`. `docker-compose.yml` maps catalog 8080 to host 8085 and `README.md` advertises 8085. This mismatch breaks the default SDK in a typical docker-compose local setup.
 Recommendation: Add `HEBER_CATALOG_URL` and use it as the SDK default. Align README and `.env.example` with the new behavior.
 
 **TD-003: Dockerfile stages reference non-existent modules.**
@@ -1438,7 +1438,7 @@ Recommendation: Derive `ts_available` from input data (e.g., max of input `ts_av
 
 **TD-035: Alert labels pipeline queries bars using raw symbols, not canonical instrument keys.**
 Evidence: `AlertLabelsPipeline._load_bars()` passes `instrument_keys=symbols` where symbols are `["AAPL", "SPY", ...]`, but Silver bars use canonical keys like `equity:AAPL`.
-Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberClient.resolve_instrument`) before querying Silver.
+Recommendation: Map symbols to canonical instrument keys (prefix with `equity:` or use `HeberReader.resolve_instrument`) before querying Silver.
 Update 2026-02-06: Remediated in `T-21` by canonicalizing alert underlyings and normalizing bar `instrument_key` values to `equity:*` keys with legacy fallback filters.
 
 **TD-036: Alert labels pipeline references a non-existent dataset.**

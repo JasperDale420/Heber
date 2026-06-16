@@ -8,7 +8,7 @@ from __future__ import annotations
 import glob
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 
@@ -43,18 +43,18 @@ def _resolve_feature_view(store: object, view_name: str) -> object | None:
     getter = getattr(store, "get_feature_view", None)
     if callable(getter):
         try:
-            return getter(view_name)
+            return getter(view_name)  # type: ignore[no-any-return]
         except Exception:
-            pass
+            logger.debug("feast_resolve_fallback", exc_info=True)
 
     lister = getattr(store, "list_feature_views", None)
     if callable(lister):
         try:
             for feature_view in lister():
                 if getattr(feature_view, "name", None) == view_name:
-                    return feature_view
+                    return feature_view  # type: ignore[no-any-return]
         except Exception:
-            pass
+            logger.debug("feast_resolve_fallback", exc_info=True)
 
     return None
 
@@ -159,6 +159,9 @@ def materialize_features(
     store = FeatureStore(repo_path=str(repo_path))
     end_date = end_date or datetime.now(UTC)
 
+    # Feast type stubs declare materialize/materialize_incremental as returning
+    # None, but the runtime implementation can return count dicts. We capture
+    # the return value defensively for _extract_materialization_counts.
     materialize_result: object = None
 
     if mode == "incremental":
@@ -167,7 +170,7 @@ def materialize_features(
             end_date=end_date.isoformat(),
             feature_views=feature_views,
         )
-        materialize_result = store.materialize_incremental(
+        materialize_result = store.materialize_incremental(  # type: ignore[func-returns-value]
             end_date=end_date,
             feature_views=feature_views,
         )
@@ -179,7 +182,7 @@ def materialize_features(
             end_date=end_date.isoformat(),
             feature_views=feature_views,
         )
-        materialize_result = store.materialize(
+        materialize_result = store.materialize(  # type: ignore[func-returns-value]
             start_date=start_date,
             end_date=end_date,
             feature_views=feature_views,
@@ -198,10 +201,10 @@ def materialize_features(
 
 def get_historical_features(
     repo_path: str | Path,
-    entity_df,
+    entity_df: Any,
     features: list[str],
     full_feature_names: bool = True,
-):
+) -> Any:
     """Get historical features for training (PRD §31.6).
 
     Wraps Feast's get_historical_features with Heber conventions.
@@ -241,7 +244,7 @@ def get_online_features(
     repo_path: str | Path,
     features: list[str],
     entity_rows: list[dict[str, str]],
-) -> dict[str, list]:
+) -> dict[str, list[object]]:
     """Get online features for inference (PRD §31.7).
 
     Low-latency feature lookup from online store.
@@ -275,7 +278,7 @@ def get_online_features(
     return online_response.to_dict()
 
 
-def list_feature_views(repo_path: str | Path = DEFAULT_REPO_PATH) -> list[dict]:
+def list_feature_views(repo_path: str | Path = DEFAULT_REPO_PATH) -> list[dict[str, Any]]:
     """List all registered feature views.
 
     Returns:
@@ -293,8 +296,8 @@ def list_feature_views(repo_path: str | Path = DEFAULT_REPO_PATH) -> list[dict]:
         views.append(
             {
                 "name": fv.name,
-                "entities": [e.name for e in fv.entities],
-                "features": [f.name for f in fv.features],
+                "entities": [str(e) for e in (fv.entities or [])],
+                "features": [f.name for f in (fv.features or [])],
                 "ttl_days": fv.ttl.days if fv.ttl else None,
                 "online": fv.online,
                 "tags": fv.tags,
@@ -309,7 +312,7 @@ def search_features(
     tags: list[str] | None = None,
     owner: str | None = None,
     category: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Search features by tags and metadata (PRD §31.10).
 
     Args:

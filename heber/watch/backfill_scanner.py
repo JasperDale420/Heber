@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import polars as pl
+import pandas as pd
 import structlog
 from prometheus_client import Counter, Histogram
 
@@ -57,6 +57,36 @@ backfill_duration_seconds = Histogram(
     "Duration of a backfill scan cycle",
     buckets=[10, 30, 60, 120, 300, 600, 1800],
 )
+
+
+def _coerce_expiry_to_int(val: object) -> int | None:
+    """Convert an expiry value to YYYYMMDD integer.
+
+    Handles:
+      - int / float already in YYYYMMDD form
+      - date / datetime objects
+      - ISO date strings  ("2026-04-18")
+      - compact strings   ("20260418")
+      - None / NaN        → None
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, date):
+        return int(val.strftime("%Y%m%d"))
+    if isinstance(val, str):
+        cleaned = val.strip().replace("-", "")
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned[:8])
+        except ValueError:
+            logger.warning("Cannot coerce expiry to int", raw_value=val)
+            return None
+    return None
 
 
 def _is_polars_panic_exception(exc: BaseException) -> bool:
@@ -131,7 +161,7 @@ class EnrichmentBackfillScanner:
         summary = {"scanned": 0, "patched": 0, "failed": 0}
 
         df = await asyncio.to_thread(self._read_recent_partitions)
-        if df is None or df.is_empty():
+        if df is None or df.empty:
             logger.debug("Enrichment backfill: no partitions found")
             return summary
 
@@ -139,7 +169,7 @@ class EnrichmentBackfillScanner:
         summary["scanned"] = len(df)
         backfill_scanned_total.inc(len(df))
 
-        if incomplete.is_empty():
+        if incomplete.empty:
             logger.info(
                 "Enrichment backfill: all rows complete",
                 scanned=len(df),
@@ -155,7 +185,7 @@ class EnrichmentBackfillScanner:
         # Limit to batch_size
         batch = incomplete.head(self.batch_size)
 
-        for row in batch.iter_rows(named=True):
+        for row in batch.to_dict(orient="records"):
             try:
                 updated = await self._re_enrich_row(row)
                 if updated is not None:
@@ -187,10 +217,10 @@ class EnrichmentBackfillScanner:
         )
         return summary
 
-    def _read_recent_partitions(self) -> pl.DataFrame | None:
+    def _read_recent_partitions(self) -> pd.DataFrame | None:
         """Read Gold feature parquet for the last N days."""
         today = date.today()
-        frames: list[pl.DataFrame] = []
+        frames: list[pd.DataFrame] = []
 
         for offset in range(self.lookback_days):
             dt = today - timedelta(days=offset)
@@ -201,7 +231,7 @@ class EnrichmentBackfillScanner:
                 continue
 
             try:
-                frame = pl.read_parquet(partition_path)
+                frame = pd.read_parquet(partition_path)
                 frames.append(frame)
             except BaseException as exc:
                 if not isinstance(exc, Exception) and not _is_polars_panic_exception(exc):
@@ -215,21 +245,17 @@ class EnrichmentBackfillScanner:
 
         if not frames:
             return None
-        return pl.concat(frames, how="diagonal_relaxed")
+        return pd.concat(frames, ignore_index=True)
 
     @staticmethod
-    def _find_incomplete_rows(df: pl.DataFrame) -> pl.DataFrame:
+    def _find_incomplete_rows(df: pd.DataFrame) -> pd.DataFrame:
         """Return rows where at least one enrichable field is null."""
         available_fields = [f for f in ENRICHABLE_FIELDS if f in df.columns]
         if not available_fields:
-            return df.clear()
+            return df.iloc[0:0]
 
-        null_conditions = [pl.col(f).is_null() for f in available_fields]
-        combined = null_conditions[0]
-        for cond in null_conditions[1:]:
-            combined = combined | cond
-
-        return df.filter(combined)
+        mask = df[available_fields].isna().any(axis=1)
+        return df[mask].reset_index(drop=True)
 
     async def _re_enrich_row(self, row: dict) -> dict | None:
         """Reconstruct a FlowAlertRecord and re-run enrichment.
@@ -295,15 +321,37 @@ class EnrichmentBackfillScanner:
         """Write updated feature row back to parquet using dedup-on-alert_id."""
         from heber.ml.datasets import persist_features_to_gold
 
-        features_df = pl.DataFrame([updated_row])
+        # Add Gold contract fields if missing.
+        if "instrument_key" not in updated_row or updated_row.get("instrument_key") is None:
+            occ = updated_row.get("occ_symbol")
+            if occ:
+                updated_row["instrument_key"] = f"option:{occ}"
+            else:
+                underlying = updated_row.get("underlying", updated_row.get("symbol", "UNKNOWN"))
+                updated_row["instrument_key"] = f"equity:{underlying}"
+
+        if "ts_event" not in updated_row or updated_row.get("ts_event") is None:
+            updated_row["ts_event"] = updated_row.get("alert_time")
+
+        if "ts_available" not in updated_row or updated_row.get("ts_available") is None:
+            updated_row["ts_available"] = datetime.now(UTC)
+
+        features_df = pd.DataFrame([updated_row])
 
         # Coerce alert_time to datetime if needed
         if "alert_time" in features_df.columns:
-            col = features_df["alert_time"]
-            if col.dtype == pl.Utf8:
-                features_df = features_df.with_columns(
-                    pl.col("alert_time").str.to_datetime(time_zone="UTC").alias("alert_time")
-                )
+            features_df["alert_time"] = pd.to_datetime(features_df["alert_time"], utc=True)
+
+        # Coerce expiry to int (YYYYMMDD) — the Gold parquet schema stores
+        # expiry as an integer, but enrichment returns date strings like
+        # "2026-04-18" or "20260418".
+        if "expiry" in features_df.columns:
+            features_df["expiry"] = features_df["expiry"].apply(_coerce_expiry_to_int)
+
+        # Coerce ts_event / ts_available to datetime if present as strings
+        for ts_col in ("ts_event", "ts_available"):
+            if ts_col in features_df.columns:
+                features_df[ts_col] = pd.to_datetime(features_df[ts_col], utc=True)
 
         persist_features_to_gold(
             features_df=features_df,

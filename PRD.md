@@ -1337,9 +1337,9 @@ dependencies = [
 #### 11.8.5 SDK Configuration
 
 ```python
-from heber_sdk import HeberClient
+from heber.reader import HeberReader
 
-client = HeberClient(
+client = HeberReader(
     catalog_url="https://heber-catalog.internal/api/v1",
     api_key=os.environ["HEBER_API_KEY"],
     storage_endpoint=os.environ.get("HEBER_STORAGE_ENDPOINT"),
@@ -3966,12 +3966,12 @@ Feature computation jobs read from Silver and write to Gold Parquet:
 
 ```python
 # heber/pipelines/compute_momentum.py
-from heber_sdk import HeberClient
+from heber.reader import HeberReader
 import pandas as pd
 
 def compute_momentum_features():
     """Daily job to compute momentum features."""
-    client = HeberClient()
+    client = HeberReader()
 
     # Read from Silver (point-in-time correct)
     bars = client.read_silver(
@@ -4078,11 +4078,11 @@ Each project integrates with Feast via the Heber SDK:
 
 ```python
 # kairos/config.py
-from heber_sdk import HeberClient
+from heber.reader import HeberReader
 from feast import FeatureStore
 
 # Heber client for Silver/Gold data
-heber = HeberClient(
+heber = HeberReader(
     catalog_url="https://heber-catalog.internal/api/v1",
     api_key=os.environ["HEBER_API_KEY"],
 )
@@ -4631,10 +4631,10 @@ Heber provides **data** for backtesting, not a full backtest engine.
 ### 33.2 Integration Pattern
 
 ```python
-from heber_sdk import HeberClient
+from heber.reader import HeberReader
 import mlflow  # or W&B, custom tracker
 
-client = HeberClient(...)
+client = HeberReader(...)
 
 # Log experiment metadata
 with mlflow.start_run():

@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +27,19 @@ from heber.bus import EventBus, StreamName
 logger = structlog.get_logger(__name__)
 
 
-def _get_or_create(metric_cls, name, *args, **kwargs):
+def _get_or_create(metric_cls: type, name: str, *args: Any, **kwargs: Any) -> Any:
     """Return an existing metric or create a new one to avoid duplicate registration."""
-    existing = REGISTRY._names_to_collectors.get(name)
-    if existing is not None:
-        return existing
-    return metric_cls(name, *args, **kwargs)
+    try:
+        return metric_cls(name, *args, **kwargs)
+    except ValueError:
+        collectors = REGISTRY._names_to_collectors
+        if name in collectors:
+            return collectors[name]
+        # Also check with _total suffix (counters are registered with _total)
+        total_name = f"{name}_total"
+        if total_name in collectors:
+            return collectors[total_name]
+        raise
 
 
 # Prometheus metrics (using _get_or_create to avoid collisions with ops.metrics)
@@ -80,7 +87,7 @@ retry_backoff_seconds = _get_or_create(
 )
 
 
-class ErrorType(str, Enum):
+class ErrorType(StrEnum):
     """Error classification per PRD §12.8.2."""
 
     # Retryable errors
@@ -235,7 +242,7 @@ def calculate_backoff(
     jitter = delay_ms * config.jitter_factor * (2 * random.random() - 1)
     delay_ms = delay_ms + jitter
 
-    return max(delay_ms / 1000.0, 0.001)  # Convert to seconds
+    return float(max(delay_ms / 1000.0, 0.001))  # Convert to seconds
 
 
 class DLQHandler:
@@ -380,12 +387,12 @@ class RetryExecutor:
 
     async def execute_with_retry(
         self,
-        operation: Callable,
+        operation: Callable[..., Any],
         envelope: dict[str, Any],
         stream: str,
         message_id: str | None = None,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ) -> Any:
         """Execute an operation with retry policy.
 
@@ -408,7 +415,7 @@ class RetryExecutor:
             try:
                 return await operation(*args, **kwargs)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — generic retry executor must catch all exceptions
                 last_error = e
                 error_type = classify_error(e)
 
@@ -439,6 +446,7 @@ class RetryExecutor:
                         "max_retries_exceeded",
                         attempts=attempt + 1,
                         error=str(e),
+                        exc_info=True,
                     )
                     await self.dlq_handler.send_to_dlq(
                         envelope=envelope,
@@ -522,8 +530,12 @@ class BackpressureMonitor:
             for stream, group in streams:
                 try:
                     await self.check_lag(stream, group)
-                except Exception as e:
-                    logger.error("lag_check_failed", stream=stream.value, error=str(e))
+                except Exception as e:  # noqa: BLE001 — monitoring loop must not crash
+                    # WARNING (not ERROR): the monitor is defensive and self-recovers on the
+                    # next tick. Persistent failure surfaces via the absent
+                    # `consumer_lag_seconds` metric and a real alert there, not by spamming
+                    # error logs every check_interval.
+                    logger.warning("lag_check_failed", stream=stream.value, error=str(e), exc_info=True)
 
             await asyncio.sleep(self.check_interval)
 

@@ -97,13 +97,12 @@ class TestUniverseManager:
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2001, 1, 1),
-            exclude_future_delistings=False,
         )
 
         assert len(result) == 3
 
-    def test_filter_dataframe_exclude_future_delistings(self):
-        """Test filtering with future delist exclusion."""
+    def test_filter_dataframe_includes_soon_to_delist(self):
+        """Point-in-time filter includes instruments active at asof_date even if they delist later."""
         df = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL", "equity:ENRN", "equity:NVDA"],
@@ -114,11 +113,10 @@ class TestUniverseManager:
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2001, 1, 1),
-            exclude_future_delistings=True,
         )
 
-        assert len(result) == 2
-        assert "equity:ENRN" not in result["instrument_key"].values
+        assert len(result) == 3
+        assert "equity:ENRN" in result["instrument_key"].values
 
     def test_filter_dataframe_mark_delistings(self):
         """Test marking upcoming delistings."""
@@ -132,7 +130,6 @@ class TestUniverseManager:
         result = self.manager.filter_dataframe(
             df,
             asof_date=date(2022, 10, 13),
-            exclude_future_delistings=False,
             mark_delistings=True,
             delist_warning_days=30,
         )
@@ -177,6 +174,25 @@ class TestCreateFromDataFrame:
 
         assert len(manager.instruments) == 2
         assert manager.instruments["equity:XYZ"].delist_reason == DelistReason.BANKRUPTCY
+
+    def test_create_from_dataframe_avoids_iterrows(self, monkeypatch):
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["equity:ABC"],
+                "list_date": ["2010-01-01"],
+                "delist_date": [None],
+                "delist_reason": [None],
+            }
+        )
+
+        def _iterrows_boom(*_args, **_kwargs):
+            raise AssertionError("iterrows should not be used for performance")
+
+        monkeypatch.setattr(df, "iterrows", _iterrows_boom)
+
+        manager = create_universe_manager_from_dataframe(df)
+
+        assert len(manager.instruments) == 1
 
 
 class TestUniverseSnapshot:

@@ -154,6 +154,29 @@ def test_congress_insider_and_news_fill_symbol_from_payload_fields() -> None:
     assert news_normalized.is_valid_instrument_key()
 
 
+def test_insider_trades_fallback_to_unknown_when_symbol_empty() -> None:
+    """When both envelope symbol and payload ticker are empty, normalization
+    falls back to the UNKNOWN sentinel instead of raising an error.  This lets
+    the record proceed to Silver required-field validation."""
+    envelope = _build_envelope(
+        "insider_trades",
+        {
+            "ticker": "",
+            "owner_name": "John Exec",
+            "transaction_code": "P",
+            "amount": "100",
+            "transaction_date": "2026-02-01",
+        },
+        symbol="",
+        instrument_key="equity:",
+    )
+
+    normalized = normalize_envelope_for_silver(envelope)
+    assert normalized.symbol == "UNKNOWN"
+    assert normalized.instrument_key == "equity:UNKNOWN"
+    assert normalized.instrument_type == "equity"
+
+
 # ---------------------------------------------------------------------------
 # Market Data Feed Normalization (bars, quotes, trades)
 # ---------------------------------------------------------------------------

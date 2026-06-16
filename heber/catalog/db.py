@@ -3,7 +3,10 @@
 See PRD Section 11.2 for table specifications.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -13,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -41,15 +45,15 @@ class Dataset(Base):
     description: str = Column(Text, nullable=True)
     storage_root: str = Column(String(500), nullable=False)
     path_template: str = Column(String(500), nullable=True)
-    partition_cols: list = Column(JSONB, nullable=True)
-    primary_keys: list = Column(JSONB, nullable=True)
-    retention_policy: dict = Column(JSONB, nullable=True)
+    partition_cols: list[str] | None = Column(JSONB, nullable=True)
+    primary_keys: list[str] | None = Column(JSONB, nullable=True)
+    retention_policy: dict[str, Any] | None = Column(JSONB, nullable=True)
     is_active: bool = Column(Boolean, default=True, nullable=False)
     created_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
     updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    versions = relationship("DatasetVersion", back_populates="dataset", lazy="dynamic")
+    versions = relationship("DatasetVersion", back_populates="dataset", lazy="select")
 
 
 class DatasetVersion(Base):
@@ -60,7 +64,7 @@ class DatasetVersion(Base):
     dataset_version_id: str = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     dataset_name: str = Column(String(255), ForeignKey("datasets.dataset_name"), nullable=False, index=True)
     schema_version: str = Column(String(50), nullable=False)
-    schema_json: dict = Column(JSONB, nullable=False)
+    schema_json: dict[str, Any] = Column(JSONB, nullable=False)
     writer_min_version: str = Column(String(50), nullable=True)
     reader_min_version: str = Column(String(50), nullable=True)
     is_current: bool = Column(Boolean, default=True, nullable=False)
@@ -105,7 +109,7 @@ class InstrumentRegistry(Base):
     updated_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    provider_mappings = relationship("InstrumentProviderMap", back_populates="instrument", lazy="dynamic")
+    provider_mappings = relationship("InstrumentProviderMap", back_populates="instrument", lazy="select")
 
 
 class InstrumentProviderMap(Base):
@@ -141,7 +145,10 @@ class DataCoverage(Base):
     last_updated_ts: datetime = Column(DateTime(timezone=True), server_default=func.now())
     approx_row_count: int = Column(Integer, nullable=True)
 
-    __table_args__ = (UniqueConstraint("dataset_name", "instrument_key", name="uq_dataset_instrument"),)
+    __table_args__ = (
+        UniqueConstraint("dataset_name", "instrument_key", name="uq_dataset_instrument"),
+        Index("ix_dataset_instrument", "dataset_name", "instrument_key"),
+    )
 
 
 class Project(Base):
@@ -164,7 +171,7 @@ class Request(Base):
     project_name: str = Column(String(100), ForeignKey("projects.project_name"), nullable=True, index=True)
     provider: str = Column(String(100), nullable=False, index=True)
     feed: str = Column(String(100), nullable=False, index=True)
-    params_json: dict = Column(JSONB, nullable=True)
+    params_json: dict[str, Any] | None = Column(JSONB, nullable=True)
     status: str = Column(String(50), default="pending")  # pending, completed, failed
     created_at: datetime = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
@@ -183,7 +190,7 @@ class Subscription(Base):
     project_name: str = Column(String(100), ForeignKey("projects.project_name"), nullable=True, index=True)
     provider: str = Column(String(100), nullable=False, index=True)
     feed: str = Column(String(100), nullable=False, index=True)
-    instrument_keys: list = Column(JSONB, nullable=True)  # List of instrument_keys
+    instrument_keys: list[str] | None = Column(JSONB, nullable=True)  # List of instrument_keys
     started_at: datetime = Column(DateTime(timezone=True), server_default=func.now())
     ended_at: datetime = Column(DateTime(timezone=True), nullable=True)
 

@@ -157,8 +157,9 @@ def test_compactor_casts_incompatible_types_to_string(tmp_path: Path, monkeypatc
 
     merged_table = pq.read_table(compacted_files[0])
 
-    # Assert that the type was cast to string
-    assert pa.types.is_string(merged_table.schema.field("total_size").type)
+    # Assert that the type was cast to string (may be large_string after compaction)
+    total_size_type = merged_table.schema.field("total_size").type
+    assert pa.types.is_string(total_size_type) or pa.types.is_large_string(total_size_type)
 
     data = merged_table.to_pylist()
     row_by_event = {row["event_id"]: row for row in data}

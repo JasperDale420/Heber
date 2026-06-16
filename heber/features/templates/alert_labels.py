@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -42,7 +43,7 @@ VIX_LOW = 15.0
 VIX_HIGH = 25.0
 
 
-class AlertHorizon(str, Enum):
+class AlertHorizon(StrEnum):
     """DTE-based horizon classification."""
 
     INTRADAY = "intraday"  # 0-2 DTE: 30min - 2h window
@@ -50,7 +51,7 @@ class AlertHorizon(str, Enum):
     LEAP = "leap"  # 22+ DTE: 5-30 day window
 
 
-class VixRegime(str, Enum):
+class VixRegime(StrEnum):
     """VIX-based market regime."""
 
     LOW = "low"  # VIX < 15: calm markets
@@ -213,7 +214,7 @@ def compute_atr(
     df["atr"] = (
         df.groupby("instrument_key", group_keys=False)
         .apply(
-            lambda g: _core_atr(g["high"], g["low"], g["close"], period).fillna(method="bfill"),
+            lambda g: _core_atr(g["high"], g["low"], g["close"], period).bfill(),
             include_groups=False,
         )
         .reset_index(level=0, drop=True)
@@ -264,8 +265,22 @@ def _compute_barrier_outcome(
     tp_threshold: float,
     sl_threshold: float,
     slippage_model: SlippageModel | None = None,
-) -> dict:
-    """Compute barrier-based outcome for a price path."""
+    max_window_bars: int = 0,
+) -> dict[str, Any]:
+    """Compute barrier-based outcome for a price path.
+
+    Args:
+        price_path: Forward price array after entry.
+        entry_price: Price at alert time.
+        is_call: True for calls (favorable=up), False for puts.
+        tp_threshold: Take-profit threshold as decimal return.
+        sl_threshold: Stop-loss threshold as decimal return (positive).
+        slippage_model: Optional execution cost model.
+        max_window_bars: Maximum bars in the forward window (for time_efficiency).
+
+    Returns:
+        Dict with barrier outcome labels including edge_ratio and time_efficiency.
+    """
     if len(price_path) == 0:
         return {
             "hit_tp_first": np.nan,
@@ -274,6 +289,8 @@ def _compute_barrier_outcome(
             "mfe_adj": np.nan,
             "mae_adj": np.nan,
             "bars_to_hit": np.nan,
+            "edge_ratio": np.nan,
+            "time_efficiency": np.nan,
         }
 
     returns = (price_path - entry_price) / entry_price
@@ -320,7 +337,21 @@ def _compute_barrier_outcome(
         bars_to_hit = int(sl_first_bar) + 1
     else:
         hit_tp_first = 0
-        bars_to_hit = np.nan
+        bars_to_hit = np.nan  # type: ignore[assignment]
+
+    # Edge ratio: quality of entry (MFE / |MAE|), capped at 10.0
+    if mfe == 0 and mae == 0:
+        edge_ratio = 1.0
+    elif abs(mae) < 1e-10:
+        edge_ratio = min(mfe / 1e-10, 10.0) if mfe > 0 else 1.0
+    else:
+        edge_ratio = min(mfe / abs(mae), 10.0)
+
+    # Time efficiency: how quickly TP was hit [0, 1], NaN if not hit
+    if hit_tp_first == 1 and not np.isnan(bars_to_hit) and max_window_bars > 0:
+        time_efficiency = 1.0 - (bars_to_hit / max_window_bars)
+    else:
+        time_efficiency = np.nan
 
     return {
         "hit_tp_first": hit_tp_first,
@@ -329,6 +360,8 @@ def _compute_barrier_outcome(
         "mfe_adj": mfe_adj,
         "mae_adj": mae_adj,
         "bars_to_hit": bars_to_hit,
+        "edge_ratio": edge_ratio,
+        "time_efficiency": time_efficiency,
     }
 
 
@@ -337,7 +370,7 @@ def _compute_contract_barrier_outcome(
     entry_price: float,
     config: ContractBarrierConfig,
     slippage_model: SlippageModel | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Compute barrier-based outcome for an option contract price path.
 
     Unlike underlying barriers which use ATR scaling, contract barriers
@@ -400,7 +433,7 @@ def _compute_contract_barrier_outcome(
         bars_to_hit = int(sl_first_bar) + 1
     else:
         hit_tp_first = 0
-        bars_to_hit = np.nan
+        bars_to_hit = np.nan  # type: ignore[assignment]
 
     return {
         "contract_hit_tp_first": hit_tp_first,
@@ -419,7 +452,7 @@ def _process_single_alert(
     vix_data: pd.DataFrame | None,
     config: BarrierConfig,
     slippage_model: SlippageModel | None,
-) -> dict:
+) -> dict[str, Any]:
     """Process a single alert and compute all labels."""
     alert_id = alert["event_id"]
     underlying = alert["underlying"]
@@ -457,7 +490,9 @@ def _process_single_alert(
     is_call = put_call.upper() == "C"
 
     # Compute barrier outcome
-    outcome = _compute_barrier_outcome(price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model)
+    outcome = _compute_barrier_outcome(
+        price_path, spot_at_alert, is_call, tp_threshold, sl_threshold, slippage_model, config.max_window_bars
+    )
 
     # Get VIX at alert time
     vix_at_alert = _get_vix_at_alert(vix_data, ts_alert)
@@ -484,6 +519,8 @@ def _process_single_alert(
         "mfe_adj": outcome["mfe_adj"],
         "mae_adj": outcome["mae_adj"],
         "bars_to_hit": outcome["bars_to_hit"],
+        "edge_ratio": outcome["edge_ratio"],
+        "time_efficiency": outcome["time_efficiency"],
         "beta_neutral_return": beta_neutral_return,
         "vix_at_alert": vix_at_alert,
         "vix_regime": classify_vix_regime(vix_at_alert),
@@ -576,7 +613,7 @@ def _empty_result(
     put_call: str,
     horizon: AlertHorizon,
     dte: int,
-) -> dict:
+) -> dict[str, Any]:
     """Create empty result row for alerts with insufficient data."""
     return {
         "alert_id": alert_id,
@@ -596,6 +633,8 @@ def _empty_result(
         "mfe_adj": np.nan,
         "mae_adj": np.nan,
         "bars_to_hit": np.nan,
+        "edge_ratio": np.nan,
+        "time_efficiency": np.nan,
         "beta_neutral_return": np.nan,
         "vix_at_alert": np.nan,
         "vix_regime": VixRegime.NORMAL.value,
@@ -730,10 +769,10 @@ def compute_multi_horizon_labels(
     alerts["ts_event"] = pd.to_datetime(alerts["ts_event"], utc=True)
 
     # Classify each alert
-    def get_dte(row):
+    def get_dte(row: pd.Series) -> int:
         alert_date = row["ts_event"].date()
         if isinstance(row["expiry"], date):
-            return (row["expiry"] - alert_date).days
+            return int((row["expiry"] - alert_date).days)
         return 5
 
     alerts["dte"] = alerts.apply(get_dte, axis=1)
@@ -773,56 +812,3 @@ def compute_multi_horizon_labels(
     if results:
         return pd.concat(results, ignore_index=True)
     return pd.DataFrame()
-
-
-# =============================================================================
-# Auxiliary: Analysis Functions
-# =============================================================================
-
-
-def compute_win_rate_by_feature(
-    labeled_df: pd.DataFrame,
-    feature_col: str,
-    bins: int = 10,
-) -> pd.DataFrame:
-    """Analyze win rate stratified by a feature."""
-    df = labeled_df.dropna(subset=["hit_tp_first", feature_col])
-
-    if df[feature_col].dtype in [np.float64, np.float32, np.int64, np.int32]:
-        df = df.copy()
-        df["bin"] = pd.qcut(df[feature_col], q=bins, duplicates="drop")
-    else:
-        df = df.copy()
-        df["bin"] = df[feature_col]
-
-    stats = (
-        df.groupby("bin")
-        .agg(
-            count=("hit_tp_first", "count"),
-            wins=("hit_tp_first", "sum"),
-            win_rate=("hit_tp_first", "mean"),
-        )
-        .reset_index()
-    )
-
-    return stats
-
-
-def compute_regime_analysis(labeled_df: pd.DataFrame) -> pd.DataFrame:
-    """Analyze win rates by VIX regime."""
-    df = labeled_df.dropna(subset=["hit_tp_first", "vix_regime"])
-
-    stats = (
-        df.groupby("vix_regime")
-        .agg(
-            count=("hit_tp_first", "count"),
-            wins=("hit_tp_first", "sum"),
-            win_rate=("hit_tp_first", "mean"),
-            avg_mfe=("mfe", "mean"),
-            avg_mae=("mae", "mean"),
-            avg_beta_neutral=("beta_neutral_return", "mean"),
-        )
-        .reset_index()
-    )
-
-    return stats

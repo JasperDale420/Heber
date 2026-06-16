@@ -12,7 +12,7 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +69,7 @@ pending_deletions = Gauge(
 )
 
 
-class DataLayer(str, Enum):
+class DataLayer(StrEnum):
     """Data layers per PRD §15.1."""
 
     BRONZE = "bronze"
@@ -79,7 +79,7 @@ class DataLayer(str, Enum):
     DLQ = "dlq"
 
 
-class LifecycleAction(str, Enum):
+class LifecycleAction(StrEnum):
     """Lifecycle actions per PRD §15.3."""
 
     DELETE = "delete"  # Permanently remove files
@@ -253,7 +253,6 @@ class Archiver:
         try:
             if self.compress_on_archive:
                 # Create compressed archive
-                archive_path / f"{archive_name}.tar.gz"
                 shutil.make_archive(
                     str(archive_path / archive_name),
                     "gztar",
@@ -725,6 +724,7 @@ class ReaperScheduler:
     def _log_success(self, result: ReaperResult) -> None:
         """Log successful reaper completion."""
         reaper_runs.labels(status="success").inc()
+        assert result.completed_at is not None
         duration = (result.completed_at - result.started_at).total_seconds()
         reaper_duration_seconds.observe(duration)
         logger.info(
@@ -769,9 +769,11 @@ def create_reaper(
 
 def get_default_retention(layer: DataLayer) -> RetentionPolicy:
     """Get default retention policy for a layer."""
-    config = DEFAULT_RETENTION.get(layer, {})
+    raw = DEFAULT_RETENTION.get(layer)
+    if raw is None or not isinstance(raw, dict):
+        return RetentionPolicy()
     return RetentionPolicy(
-        retention_days=config.get("retention_days"),
-        retention_versions=config.get("retention_versions"),
-        action=config.get("action", LifecycleAction.DELETE),
+        retention_days=raw.get("retention_days"),
+        retention_versions=raw.get("retention_versions"),
+        action=raw.get("action", LifecycleAction.DELETE),
     )

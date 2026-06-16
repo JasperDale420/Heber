@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from heber.ml.trainer import MetaModelTrainer
     from heber.models.silver import FlowAlertRecord
+    from heber.watch.features import AlertFeatureExtractor
 
 logger = structlog.get_logger(__name__)
 
@@ -62,15 +63,32 @@ class MetaLabelScorer:
         self.config = config or InferenceConfig()
         self.redis = redis
         self._model = model
-        self._feature_extractor = None
+        self._feature_extractor: AlertFeatureExtractor | None = None
+        # One-shot startup warning: we log once when the model isn't loaded,
+        # then suppress per-score warnings entirely. score() still returns
+        # None (graceful degradation) on every call.
+        self._missing_model_warned: bool = False
+        self._missing_model_skips: int = 0
 
     def initialize(self) -> None:
-        """Load model and feature extractor."""
+        """Load model and feature extractor.
+
+        Logs a single WARNING on startup if the model is unavailable —
+        subsequent ``score()`` calls return ``None`` silently rather than
+        emitting a warning per request.
+        """
         if self._model is None and self.config.model_path:
             from heber.ml.trainer import MetaModelTrainer
 
-            self._model = MetaModelTrainer.load(self.config.model_path)
-            logger.info("Loaded meta-model", path=str(self.config.model_path))
+            try:
+                self._model = MetaModelTrainer.load(self.config.model_path)
+                logger.info("Loaded meta-model", path=str(self.config.model_path))
+            except Exception as exc:  # noqa: BLE001 — startup must not crash on missing model
+                self._warn_missing_model_once(
+                    reason="model_load_failed",
+                    error=str(exc),
+                    path=str(self.config.model_path),
+                )
 
         # Initialize feature extractor
         from heber.watch.features import AlertFeatureExtractor
@@ -80,7 +98,25 @@ class MetaLabelScorer:
             gateway_url=self.config.gateway_url,
         )
 
+        if self._model is None and not self._missing_model_warned:
+            self._warn_missing_model_once(
+                reason="model_not_configured",
+                path=str(self.config.model_path) if self.config.model_path else None,
+            )
+
         logger.info("Inference service initialized")
+
+    def _warn_missing_model_once(self, *, reason: str, **context: object) -> None:
+        """Emit a single WARNING about the unavailable model, then go silent.
+
+        Per-score callers still get ``None`` from ``score()``, but the log
+        stays quiet after the first emit. Prevents the "logged on every score
+        request" noise (~192 records/day in production before this change).
+        """
+        if self._missing_model_warned:
+            return
+        self._missing_model_warned = True
+        logger.warning("meta_model_unavailable", reason=reason, **context)
 
     async def score(self, alert: FlowAlertRecord) -> float | None:
         """Score a single alert.
@@ -92,7 +128,12 @@ class MetaLabelScorer:
             Probability of TP hit (0-1), or None if scoring fails
         """
         if self._model is None:
-            logger.warning("Model not loaded, cannot score")
+            # Graceful degradation: return None silently. The startup warning
+            # in initialize()/_warn_missing_model_once already announced the
+            # condition once; per-call warnings would spam the error log.
+            self._missing_model_skips += 1
+            if not self._missing_model_warned:
+                self._warn_missing_model_once(reason="model_not_loaded")
             return None
 
         try:
@@ -103,6 +144,8 @@ class MetaLabelScorer:
                     return cached
 
             # Extract features
+            if self._feature_extractor is None:
+                raise RuntimeError("Feature extractor not initialized. Call initialize() first.")
             features = await self._feature_extractor.extract(alert)
 
             # Get feature vector
@@ -152,12 +195,12 @@ class MetaLabelScorer:
         Returns:
             Dict mapping alert_id to score (or None if failed)
         """
-        results = {}
+        results: dict[str, float | None] = {}
         tasks = [self.score(alert) for alert in alerts]
         scores = await asyncio.gather(*tasks, return_exceptions=True)
 
         for alert, score in zip(alerts, scores, strict=False):
-            if isinstance(score, Exception):
+            if isinstance(score, BaseException):
                 results[alert.event_id] = None
             else:
                 results[alert.event_id] = score

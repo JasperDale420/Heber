@@ -205,7 +205,8 @@ class BacktestDataLoader:
             asof_time = end
 
         logger.info(
-            f"Loading {split_name} data",
+            "loading_data_split",
+            split=split_name,
             start=str(start),
             end=str(end),
             asof_time=str(asof_time),

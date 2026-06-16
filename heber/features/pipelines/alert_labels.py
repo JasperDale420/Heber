@@ -30,7 +30,7 @@ from heber.features.templates.alert_labels import (
     compute_barrier_labels,
     compute_multi_horizon_labels,
 )
-from heber.sdk import HeberClient
+from heber.reader import HeberReader
 from heber.watch.gateway import gateway_auth_headers
 
 logger = structlog.get_logger(__name__)
@@ -52,7 +52,7 @@ class AlertLabelsPipeline:
 
     def __init__(
         self,
-        client: HeberClient | None = None,
+        client: HeberReader | None = None,
         slippage_model: SlippageModel | None = None,
         contract_config: ContractBarrierConfig | None = None,
         output_dataset: str = "labels_alert_barriers",
@@ -64,7 +64,7 @@ class AlertLabelsPipeline:
         """Initialize the pipeline.
 
         Args:
-            client: HeberClient instance (created if None)
+            client: HeberReader instance (created if None)
             slippage_model: Execution cost model
             contract_config: Contract barrier config (TP/SL percentages)
             output_dataset: Name for output Gold dataset
@@ -73,7 +73,7 @@ class AlertLabelsPipeline:
             gateway_url: Data Gateway URL for fetching option bars
             gateway_api_key: Data Gateway API key for authenticated option-bars fetches
         """
-        self.client = client or HeberClient()
+        self.client = client or HeberReader()
         self.slippage_model = slippage_model or SlippageModel()
         self.contract_config = contract_config or ContractBarrierConfig.moderate()
         self.output_dataset = output_dataset
@@ -110,6 +110,7 @@ class AlertLabelsPipeline:
         expanded: list[str] = []
         for symbol in symbols:
             raw = str(symbol).strip()
+            candidates: tuple[str, ...]
             if raw.lower().startswith("equity:"):
                 candidates = (raw.split(":", 1)[1], raw)
             elif ":" in raw:
@@ -301,9 +302,46 @@ class AlertLabelsPipeline:
 
         logger.info("Fetched option bars", count=len(option_bars))
 
-        contract_labels = [
-            self._compute_single_contract_label(row, flow_alerts, option_bars) for _, row in labels.iterrows()
-        ]
+        # PERF: pre-index OCC symbols and option bars to avoid per-row lookups and DataFrame filters.
+        occ_symbol_by_event = flow_alerts.dropna(subset=["occ_symbol"]).set_index("event_id")["occ_symbol"].to_dict()
+        option_bars_by_symbol = {symbol: df for symbol, df in option_bars.groupby("symbol", sort=False)}
+        contract_labels = []
+        for row in labels.itertuples(index=False):
+            alert_id = row.alert_id
+            occ_symbol = occ_symbol_by_event.get(alert_id)
+            if not occ_symbol:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            contract_bars = option_bars_by_symbol.get(occ_symbol)
+            if contract_bars is None or contract_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            ts_alert = row.ts_alert
+            entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
+            if entry_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            entry_price = entry_bars.iloc[-1]["close"]
+            future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(
+                self.contract_config.max_window_bars
+            )
+
+            if future_bars.empty:
+                contract_labels.append(self._empty_contract_result())
+                continue
+
+            price_path = future_bars["close"].values
+            contract_labels.append(
+                _compute_contract_barrier_outcome(
+                    price_path,
+                    entry_price,
+                    self.contract_config,
+                    self.slippage_model,
+                )
+            )
 
         contract_df = pd.DataFrame(contract_labels)
         for col in contract_df.columns:
@@ -323,43 +361,6 @@ class AlertLabelsPipeline:
         ]:
             labels[col] = pd.NA
         return labels
-
-    def _compute_single_contract_label(
-        self,
-        row: pd.Series,
-        flow_alerts: pd.DataFrame,
-        option_bars: pd.DataFrame,
-    ) -> dict:
-        """Compute contract barrier label for a single alert."""
-        alert_id = row["alert_id"]
-        occ_symbol = self._get_occ_symbol_for_alert(alert_id, flow_alerts)
-
-        if occ_symbol is None or pd.isna(occ_symbol):
-            return self._empty_contract_result()
-
-        contract_bars = option_bars[option_bars["symbol"] == occ_symbol]
-        if contract_bars.empty:
-            return self._empty_contract_result()
-
-        ts_alert = row["ts_alert"]
-        entry_bars = contract_bars[contract_bars["timestamp"] <= ts_alert]
-        if entry_bars.empty:
-            return self._empty_contract_result()
-
-        entry_price = entry_bars.iloc[-1]["close"]
-        future_bars = contract_bars[contract_bars["timestamp"] > ts_alert].head(self.contract_config.max_window_bars)
-
-        if future_bars.empty:
-            return self._empty_contract_result()
-
-        price_path = future_bars["close"].values
-        return _compute_contract_barrier_outcome(price_path, entry_price, self.contract_config, self.slippage_model)
-
-    def _get_occ_symbol_for_alert(self, alert_id: str, flow_alerts: pd.DataFrame) -> str | None:
-        """Look up OCC symbol for an alert ID."""
-        if alert_id not in flow_alerts["event_id"].values:
-            return None
-        return flow_alerts.loc[flow_alerts["event_id"] == alert_id, "occ_symbol"].iloc[0]
 
     async def _fetch_option_bars(
         self,
@@ -413,7 +414,7 @@ class AlertLabelsPipeline:
             logger.error("Failed to fetch option bars", error=str(e))
             return pd.DataFrame()
 
-    def _empty_contract_result(self) -> dict:
+    def _empty_contract_result(self) -> dict[str, Any]:
         """Return empty contract label result."""
         return {
             "contract_hit_tp_first": pd.NA,
@@ -529,14 +530,14 @@ class AlertLabelsPipeline:
 
     def _compute_stats(self, labels: pd.DataFrame) -> dict[str, Any]:
         """Compute summary statistics from labels."""
-        stats = {}
+        stats: dict[str, Any] = {}
 
         # Underlying stats
         if "hit_tp_first" in labels.columns:
             valid = labels.dropna(subset=["hit_tp_first"])
             if not valid.empty:
                 stats["underlying_win_rate"] = float(valid["hit_tp_first"].mean())
-                stats["avg_mfe"] = float(valid["mfe"].mean()) if "mfe" in valid else None
+                stats["avg_mfe"] = float(valid["mfe"].mean()) if "mfe" in valid.columns else None
                 stats["by_horizon"] = valid.groupby("horizon")["hit_tp_first"].mean().to_dict()
 
         # Contract stats
@@ -544,12 +545,15 @@ class AlertLabelsPipeline:
             valid = labels.dropna(subset=["contract_hit_tp_first"])
             if not valid.empty:
                 stats["contract_win_rate"] = float(valid["contract_hit_tp_first"].mean())
-                stats["contract_avg_mfe"] = float(valid["contract_mfe"].mean()) if "contract_mfe" in valid else None
+                if "contract_mfe" in valid.columns:
+                    stats["contract_avg_mfe"] = float(valid["contract_mfe"].mean())
+                else:
+                    stats["contract_avg_mfe"] = None
 
         return stats
 
 
-def main():
+def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="Compute alert barrier labels")
     parser.add_argument("--start", required=True, help="Start date (YYYY-MM-DD)")

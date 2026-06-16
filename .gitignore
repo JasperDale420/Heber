@@ -46,3 +46,15 @@ sonar_scan.log
 
 # Axon knowledge graph cache
 .axon/
+
+# Log files (empire_core daily rotation)
+logs/
+
+# Debug investigation artifacts
+debug/
+
+# Local dev data
+.local_heber_data/
+
+# Sourcegraph SCIP indexes (build artifact)
+*.scip

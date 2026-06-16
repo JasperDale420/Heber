@@ -127,12 +127,8 @@ class EventDeduplicator:
             rotation_seconds=self.bloom_rotation_seconds,
         )
 
-    def check_and_register(self, event_id: str) -> DeduplicationResult:
-        """Check if event is duplicate, register if new.
-
-        Returns:
-            DeduplicationResult with is_duplicate flag
-        """
+    def check(self, event_id: str) -> DeduplicationResult:
+        """Check if event is duplicate without registering a new success."""
         self._stats["checked"] += 1
         self._rotate_if_needed()
 
@@ -160,12 +156,21 @@ class EventDeduplicator:
                     reason="bloom_filter_match",
                 )
 
-        # Not a duplicate - register it
+        return DeduplicationResult(is_duplicate=False, event_id=event_id)
+
+    def register(self, event_id: str) -> None:
+        """Register an event_id after successful processing."""
+        self._rotate_if_needed()
         self.bloom.add(event_id)
         if self.backing_store:
             self._backing_add(event_id)
 
-        return DeduplicationResult(is_duplicate=False, event_id=event_id)
+    def check_and_register(self, event_id: str) -> DeduplicationResult:
+        """Check if event is duplicate, register if new."""
+        result = self.check(event_id)
+        if not result.is_duplicate:
+            self.register(event_id)
+        return result
 
     def _backing_contains(self, _event_id: str) -> bool:
         """Check backing store for event_id."""

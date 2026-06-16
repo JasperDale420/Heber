@@ -35,6 +35,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Create monorepo layout for Docker build
+        run: |
+          # Dockerfile expects parent context with Heber/ and empire-core/ siblings.
+          # Restructure checkout into that layout and create dependency stubs.
+          mkdir -p /tmp/build-ctx/Heber
+          cp -r . /tmp/build-ctx/Heber/
+          bash /tmp/build-ctx/Heber/.github/scripts/create-ci-stubs.sh
+          # Stubs are now at /tmp/build-ctx/../empire-core — move them into build context
+          mv ../empire-core /tmp/build-ctx/empire-core
+          mv ../empire-schemas /tmp/build-ctx/empire-schemas
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -51,7 +62,8 @@ jobs:
       - name: Build images (no push)
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: /tmp/build-ctx
+          file: /tmp/build-ctx/Heber/Dockerfile
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
@@ -73,9 +85,12 @@ jobs:
 
       - name: Set up Python and virtual environment
         run: |
-          uv python install 3.11
-          uv venv .venv --python 3.11
+          uv python install 3.12
+          uv venv .venv --python 3.12
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Create monorepo sibling stubs
+        run: bash .github/scripts/create-ci-stubs.sh
 
       - name: Install dependencies
         run: uv pip install -e ".[dev]"
@@ -87,7 +102,7 @@ jobs:
         run: pytest tests/ -v --cov=heber --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           file: coverage.xml
           fail_ci_if_error: false
@@ -112,9 +127,12 @@ jobs:
 
       - name: Set up Python and virtual environment
         run: |
-          uv python install 3.11
-          uv venv .venv --python 3.11
+          uv python install 3.12
+          uv venv .venv --python 3.12
           echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Create monorepo sibling stubs
+        run: bash .github/scripts/create-ci-stubs.sh
 
       - name: Install dependencies
         run: uv pip install -e ".[dev]"
@@ -214,7 +232,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: 'v1.29.0'
 
@@ -250,7 +268,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: 'v1.29.0'
 

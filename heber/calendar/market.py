@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
@@ -73,7 +74,7 @@ class MarketCalendar:
         ts = self._to_exchange_timestamp(dt)
 
         try:
-            return self._cal.is_open_on_minute(ts)
+            return cast(bool, self._cal.is_open_on_minute(ts))
         except ValueError:
             # Date out of calendar range
             return False
@@ -91,7 +92,7 @@ class MarketCalendar:
         date = ts.date()
 
         try:
-            return self._cal.is_session(pd.Timestamp(date))
+            return cast(bool, self._cal.is_session(pd.Timestamp(date)))
         except ValueError:
             return False
 
@@ -112,7 +113,7 @@ class MarketCalendar:
             session = self._next_session(ts)
 
         open_time = self._cal.session_open(session)
-        return open_time.to_pydatetime().replace(tzinfo=UTC)
+        return cast(datetime, open_time.to_pydatetime().replace(tzinfo=UTC))
 
     def session_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get market close time for the session containing dt.
@@ -133,7 +134,7 @@ class MarketCalendar:
             session = self._next_session(ts)
 
         close_time = self._cal.session_close(session)
-        return close_time.to_pydatetime().replace(tzinfo=UTC)
+        return cast(datetime, close_time.to_pydatetime().replace(tzinfo=UTC))
 
     def next_open(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market open time.
@@ -148,11 +149,15 @@ class MarketCalendar:
         """
         ts = self._to_exchange_timestamp(dt)
 
-        # Find next session
+        if self.is_market_open(dt):
+            session = self._get_session(ts)
+            if session is not None:
+                ts = self._cal.session_close(session) + pd.Timedelta(minutes=1)
+
         next_session = self._next_session(ts)
         open_time = self._cal.session_open(next_session)
 
-        return open_time.to_pydatetime().replace(tzinfo=UTC)
+        return cast(datetime, open_time.to_pydatetime().replace(tzinfo=UTC))
 
     def next_close(self, dt: datetime | pd.Timestamp | None = None) -> datetime:
         """Get next market close time.
@@ -173,12 +178,12 @@ class MarketCalendar:
             session = self._get_session(ts)
             if session is not None:
                 close_time = self._cal.session_close(session)
-                return close_time.to_pydatetime().replace(tzinfo=UTC)
+                return cast(datetime, close_time.to_pydatetime().replace(tzinfo=UTC))
 
         # Return next session's close
         next_session = self._next_session(ts)
         close_time = self._cal.session_close(next_session)
-        return close_time.to_pydatetime().replace(tzinfo=UTC)
+        return cast(datetime, close_time.to_pydatetime().replace(tzinfo=UTC))
 
     def add_trading_hours(self, dt: datetime | pd.Timestamp, hours: float) -> datetime:
         """Add trading hours to a timestamp, skipping non-trading time.
@@ -225,7 +230,7 @@ class MarketCalendar:
                 next_session = self._next_session(current)
                 current = self._cal.session_open(next_session)
 
-        return current.to_pydatetime().replace(tzinfo=UTC)
+        return cast(datetime, current.to_pydatetime().replace(tzinfo=UTC))
 
     def trading_minutes_until(
         self,
@@ -321,7 +326,7 @@ class MarketCalendar:
             return 0.0
 
         next_open = self.next_open(dt_utc)
-        return max(0.0, (next_open - dt_utc).total_seconds())
+        return cast(float, max(0.0, (next_open - dt_utc).total_seconds()))
 
     def _to_utc_timestamp(self, dt: datetime | pd.Timestamp | None) -> pd.Timestamp:
         """Normalize supported datetime inputs to timezone-aware UTC pandas timestamp.

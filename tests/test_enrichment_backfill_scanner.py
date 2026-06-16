@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import polars as pl
+import pandas as pd
 import pytest
 
 from heber.watch.backfill_scanner import ENRICHABLE_FIELDS, EnrichmentBackfillScanner
@@ -114,7 +114,7 @@ def _write_partition(features_dir: Path, dt: date, rows: list[dict]) -> Path:
     partition = features_dir / f"dt={dt_str}"
     partition.mkdir(parents=True, exist_ok=True)
     out = partition / "data.parquet"
-    pl.DataFrame(rows).write_parquet(out)
+    pd.DataFrame(rows).to_parquet(out, index=False)
     return out
 
 
@@ -129,31 +129,31 @@ class TestFindIncompleteRows:
     def test_finds_rows_with_null_enrichment_fields(self) -> None:
         incomplete_row = _make_feature_row("a1", complete=False)
         complete_row = _make_feature_row("a2", complete=True)
-        df = pl.DataFrame([incomplete_row, complete_row])
+        df = pd.DataFrame([incomplete_row, complete_row])
 
         result = EnrichmentBackfillScanner._find_incomplete_rows(df)
 
         assert len(result) == 1
-        assert result["alert_id"][0] == "a1"
+        assert result["alert_id"].iloc[0] == "a1"
 
     def test_all_complete_returns_empty(self) -> None:
         rows = [_make_feature_row(f"a{i}", complete=True) for i in range(5)]
-        df = pl.DataFrame(rows)
+        df = pd.DataFrame(rows)
 
         result = EnrichmentBackfillScanner._find_incomplete_rows(df)
-        assert result.is_empty()
+        assert result.empty
 
     def test_partial_nulls_detected(self) -> None:
         row = _make_feature_row("a1", complete=True, partial_fields={"gex": None})
-        df = pl.DataFrame([row])
+        df = pd.DataFrame([row])
 
         result = EnrichmentBackfillScanner._find_incomplete_rows(df)
         assert len(result) == 1
 
     def test_empty_df_returns_empty(self) -> None:
-        df = pl.DataFrame({"alert_id": [], "delta": []}).cast({"delta": pl.Float64})
+        df = pd.DataFrame({"alert_id": pd.Series([], dtype=str), "delta": pd.Series([], dtype="float64")})
         result = EnrichmentBackfillScanner._find_incomplete_rows(df)
-        assert result.is_empty()
+        assert result.empty
 
 
 class TestReadRecentPartitions:
@@ -208,7 +208,7 @@ class TestReadRecentPartitions:
         df = scanner._read_recent_partitions()
         assert df is None
 
-    def test_skips_partition_when_polars_panics(
+    def test_skips_partition_when_read_fails(
         self, tmp_features_dir: Path, mock_extractor: AsyncMock, mock_calendar: MagicMock
     ) -> None:
         today = date.today()
@@ -223,23 +223,20 @@ class TestReadRecentPartitions:
             calendar=mock_calendar,
         )
 
-        class PanicException(BaseException):
-            pass
-
-        real_read_parquet = pl.read_parquet
+        real_read_parquet = pd.read_parquet
         panic_path_suffix = str((tmp_features_dir / f"dt={today}" / "data.parquet").resolve())
 
-        def _read_parquet_with_panic(path: Path) -> pl.DataFrame:
+        def _read_parquet_with_error(path: Path) -> pd.DataFrame:
             if str(Path(path).resolve()) == panic_path_suffix:
-                raise PanicException("simulated rust panic")
+                raise OSError("simulated read failure")
             return real_read_parquet(path)
 
-        with patch("heber.watch.backfill_scanner.pl.read_parquet", side_effect=_read_parquet_with_panic):
+        with patch("heber.watch.backfill_scanner.pd.read_parquet", side_effect=_read_parquet_with_error):
             df = scanner._read_recent_partitions()
 
         assert df is not None
         assert len(df) == 1
-        assert df.get_column("alert_id").to_list() == ["yesterday_row"]
+        assert df["alert_id"].tolist() == ["yesterday_row"]
 
 
 class TestScanAndBackfill:

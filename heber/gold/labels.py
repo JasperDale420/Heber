@@ -18,7 +18,7 @@ from typing import Any, Literal
 import pandas as pd
 import structlog
 
-from heber.core.parquet import read_parquet_dataset
+from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
@@ -150,11 +150,13 @@ def compute_availability_time(
     forward_delta = parse_duration(forward_window)
     lag_delta = parse_duration(availability_lag)
 
-    availability = label_time + forward_delta + lag_delta
+    availability = label_time + forward_delta
 
     if "d" in forward_window:
         close_h, close_m, close_s = map(int, market_close_time.split(":"))
         availability = availability.replace(hour=close_h, minute=close_m, second=close_s, microsecond=0)
+
+    availability += lag_delta
 
     return availability
 
@@ -220,7 +222,7 @@ def write_label(
     output_path.mkdir(parents=True, exist_ok=True)
 
     parquet_path = output_path / DATA_PARQUET
-    df.to_parquet(parquet_path, compression="snappy")
+    df.to_parquet(parquet_path, index=False, compression="snappy")
 
     logger.info(
         "Wrote label dataset",
@@ -282,12 +284,13 @@ def read_label(
         return pd.DataFrame()
 
     try:
-        df = read_parquet_dataset(
+        reader = HeberReader()
+        df = reader.read_parquet_dataset(
             path=data_path,
             asof_time=asof_time,
         )
     except Exception as e:
-        logger.error("Failed to read label dataset", dataset=dataset, error=str(e))
+        logger.error("Failed to read label dataset", dataset=dataset, error=str(e), exc_info=True)
         return pd.DataFrame()
 
     if "ts_available" not in df.columns and not df.empty:

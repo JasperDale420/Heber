@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -21,21 +21,26 @@ logger = structlog.get_logger(__name__)
 
 
 # Degraded mode metric (PRD §12.13.4)
-degraded_mode = Gauge(
-    "heber_degraded_mode",
-    "Service operating in degraded mode (1=degraded, 0=normal)",
-    ["dependency"],
-)
+try:
+    degraded_mode = Gauge(
+        "heber_degraded_mode",
+        "Service operating in degraded mode (1=degraded, 0=normal)",
+        ["dependency"],
+    )
+except ValueError:
+    from prometheus_client import REGISTRY as _R
+
+    degraded_mode = next(c for c in _R._collectors if hasattr(c, "_name") and c._name == "heber_degraded_mode")
 
 
-class DependencyType(str, Enum):
+class DependencyType(StrEnum):
     """Dependency classification per PRD §12.13.1."""
 
     HARD = "hard"  # Service cannot function without it
     SOFT = "soft"  # Service can continue with reduced functionality
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """Circuit breaker states per PRD §12.13.3."""
 
     CLOSED = "closed"  # Normal operation

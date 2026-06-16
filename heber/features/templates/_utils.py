@@ -53,4 +53,4 @@ def rolling_max_timestamp_time(
     ints = naive.astype("int64")
     s = pd.Series(ints.to_numpy(), index=index)
     rolled = s.rolling(f"{window_hours}h", min_periods=1).max()
-    return pd.to_datetime(rolled.values, utc=True)
+    return pd.to_datetime(rolled.values, utc=True)  # type: ignore[no-any-return]

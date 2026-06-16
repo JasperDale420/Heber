@@ -7,7 +7,7 @@ if they would have produced acceptable trade outcomes.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,7 +21,7 @@ def _normalize_datetime_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-class WatchStatus(str, Enum):
+class WatchStatus(StrEnum):
     """Status of an alert watch."""
 
     WATCHING = "watching"  # Actively being tracked
@@ -31,7 +31,7 @@ class WatchStatus(str, Enum):
     ERROR = "error"  # Failed to track (e.g., no quotes available)
 
 
-class WatchHorizon(str, Enum):
+class WatchHorizon(StrEnum):
     """Trading horizon classification."""
 
     INTRADAY = "intraday"  # 0-2 DTE, 5-min polling, 4h max

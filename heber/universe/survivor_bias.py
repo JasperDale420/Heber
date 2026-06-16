@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import pandas as pd
@@ -17,7 +17,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-class DelistReason(str, Enum):
+class DelistReason(StrEnum):
     """Reason for instrument delisting (PRD §35.2)."""
 
     BANKRUPTCY = "bankruptcy"
@@ -124,7 +124,6 @@ class UniverseManager:
         df: pd.DataFrame,
         asof_date: date | str,
         instrument_key_col: str = "instrument_key",
-        exclude_future_delistings: bool = True,
         mark_delistings: bool = False,
         delist_warning_days: int = 30,
     ) -> pd.DataFrame:
@@ -134,7 +133,6 @@ class UniverseManager:
             df: DataFrame to filter
             asof_date: Point-in-time date for filtering
             instrument_key_col: Column containing instrument keys
-            exclude_future_delistings: If True, exclude symbols that delist after asof_date
             mark_delistings: If True, add column indicating upcoming delistings
             delist_warning_days: Days ahead to mark delistings
 
@@ -152,15 +150,6 @@ class UniverseManager:
 
         # Filter to active instruments
         result = df[df[instrument_key_col].isin(active_keys)].copy()
-
-        # Additional filtering for future delistings
-        if exclude_future_delistings:
-            keys_to_exclude = set()
-            for key in result[instrument_key_col].unique():
-                inst = self.instruments.get(key)
-                if inst and inst.delist_date and inst.delist_date > asof_date:
-                    keys_to_exclude.add(key)
-            result = result[~result[instrument_key_col].isin(keys_to_exclude)]
 
         # Optionally mark upcoming delistings
         if mark_delistings:
@@ -272,32 +261,39 @@ def create_universe_manager_from_dataframe(
         UniverseManager populated with instruments
     """
     instruments = []
+    columns = list(df.columns)
+    column_index = {name: idx for idx, name in enumerate(columns)}
+    instrument_idx = column_index[instrument_key_col]
+    list_date_idx = column_index[list_date_col]
+    delist_date_idx = column_index.get(delist_date_col)
+    delist_reason_idx = column_index.get(delist_reason_col)
 
-    for _, row in df.iterrows():
-        list_date = row[list_date_col]
+    # PERF: itertuples avoids pandas Series allocation per row (faster, less memory).
+    for row in df.itertuples(index=False, name=None):
+        list_date = row[list_date_idx]
         if isinstance(list_date, str):
             list_date = date.fromisoformat(list_date)
         elif isinstance(list_date, datetime):
             list_date = list_date.date()
 
         delist_date = None
-        if pd.notna(row.get(delist_date_col)):
-            delist_date = row[delist_date_col]
+        if delist_date_idx is not None and pd.notna(row[delist_date_idx]):
+            delist_date = row[delist_date_idx]
             if isinstance(delist_date, str):
                 delist_date = date.fromisoformat(delist_date)
             elif isinstance(delist_date, datetime):
                 delist_date = delist_date.date()
 
         delist_reason = None
-        if pd.notna(row.get(delist_reason_col)):
+        if delist_reason_idx is not None and pd.notna(row[delist_reason_idx]):
             try:
-                delist_reason = DelistReason(row[delist_reason_col])
+                delist_reason = DelistReason(row[delist_reason_idx])
             except ValueError:
                 delist_reason = DelistReason.OTHER
 
         instruments.append(
             InstrumentLifecycle(
-                instrument_key=row[instrument_key_col],
+                instrument_key=row[instrument_idx],
                 list_date=list_date,
                 delist_date=delist_date,
                 delist_reason=delist_reason,

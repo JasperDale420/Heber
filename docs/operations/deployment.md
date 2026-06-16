@@ -137,8 +137,8 @@ curl -s http://localhost:8085/health | jq
 curl -s http://localhost:8000/api/v1/healthcheck
 curl -s http://localhost:18081/health/ready | jq
 
-# Verify SDK works
-PYTHONPATH=. python -c "from heber.sdk.client import HeberClient; print('SDK OK')"
+# Verify reader works
+PYTHONPATH=. python -c "from heber.reader import HeberReader; print('Reader OK')"
 ```
 
 ---
