@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_ROOT = Path("/Users/jacobmcmillan/Empire/Heber")
+INSTALLED_ROOT = Path("/Users/jacobmcmillan/Empire/Heber")
 
 
 def _load_massive_plist() -> dict[str, Any]:
@@ -56,10 +56,10 @@ def test_massive_daily_launchagent_runs_after_login_restart_and_retries_failures
 
     assert plist["Label"] == "com.empire.heber.massive-daily"
     assert plist["ProgramArguments"] == [
-        str(CANONICAL_ROOT / "scripts" / "run_native_heber_service.sh"),
+        str(INSTALLED_ROOT / "scripts" / "run_native_heber_service.sh"),
         "massive-daily",
     ]
-    assert plist["WorkingDirectory"] == str(CANONICAL_ROOT)
+    assert plist["WorkingDirectory"] == str(INSTALLED_ROOT)
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
     assert plist["ThrottleInterval"] >= 300
@@ -73,6 +73,12 @@ def test_massive_rest_backlog_launchagent_restarts_until_complete() -> None:
         plist = cast(dict[str, Any], plistlib.load(handle))
 
     assert plist["Label"] == "com.empire.heber.massive-rest-backlog"
+    assert plist["ProgramArguments"] == [
+        str(INSTALLED_ROOT / "scripts" / "run_native_heber_service.sh"),
+        "massive-rest-backlog",
+    ]
+    assert plist["WorkingDirectory"] == str(INSTALLED_ROOT)
+    assert plist["EnvironmentVariables"]["HEBER_PROJECT_DIR"] == str(INSTALLED_ROOT)
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
     assert plist["ThrottleInterval"] >= 300
@@ -86,9 +92,11 @@ def test_massive_ticker_meta_launchagent_restarts_until_complete() -> None:
 
     assert plist["Label"] == "com.empire.heber.massive-ticker-meta"
     assert plist["ProgramArguments"] == [
-        str(ROOT / "scripts" / "run_native_heber_service.sh"),
+        str(INSTALLED_ROOT / "scripts" / "run_native_heber_service.sh"),
         "massive-ticker-meta",
     ]
+    assert plist["WorkingDirectory"] == str(INSTALLED_ROOT)
+    assert plist["EnvironmentVariables"]["HEBER_PROJECT_DIR"] == str(INSTALLED_ROOT)
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
     assert plist["ThrottleInterval"] >= 300
@@ -102,9 +110,11 @@ def test_massive_delisted_details_launchagent_restarts_until_complete() -> None:
 
     assert plist["Label"] == "com.empire.heber.massive-delisted-details"
     assert plist["ProgramArguments"] == [
-        str(ROOT / "scripts" / "run_native_heber_service.sh"),
+        str(INSTALLED_ROOT / "scripts" / "run_native_heber_service.sh"),
         "massive-delisted-details",
     ]
+    assert plist["WorkingDirectory"] == str(INSTALLED_ROOT)
+    assert plist["EnvironmentVariables"]["HEBER_PROJECT_DIR"] == str(INSTALLED_ROOT)
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
     assert plist["ThrottleInterval"] >= 300

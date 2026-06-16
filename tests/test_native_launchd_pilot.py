@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_ROOT = Path("/Users/jacobmcmillan/Empire/Heber")
+INSTALLED_ROOT = Path("/Users/jacobmcmillan/Empire/Heber")
 
 
 PILOT_SERVICES = {
@@ -65,14 +65,14 @@ def test_native_runner_only_allows_low_risk_pilot_services() -> None:
 
 
 def test_launchd_plists_run_native_runner_with_restart_policy() -> None:
-    runner = str(CANONICAL_ROOT / "scripts" / "run_native_heber_service.sh")
+    runner = str(INSTALLED_ROOT / "scripts" / "run_native_heber_service.sh")
 
     for service, expected in PILOT_SERVICES.items():
         plist = _load_plist(service)
 
         assert plist["Label"] == expected["label"]
         assert plist["ProgramArguments"] == [runner, service]
-        assert plist["WorkingDirectory"] == str(CANONICAL_ROOT)
+        assert plist["WorkingDirectory"] == str(INSTALLED_ROOT)
         assert plist["RunAtLoad"] is True
         assert plist["KeepAlive"] == {"SuccessfulExit": False}
         assert plist["ThrottleInterval"] >= 30

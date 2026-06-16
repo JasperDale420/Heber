@@ -111,6 +111,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
     base = Path(root)
     if not base.exists():
         return []
+    if base.is_file():
+        if (
+            base.suffix == ".parquet"
+            and not base.name.startswith("._")
+            and not any(part.startswith("._") for part in base.parts)
+        ):
+            return [str(base)]
+        return []
     files: list[str] = []
     for f in base.rglob("*.parquet"):
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
