@@ -802,7 +802,7 @@ class TestSendToDlq:
         consumer = EventConsumer()
 
         class FakeRedis:
-            async def xadd(self, stream, payload):
+            async def xadd(self, stream, payload, **_kwargs):
                 return b"dlq-1-0"
 
         consumer.redis = FakeRedis()
@@ -826,7 +826,7 @@ class TestSendToDlq:
         consumer = EventConsumer()
 
         class FakeRedis:
-            async def xadd(self, stream, payload):
+            async def xadd(self, stream, payload, **_kwargs):
                 raise aioredis.RedisError("DLQ unavailable")
 
         consumer.redis = FakeRedis()

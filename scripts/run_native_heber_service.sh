@@ -31,12 +31,18 @@ export HEBER_HEALTH_WATCH_METRICS_URL="${HEBER_HEALTH_WATCH_METRICS_URL:-http://
 export HEBER_HEALTH_REPORT_DIR="${HEBER_HEALTH_REPORT_DIR:-${HEBER_DATA_ROOT}/ops/dataflow-health}"
 export PYTHONUNBUFFERED=1
 
-mkdir -p "${HEBER_NATIVE_LOG_DIR}" "${HEBER_HEALTH_REPORT_DIR}"
+mkdir -p "${HEBER_NATIVE_LOG_DIR}"
 
+# The data volume must be mounted before we create anything under it. When it is
+# absent, mkdir-ing the report dir under /Volumes/heber either spams
+# "Permission denied" against the root-owned mount placeholder (every launchd
+# cycle) or split-brains the lakehouse onto the boot disk. Guard first.
 if [[ ! -d "${HEBER_DATA_ROOT}" ]]; then
-  echo "ERROR: HEBER_DATA_ROOT does not exist: ${HEBER_DATA_ROOT}" >&2
+  echo "ERROR: HEBER_DATA_ROOT does not exist (volume not mounted?): ${HEBER_DATA_ROOT}" >&2
   exit 1
 fi
+
+mkdir -p "${HEBER_HEALTH_REPORT_DIR}"
 
 cd "${PROJECT_DIR}"
 

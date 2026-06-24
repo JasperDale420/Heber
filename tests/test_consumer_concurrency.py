@@ -27,7 +27,7 @@ class _StubRedis:
         self.acked.append(args)
         return len(args) - 2
 
-    async def xadd(self, stream: str, payload: dict):
+    async def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN003
         if self.fail_xadd:
             raise RuntimeError("dlq unavailable")
         self.added.append((stream, payload))

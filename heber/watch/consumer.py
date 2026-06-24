@@ -262,7 +262,13 @@ class AlertWatchConsumer:
             )
 
         async def _xadd() -> Any:
-            return await asyncio.to_thread(self.redis.xadd, self.dlq_stream_name, dlq_payload)
+            return await asyncio.to_thread(
+                self.redis.xadd,
+                self.dlq_stream_name,
+                dlq_payload,
+                maxlen=settings.redis_dlq_max_stream_len,
+                approximate=True,
+            )
 
         success, _result, last_exc = await try_xadd_with_retry(_xadd)
 

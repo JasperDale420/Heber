@@ -186,6 +186,13 @@ class Settings(BaseSettings):
         default="heber:events:dlq",
         description="Redis stream for failed consumer messages",
     )
+    redis_dlq_max_stream_len: int = Field(
+        default=100_000,
+        ge=1000,
+        description="Approximate MAXLEN cap applied to the DLQ stream on XADD. The "
+        "DLQ lives on a cache-mode Redis; this bounds the best-effort reprocessing "
+        "queue so it cannot grow unbounded. Durable on-disk files remain the audit record.",
+    )
     dlq_fallback_dir: Path | None = Field(
         default=None,
         validation_alias=AliasChoices("HEBER_DLQ_FALLBACK_DIR"),

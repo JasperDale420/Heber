@@ -162,7 +162,7 @@ class _FlakyRedis:
         self.calls = 0
         self.added: list[tuple] = []
 
-    async def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    async def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         self.calls += 1
         if self.calls <= self.fail_count:
             raise RuntimeError("transient redis error")
@@ -259,7 +259,7 @@ class _FlakySyncRedis:
         self.calls = 0
         self.added: list[tuple] = []
 
-    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         self.calls += 1
         if self.calls <= self.fail_count:
             raise RuntimeError("transient redis error")

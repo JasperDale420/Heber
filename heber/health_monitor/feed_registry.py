@@ -27,7 +27,10 @@ class FeedRule:
 
 DEFAULT_REGISTRY: list[FeedRule] = [
     FeedRule("flow_alerts", "continuous", "09:30", "16:00", 60, 1),
-    FeedRule("darkpool", "continuous", "04:00", "20:00", 60, 1),
+    # Darkpool prints flow from the open through after-hours (~19:00 ET), but never
+    # pre-market: a 04:00 start produced ~100 false "feed appears dark" criticals per
+    # pre-market hour. Start at the open; keep the after-hours tail to 20:00.
+    FeedRule("darkpool", "continuous", "09:30", "20:00", 60, 1),
     FeedRule("bars", "continuous", "09:30", "16:00", 30, 1),
     FeedRule("trades", "continuous", "09:30", "16:00", 30, 1),
     FeedRule("oi_change", "daily", "", "17:30", 0, 1),

@@ -110,6 +110,32 @@ async def test_daily_feed_missing_past_deadline_fails(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+async def test_darkpool_premarket_no_result(tmp_path: Path) -> None:
+    # Darkpool's window starts at the open (09:30); pre-market it has no prints, so
+    # at 06:00 ET a dark darkpool feed must NOT fire — this is the pre-market
+    # false-positive the window start fixes.
+    pre_market_et = datetime(2026, 3, 25, 6, 0, tzinfo=ET)
+    reader = _reader_returning({"darkpool": 0})
+    ctx = _ctx(tmp_path, reader)
+    results = await run_liveness_checks(ctx, now=pre_market_et)
+    assert all(r.feed != "darkpool" for r in results)
+
+
+@pytest.mark.unit
+async def test_darkpool_afterhours_still_monitored(tmp_path: Path) -> None:
+    # Darkpool legitimately flows after 16:00 ET (its window runs to 20:00), so a
+    # dark feed at 17:00 ET must still FAIL — not be silently unmonitored.
+    after_hours_et = datetime(2026, 3, 25, 17, 0, tzinfo=ET)
+    reader = _reader_returning({"darkpool": 0})
+    ctx = _ctx(tmp_path, reader)
+    results = await run_liveness_checks(ctx, now=after_hours_et)
+    dp = [r for r in results if r.feed == "darkpool"]
+    assert len(dp) == 1
+    assert dp[0].status == Status.FAIL
+    assert dp[0].severity == Severity.P0_CRITICAL
+
+
+@pytest.mark.unit
 async def test_continuous_feed_outside_window_no_result(tmp_path: Path) -> None:
     # 18:00 ET is outside flow_alerts' 09:30-16:00 window -> no flow_alerts result.
     reader = _reader_returning({"flow_alerts": 0})

@@ -209,7 +209,12 @@ class EventConsumer:
         )
 
         success, dlq_id, last_exc = await try_xadd_with_retry(
-            lambda: self.redis.xadd(settings.redis_dlq_stream_name, dlq_event),
+            lambda: self.redis.xadd(
+                settings.redis_dlq_stream_name,
+                dlq_event,
+                maxlen=settings.redis_dlq_max_stream_len,
+                approximate=True,
+            ),
         )
 
         if fallback_path is None and not success:
@@ -841,8 +846,12 @@ class EventConsumer:
         )
 
         if not messages:
-            # Flush on idle iterations to respect time-based flush thresholds
-            self._flush_layers()
+            # Flush on idle iterations to respect time-based flush thresholds.
+            # Offloaded to a thread so the gzip/parquet I/O does not block the
+            # event loop (keeps the Prometheus metrics endpoint and Redis
+            # heartbeats responsive). Safe: flush never runs concurrently with
+            # buffer appends or another flush within the single consume loop.
+            await asyncio.to_thread(self._flush_layers)
             return
 
         t0 = time.monotonic()
@@ -859,8 +868,10 @@ class EventConsumer:
             processed_ids.extend(ack_ids)
             failed_ids.extend(stream_failed_ids)
 
-        # Flush to disk BEFORE acknowledging
-        flush_ok = self._flush_layers()
+        # Flush to disk BEFORE acknowledging. Offloaded to a thread so the
+        # blocking gzip/parquet write does not stall the event loop (and the
+        # consumer's metrics endpoint) on large batches.
+        flush_ok = await asyncio.to_thread(self._flush_layers)
 
         # Only ACK after successful flush — on failure, messages stay
         # pending and will be redelivered on the next iteration.

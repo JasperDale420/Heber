@@ -32,13 +32,13 @@ class _RedisWithDlq:
     def xack(self, *args, **kwargs):  # noqa: ANN002, ANN003
         return 1
 
-    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         self.added.append((stream, payload))
         return "1-0"
 
 
 class _RedisDlqFailure(_RedisWithDlq):
-    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         raise RuntimeError("dlq unavailable")
 
 
