@@ -63,7 +63,12 @@ class BronzeWriter:
             )
             if should_flush and events:
                 self._flush_partition(partition_key, events)
-                self.buffers[partition_key] = []
+                # Drop the key, not just its contents: partition keys embed
+                # dt=/hour=, so retaining emptied entries leaks one dead key per
+                # (provider,feed,dt,hour) forever. The defaultdict recreates it
+                # on the next write. (del runs only after a successful flush, so
+                # a flush failure retains the buffered events for redelivery.)
+                del self.buffers[partition_key]
                 flushed = True
 
         if flushed:
@@ -71,10 +76,11 @@ class BronzeWriter:
 
     def flush(self) -> None:
         """Flush all buffers immediately."""
-        for partition_key, events in self.buffers.items():
+        for partition_key in list(self.buffers):
+            events = self.buffers[partition_key]
             if events:
                 self._flush_partition(partition_key, events)
-                self.buffers[partition_key] = []
+            del self.buffers[partition_key]
 
     def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
         """Write events to a partition file."""

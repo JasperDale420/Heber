@@ -131,7 +131,12 @@ class SilverWriter:
             )
             if should_flush:
                 self._flush_partition(partition_key, rows)
-                self.buffers[partition_key] = []
+                # Drop the key, not just its contents: partition keys embed
+                # dt=/hour=, so retaining emptied entries leaks one dead key per
+                # (feed,instrument_type,dt,hour) forever. The defaultdict
+                # recreates it on the next write. (del runs only after a
+                # successful flush, so a failure retains the rows for redelivery.)
+                del self.buffers[partition_key]
                 flushed = True
 
         if flushed:
@@ -139,10 +144,11 @@ class SilverWriter:
 
     def flush(self) -> None:
         """Flush all buffers immediately."""
-        for partition_key, rows in self.buffers.items():
+        for partition_key in list(self.buffers):
+            rows = self.buffers[partition_key]
             if rows:
                 self._flush_partition(partition_key, rows)
-                self.buffers[partition_key] = []
+            del self.buffers[partition_key]
 
     def _flush_partition(self, partition_key: str, rows: list[dict]) -> None:
         """Write rows to a Parquet file."""

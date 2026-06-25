@@ -124,9 +124,9 @@ class TestBronzeWriter:
         writer.write(envelope)
         writer.flush()
 
-        # After flush, buffers should be empty lists
-        for events in writer.buffers.values():
-            assert events == []
+        # After flush, the partition key is removed (not retained as an empty
+        # list) so dt=/hour= keys don't accumulate forever.
+        assert len(writer.buffers) == 0
 
         # Verify gzip file was written
         files = list((tmp_path / "bronze").rglob("*.jsonl.gz"))
@@ -272,8 +272,8 @@ class TestSilverWriter:
         writer.buffers[pk] = [row]
         writer.flush()
 
-        for rows in writer.buffers.values():
-            assert rows == []
+        # Partition key removed after flush (not retained as an empty list).
+        assert len(writer.buffers) == 0
 
         files = list((tmp_path / "silver").rglob("*.parquet"))
         assert len(files) == 1
@@ -287,6 +287,47 @@ class TestSilverWriter:
         writer.flush()
         silver_dir = tmp_path / "silver"
         assert not silver_dir.exists() or not list(silver_dir.rglob("*.parquet"))
+
+    def test_buffers_do_not_accumulate_dead_keys(self, tmp_path, monkeypatch):
+        """Flushing distinct dt/hour partitions must not leave dead keys behind.
+
+        Regression for the unbounded buffer growth: emptied partitions used to
+        be retained as `[]`, leaking one key per (feed,instrument_type,dt,hour).
+        """
+        from heber.config import settings
+
+        monkeypatch.setattr(settings, "data_root", tmp_path)
+        writer = SilverWriter()
+        base_row = {
+            "event_id": "e",
+            "provider": "alpaca",
+            "feed": "bars",
+            "instrument_type": "equity",
+            "instrument_key": "equity:AAPL",
+            "symbol": "AAPL",
+            "ts_event": NOW,
+            "ts_ingest": NOW,
+            "ts_available": NOW,
+            "source": "websocket",
+            "schema_version": "v1",
+            "quality_flags": [],
+            "timeframe": "1Min",
+            "bar_start_ts": NOW,
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+            "trade_count": 1,
+            "vwap": 1.0,
+        }
+        for day in ("2026-03-10", "2026-03-11", "2026-03-12"):
+            writer.write_row(f"feed=bars/instrument_type=equity/dt={day}", dict(base_row))
+            writer.flush()
+        assert len(writer.buffers) == 0, f"dead keys accumulated: {list(writer.buffers)}"
+        # The defaultdict still works for a fresh write after the deletions.
+        writer.write_row("feed=bars/instrument_type=equity/dt=2026-03-13", dict(base_row))
+        assert len(writer.buffers) == 1
 
     def test_flush_partition_skips_empty_rows(self, tmp_path, monkeypatch):
         """_flush_partition returns early when rows list is empty."""
