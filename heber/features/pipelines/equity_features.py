@@ -544,11 +544,21 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
         g = group.set_index("ts_event")["close"]
         fwd_return = g.shift(-horizon) / g - 1
 
+        # The forward return at row i resolves at the CLOSE of the bar `horizon`
+        # TRADING days ahead (g.index[i+horizon]) — not `horizon` calendar days
+        # later. Stamp ts_available from that resolving bar, conservatively one
+        # day past its (midnight-UTC) date so the resolving session's 16:00 ET
+        # close is fully observable in both DST regimes. Calendar-day arithmetic
+        # here leaked every label spanning a weekend/holiday. (.to_series() keeps
+        # the index tz-aware UTC; .values would strip the tz.)
+        resolving_ts = g.index.to_series().shift(-horizon).reset_index(drop=True) + timedelta(days=1)
+
         feat = pd.DataFrame(
             {
                 "instrument_key": symbol,
                 "ts_event": g.index,
                 f"return_{horizon}d": fwd_return.values,
+                "ts_available": resolving_ts,
             }
         )
         feat[f"direction_{horizon}d"] = np.sign(feat[f"return_{horizon}d"]).astype("Int64")
@@ -564,7 +574,6 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    out["ts_available"] = pd.to_datetime(out["ts_event"], utc=True) + timedelta(days=horizon)
     return out
 
 
