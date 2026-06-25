@@ -77,6 +77,10 @@ def test_registered_pipeline_returns_nested_shape(entry: dict, empty_reader: Mag
         f"return the nested shape {{gold_dataset_name: {{'status', 'rows', 'path'}}}}"
     )
     assert result, f"{entry['name']} returned an empty result dict"
+    assert set(result) == set(entry["gold_datasets"]), (
+        f"{entry['name']} returned top-level keys {sorted(result)}; expected the "
+        f"registered Gold dataset names {sorted(entry['gold_datasets'])}"
+    )
 
     for dataset_name, info in result.items():
         assert isinstance(info, dict), f"{entry['name']}[{dataset_name}] is not a dict"

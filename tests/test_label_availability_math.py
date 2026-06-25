@@ -82,19 +82,20 @@ class TestComputeAvailabilityTime:
     def test_daily_window_snaps_to_market_close(self):
         label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
         result = compute_availability_time(label_time, "5d", "0s")
-        # +5d -> 2026-01-10, then snapped to default 16:05:00.
-        assert result == datetime(2026, 1, 10, 16, 5, 0, tzinfo=UTC)
+        # +5d -> 2026-01-10, then snapped to 16:05 New York time
+        # (21:05 UTC in January). Snapping in UTC would leak the label early.
+        assert result == datetime(2026, 1, 10, 21, 5, 0, tzinfo=UTC)
 
     def test_custom_market_close_time(self):
         label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
         result = compute_availability_time(label_time, "1d", "0s", market_close_time="13:00:00")
-        assert result == datetime(2026, 1, 6, 13, 0, 0, tzinfo=UTC)
+        assert result == datetime(2026, 1, 6, 18, 0, 0, tzinfo=UTC)
 
     def test_availability_lag_added_after_close_snap(self):
         label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
         result = compute_availability_time(label_time, "5d", "2h")
         # snapped to 16:05 then +2h lag.
-        assert result == datetime(2026, 1, 10, 18, 5, 0, tzinfo=UTC)
+        assert result == datetime(2026, 1, 10, 23, 5, 0, tzinfo=UTC)
 
     def test_intraday_window_no_close_snap(self):
         # Hours window has no 'd' -> raw forward delta, no market-close re-anchor.
@@ -249,9 +250,9 @@ class TestWriteReadLabel:
         written = pd.read_parquet(path)
         assert "ts_available" in written.columns
         assert "ts_event" in written.columns
-        # AAPL label 2026-01-05 +5d snapped to 16:05 -> 2026-01-10 16:05 UTC.
+        # AAPL label 2026-01-05 +5d snapped to 16:05 ET -> 2026-01-10 21:05 UTC.
         aapl = written[written["instrument_key"] == "equity:AAPL"].iloc[0]
-        assert pd.Timestamp(aapl["ts_available"]) == pd.Timestamp("2026-01-10 16:05:00", tz="UTC")
+        assert pd.Timestamp(aapl["ts_available"]) == pd.Timestamp("2026-01-10 21:05:00", tz="UTC")
 
     def test_write_missing_required_column_raises(self, tmp_path):
         df = pd.DataFrame({"instrument_key": ["equity:AAPL"], "label": [0.1]})
@@ -260,7 +261,7 @@ class TestWriteReadLabel:
 
     def test_read_enforces_point_in_time(self, tmp_path):
         write_label(tmp_path, "ret5", self._frame(), "5d")
-        # asof between AAPL availability (01-10 16:05) and MSFT availability (01-25).
+        # asof between AAPL availability (01-10 21:05) and MSFT availability (01-25).
         asof = datetime(2026, 1, 12, 0, 0, 0, tzinfo=UTC)
         out = read_label(tmp_path, "ret5", asof_time=asof)
         assert list(out["instrument_key"]) == ["equity:AAPL"]

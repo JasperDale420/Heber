@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import structlog
@@ -26,6 +27,7 @@ logger = structlog.get_logger(__name__)
 LABEL_TYPE_DIR = "type=label"
 DEFAULT_VERSION = "v1.0.0"
 DATA_PARQUET = "data.parquet"
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
 
 from heber.gold.duration import parse_duration
@@ -150,11 +152,17 @@ def compute_availability_time(
     forward_delta = parse_duration(forward_window)
     lag_delta = parse_duration(availability_lag)
 
+    if label_time.tzinfo is None:
+        label_time = label_time.replace(tzinfo=UTC)
+
+    output_tz = label_time.tzinfo
     availability = label_time + forward_delta
 
     if "d" in forward_window:
         close_h, close_m, close_s = map(int, market_close_time.split(":"))
+        availability = availability.astimezone(MARKET_TIMEZONE)
         availability = availability.replace(hour=close_h, minute=close_m, second=close_s, microsecond=0)
+        availability = availability.astimezone(output_tz)
 
     availability += lag_delta
 

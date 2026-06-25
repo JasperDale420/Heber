@@ -70,3 +70,29 @@ def test_prod_with_explicit_url_still_carrying_dev_password_raises(monkeypatch) 
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_prod_with_url_encoded_dev_password_raises(monkeypatch) -> None:
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("HEBER_ENVIRONMENT", "prod")
+    monkeypatch.setenv(
+        "HEBER_POSTGRES_URL",
+        "postgresql+asyncpg://heber:heber%5Fdev%5Fpassword@db:5432/heber_catalog",  # pragma: allowlist secret
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_prod_with_password_containing_dev_password_substring_is_allowed(monkeypatch) -> None:
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("HEBER_ENVIRONMENT", "prod")
+    monkeypatch.setenv(
+        "HEBER_POSTGRES_URL",
+        f"postgresql+asyncpg://heber:not_{DEV_POSTGRES_PASSWORD}_real"  # pragma: allowlist secret
+        "@db:5432/heber_catalog",
+    )
+
+    settings = Settings(_env_file=None)
+
+    assert settings.environment == "prod"

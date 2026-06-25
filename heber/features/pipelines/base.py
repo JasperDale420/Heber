@@ -14,6 +14,7 @@ label pipelines that gate availability on a forward window) define their own
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -50,3 +51,24 @@ def ensure_market_instrument_key(df: pd.DataFrame, instrument_key: str) -> pd.Da
     """
     df["instrument_key"] = instrument_key
     return df
+
+
+def gold_dataset_result(
+    *,
+    status: str,
+    rows: int,
+    path: str | None = None,
+    error: str | None = None,
+    components: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the poller-facing result for one Gold dataset."""
+    result: dict[str, Any] = {
+        "status": status,
+        "rows": int(rows),
+        "path": path,
+    }
+    if error is not None:
+        result["error"] = error
+    if components is not None:
+        result["components"] = components
+    return result

@@ -72,9 +72,7 @@ class TestComputeAvailabilityTime:
         label_time = datetime(2025, 1, 10, 9, 30, tzinfo=UTC)
         availability = compute_availability_time(label_time, "5d")
 
-        assert availability.date() == datetime(2025, 1, 15).date()
-        assert availability.hour == 16
-        assert availability.minute == 5
+        assert availability == datetime(2025, 1, 15, 21, 5, tzinfo=UTC)
 
     def test_1d_forward_window(self):
         label_time = datetime(2025, 1, 10, 9, 30, tzinfo=UTC)

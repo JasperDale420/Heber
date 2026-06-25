@@ -4,6 +4,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple
+from urllib.parse import unquote, urlsplit
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Fallback Postgres password used only when HEBER_POSTGRES_PASSWORD is unset.
 # Safe for local dev; a model validator rejects it outside the dev environment.
 DEV_POSTGRES_PASSWORD = "heber_dev_password"  # pragma: allowlist secret — dev-only fallback, rejected outside dev
+
+
+def _postgres_url_uses_dev_password(postgres_url: str) -> bool:
+    """Return True when the URL password exactly matches the dev fallback."""
+    try:
+        password = urlsplit(postgres_url).password
+    except ValueError:
+        return False
+    if password is None:
+        return False
+    return unquote(password) == DEV_POSTGRES_PASSWORD
+
 
 # ---------------------------------------------------------------------------
 # Typed section accessors (NamedTuples)
@@ -655,7 +668,7 @@ class Settings(BaseSettings):
         ``HEBER_POSTGRES_PASSWORD`` is unset. That fallback is convenient for local
         development but must never reach staging/prod, so we refuse to start.
         """
-        if self.environment != "dev" and DEV_POSTGRES_PASSWORD in self.postgres_url:
+        if self.environment != "dev" and _postgres_url_uses_dev_password(self.postgres_url):
             raise ValueError(
                 f"Refusing to start in environment='{self.environment}' with the default "
                 f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "

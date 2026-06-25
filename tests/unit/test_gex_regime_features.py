@@ -14,6 +14,7 @@ import pandas as pd
 from heber.features.pipelines.gex_regime_features import (
     ALL_DATASETS,
     INSTRUMENT_KEY,
+    OUTPUT_DATASET,
     GexRegimePipeline,
     compute_gex_flip_distance,
     compute_gex_regime,
@@ -332,8 +333,9 @@ class TestGexRegimePipeline:
         )
 
         mock_reader.write_gold.assert_not_called()
-        assert "_merged" in stats
-        assert stats["_merged"]["path"] is None
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["path"] is None
+        assert stats[OUTPUT_DATASET]["rows"] > 0
 
     def test_writes_gold_on_real_run(self) -> None:
         """Non-dry run should call write_gold with correct dataset name."""
@@ -377,8 +379,10 @@ class TestGexRegimePipeline:
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-03-01")
 
         mock_reader.write_gold.assert_not_called()
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["status"] == "no_data"
         for ds_name in ALL_DATASETS:
-            assert stats[ds_name]["status"] == "no_data"
+            assert stats[OUTPUT_DATASET]["components"][ds_name]["status"] == "no_data"
 
     def test_subset_datasets(self) -> None:
         """Pipeline should only compute requested datasets."""
@@ -393,11 +397,13 @@ class TestGexRegimePipeline:
             dry_run=True,
         )
 
-        assert "net_gex" in stats
-        assert stats["net_gex"]["status"] == "success"
+        assert set(stats) == {OUTPUT_DATASET}
+        components = stats[OUTPUT_DATASET]["components"]
+        assert "net_gex" in components
+        assert components["net_gex"]["status"] == "success"
         # gex_regime and gex_flip_distance should not be in stats
-        assert "gex_regime" not in stats
-        assert "gex_flip_distance" not in stats
+        assert "gex_regime" not in components
+        assert "gex_flip_distance" not in components
 
     def test_reader_exception_handled(self) -> None:
         """Pipeline should handle reader exceptions gracefully."""
@@ -407,5 +413,7 @@ class TestGexRegimePipeline:
         pipeline = GexRegimePipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-03-01")
 
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["status"] == "error"
         for ds_name in ALL_DATASETS:
-            assert stats[ds_name]["status"] == "error"
+            assert stats[OUTPUT_DATASET]["components"][ds_name]["status"] == "error"
