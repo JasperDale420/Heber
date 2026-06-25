@@ -13,6 +13,7 @@ import re
 import time
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import redis
@@ -1009,14 +1010,18 @@ class AlertWatchConsumer:
         return None
 
     def _calculate_dte(self, expiry: str | None) -> int:
-        """Calculate days to expiry from expiry string."""
+        """Calculate days to expiry from expiry string.
+
+        ``today`` is the ET market date, not ``date.today()`` (UTC/local): in the
+        evening ET (past UTC midnight) a UTC-based today is already tomorrow, so
+        DTE would be understated by a day for every alert processed after ~20:00 ET.
+        """
         if not expiry:
             return 5
         try:
-            from datetime import date
-
             exp_date = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
-            return (exp_date - date.today()).days
+            et_today = datetime.now(ZoneInfo("America/New_York")).date()
+            return (exp_date - et_today).days
         except Exception:
             logger.warning("dte_calculation_fallback", expiry=expiry, exc_info=True)
             return 5
