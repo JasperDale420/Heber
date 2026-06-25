@@ -92,15 +92,34 @@ def _parse_prometheus_text(payload: str) -> list[tuple[str, dict[str, str], floa
     return samples
 
 
-def _fetch_metrics_samples(metrics_url: str) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
-    try:
-        with create_http_client(timeout=5.0) as client:
-            response = client.get(metrics_url)
-        raise_for_status(response)
-        return _parse_prometheus_text(response.text), None
-    except Exception as exc:
-        logger.warning("dataflow_metrics_fetch_failed", url=metrics_url, error=str(exc), exc_info=True)
-        return None, str(exc)
+def _fetch_metrics_samples(
+    metrics_url: str, *, attempts: int = 2, retry_delay: float = 0.5
+) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
+    """Fetch and parse Prometheus metrics, retrying once on a transient blip.
+
+    The co-located metrics endpoint occasionally takes longer than the client
+    timeout to respond when the consumer event loop is briefly busy (a large
+    flush or GC pause), yielding a single ReadTimeout that recovers on the very
+    next request. One short retry absorbs that transient without masking a
+    genuinely-unreachable endpoint — both attempts must fail before it is logged
+    and reported down. Mirrors _collect_redis_signals.
+
+    The failure is logged without a traceback: the stack is the identical httpx
+    timeout every time and adds only noise; the url + error string is the signal.
+    """
+    last_error: str | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with create_http_client(timeout=5.0) as client:
+                response = client.get(metrics_url)
+            raise_for_status(response)
+            return _parse_prometheus_text(response.text), None
+        except Exception as exc:  # noqa: BLE001 — any fetch failure degrades to filesystem fallback
+            last_error = str(exc)
+            if attempt < attempts:
+                time.sleep(retry_delay)
+    logger.warning("dataflow_metrics_fetch_failed", url=metrics_url, error=last_error, attempts=attempts)
+    return None, last_error
 
 
 def _metric_max(

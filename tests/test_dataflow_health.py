@@ -193,6 +193,67 @@ def test_redis_signals_persistent_failure_stops_after_attempts(monkeypatch) -> N
     assert calls["n"] == 2
 
 
+class _FakeClient:
+    def __init__(self, behaviour) -> None:
+        self._behaviour = behaviour
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        return None
+
+    def get(self, _url):
+        result = self._behaviour()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_metrics_fetch_retry_absorbs_transient_timeout(monkeypatch) -> None:
+    """A single slow-scrape ReadTimeout must not be reported as down —
+    _fetch_metrics_samples retries once and parses the recovered response.
+    """
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        text = 'heber_writer_last_write_unixtime{layer="silver",dataset="bars"} 1.0\n'
+
+    def _behaviour():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return TimeoutError("timed out")
+        return _Resp()
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(_behaviour))
+    monkeypatch.setattr(dataflow_health_module, "raise_for_status", lambda _resp: None)
+
+    samples, error = dataflow_health_module._fetch_metrics_samples("http://x/metrics", retry_delay=0.0)
+
+    assert error is None
+    assert calls["n"] == 2
+    assert dataflow_health_module._metric_max(samples, "heber_writer_last_write_unixtime") == 1.0
+
+
+def test_metrics_fetch_persistent_failure_reports_error(monkeypatch) -> None:
+    """A genuinely-unreachable endpoint must fail after the bounded retries and
+    surface the error string (filesystem fallback handles freshness)."""
+    calls = {"n": 0}
+
+    def _behaviour():
+        calls["n"] += 1
+        return TimeoutError("timed out")
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(_behaviour))
+
+    samples, error = dataflow_health_module._fetch_metrics_samples("http://x/metrics", attempts=2, retry_delay=0.0)
+
+    assert samples is None
+    assert error == "timed out"
+    assert calls["n"] == 2
+
+
 def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
