@@ -340,15 +340,15 @@ class TestWriteSilverParquet:
             ]
         )
 
-        # Mix of valid and invalid rows
+        # Mix of valid and invalid rows: e2's string cannot coerce to float64,
+        # which fails the batch write and triggers row-by-row salvage.
         rows = [
             {"event_id": "e1", "value": 1.0},
-            {"event_id": "e2", "value": "not_a_float_for_schema"},  # This may cause issues
+            {"event_id": "e2", "value": "not_a_float_for_schema"},
             {"event_id": "e3", "value": 3.0},
         ]
 
         file_path = tmp_path / "test.parquet"
-        # This should not raise -- it should salvage valid rows
         write_silver_parquet(
             rows=rows,
             schema=schema,
@@ -356,6 +356,10 @@ class TestWriteSilverParquet:
             partition_key="feed=test/dt=2026-03-01",
             dataset="test",
         )
+
+        # Salvage keeps the two valid rows and drops e2.
+        assert file_path.exists()
+        assert pq.read_table(file_path).column("event_id").to_pylist() == ["e1", "e3"]
 
     def test_oserror_propagates(self, tmp_path):
         """OSError from writing to bad path propagates."""
@@ -385,9 +389,12 @@ class TestWriteSilverParquet:
             ]
         )
 
-        # Force a batch-level failure by mixing types, then salvage
+        # The middle row's non-timestamp string fails the batch write and forces
+        # the row-by-row salvage path (the previous all-valid input never did).
         rows = [
             {"event_id": "e1", "ts": datetime(2026, 1, 1, tzinfo=UTC)},
+            {"event_id": "bad", "ts": "garbage-not-a-timestamp"},
+            {"event_id": "e3", "ts": datetime(2026, 1, 2, tzinfo=UTC)},
         ]
 
         file_path = tmp_path / "salvage_test.parquet"
@@ -398,7 +405,9 @@ class TestWriteSilverParquet:
             partition_key="feed=test/dt=2026-03-01",
             dataset="test",
         )
+        # Salvage keeps the two valid rows and drops the bad one.
         assert file_path.exists()
+        assert pq.read_table(file_path).column("event_id").to_pylist() == ["e1", "e3"]
 
 
 # ===================================================================

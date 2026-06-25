@@ -1689,27 +1689,27 @@ class TestWriteSilverParquet:
         assert not file_path.exists()
 
     def test_arrow_type_error_salvages_valid_rows(self, tmp_path):
-        """ArrowTypeError triggers row-by-row salvage."""
+        """ArrowTypeError triggers row-by-row salvage: valid rows kept, bad dropped."""
+        import pyarrow.parquet as pq
+
         schema = pa.schema([("event_id", pa.string()), ("price", pa.float64())])
         rows = [
             {"event_id": "e1", "price": 100.0},
-            {"event_id": "e2", "price": "not-a-number-at-all"},  # Will fail type coercion
+            {"event_id": "e2", "price": "not-a-number-at-all"},  # fails float coercion -> salvaged out
         ]
         file_path = tmp_path / "part-test.parquet"
 
-        # This may or may not trigger salvage depending on Arrow's leniency,
-        # but at least it should not raise
-        try:
-            write_silver_parquet(
-                rows=rows,
-                schema=schema,
-                file_path=file_path,
-                partition_key="feed=test/dt=2026-03-10",
-                dataset="test",
-            )
-        except Exception:
-            pass  # Some Arrow versions may not trigger salvage path
-        # Just verify no unhandled crash
+        write_silver_parquet(
+            rows=rows,
+            schema=schema,
+            file_path=file_path,
+            partition_key="feed=test/dt=2026-03-10",
+            dataset="test",
+        )
+
+        # The valid row is persisted; the bad row is dropped during salvage.
+        assert file_path.exists()
+        assert pq.read_table(file_path).column("event_id").to_pylist() == ["e1"]
 
     def test_generic_error_reraises(self, tmp_path):
         """Non-Arrow exceptions are re-raised."""
