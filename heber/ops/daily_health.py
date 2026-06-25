@@ -55,20 +55,27 @@ def _check_cross_feed_completeness(
     feed_symbols: dict[str, set[str]] = {}
 
     for feed in ("bars", "quotes", "trades"):
-        partition = settings.silver_path / f"feed={feed}" / f"dt={dt_str}"
-        if not partition.exists():
+        # The writer nests dt under instrument_type= (feed={feed}/instrument_type=
+        # {type}/dt={dt}); the bare feed/dt path never exists.
+        feed_dir = settings.silver_path / f"feed={feed}"
+        part_dirs = list(feed_dir.glob(f"instrument_type=*/dt={dt_str}")) if feed_dir.exists() else []
+        if not part_dirs:
             continue
-        parquet_files = list(partition.glob("*.parquet"))
-        if not parquet_files:
-            continue
-        try:
-            df = pd.read_parquet(partition)
+        symbols: set[str] = set()
+        for partition in part_dirs:
+            if not list(partition.rglob("*.parquet")):
+                continue
+            try:
+                df = pd.read_parquet(partition)
+            except Exception:
+                logger.warning("cross_feed_read_failed", feed=feed, date=dt_str, exc_info=True)
+                continue
             if "instrument_key" in df.columns:
-                feed_symbols[feed] = set(df["instrument_key"].dropna().unique())
+                symbols |= set(df["instrument_key"].dropna().unique())
             elif "symbol" in df.columns:
-                feed_symbols[feed] = set(df["symbol"].dropna().unique())
-        except Exception:
-            logger.warning("cross_feed_read_failed", feed=feed, date=dt_str, exc_info=True)
+                symbols |= set(df["symbol"].dropna().unique())
+        if symbols:
+            feed_symbols[feed] = symbols
 
     if len(feed_symbols) < 2:
         return _check_result(
