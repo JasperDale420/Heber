@@ -93,7 +93,10 @@ async def run_statistical_checks(ctx: CheckContext, check_date: date | None = No
         try:
             df = ctx.reader.read_silver(feed, time_range=(today_str, today_str))
         except Exception:
-            logger.debug("statistical_read_failed", feed=feed, exc_info=True)
+            # WARNING (not DEBUG): a read failure silently drops the feed from
+            # the drift/null audit, and DEBUG is suppressed at the default INFO
+            # level — the unreadable feed would otherwise vanish without a trace.
+            logger.warning("statistical_read_failed", feed=feed, exc_info=True)
             continue
 
         if df is None or df.empty:

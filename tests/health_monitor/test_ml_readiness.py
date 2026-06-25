@@ -146,6 +146,23 @@ async def test_leakage_violation_fail(mock_now: MagicMock, tmp_path: Path) -> No
     assert leakage_results[0].details["violation_count"] == 3
 
 
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", ["test_features"])
+async def test_leakage_read_failure_is_error_not_pass(mock_now: MagicMock, tmp_path: Path) -> None:
+    """A failed Gold read must NOT report a clean PASS on the zero-leakage guardrail."""
+    reader = MagicMock()
+    reader.read_gold = MagicMock(side_effect=OSError("corrupt parquet"))
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    leakage_results = [r for r in results if r.check_name == "ml_leakage_audit"]
+    assert len(leakage_results) == 1
+    assert leakage_results[0].status == Status.ERROR
+    assert leakage_results[0].status != Status.PASS
+
+
 # --- 11b: Label Distribution Stability ---
 
 
