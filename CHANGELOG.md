@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Redacted a still-live Data-Gateway credential from tracked files** (`docs/audit-2026-06-10.md`, `.env.example`): the `heber-watch` gateway key was committed in plaintext in the audit doc, and `.env.example` shipped a real-looking key value. Both are now redacted/placeholdered. **The durable fix is rotation in Data-Gateway** — the committed value remains in git history and (per audit verification) still authenticates against `Data-Gateway/config/clients.yaml` despite a rotation handoff that was never applied; redacting HEAD does not revoke it.
+
 ### Added
 
 - **Deep behavioral test coverage for the zero-leakage money path**: `tests/test_heber_reader_edge_cases.py` (54 tests — asof_join boundary semantics, late `ts_available`, tolerance/gap/out-of-order handling, `prune_by_dt` partition boundaries, batched-vs-unbatched equivalence, string-encoding fragment unification, macOS sidecar/`.tmp` skip behavior; reader coverage now 80%), `tests/test_normalizer_coercion.py` (every Bronze→Silver coercion branch), and `tests/test_label_availability_math.py` (label availability math incl. DST-crossing windows). One real reader bug surfaced and documented as strict xfails: the int64/float64 fragment-unification fallback in `_open_dataset_safe` is unreachable for same-partition conflicts, so such reads silently return an empty DataFrame.
