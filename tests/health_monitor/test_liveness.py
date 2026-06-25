@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
@@ -35,9 +35,15 @@ def _reader_returning(counts: dict[str, int]) -> MagicMock:
     return reader
 
 
-def _ctx(tmp_path: Path, reader: MagicMock, overrides: dict | None = None):
+def _ctx(
+    tmp_path: Path,
+    reader: MagicMock,
+    overrides: dict | None = None,
+    close_time: time = time(16, 0),
+):
     cal = MagicMock()
     cal.is_trading_day = MagicMock(return_value=True)
+    cal.market_hours = MagicMock(return_value=(time(9, 30), close_time))
     settings_overrides = {"alert_floor_overrides": overrides or {}}
     return make_check_context(tmp_path, calendar=cal, reader=reader, settings_overrides=settings_overrides)
 
@@ -182,9 +188,41 @@ async def test_daily_eod_rows_at_utc_midnight_are_counted(tmp_path: Path) -> Non
     reader.read_silver = MagicMock(side_effect=_read)
     cal = MagicMock()
     cal.is_trading_day = MagicMock(return_value=True)
+    cal.market_hours = MagicMock(return_value=(time(9, 30), time(16, 0)))
     ctx = make_check_context(tmp_path, calendar=cal, reader=reader, settings_overrides={"alert_floor_overrides": {}})
 
     results = await run_liveness_checks(ctx, now=EVENING_ET)  # 18:00 ET, past the 17:30 deadline
     gx = [r for r in results if r.feed == "greek_exposure"]
     assert len(gx) == 1
     assert gx[0].status == Status.PASS  # FAILs with an ET-midnight window start
+
+
+# 2026-11-27 (day after Thanksgiving) is a 13:00 ET early close. 14:30 ET is
+# past that close: regular-hours feeds are legitimately quiet.
+EARLY_CLOSE_AFTERNOON_ET = datetime(2026, 11, 27, 14, 30, tzinfo=ET)
+NORMAL_AFTERNOON_ET = datetime(2026, 11, 30, 14, 30, tzinfo=ET)  # a regular trading day
+
+
+@pytest.mark.unit
+async def test_early_close_no_false_critical_after_close(tmp_path: Path) -> None:
+    """After a 13:00 ET early close, a quiet regular-hours feed must NOT alarm."""
+    reader = _reader_returning({"flow_alerts": 0, "darkpool": 0, "bars": 0, "trades": 0})
+    ctx = _ctx(tmp_path, reader, close_time=time(13, 0))
+    results = await run_liveness_checks(ctx, now=EARLY_CLOSE_AFTERNOON_ET)
+    # flow_alerts/bars/trades (16:00 window -> shifted to 13:00) are past close: no result.
+    for feed in ("flow_alerts", "bars", "trades"):
+        assert [r for r in results if r.feed == feed] == [], f"{feed} false-alarmed after early close"
+    # darkpool (20:00 = +4h tail -> 13:00+4h = 17:00) is still in window at 14:30.
+    darkpool = [r for r in results if r.feed == "darkpool"]
+    assert len(darkpool) == 1 and darkpool[0].status == Status.FAIL
+
+
+@pytest.mark.unit
+async def test_normal_day_afternoon_still_alarms(tmp_path: Path) -> None:
+    """On a regular 16:00 close day, a dark feed at 14:30 still FAILs (no over-suppression)."""
+    reader = _reader_returning({"flow_alerts": 0, "darkpool": 50, "bars": 50, "trades": 50})
+    ctx = _ctx(tmp_path, reader, close_time=time(16, 0))
+    results = await run_liveness_checks(ctx, now=NORMAL_AFTERNOON_ET)
+    flow = [r for r in results if r.feed == "flow_alerts"]
+    assert len(flow) == 1
+    assert flow[0].status == Status.FAIL

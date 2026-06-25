@@ -7,7 +7,7 @@ than skipped.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -19,11 +19,37 @@ logger = structlog.get_logger(__name__)
 
 ET = ZoneInfo("America/New_York")
 CHECK_NAME = "feed_liveness"
+_REGULAR_CLOSE_MINUTES = 16 * 60  # 16:00 ET
 
 
 def _parse_hhmm(value: str) -> time:
     hh, mm = value.split(":")
     return time(int(hh), int(mm))
+
+
+def _minutes(t: time) -> int:
+    return t.hour * 60 + t.minute
+
+
+def _early_close_adjusted_end(ctx: CheckContext, window_end: time, day_et: date | None) -> time:
+    """Shift a continuous window's end earlier on early-close (half) days.
+
+    On a 13:00 ET close, regular-hours feeds legitimately go quiet at 13:00,
+    so a fixed 16:00/20:00 window fires false 'feed dark' criticals all
+    afternoon. Shift the end earlier by the early-close delta — this preserves
+    each feed's after-hours tail relative to the real close (e.g. darkpool's
+    20:00 = +4h tail becomes 13:00+4h = 17:00).
+    """
+    if day_et is None:
+        return window_end
+    hours = ctx.calendar.market_hours(day_et)
+    if hours is None:
+        return window_end
+    close_minutes = _minutes(hours[1])
+    if close_minutes >= _REGULAR_CLOSE_MINUTES:
+        return window_end
+    shifted = max(0, _minutes(window_end) - (_REGULAR_CLOSE_MINUTES - close_minutes))
+    return time(shifted // 60, shifted % 60)
 
 
 def _window_row_count(ctx: CheckContext, feed: str, start_utc: datetime, end_utc: datetime) -> int:
@@ -63,7 +89,12 @@ def _check_continuous(ctx: CheckContext, rule: FeedRule, now_et: datetime) -> Ch
     start = _parse_hhmm(rule.window_start_et)
     end = _parse_hhmm(rule.window_end_et)
     if not (start <= now_et.time() <= end):
-        return None  # out of window -> no result
+        return None  # out of the regular window -> no result
+    # Inside the regular window: on early-close (half) days the feed may already
+    # be legitimately done, so shift the end earlier and re-check before alarming.
+    end = _early_close_adjusted_end(ctx, end, now_et.date())
+    if now_et.time() > end:
+        return None  # past the early close -> feed legitimately quiet, no alarm
 
     now_utc = now_et.astimezone(UTC)
     cutoff_utc = now_utc - timedelta(minutes=rule.lookback_minutes)
