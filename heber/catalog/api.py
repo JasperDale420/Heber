@@ -550,9 +550,14 @@ async def list_backfills(
 
 
 # Health Monitor summary endpoint
-@app.get("/api/v1/health/summary")
-async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
-    """Return latest health check results and trend data."""
+def _compute_health_summary(days: int) -> dict[str, Any]:
+    """Read and aggregate health-check parquet — blocking, runs in a worker thread.
+
+    Each day's partition can hold >1000 small parquet files on the bind-mounted
+    volume; a single-day read measured 50-80s. This must NOT run on the event
+    loop or it stalls the catalog API (single-worker uvicorn) and its background
+    discovery task for the whole read.
+    """
     from datetime import date, timedelta
 
     import pandas as pd
@@ -588,6 +593,12 @@ async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
             "error": summary.get("error", 0),
         },
     }
+
+
+@app.get("/api/v1/health/summary")
+async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
+    """Return latest health check results and trend data."""
+    return await asyncio.to_thread(_compute_health_summary, days)
 
 
 # Error codes (PRD §11.7.5)
