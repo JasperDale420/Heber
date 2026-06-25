@@ -75,12 +75,13 @@ async def run_volume_checks(ctx: CheckContext, check_date: date | None = None) -
     critical_ratio = ctx.settings.health_volume_critical_ratio
 
     for feed in _silver_feeds():
-        dt_dir = silver_root / f"feed={feed}" / f"dt={today.isoformat()}"
+        feed_dir = silver_root / f"feed={feed}"
+        dt_dirs = list(feed_dir.glob(f"instrument_type=*/dt={today.isoformat()}")) if feed_dir.exists() else []
 
-        if not dt_dir.exists():
+        if not dt_dirs:
             continue
 
-        row_count = _count_rows(dt_dir)
+        row_count = sum(_count_rows(d) for d in dt_dirs)
         today_counts[feed] = row_count
 
         median = feed_medians.get(feed)
@@ -182,9 +183,10 @@ async def write_volume_baseline(ctx: CheckContext, check_date: date) -> None:
     silver_root = ctx.settings.silver_path
     today_counts: dict[str, int] = {}
     for feed in _silver_feeds():
-        dt_dir = silver_root / f"feed={feed}" / f"dt={check_date.isoformat()}"
-        if dt_dir.exists():
-            today_counts[feed] = _count_rows(dt_dir)
+        feed_dir = silver_root / f"feed={feed}"
+        dt_dirs = list(feed_dir.glob(f"instrument_type=*/dt={check_date.isoformat()}")) if feed_dir.exists() else []
+        if dt_dirs:
+            today_counts[feed] = sum(_count_rows(d) for d in dt_dirs)
     if today_counts:
         baseline_rows = [{"feed": feed, "row_count": count} for feed, count in today_counts.items()]
         ctx.store.write_baseline(pd.DataFrame(baseline_rows), check_date, baseline_key="volume")

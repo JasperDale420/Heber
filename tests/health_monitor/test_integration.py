@@ -30,7 +30,7 @@ MARKET_HOURS_DT = datetime(2026, 3, 24, 12, 0, 0, tzinfo=ET)
 
 def _create_silver_bars(silver_root: Path) -> None:
     """Create a bars partition with 10 valid rows."""
-    dt_dir = silver_root / "feed=bars" / f"dt={CHECK_DATE.isoformat()}"
+    dt_dir = silver_root / "feed=bars" / "instrument_type=equity" / f"dt={CHECK_DATE.isoformat()}"
     dt_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table(
         {
@@ -50,7 +50,7 @@ def _create_silver_bars(silver_root: Path) -> None:
 
 def _create_silver_trades_empty(silver_root: Path) -> None:
     """Create trades partition directory with an empty Parquet file (0 rows)."""
-    dt_dir = silver_root / "feed=trades" / f"dt={CHECK_DATE.isoformat()}"
+    dt_dir = silver_root / "feed=trades" / "instrument_type=equity" / f"dt={CHECK_DATE.isoformat()}"
     dt_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({"x": pa.array([], type=pa.int64())})
     pq.write_table(table, dt_dir / "empty.parquet")

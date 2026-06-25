@@ -28,6 +28,27 @@ def _make_ctx(tmp_path: Path, calendar: MagicMock | None = None):
 
 @pytest.mark.unit
 @patch("heber.health_monitor.checks.partition._now_et", return_value=MARKET_OPEN_DT)
+async def test_partition_resolves_under_any_instrument_type(mock_now: MagicMock, tmp_path: Path) -> None:
+    """The writer nests dt under instrument_type=; a partition present only under
+    a non-equity type (e.g. option) must still be found, not flagged missing."""
+    silver_root = tmp_path / "silver"
+    for feed in _silver_feeds():
+        itype = "option" if feed == "flow_alerts" else "equity"
+        if feed in HOURLY_FEEDS:
+            create_feed_partition(silver_root, feed, TRADING_DAY, hours=[9, 10, 11], instrument_type=itype)
+        else:
+            create_feed_partition(silver_root, feed, TRADING_DAY, instrument_type=itype)
+
+    ctx = _make_ctx(tmp_path)
+    results = await run_partition_checks(ctx, check_date=TRADING_DAY)
+
+    fa = [r for r in results if r.feed == "flow_alerts"]
+    assert fa and fa[0].status == Status.PASS, "flow_alerts present under instrument_type=option but flagged missing"
+    assert not [r for r in results if r.status == Status.FAIL and "Missing dt=" in r.message]
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.partition._now_et", return_value=MARKET_OPEN_DT)
 async def test_all_partitions_present(mock_now: MagicMock, tmp_path: Path) -> None:
     """All expected partitions exist and have data -- all PASS."""
     silver_root = tmp_path / "silver"

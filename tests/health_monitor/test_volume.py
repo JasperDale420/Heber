@@ -156,7 +156,7 @@ async def test_baseline_written_after_check(tmp_path: Path) -> None:
 async def test_multiple_parquet_files_summed(mock_now: MagicMock, tmp_path: Path) -> None:
     """Multiple Parquet files in a partition have their rows summed."""
     silver_root = tmp_path / "silver"
-    dt_dir = silver_root / "feed=bars" / f"dt={TRADING_DAY.isoformat()}"
+    dt_dir = silver_root / "feed=bars" / "instrument_type=equity" / f"dt={TRADING_DAY.isoformat()}"
     write_parquet(dt_dir / "part-0.parquet", num_rows=300)
     write_parquet(dt_dir / "part-1.parquet", num_rows=700)
 
