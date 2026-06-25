@@ -180,22 +180,6 @@ def _is_nyse_trading_day(dt: date) -> bool:
         return dt.weekday() < 5
 
 
-def _last_trading_day() -> date:
-    """Return the most recent completed trading day."""
-    et_now = datetime.now(ZoneInfo("America/New_York"))
-    today = et_now.date()
-    candidate = today
-    # If it's before 17:00 ET, the current day isn't done yet
-    if et_now.hour < 17:
-        candidate = today - timedelta(days=1)
-    # Walk backward to find a trading day
-    for _ in range(10):
-        if _is_nyse_trading_day(candidate):
-            return candidate
-        candidate -= timedelta(days=1)
-    return today - timedelta(days=1)
-
-
 def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     """Lazy-import and instantiate a pipeline class."""
     import importlib
@@ -330,7 +314,13 @@ class GoldFeaturePoller:
     async def _run_all_pipelines(self) -> None:
         """Execute all registered pipelines for the lookback window."""
         settings = self._settings
-        today = _last_trading_day()
+        # _should_run() has already validated that today is a trading day whose
+        # configured EOD trigger time has passed, so the just-closed session is
+        # today. (Using the old _last_trading_day() helper here gated on a
+        # hardcoded 17:00 ET and returned *yesterday* for the default 16:35
+        # trigger — and because _last_run_date is then set to today, the 17:00
+        # re-run never happened, leaving the lakehouse one trading day stale.)
+        today = datetime.now(ZoneInfo("America/New_York")).date()
         lookback = settings.gold_poller_lookback_days
         start_date = today - timedelta(days=lookback)
         end_date = today
