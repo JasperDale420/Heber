@@ -249,19 +249,26 @@ class TestLabelFeatures:
     def test_compute_return_labels(self):
         from heber.features.templates.labels import compute_return_labels
 
+        # Business days so the horizon shift spans weekends — exercises the
+        # trading-day-vs-calendar-day availability semantics.
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 30,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=30, freq="D"),
+                "bar_start_ts": pd.bdate_range("2024-01-01", periods=30),
                 "close": np.linspace(100, 115, 30),
             }
         )
 
-        labels = compute_return_labels(bars, horizons=[1, 5])
+        labels = compute_return_labels(bars, horizons=[1, 5]).reset_index(drop=True)
 
         assert "return_1d" in labels.columns
         assert "return_5d" in labels.columns
         assert "ts_available" in labels.columns
+        # ts_available must be derived from the resolving bar (trading days),
+        # never leak before it. Friday 2024-01-05 resolves 1d at Mon 2024-01-08.
+        fri = labels.loc[labels["ts_label"] == pd.Timestamp("2024-01-05"), "ts_available_1d"].iloc[0]
+        assert fri >= pd.Timestamp("2024-01-09")  # after Monday's resolving close
+        assert fri != pd.Timestamp("2024-01-06")  # the old calendar-day leak (Saturday)
 
     def test_compute_classification_labels(self):
         from heber.features.templates.labels import compute_classification_labels
@@ -269,16 +276,20 @@ class TestLabelFeatures:
         bars = pd.DataFrame(
             {
                 "instrument_key": ["equity:AAPL"] * 30,
-                "bar_start_ts": pd.date_range("2024-01-01", periods=30, freq="D"),
+                "bar_start_ts": pd.bdate_range("2024-01-01", periods=30),
                 "close": np.linspace(100, 115, 30),
             }
         )
 
-        labels = compute_classification_labels(bars, horizon=5, threshold=0.02)
+        labels = compute_classification_labels(bars, horizon=5, threshold=0.02).reset_index(drop=True)
 
         assert "direction_5d" in labels.columns
         assert "is_up_5d" in labels.columns
         assert labels["direction_5d"].isin([-1, 0, 1]).all()
+        # ts_available derived from the 5th trading bar ahead, +1 day; never the
+        # calendar-day value, and strictly after ts_event where defined.
+        defined = labels["ts_available"].notna()
+        assert (labels.loc[defined, "ts_available"] > labels.loc[defined, "ts_event"]).all()
 
 
 def run_all_template_tests() -> dict[str, bool]:
