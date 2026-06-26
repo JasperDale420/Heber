@@ -90,6 +90,13 @@ consumer_dedupe_store_errors_total = _get_or_create(
     ["operation"],
 )
 
+consumer_loop_heartbeat_unixtime = _get_or_create(
+    Gauge,
+    "heber_consumer_loop_heartbeat_unixtime",
+    "Unix timestamp set at the top of every consumer run-loop iteration (liveness signal; "
+    "stays fresh while the event loop spins even when no data is flowing — unlike last-write)",
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)

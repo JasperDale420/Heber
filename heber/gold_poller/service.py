@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from heber.config import Settings, get_settings
+from heber.gold_poller.reconcile import reconcile_eod_feeds
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -246,6 +247,7 @@ class GoldFeaturePoller:
         self._task: asyncio.Task[None] | None = None
         self._reader = HeberReader()
         self._last_run_date: date | None = None
+        self._last_reconcile_date: date | None = None
         self._run_history: list[dict[str, Any]] = []
 
     async def start(self) -> None:
@@ -282,6 +284,8 @@ class GoldFeaturePoller:
             try:
                 if self._should_run():
                     await self._run_all_pipelines()
+                if self._should_reconcile():
+                    await self._run_reconcile()
             except Exception:
                 logger.error("gold_poller_loop_error", exc_info=True)
 
@@ -308,6 +312,38 @@ class GoldFeaturePoller:
             return False
 
         return True
+
+    def _should_reconcile(self) -> bool:
+        """Return True if the EOD self-heal reconcile is due (enabled, trading day,
+        past its trigger time, not yet run today)."""
+        if not self._settings.eod_reconcile_enabled:
+            return False
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        today = et_now.date()
+        if self._last_reconcile_date == today:
+            return False
+        if not _is_nyse_trading_day(today):
+            return False
+        hour = self._settings.eod_reconcile_hour
+        minute = self._settings.eod_reconcile_minute
+        if et_now.hour < hour or (et_now.hour == hour and et_now.minute < minute):
+            return False
+        return True
+
+    async def _run_reconcile(self) -> None:
+        """Re-pull any daily UW feed missing today's Silver via the gateway backfill.
+
+        Marks today done even on failure so a persistent gateway/credential error
+        does not retry-storm every check interval — the next attempt is tomorrow,
+        and the liveness alarm still surfaces a genuinely missing feed today.
+        """
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        try:
+            await reconcile_eod_feeds(self._settings, self._reader, today=today)
+        except Exception:
+            logger.error("gold_poller_reconcile_error", exc_info=True)
+        finally:
+            self._last_reconcile_date = today
 
     # ----- Pipeline execution -----
 

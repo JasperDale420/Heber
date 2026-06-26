@@ -218,7 +218,16 @@ class Settings(BaseSettings):
     )
     redis_claim_batch_size: int = Field(
         default=100,
-        description="Max pending messages to claim per recovery cycle",
+        description="Max pending messages to claim per recovery batch (a recovery cycle drains in batches until empty)",
+    )
+    redis_recover_interval_seconds: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "How often the running consumer re-runs pending-message recovery to "
+            "reclaim messages stranded by a dead consumer; 0 disables periodic recovery "
+            "(startup recovery still runs)"
+        ),
     )
     redis_process_max_retries: int = Field(
         default=3,
@@ -490,6 +499,51 @@ class Settings(BaseSettings):
             return set()
         return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
 
+    # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
+    # (e.g. evicted from the capped stream while the consumer was down) via the
+    # Data-Gateway backfill API. Off by default.
+    eod_reconcile_enabled: bool = Field(
+        default=False,
+        description="Enable the post-EOD self-heal reconcile (re-pull missing daily UW feeds via gateway backfill)",
+    )
+    eod_reconcile_hour: int = Field(
+        default=17,
+        ge=0,
+        le=23,
+        description="ET hour to run the EOD reconcile — after the feeds' EOD deadline so in-flight data is not flagged",
+    )
+    eod_reconcile_minute: int = Field(
+        default=45,
+        ge=0,
+        le=59,
+        description="ET minute to run the EOD reconcile",
+    )
+    eod_reconcile_feeds: str = Field(
+        default="oi_change,iv_rank,historic_option_volume",
+        description=(
+            "Comma-separated daily UW feeds to self-heal if today's Silver is missing "
+            "(iv_term_structure excluded — its provider method is snapshot-only and cannot backfill a past date)"
+        ),
+    )
+    eod_reconcile_symbols: str = Field(
+        default=(
+            "SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD,NFLX,JPM,GS,BAC,"
+            "XLF,XLE,XLK,XLV,XLI,XLP,XLU,XLB,XLRE,XLC,GLD,TLT,HYG"
+        ),
+        description=(
+            "Comma-separated symbols for the gateway backfill (it requires an explicit list); "
+            "defaults to the core ticker set"
+        ),
+    )
+
+    @property
+    def eod_reconcile_feed_list(self) -> list[str]:
+        return [f.strip() for f in self.eod_reconcile_feeds.split(",") if f.strip()]
+
+    @property
+    def eod_reconcile_symbol_list(self) -> list[str]:
+        return [s.strip() for s in self.eod_reconcile_symbols.split(",") if s.strip()]
+
     # Health Monitor
     health_monitor_enabled: bool = Field(
         default=True,
@@ -570,6 +624,15 @@ class Settings(BaseSettings):
     alert_send_recovery: bool = Field(
         default=True,
         description="Send a one-line recovery note when a previously-alerting feed returns to healthy",
+    )
+    alert_debounce_cycles: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Consecutive failing liveness cycles required before the first alert. "
+            "Suppresses single-cycle flaps (transient bind-mount read errors, "
+            "deadline-edge blips); 1 = alert on the first failure"
+        ),
     )
     alert_liveness_check_interval_seconds: int = Field(
         default=300,

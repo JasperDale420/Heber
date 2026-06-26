@@ -23,6 +23,7 @@ from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
+    consumer_loop_heartbeat_unixtime,
     record_batch_processed,
     record_dedupe_drop,
     record_dlq_event,
@@ -64,6 +65,11 @@ from heber.writer.utils import build_silver_candidates, get_partition_key
 
 logger = structlog.get_logger(__name__)
 
+# ponytail: safety bound on a single recovery drain (× redis_claim_batch_size
+# messages). Caps worst-case round-trips if Redis kept returning claimable
+# pending; raise only if a real backlog can exceed this many batches.
+_MAX_RECOVERY_BATCHES = 100
+
 
 class EventConsumer:
     """Consumes events from Redis Streams and writes to Lake layers."""
@@ -81,6 +87,7 @@ class EventConsumer:
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
+        self._last_recovery_monotonic = 0.0
 
     @staticmethod
     def _build_dedupe_store() -> RedisDedupeStore | None:
@@ -564,7 +571,33 @@ class EventConsumer:
         return processed_ids, failed_ids
 
     async def _recover_pending_messages(self) -> int:
-        """Claim and process idle pending messages for this consumer group."""
+        """Reclaim idle pending messages for this group, draining until none remain.
+
+        A consumer that dies holding a large pending backlog (e.g. 1,900 messages)
+        used to leave all but one batch stranded forever, because recovery claimed a
+        single ``redis_claim_batch_size`` batch and ran only at startup. This now
+        loops over batches until the idle-pending set is empty (each claim removes
+        the messages from the idle window, so the loop terminates naturally) and is
+        also invoked periodically from the run loop (``_maybe_recover_pending``).
+        """
+        total = 0
+        for _ in range(_MAX_RECOVERY_BATCHES):
+            recovered = await self._recover_pending_batch()
+            if recovered == 0:
+                break
+            total += recovered
+        return total
+
+    async def _maybe_recover_pending(self, now_monotonic: float) -> int:
+        """Run a recovery drain if the periodic interval has elapsed. Returns count recovered."""
+        interval = settings.redis_recover_interval_seconds
+        if interval <= 0 or (now_monotonic - self._last_recovery_monotonic) < interval:
+            return 0
+        self._last_recovery_monotonic = now_monotonic
+        return await self._recover_pending_messages()
+
+    async def _recover_pending_batch(self) -> int:
+        """Claim and process one batch of idle pending messages for this consumer group."""
         pending = await self.redis.xpending_range(
             settings.redis_stream_name,
             settings.redis_consumer_group,
@@ -739,6 +772,9 @@ class EventConsumer:
         await self.connect()
         self.running = True
         error_streak = 0
+        # Startup recovery already ran in connect(); start the periodic clock now so
+        # the next drain waits a full interval rather than firing immediately.
+        self._last_recovery_monotonic = time.monotonic()
 
         logger.info(
             "Starting consumer",
@@ -749,8 +785,15 @@ class EventConsumer:
 
         while self.running:
             try:
+                # Liveness heartbeat at the top of every iteration — stays fresh while
+                # the loop spins (even on idle, no-data cycles); the container
+                # healthcheck reads this to detect a stalled-but-running consumer.
+                consumer_loop_heartbeat_unixtime.set(time.time())
                 await self._consume_iteration()
                 error_streak = 0
+                recovered = await self._maybe_recover_pending(time.monotonic())
+                if recovered:
+                    logger.info("Recovered stranded pending messages", recovered=recovered)
             except asyncio.CancelledError:
                 logger.info("Consumer cancelled")
                 raise  # Re-raise per best practice

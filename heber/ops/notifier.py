@@ -1,9 +1,12 @@
 """Discord notifier for critical data-quality alerts.
 
-Severity-gated, per-(check, feed) cooldown with status-change override, and a
-recovery note when a previously-alerting feed returns to healthy. Network and IO
-errors are swallowed (logged) so a broken webhook never crashes the monitor.
-State persists to ``${data_root}/ops/alerts/state.json``.
+Severity-gated, with a debounce (N consecutive failing cycles before the first
+alert) so single-cycle flaps — transient bind-mount read errors, deadline-edge
+blips — never reach Discord, plus a per-(check, feed) cooldown for repeat
+reminders on a sustained outage and a recovery note when a previously-alerting
+feed returns to healthy. Network and IO errors are swallowed (logged) so a
+broken webhook never crashes the monitor. State persists to
+``${data_root}/ops/alerts/state.json``.
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ class DiscordNotifier:
         self._min_severity = Severity(settings.alert_min_severity)
         self._cooldown = settings.alert_cooldown_seconds
         self._send_recovery = settings.alert_send_recovery
+        self._debounce_cycles = settings.alert_debounce_cycles
         self._client = client
         self._state_path = state_path or (Path(settings.data_root) / "ops" / "alerts" / "state.json")
         self._state: dict[str, dict[str, Any]] = self._load_state()
@@ -77,29 +81,44 @@ class DiscordNotifier:
         for r in results:
             key = f"{r.check_name}|{r.feed or ''}"
             if r.status in (Status.FAIL, Status.ERROR) and _severity_meets(r.severity, self._min_severity):
-                if self._should_alert(key, now):
-                    if self._post(f"🚨 CRITICAL — {r.message}", r.check_name):
-                        self._state[key] = {"last_sent_ts": now.isoformat(), "last_status": "fail"}
-                        changed = True
+                changed |= self._handle_fail(key, r, now)
             elif r.status == Status.PASS:
-                prev = self._state.get(key)
-                if prev and prev.get("last_status") == "fail":
-                    if self._send_recovery:
-                        self._post(f"✅ RECOVERED — {r.message}", r.check_name)
-                    self._state.pop(key, None)
-                    changed = True
+                changed |= self._handle_pass(key, r)
         if changed:
             self._save_state()
 
-    def _should_alert(self, key: str, now: datetime) -> bool:
+    def _handle_fail(self, key: str, r: CheckResult, now: datetime) -> bool:
+        """Accrue a failure; alert once the debounce streak clears. Returns True if state changed."""
         prev = self._state.get(key)
-        if prev is None or prev.get("last_status") != "fail":
-            return True  # new or status changed -> alert immediately
-        try:
-            last = datetime.fromisoformat(prev["last_sent_ts"])
-        except (KeyError, ValueError):
-            return True
-        return (now - last).total_seconds() >= self._cooldown
+        if prev and prev.get("last_status") == "fail":
+            # Already alerting -> repeat reminder only after the cooldown elapses.
+            try:
+                last = datetime.fromisoformat(prev["last_sent_ts"])
+            except (KeyError, ValueError):
+                last = None
+            if last is not None and (now - last).total_seconds() < self._cooldown:
+                return False
+            if self._post(f"🚨 CRITICAL — {r.message}", r.check_name):
+                self._state[key] = {"last_sent_ts": now.isoformat(), "last_status": "fail"}
+                return True
+            return False
+        # Not yet alerting -> count consecutive failing cycles before the first alert.
+        streak = int((prev or {}).get("fail_streak", 0)) + 1
+        if streak >= self._debounce_cycles and self._post(f"🚨 CRITICAL — {r.message}", r.check_name):
+            self._state[key] = {"last_sent_ts": now.isoformat(), "last_status": "fail"}
+        else:
+            self._state[key] = {"fail_streak": streak, "last_status": "pending"}
+        return True
+
+    def _handle_pass(self, key: str, r: CheckResult) -> bool:
+        """Clear state on recovery; only send a note if we had actually alerted. Returns True if state changed."""
+        prev = self._state.get(key)
+        if not prev:
+            return False
+        if prev.get("last_status") == "fail" and self._send_recovery:
+            self._post(f"✅ RECOVERED — {r.message}", r.check_name)
+        self._state.pop(key, None)  # also resets a sub-threshold (pending) streak silently
+        return True
 
     def _post(self, content: str, check_name: str) -> bool:
         client = self._client or httpx.Client(timeout=10.0)

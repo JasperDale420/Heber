@@ -38,3 +38,12 @@ def test_floor_zero_disables_feed() -> None:
 @pytest.mark.unit
 def test_no_overrides_returns_defaults() -> None:
     assert resolved_registry({}) == list(DEFAULT_REGISTRY)
+
+
+@pytest.mark.unit
+def test_darkpool_lookback_spans_batched_delivery() -> None:
+    # Darkpool delivers in batches with long inter-batch gaps (esp. after-hours);
+    # the lookback must be wide enough to span those gaps so a healthy-but-quiet
+    # feed is not read as "dark". A 60m window flapped CRITICAL/RECOVERED all evening.
+    darkpool = next(r for r in DEFAULT_REGISTRY if r.feed == "darkpool")
+    assert darkpool.lookback_minutes >= 180

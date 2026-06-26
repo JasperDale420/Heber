@@ -17,6 +17,28 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# --- Guardrail: don't rebuild during the UW EOD ingest window ---
+# A rebuild recreates heber-consumer. If that lands across the ~16:31 ET EOD
+# publish, the consumer is down while the ~114k-message burst arrives and the
+# capped Redis stream evicts the earliest (unread) feeds — exactly how the
+# 2026-06-25 oi_change/iv_rank/iv_term/historic_option_volume loss happened.
+# Refuse 16:25–16:45 ET unless --force / HEBER_DEPLOY_FORCE=1.
+FORCE="${HEBER_DEPLOY_FORCE:-0}"
+NEWARGS=""
+for a in "$@"; do
+  if [[ "$a" == "--force" ]]; then FORCE=1; else NEWARGS="${NEWARGS:+$NEWARGS }$a"; fi
+done
+# shellcheck disable=SC2086 # service names are single words; intentional split
+set -- $NEWARGS
+
+et_num=$((10#$(TZ=America/New_York date +%H%M)))  # 10# forces base-10 (avoid octal on leading zeros)
+if [[ "$FORCE" != "1" && "$et_num" -ge 1625 && "$et_num" -le 1645 ]]; then
+  echo "⛔ Refusing to deploy during the UW EOD ingest window (16:25–16:45 ET)."
+  echo "   Rebuilding now drops heber-consumer across the ~16:31 ET EOD publish and loses feeds."
+  echo "   Re-run after 16:45 ET, or override: HEBER_DEPLOY_FORCE=1 $0 ${*:-}  (or pass --force)"
+  exit 1
+fi
+
 DEFAULT_SERVICES="heber-consumer heber-watch heber-catalog heber-gold-poller heber-compactor heber-dataflow-health heber-health-monitor"
 SERVICES="${*:-$DEFAULT_SERVICES}"
 
