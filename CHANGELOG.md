@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Watch `meta_label_features` backfill now writes `expiry` as `date32`, matching the live writer**: `EnrichmentBackfillScanner` coerced `expiry` to a YYYYMMDD **integer** (on a stale "the Gold schema stores expiry as an integer" assumption), while the live watch writer persists it as a `date` (`date32`). A gold dataset spanning both writers' `dt=` partitions then failed to read with `ArrowNotImplementedError: Unsupported cast from int64 to date32` — observed 2026-06-30, recurring on backfill days (06-23/24/30), which blinded Orion's ML feature reads for the whole session. The backfill now coerces `expiry` to a `datetime.date` (date32) like the live path, so partitions are type-consistent. Existing int64 partitions still need a one-off re-backfill or removal.
 - **`heber backfill --since/--until` no longer crashes on naive datetimes** (`heber/writer/transformer.py`): the CLI parses `--since`/`--until` as naive datetimes, but `_transform_feed` compared them against UTC-aware partition dates, raising `TypeError: can't compare offset-naive and offset-aware datetimes` on every date-filtered backfill. `_transform_feed` now normalizes naive bounds to UTC before comparison. Regression test in `tests/test_transformer_dedup.py::test_transform_since_accepts_naive_datetime`.
 
 ### Added
