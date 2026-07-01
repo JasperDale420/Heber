@@ -503,7 +503,7 @@ class Settings(BaseSettings):
     # (e.g. evicted from the capped stream while the consumer was down) via the
     # Data-Gateway backfill API. Off by default.
     eod_reconcile_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable the post-EOD self-heal reconcile (re-pull missing daily UW feeds via gateway backfill)",
     )
     eod_reconcile_hour: int = Field(

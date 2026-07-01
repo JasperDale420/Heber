@@ -167,3 +167,12 @@ def test_should_reconcile_gating(monkeypatch, enabled, when, last, expected) -> 
     _FrozenDateTime._frozen = when
     monkeypatch.setattr(service, "datetime", _FrozenDateTime)
     assert _poller(enabled, last)._should_reconcile() is expected
+
+
+@pytest.mark.unit
+def test_reconcile_enabled_by_default() -> None:
+    # The post-EOD self-heal is on by default so a genuinely-missed daily feed re-pulls
+    # from source without operator action. Locks the intended default.
+    from heber.config import Settings
+
+    assert Settings(_env_file=None).eod_reconcile_enabled is True
