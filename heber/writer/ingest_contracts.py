@@ -36,6 +36,14 @@ FEED_ALIASES: dict[str, str] = {
     "updated_bars": "bars",
     "institutions": "institution_holdings",
     "filings": "news",
+    # Company financial statements — UW REST endpoint paths use hyphens; canonical
+    # Silver names use underscores. Alias both forms so either routes to Silver.
+    "balance-sheet": "balance_sheet",
+    "balance-sheets": "balance_sheet",
+    "income-statement": "income_statement",
+    "income-statements": "income_statement",
+    "cash-flow": "cash_flow",
+    "cash-flows": "cash_flow",
 }
 FEED_ALIAS_MAP = FEED_ALIASES
 
@@ -78,6 +86,10 @@ CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "iv_term_structure",
     "etf_tide",
     "auctions",
+    # Company financial statements — typed Silver (promoted from Bronze-only).
+    "balance_sheet",
+    "income_statement",
+    "cash_flow",
     # Reference / metadata feeds — contracted-but-Bronze-only.
     # Listed here so `is_contracted_feed` passes the routing gate (no
     # `silver_feed_uncontracted` DLQ).  Each canonical name appears in
@@ -238,10 +250,9 @@ BRONZE_ONLY_SILVER_DATASETS: frozenset[str] = frozenset(
         "fixed-income",
         "economic",
         "frames",
-        # Fundamentals: balance sheet / cash flow / income statement / fundamentals snapshot.
-        "balance-sheet",
-        "cash-flow",
-        "income-statement",
+        # Fundamentals snapshot (per-symbol point-in-time metrics — no typed Silver yet).
+        # balance-sheet / cash-flow / income-statement were promoted to typed Silver:
+        # they now alias to balance_sheet / cash_flow / income_statement (see FEED_ALIASES).
         "stock_fundamentals",
         # Misc variant pending a typed Silver schema. (short_data was removed here:
         # it has a typed Silver schema and was wrongly swept into this set by the
@@ -763,6 +774,13 @@ FIELD_MAPPINGS: dict[str, dict[str, str]] = {
         "week_52_low": "low_52w",
         "date": "snapshot_date",
     },
+    # Company financial statements. Silver columns are the raw UW line items
+    # verbatim (verified against the live endpoint 2026-07-03), so the normalizer's
+    # own-name fallback maps them identity — the only rename is the period-identity
+    # anchor fiscal_date_ending → fiscal_date.
+    "income_statement": {"fiscal_date_ending": "fiscal_date"},
+    "balance_sheet": {"fiscal_date_ending": "fiscal_date"},
+    "cash_flow": {"fiscal_date_ending": "fiscal_date"},
     "economic_events": {
         "name": "event_name",
         "type": "event_type",
@@ -851,6 +869,9 @@ REQUIRED_FIELDS_BY_FEED: dict[str, set[str]] = {
     "earnings": {"earnings_date"},
     "institution_holdings": {"institution_name", "value", "quarter_end"},
     "treasury_yields": {"date", "maturity", "yield_pct"},
+    "income_statement": {"fiscal_date"},
+    "balance_sheet": {"fiscal_date"},
+    "cash_flow": {"fiscal_date"},
     "lulds": {"upper_limit", "lower_limit"},
     "statuses": {"status_code"},
     "corrections": {"original_trade_id", "original_price", "original_size"},
