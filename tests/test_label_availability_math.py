@@ -3,7 +3,8 @@
 Covers every public function:
 - ``parse_duration`` (heber.gold.duration) — all units + invalid formats.
 - ``compute_availability_time`` — forward_window/availability_lag combinations,
-  daily market-close snapping, and DST-crossing windows (zoneinfo, fixed dates).
+  daily trading-session resolution (weekends, holidays, half-days), and
+  DST-crossing windows (zoneinfo, fixed dates).
 - ``LabelMetadata`` / ``LabelDataset`` round-trips and delta accessors.
 - ``write_label`` / ``read_label`` point-in-time correctness.
 
@@ -82,20 +83,33 @@ class TestComputeAvailabilityTime:
     def test_daily_window_snaps_to_market_close(self):
         label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
         result = compute_availability_time(label_time, "5d", "0s")
-        # +5d -> 2026-01-10, then snapped to 16:05 New York time
-        # (21:05 UTC in January). Snapping in UTC would leak the label early.
-        assert result == datetime(2026, 1, 10, 21, 5, 0, tzinfo=UTC)
+        # Mon 2026-01-05 + 5 TRADING sessions (Tue-Fri 06-09, Mon 12) resolves
+        # at the Mon 2026-01-12 close: 16:00 ET = 21:00 UTC in January.
+        assert result == datetime(2026, 1, 12, 21, 0, 0, tzinfo=UTC)
 
-    def test_custom_market_close_time(self):
-        label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
-        result = compute_availability_time(label_time, "1d", "0s", market_close_time="13:00:00")
-        assert result == datetime(2026, 1, 6, 18, 0, 0, tzinfo=UTC)
+    def test_daily_window_skips_holiday_and_weekend(self):
+        # Regression for the zero-leakage leak: a Fri close_to_close 1d label
+        # resolves at the NEXT trading session's close, not the next calendar
+        # day. Fri 2026-01-16 + 1 session skips Sat/Sun and the MLK Mon
+        # 2026-01-19 holiday, landing on Tue 2026-01-20 16:00 ET (21:00 UTC).
+        # Calendar-day arithmetic marked it available Sat 01-17 — ~3 days early.
+        label_time = datetime(2026, 1, 16, 15, 0, 0, tzinfo=UTC)
+        result = compute_availability_time(label_time, "1d", "0s")
+        assert result == datetime(2026, 1, 20, 21, 0, 0, tzinfo=UTC)
+
+    def test_daily_window_uses_real_early_close(self):
+        # Fri 2026-11-27 (day after Thanksgiving) is a 13:00 ET early close.
+        # A same-session ("0d") label resolves at the real 13:00 close (18:00
+        # UTC), not a hardcoded 16:00 — session_close handles half-days.
+        label_time = datetime(2026, 11, 27, 15, 0, 0, tzinfo=UTC)
+        result = compute_availability_time(label_time, "0d", "0s")
+        assert result == datetime(2026, 11, 27, 18, 0, 0, tzinfo=UTC)
 
     def test_availability_lag_added_after_close_snap(self):
         label_time = datetime(2026, 1, 5, 10, 30, 0, tzinfo=UTC)
         result = compute_availability_time(label_time, "5d", "2h")
-        # snapped to 16:05 then +2h lag.
-        assert result == datetime(2026, 1, 10, 23, 5, 0, tzinfo=UTC)
+        # Resolves at Mon 2026-01-12 16:00 ET (21:00 UTC) then +2h lag.
+        assert result == datetime(2026, 1, 12, 23, 0, 0, tzinfo=UTC)
 
     def test_intraday_window_no_close_snap(self):
         # Hours window has no 'd' -> raw forward delta, no market-close re-anchor.
@@ -126,24 +140,24 @@ class TestComputeAvailabilityTime:
         assert result == datetime(2026, 1, 5, 11, 45, 0, tzinfo=UTC)
 
     def test_dst_spring_forward_crossing_window(self):
-        # 2026 US DST starts Sun 2026-03-08. Label on 2026-03-06 (EST, -05:00),
-        # +5d lands on 2026-03-11 (EDT, -04:00). Market-close snap re-anchors to
-        # 16:05 local wall-clock on the *result* date with that date's offset.
+        # 2026 US DST starts Sun 2026-03-08. Label Fri 2026-03-06 (EST, -05:00).
+        # +5 trading sessions (Mon 03-09 ... Fri 03-13) resolves at the Fri
+        # 2026-03-13 close, past the spring-forward boundary -> 16:00 EDT.
         label_time = datetime(2026, 3, 6, 10, 0, 0, tzinfo=ET)
         result = compute_availability_time(label_time, "5d", "0s")
-        assert result.hour == 16 and result.minute == 5
-        # Result date is past the spring-forward boundary -> EDT offset.
+        assert result.hour == 16 and result.minute == 0
         assert result.utcoffset() == timedelta(hours=-4)
-        assert result.date() == datetime(2026, 3, 11).date()
+        assert result.date() == datetime(2026, 3, 13).date()
 
     def test_dst_fall_back_crossing_window(self):
-        # 2026 US DST ends Sun 2026-11-01. Label 2026-10-30 (EDT, -04:00),
-        # +5d -> 2026-11-04 (EST, -05:00).
+        # 2026 US DST ends Sun 2026-11-01. Label Fri 2026-10-30 (EDT, -04:00).
+        # +5 trading sessions (Mon 11-02 ... Fri 11-06) resolves at the Fri
+        # 2026-11-06 close -> 16:00 EST.
         label_time = datetime(2026, 10, 30, 10, 0, 0, tzinfo=ET)
         result = compute_availability_time(label_time, "5d", "0s")
-        assert result.hour == 16 and result.minute == 5
+        assert result.hour == 16 and result.minute == 0
         assert result.utcoffset() == timedelta(hours=-5)
-        assert result.date() == datetime(2026, 11, 4).date()
+        assert result.date() == datetime(2026, 11, 6).date()
 
     def test_dst_aware_result_monotonic_after_label(self):
         # Availability must never precede the label time across a DST boundary.
@@ -250,9 +264,10 @@ class TestWriteReadLabel:
         written = pd.read_parquet(path)
         assert "ts_available" in written.columns
         assert "ts_event" in written.columns
-        # AAPL label 2026-01-05 +5d snapped to 16:05 ET -> 2026-01-10 21:05 UTC.
+        # AAPL label 2026-01-05 +5 trading sessions resolves Mon 2026-01-12
+        # 16:00 ET -> 21:00 UTC.
         aapl = written[written["instrument_key"] == "equity:AAPL"].iloc[0]
-        assert pd.Timestamp(aapl["ts_available"]) == pd.Timestamp("2026-01-10 21:05:00", tz="UTC")
+        assert pd.Timestamp(aapl["ts_available"]) == pd.Timestamp("2026-01-12 21:00:00", tz="UTC")
 
     def test_write_missing_required_column_raises(self, tmp_path):
         df = pd.DataFrame({"instrument_key": ["equity:AAPL"], "label": [0.1]})
@@ -261,8 +276,8 @@ class TestWriteReadLabel:
 
     def test_read_enforces_point_in_time(self, tmp_path):
         write_label(tmp_path, "ret5", self._frame(), "5d")
-        # asof between AAPL availability (01-10 21:05) and MSFT availability (01-25).
-        asof = datetime(2026, 1, 12, 0, 0, 0, tzinfo=UTC)
+        # asof between AAPL availability (01-12 21:00) and MSFT availability (01-27 21:00).
+        asof = datetime(2026, 1, 15, 0, 0, 0, tzinfo=UTC)
         out = read_label(tmp_path, "ret5", asof_time=asof)
         assert list(out["instrument_key"]) == ["equity:AAPL"]
 
