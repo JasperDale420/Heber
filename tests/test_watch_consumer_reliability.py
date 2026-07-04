@@ -13,6 +13,12 @@ import heber.watch.consumer as watch_consumer_module
 from heber.watch.consumer import AlertWatchConsumer
 
 
+@pytest.fixture(autouse=True)
+def _isolated_dlq_fallback_dir(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Keep durable DLQ fallback files out of the real data root."""
+    monkeypatch.setattr(watch_consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+
 class _RedisWithDlq:
     def __init__(self) -> None:
         self.added: list[tuple[str, dict]] = []
@@ -26,13 +32,13 @@ class _RedisWithDlq:
     def xack(self, *args, **kwargs):  # noqa: ANN002, ANN003
         return 1
 
-    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         self.added.append((stream, payload))
         return "1-0"
 
 
 class _RedisDlqFailure(_RedisWithDlq):
-    def xadd(self, stream: str, payload: dict):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN001, ANN003
         raise RuntimeError("dlq unavailable")
 
 

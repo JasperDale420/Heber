@@ -17,23 +17,31 @@ from heber.writer.consumer import EventConsumer
 
 class _StubRedis:
     def __init__(self):
-        self.pending = []
-        self.claimed = []
+        self.pending: list[dict] = []  # idle-pending entries: [{"message_id": id}, ...]
+        self.claim_payloads: dict = {}  # id -> payload returned by xclaim
         self.acked: list[tuple] = []
         self.added: list[tuple] = []
         self.fail_xadd = False
 
-    async def xpending_range(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        return self.pending
+    @staticmethod
+    def _mid(entry: dict):  # noqa: ANN205
+        return entry.get("message_id") or entry.get(b"message_id")
 
-    async def xclaim(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        return self.claimed
+    async def xpending_range(self, _stream, _group, _min, _max, count, idle=0):  # noqa: ANN001
+        return self.pending[:count]
+
+    async def xclaim(self, _stream, _group, _consumer, _idle, message_ids):  # noqa: ANN001
+        ids = set(message_ids)
+        claimed = [(mid, self.claim_payloads.pop(mid)) for mid in message_ids if mid in self.claim_payloads]
+        # Claimed messages leave the idle-pending window — so a drain loop terminates.
+        self.pending = [p for p in self.pending if self._mid(p) not in ids]
+        return claimed
 
     async def xack(self, *args):  # noqa: ANN002
         self.acked.append(args)
         return len(args) - 2
 
-    async def xadd(self, stream: str, payload: dict):
+    async def xadd(self, stream: str, payload: dict, **_kwargs):  # noqa: ANN003
         if self.fail_xadd:
             raise RuntimeError("dlq unavailable")
         self.added.append((stream, payload))
@@ -55,7 +63,7 @@ async def test_recover_pending_messages_claims_and_acks() -> None:
     consumer = EventConsumer()
     redis = _StubRedis()
     redis.pending = [{"message_id": "1-0"}]
-    redis.claimed = [("1-0", {"data": "{}"})]
+    redis.claim_payloads = {"1-0": {"data": "{}"}}
     consumer.redis = redis
 
     consumer._process_stream_messages = AsyncMock(return_value=(["1-0"], []))
@@ -72,7 +80,57 @@ async def test_recover_pending_messages_claims_and_acks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_stream_messages_moves_failures_to_dlq() -> None:
+async def test_recover_pending_messages_drains_all_batches() -> None:
+    # A consumer that died holding more than one claim-batch of pending messages
+    # must have ALL of them reclaimed in a single recovery cycle, not just the
+    # first batch (the bug that stranded ~1,800 of 1,900 messages forever).
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    ids = [f"{i}-0" for i in range(250)]  # > default claim batch of 100
+    redis.pending = [{"message_id": i} for i in ids]
+    redis.claim_payloads = {i: {"data": "{}"} for i in ids}
+    consumer.redis = redis
+
+    async def _proc(messages):  # noqa: ANN001 — acks exactly the ids it was handed
+        return [mid for mid, _ in messages], []
+
+    consumer._process_stream_messages = _proc  # type: ignore[assignment]
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
+
+    recovered = await consumer._recover_pending_messages()
+
+    assert recovered == 250
+    assert sum(len(a) - 2 for a in redis.acked) == 250  # every id acked across batches
+    assert redis.pending == []
+
+
+@pytest.mark.asyncio
+async def test_maybe_recover_pending_respects_interval() -> None:
+    # Periodic recovery must fire only after the interval elapses (default 300s),
+    # and advance its clock when it does — so the run loop reclaims messages
+    # stranded mid-session without waiting for a restart.
+    consumer = EventConsumer()
+    calls: list[int] = []
+
+    async def _rec() -> int:
+        calls.append(1)
+        return 0
+
+    consumer._recover_pending_messages = _rec  # type: ignore[assignment]
+    consumer._last_recovery_monotonic = 1000.0
+
+    assert await consumer._maybe_recover_pending(1000.0 + 299) == 0  # within interval
+    assert calls == []
+
+    await consumer._maybe_recover_pending(1000.0 + 301)  # interval elapsed
+    assert len(calls) == 1
+    assert consumer._last_recovery_monotonic == 1000.0 + 301
+
+
+@pytest.mark.asyncio
+async def test_process_stream_messages_moves_failures_to_dlq(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
     consumer = EventConsumer()
     redis = _StubRedis()
     consumer.redis = redis

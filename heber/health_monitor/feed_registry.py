@@ -27,7 +27,16 @@ class FeedRule:
 
 DEFAULT_REGISTRY: list[FeedRule] = [
     FeedRule("flow_alerts", "continuous", "09:30", "16:00", 60, 1),
-    FeedRule("darkpool", "continuous", "04:00", "20:00", 60, 1),
+    # Darkpool prints flow from the open through after-hours (~19:00 ET), but never
+    # pre-market: a 04:00 start produced ~100 false "feed appears dark" criticals per
+    # pre-market hour. Start at the open; keep the after-hours tail to 20:00.
+    # Delivery is batched, not steady: after the close the feed legitimately goes
+    # quiet for stretches (~2h observed) before the next batch lands, which a 60m
+    # window read as "dark" and flapped CRITICAL/RECOVERED all evening. A 180m
+    # lookback spans those inter-batch gaps; a truly dead feed still trips after 3h.
+    # ponytail: 180 is a hand-set ceiling from one day's gap — re-derive with
+    # `heber alert-calibrate` if the cadence shifts.
+    FeedRule("darkpool", "continuous", "09:30", "20:00", 180, 1),
     FeedRule("bars", "continuous", "09:30", "16:00", 30, 1),
     FeedRule("trades", "continuous", "09:30", "16:00", 30, 1),
     FeedRule("oi_change", "daily", "", "17:30", 0, 1),

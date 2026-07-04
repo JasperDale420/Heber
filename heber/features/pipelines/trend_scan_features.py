@@ -272,7 +272,7 @@ class TrendScanPipeline:
 
         if bars.empty:
             logger.warning("No bars found for trend scan")
-            return {"status": "no_data", "rows": 0}
+            return {"trend_scan_features": {"status": "no_data", "rows": 0}}
 
         # Reduce to daily close
         daily = self._to_daily_close(bars)
@@ -284,7 +284,7 @@ class TrendScanPipeline:
 
         if labels.empty:
             logger.warning("No trend scan labels computed")
-            return {"status": "no_data", "rows": 0}
+            return {"trend_scan_features": {"status": "no_data", "rows": 0}}
 
         # Filter to requested date range (labels computed within range)
         labels["ts_event"] = pd.to_datetime(labels["ts_event"], utc=True)
@@ -293,7 +293,7 @@ class TrendScanPipeline:
 
         if labels.empty:
             logger.warning("No labels within date range after filtering")
-            return {"status": "no_data", "rows": 0}
+            return {"trend_scan_features": {"status": "no_data", "rows": 0}}
 
         # Add Gold schema columns
         labels = _ensure_ts_available(labels)
@@ -320,7 +320,7 @@ class TrendScanPipeline:
         }
 
         logger.info("Trend scan pipeline complete", **stats)
-        return stats
+        return {"trend_scan_features": stats}
 
     @staticmethod
     def _to_daily_close(bars: pd.DataFrame) -> pd.DataFrame:
@@ -374,15 +374,16 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("TREND SCAN PIPELINE RESULTS")
     print("=" * 60)
-    print(f"  Status: {stats.get('status', 'unknown')}")
-    print(f"  Rows: {stats.get('rows', 0)}")
-    print(f"  Tickers: {stats.get('tickers', 0)}")
-    if stats.get("mean_abs_t_value") is not None:
-        print(f"  Mean |t-value|: {stats['mean_abs_t_value']:.4f}")
-    if stats.get("horizon_distribution"):
-        print(f"  Horizon distribution: {stats['horizon_distribution']}")
-    if stats.get("path"):
-        print(f"  Output: {stats['path']}")
+    info = stats.get("trend_scan_features", {})
+    print(f"  Status: {info.get('status', 'unknown')}")
+    print(f"  Rows: {info.get('rows', 0)}")
+    print(f"  Tickers: {info.get('tickers', 0)}")
+    if info.get("mean_abs_t_value") is not None:
+        print(f"  Mean |t-value|: {info['mean_abs_t_value']:.4f}")
+    if info.get("horizon_distribution"):
+        print(f"  Horizon distribution: {info['horizon_distribution']}")
+    if info.get("path"):
+        print(f"  Output: {info['path']}")
     print()
 
 

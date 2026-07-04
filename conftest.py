@@ -13,6 +13,22 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _disable_redis_dedupe_backing(monkeypatch):
+    """Tests must never talk to live Redis for dedupe checks.
+
+    ``EventConsumer()`` builds a ``RedisDedupeStore`` against the real
+    ``settings.redis_url`` when ``dedupe_redis_enabled`` is True (the
+    production default). Without this guard, any consumer test that
+    triggers a Bloom hit or a successful register would read/write
+    ``heber:dedupe:*`` keys on the live event-bus Redis. Tests that
+    exercise the store itself construct it directly with a stub client.
+    """
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "dedupe_redis_enabled", False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_empire_logger_globals():
     """Reset ``empire_core.logger``'s module-globals between tests.
 

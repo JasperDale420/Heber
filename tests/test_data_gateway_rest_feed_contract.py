@@ -92,16 +92,21 @@ def test_non_contracted_route_derived_feeds_are_blocked_from_silver() -> None:
         pytest.skip(f"Data-Gateway repo not found at {dg_root}")
 
     api_root = dg_root / "gateway" / "api"
-    middleware_path = api_root / "middleware.py"
+    middleware_path = api_root / "middleware" / "envelope.py"
     feed_mapping = _load_feed_mapping(middleware_path)
     route_segments = _extract_provider_route_first_segments(api_root)
     derived_feeds = {feed_mapping.get(segment, segment) for segment in route_segments}
 
+    # After the 2026-06 contract sweep every current route-derived feed is
+    # contracted, so this set is usually empty — the synthetic feed below
+    # keeps the blocking mechanism itself under test either way, and any
+    # future uncontracted route still gets exercised here.
     non_contracted = sorted(feed for feed in derived_feeds if feed not in CONTRACTED_RAW_FEEDS)
-    assert non_contracted, "Expected at least one non-contracted route-derived feed"
+    synthetic_feed = "synthetic_route_feed_not_contracted"
+    assert synthetic_feed not in CONTRACTED_RAW_FEEDS
 
     consumer = EventConsumer()
-    for feed in non_contracted:
+    for feed in [*non_contracted, synthetic_feed]:
         consumer.bronze_writer.write = MagicMock()
         consumer.silver_writer.write = MagicMock()
 

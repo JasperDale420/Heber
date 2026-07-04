@@ -20,6 +20,9 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
         "data_root": str(tmp_path),
         "alert_discord_enabled": True,
         "alert_discord_webhook_url": "https://discord.com/api/webhooks/1/abc",
+        # Default to immediate alerting so the cooldown/recovery tests below read
+        # cleanly; the debounce behaviour has its own dedicated tests.
+        "alert_debounce_cycles": 1,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)
@@ -144,3 +147,38 @@ def test_state_persists_across_instances(tmp_path: Path) -> None:
     n2 = DiscordNotifier(settings, client=client2)
     n2.dispatch([_fail()], now=T0 + timedelta(minutes=10))  # still within cooldown
     assert client2.post.call_count == 0
+
+
+@pytest.mark.unit
+def test_debounce_suppresses_single_cycle_flap(tmp_path: Path) -> None:
+    # One failing cycle then recovery (debounce=2) must be completely silent —
+    # this is the transient read-error / inter-batch-gap blip that caused the spam.
+    client = _client()
+    n = DiscordNotifier(_settings(tmp_path, alert_debounce_cycles=2), client=client)
+    n.dispatch([_fail("darkpool")], now=T0)
+    n.dispatch([_passing("darkpool")], now=T0 + timedelta(minutes=5))
+    assert client.post.call_count == 0
+
+
+@pytest.mark.unit
+def test_debounce_alerts_after_consecutive_fails(tmp_path: Path) -> None:
+    # Two consecutive failing cycles clears the debounce -> exactly one CRITICAL.
+    client = _client()
+    n = DiscordNotifier(_settings(tmp_path, alert_debounce_cycles=2), client=client)
+    n.dispatch([_fail("darkpool")], now=T0)
+    assert client.post.call_count == 0  # first cycle accrues, does not alert
+    n.dispatch([_fail("darkpool")], now=T0 + timedelta(minutes=5))
+    assert client.post.call_count == 1
+    assert "critical" in client.post.call_args.kwargs["json"]["content"].lower()
+
+
+@pytest.mark.unit
+def test_debounce_recovery_note_only_after_real_alert(tmp_path: Path) -> None:
+    # After a debounced CRITICAL fires, a recovery DOES send a note...
+    client = _client()
+    n = DiscordNotifier(_settings(tmp_path, alert_debounce_cycles=2), client=client)
+    n.dispatch([_fail("darkpool")], now=T0)
+    n.dispatch([_fail("darkpool")], now=T0 + timedelta(minutes=5))  # CRITICAL
+    n.dispatch([_passing("darkpool")], now=T0 + timedelta(minutes=10))  # RECOVERED
+    assert client.post.call_count == 2
+    assert "recover" in client.post.call_args.kwargs["json"]["content"].lower()

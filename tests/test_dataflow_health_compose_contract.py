@@ -51,8 +51,9 @@ def test_consumer_and_watch_metrics_ports_exposed_to_host() -> None:
     consumer_ports = services["heber-consumer"].get("ports", [])
     watch_ports = services["heber-watch"].get("ports", [])
 
-    assert "9090:9090" in consumer_ports
-    assert "9091:9090" in watch_ports
+    # Published loopback-only: dataflow-health scrapes from the same host.
+    assert "127.0.0.1:9090:9090" in consumer_ports
+    assert "127.0.0.1:9091:9090" in watch_ports
 
 
 def test_watch_service_has_gateway_api_key_env_wiring() -> None:

@@ -327,7 +327,7 @@ class SectorFlowPipeline:
 
         if flow_alerts.empty:
             logger.warning("No flow alerts found")
-            return {"status": "no_data", "rows": 0}
+            return {"sector_flow_features": {"status": "no_data", "rows": 0}}
 
         # Compute features
         logger.info("Computing sector flow features")
@@ -335,7 +335,7 @@ class SectorFlowPipeline:
 
         if df.empty:
             logger.warning("No features computed")
-            return {"status": "no_data", "rows": 0}
+            return {"sector_flow_features": {"status": "no_data", "rows": 0}}
 
         # Filter to requested date range only (exclude lookback rows)
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
@@ -344,7 +344,7 @@ class SectorFlowPipeline:
 
         if df.empty:
             logger.warning("No features in requested date range after filtering")
-            return {"status": "no_data", "rows": 0}
+            return {"sector_flow_features": {"status": "no_data", "rows": 0}}
 
         logger.info("Features computed", rows=len(df))
 
@@ -361,9 +361,11 @@ class SectorFlowPipeline:
             output_path = None
 
         return {
-            "status": "success",
-            "rows": len(df),
-            "path": str(output_path) if output_path else None,
+            "sector_flow_features": {
+                "status": "success",
+                "rows": len(df),
+                "path": str(output_path) if output_path else None,
+            }
         }
 
 
@@ -388,11 +390,12 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("SECTOR FLOW FEATURES PIPELINE RESULTS")
     print("=" * 60)
-    status = stats.get("status", "unknown")
-    rows = stats.get("rows", 0)
-    print(f"  sector_flow_features: {status} ({rows} rows)")
-    if stats.get("path"):
-        print(f"  Output: {stats['path']}")
+    for dataset, info in stats.items():
+        status = info.get("status", "unknown")
+        rows = info.get("rows", 0)
+        print(f"  {dataset}: {status} ({rows} rows)")
+        if info.get("path"):
+            print(f"  Output: {info['path']}")
     print()
 
 

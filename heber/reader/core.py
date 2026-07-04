@@ -112,9 +112,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
     if not base.exists():
         return []
     if base.is_file():
+        # Callers like read_label() pass the data file directly; rglob on a
+        # file path yields nothing, so handle it explicitly. Apply the same
+        # name-based filters used for the directory walk below (skip AppleDouble
+        # sidecars and partial `.tmp` writes) and require a real .parquet file.
         if (
             base.suffix == ".parquet"
             and not base.name.startswith("._")
+            and not base.name.endswith(".tmp")
             and not any(part.startswith("._") for part in base.parts)
         ):
             return [str(base)]

@@ -34,8 +34,10 @@ def _write_silver_partition(
     feed: str,
     dt: date,
     df: pd.DataFrame,
+    instrument_type: str = "equity",
 ) -> Path:
-    partition = data_root / "silver" / f"feed={feed}" / f"dt={dt.isoformat()}"
+    # Mirror the writer's real layout: feed={feed}/instrument_type={type}/dt={dt}.
+    partition = data_root / "silver" / f"feed={feed}" / f"instrument_type={instrument_type}" / f"dt={dt.isoformat()}"
     partition.mkdir(parents=True, exist_ok=True)
     out = partition / "data.parquet"
     df.to_parquet(out, index=False)

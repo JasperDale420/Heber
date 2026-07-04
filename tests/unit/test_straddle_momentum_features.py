@@ -458,8 +458,9 @@ class TestStraddleMomentumPipeline:
         pipeline = StraddleMomentumPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-03-31", dry_run=True)
 
-        assert stats["status"] == "no_data"
-        assert stats["rows"] == 0
+        result = stats["straddle_momentum_features"]
+        assert result["status"] == "no_data"
+        assert result["rows"] == 0
 
     def test_pipeline_dry_run_does_not_write(self) -> None:
         """Pipeline dry run should compute but not call write_gold."""
@@ -513,6 +514,7 @@ class TestStraddleMomentumPipeline:
         pipeline = StraddleMomentumPipeline(reader=mock_reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-10", dry_run=True)
 
-        assert stats["status"] == "success"
-        assert stats["rows"] > 0
+        result = stats["straddle_momentum_features"]
+        assert result["status"] == "success"
+        assert result["rows"] > 0
         assert mock_reader.read_silver.call_count > 30  # per-day reads, not one bulk read

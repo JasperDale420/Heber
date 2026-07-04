@@ -124,9 +124,9 @@ class TestBronzeWriter:
         writer.write(envelope)
         writer.flush()
 
-        # After flush, buffers should be empty lists
-        for events in writer.buffers.values():
-            assert events == []
+        # After flush, the partition key is removed (not retained as an empty
+        # list) so dt=/hour= keys don't accumulate forever.
+        assert len(writer.buffers) == 0
 
         # Verify gzip file was written
         files = list((tmp_path / "bronze").rglob("*.jsonl.gz"))
@@ -272,8 +272,8 @@ class TestSilverWriter:
         writer.buffers[pk] = [row]
         writer.flush()
 
-        for rows in writer.buffers.values():
-            assert rows == []
+        # Partition key removed after flush (not retained as an empty list).
+        assert len(writer.buffers) == 0
 
         files = list((tmp_path / "silver").rglob("*.parquet"))
         assert len(files) == 1
@@ -287,6 +287,47 @@ class TestSilverWriter:
         writer.flush()
         silver_dir = tmp_path / "silver"
         assert not silver_dir.exists() or not list(silver_dir.rglob("*.parquet"))
+
+    def test_buffers_do_not_accumulate_dead_keys(self, tmp_path, monkeypatch):
+        """Flushing distinct dt/hour partitions must not leave dead keys behind.
+
+        Regression for the unbounded buffer growth: emptied partitions used to
+        be retained as `[]`, leaking one key per (feed,instrument_type,dt,hour).
+        """
+        from heber.config import settings
+
+        monkeypatch.setattr(settings, "data_root", tmp_path)
+        writer = SilverWriter()
+        base_row = {
+            "event_id": "e",
+            "provider": "alpaca",
+            "feed": "bars",
+            "instrument_type": "equity",
+            "instrument_key": "equity:AAPL",
+            "symbol": "AAPL",
+            "ts_event": NOW,
+            "ts_ingest": NOW,
+            "ts_available": NOW,
+            "source": "websocket",
+            "schema_version": "v1",
+            "quality_flags": [],
+            "timeframe": "1Min",
+            "bar_start_ts": NOW,
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+            "trade_count": 1,
+            "vwap": 1.0,
+        }
+        for day in ("2026-03-10", "2026-03-11", "2026-03-12"):
+            writer.write_row(f"feed=bars/instrument_type=equity/dt={day}", dict(base_row))
+            writer.flush()
+        assert len(writer.buffers) == 0, f"dead keys accumulated: {list(writer.buffers)}"
+        # The defaultdict still works for a fresh write after the deletions.
+        writer.write_row("feed=bars/instrument_type=equity/dt=2026-03-13", dict(base_row))
+        assert len(writer.buffers) == 1
 
     def test_flush_partition_skips_empty_rows(self, tmp_path, monkeypatch):
         """_flush_partition returns early when rows list is empty."""
@@ -794,17 +835,44 @@ class TestSendToDlq:
     """Tests for _send_to_dlq."""
 
     @pytest.mark.asyncio
-    async def test_send_to_dlq_success(self):
+    async def test_send_to_dlq_success(self, monkeypatch, tmp_path):
         """Successfully sends to DLQ and returns True."""
+        import heber.writer.consumer as consumer_module
+
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
         consumer = EventConsumer()
 
         class FakeRedis:
-            async def xadd(self, stream, payload):
+            async def xadd(self, stream, payload, **_kwargs):
                 return b"dlq-1-0"
 
         consumer.redis = FakeRedis()
         result = await consumer._send_to_dlq("1-0", {"data": "{}"}, "test_error", 3, feed="bars")
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_send_to_dlq_failure(self, monkeypatch, tmp_path):
+        """Returns False only when both Redis and the durable file fallback fail."""
+        import redis.asyncio as aioredis
+
+        import heber.writer.consumer as consumer_module
+
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+        def _fail_fallback(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(consumer_module, "write_dlq_fallback_file", _fail_fallback)
+
+        consumer = EventConsumer()
+
+        class FakeRedis:
+            async def xadd(self, stream, payload, **_kwargs):
+                raise aioredis.RedisError("DLQ unavailable")
+
+        consumer.redis = FakeRedis()
+        result = await consumer._send_to_dlq("1-0", {"data": "{}"}, "test_error", 3, feed="bars")
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_send_to_dlq_redis_failure_uses_file_fallback(
@@ -821,7 +889,7 @@ class TestSendToDlq:
         consumer = EventConsumer()
 
         class FakeRedis:
-            async def xadd(self, stream, payload):
+            async def xadd(self, stream, payload, **_kwargs):
                 raise aioredis.RedisError("DLQ unavailable")
 
         consumer.redis = FakeRedis()
@@ -1651,27 +1719,27 @@ class TestWriteSilverParquet:
         assert not file_path.exists()
 
     def test_arrow_type_error_salvages_valid_rows(self, tmp_path):
-        """ArrowTypeError triggers row-by-row salvage."""
+        """ArrowTypeError triggers row-by-row salvage: valid rows kept, bad dropped."""
+        import pyarrow.parquet as pq
+
         schema = pa.schema([("event_id", pa.string()), ("price", pa.float64())])
         rows = [
             {"event_id": "e1", "price": 100.0},
-            {"event_id": "e2", "price": "not-a-number-at-all"},  # Will fail type coercion
+            {"event_id": "e2", "price": "not-a-number-at-all"},  # fails float coercion -> salvaged out
         ]
         file_path = tmp_path / "part-test.parquet"
 
-        # This may or may not trigger salvage depending on Arrow's leniency,
-        # but at least it should not raise
-        try:
-            write_silver_parquet(
-                rows=rows,
-                schema=schema,
-                file_path=file_path,
-                partition_key="feed=test/dt=2026-03-10",
-                dataset="test",
-            )
-        except Exception:
-            pass  # Some Arrow versions may not trigger salvage path
-        # Just verify no unhandled crash
+        write_silver_parquet(
+            rows=rows,
+            schema=schema,
+            file_path=file_path,
+            partition_key="feed=test/dt=2026-03-10",
+            dataset="test",
+        )
+
+        # The valid row is persisted; the bad row is dropped during salvage.
+        assert file_path.exists()
+        assert pq.read_table(file_path).column("event_id").to_pylist() == ["e1"]
 
     def test_generic_error_reraises(self, tmp_path):
         """Non-Arrow exceptions are re-raised."""

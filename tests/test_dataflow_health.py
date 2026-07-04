@@ -124,25 +124,134 @@ def test_dlq_flood_escalates_to_critical(monkeypatch) -> None:
     """A DLQ that has grown into the hundreds of thousands (a rejection flood) must
     page as critical, not sit at warning like a steady-state trickle.
     """
-    import heber.writer.dlq_reprocessor as dlq_mod
+    import heber.writer.dlq_fallback as dlq_fallback_mod
 
-    monkeypatch.setattr(
-        dlq_mod,
-        "check_dlq_size",
-        lambda **_kwargs: {
-            "id": "dlq_queue_size",
-            "status": "warn",
-            "severity": "warning",
-            "observed": {"dlq_stream": "heber:events:dlq", "length": 250_000},
-            "threshold": {"max_length": 10_000},
-            "message": "DLQ has 250000 entries (exceeds 10000 threshold).",
-        },
-    )
+    # The signal is the durable audit-file count for today, not the Redis xlen.
+    monkeypatch.setattr(dlq_fallback_mod, "count_fallback_files_for_today", lambda *_a, **_kw: 5_000)
 
     check = dataflow_health_module._collect_dlq_size_check(Settings())
 
     assert check["status"] == "fail"
     assert check["severity"] == "critical"
+    assert check["observed"]["durable_files_today"] == 5_000
+
+
+def test_dlq_steady_trickle_stays_ok(monkeypatch) -> None:
+    """A handful of durable DLQ files (the real steady-state rate) must stay OK —
+    the historical multi-million Redis xlen was eviction churn, not real failures.
+    """
+    import heber.writer.dlq_fallback as dlq_fallback_mod
+
+    monkeypatch.setattr(dlq_fallback_mod, "count_fallback_files_for_today", lambda *_a, **_kw: 7)
+
+    check = dataflow_health_module._collect_dlq_size_check(Settings())
+
+    assert check["status"] == "ok"
+    assert check["observed"]["durable_files_today"] == 7
+
+
+def test_redis_signals_retry_absorbs_transient_blip(monkeypatch) -> None:
+    """A single transient Redis failure must not flip the redis checks to fail —
+    _collect_redis_signals retries once and returns the recovered signal.
+    """
+    calls = {"n": 0}
+
+    def _fake_once(_settings):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "ok": False,
+                "group_exists": False,
+                "lag": None,
+                "pending": None,
+                "stream_len": None,
+                "error": "timed out",
+            }
+        return {"ok": True, "group_exists": True, "lag": 0, "pending": 0, "stream_len": 100, "error": None}
+
+    monkeypatch.setattr(dataflow_health_module, "_collect_redis_signals_once", _fake_once)
+
+    result = dataflow_health_module._collect_redis_signals(Settings(), retry_delay=0.0)
+
+    assert result["ok"] is True
+    assert calls["n"] == 2
+
+
+def test_redis_signals_persistent_failure_stops_after_attempts(monkeypatch) -> None:
+    """A genuinely-down Redis must still fail (not loop forever) after the bounded retries."""
+    calls = {"n": 0}
+
+    def _fake_once(_settings):
+        calls["n"] += 1
+        return {"ok": False, "group_exists": False, "lag": None, "pending": None, "stream_len": None, "error": "down"}
+
+    monkeypatch.setattr(dataflow_health_module, "_collect_redis_signals_once", _fake_once)
+
+    result = dataflow_health_module._collect_redis_signals(Settings(), attempts=2, retry_delay=0.0)
+
+    assert result["ok"] is False
+    assert calls["n"] == 2
+
+
+class _FakeClient:
+    def __init__(self, behaviour) -> None:
+        self._behaviour = behaviour
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        return None
+
+    def get(self, _url):
+        result = self._behaviour()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def test_metrics_fetch_retry_absorbs_transient_timeout(monkeypatch) -> None:
+    """A single slow-scrape ReadTimeout must not be reported as down —
+    _fetch_metrics_samples retries once and parses the recovered response.
+    """
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        text = 'heber_writer_last_write_unixtime{layer="silver",dataset="bars"} 1.0\n'
+
+    def _behaviour():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return TimeoutError("timed out")
+        return _Resp()
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(_behaviour))
+    monkeypatch.setattr(dataflow_health_module, "raise_for_status", lambda _resp: None)
+
+    samples, error = dataflow_health_module._fetch_metrics_samples("http://x/metrics", retry_delay=0.0)
+
+    assert error is None
+    assert calls["n"] == 2
+    assert dataflow_health_module._metric_max(samples, "heber_writer_last_write_unixtime") == 1.0
+
+
+def test_metrics_fetch_persistent_failure_reports_error(monkeypatch) -> None:
+    """A genuinely-unreachable endpoint must fail after the bounded retries and
+    surface the error string (filesystem fallback handles freshness)."""
+    calls = {"n": 0}
+
+    def _behaviour():
+        calls["n"] += 1
+        return TimeoutError("timed out")
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(_behaviour))
+
+    samples, error = dataflow_health_module._fetch_metrics_samples("http://x/metrics", attempts=2, retry_delay=0.0)
+
+    assert samples is None
+    assert error == "timed out"
+    assert calls["n"] == 2
 
 
 def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None:

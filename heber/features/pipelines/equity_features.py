@@ -18,13 +18,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_instrument_key, ensure_ts_available
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -141,20 +142,6 @@ def _resample_bars_to_daily(bars: pd.DataFrame) -> pd.DataFrame:
 
     logger.info("Daily bars ready", total_rows=len(daily), symbols=daily["instrument_key"].nunique())
     return daily
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_instrument_key(df: pd.DataFrame, symbol_col: str = "symbol") -> pd.DataFrame:
-    """Add instrument_key if missing."""
-    if "instrument_key" not in df.columns and symbol_col in df.columns:
-        df["instrument_key"] = df[symbol_col].apply(lambda s: s if ":" in str(s) else f"equity:{s}")
-    return df
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +264,7 @@ def compute_flow_features(
     result = result.rename(columns={"underlying": "symbol", "date": "ts_event"})
     result["ts_event"] = pd.to_datetime(result["ts_event"], utc=True)
 
-    return _ensure_instrument_key(_ensure_ts_available(result))
+    return ensure_instrument_key(ensure_ts_available(result))
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +334,7 @@ def compute_momentum_features(bars: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    return _ensure_ts_available(out)
+    return ensure_ts_available(out)
 
 
 def _compute_rsi(prices: pd.Series, period: int) -> pd.Series:
@@ -448,7 +435,7 @@ def compute_volatility_features(bars: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    return _ensure_ts_available(out)
+    return ensure_ts_available(out)
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +514,7 @@ def compute_microstructure_features(quotes: pd.DataFrame) -> pd.DataFrame:
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
     agg["symbol"] = agg["instrument_key"].str.replace(r"^equity:", "", regex=True)
 
-    return _ensure_instrument_key(_ensure_ts_available(agg), symbol_col="instrument_key")
+    return ensure_instrument_key(ensure_ts_available(agg), symbol_col="instrument_key")
 
 
 # ---------------------------------------------------------------------------
@@ -557,11 +544,21 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
         g = group.set_index("ts_event")["close"]
         fwd_return = g.shift(-horizon) / g - 1
 
+        # The forward return at row i resolves at the CLOSE of the bar `horizon`
+        # TRADING days ahead (g.index[i+horizon]) — not `horizon` calendar days
+        # later. Stamp ts_available from that resolving bar, conservatively one
+        # day past its (midnight-UTC) date so the resolving session's 16:00 ET
+        # close is fully observable in both DST regimes. Calendar-day arithmetic
+        # here leaked every label spanning a weekend/holiday. (.to_series() keeps
+        # the index tz-aware UTC; .values would strip the tz.)
+        resolving_ts = g.index.to_series().shift(-horizon).reset_index(drop=True) + timedelta(days=1)
+
         feat = pd.DataFrame(
             {
                 "instrument_key": symbol,
                 "ts_event": g.index,
                 f"return_{horizon}d": fwd_return.values,
+                "ts_available": resolving_ts,
             }
         )
         feat[f"direction_{horizon}d"] = np.sign(feat[f"return_{horizon}d"]).astype("Int64")
@@ -577,7 +574,6 @@ def compute_return_labels(bars: pd.DataFrame, horizon: int) -> pd.DataFrame:
 
     out = pd.concat(results, ignore_index=True)
     out["symbol"] = out["instrument_key"].str.replace(r"^equity:", "", regex=True)
-    out["ts_available"] = pd.to_datetime(out["ts_event"], utc=True) + timedelta(days=horizon)
     return out
 
 

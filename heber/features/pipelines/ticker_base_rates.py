@@ -257,7 +257,7 @@ class TickerBaseRatesPipeline:
 
         if labels.empty:
             logger.warning("No alert labels found in date range")
-            return {"status": "no_data", "rows": 0}
+            return {"ticker_base_rates": {"status": "no_data", "rows": 0}}
 
         logger.info("Loaded alert labels", rows=len(labels))
 
@@ -266,7 +266,7 @@ class TickerBaseRatesPipeline:
 
         if df.empty:
             logger.warning("No base rates computed")
-            return {"status": "no_data", "rows": 0}
+            return {"ticker_base_rates": {"status": "no_data", "rows": 0}}
 
         # Filter to requested date range only (exclude lookback)
         df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
@@ -275,7 +275,7 @@ class TickerBaseRatesPipeline:
 
         if df.empty:
             logger.warning("No base rates in requested date range after filtering")
-            return {"status": "no_data", "rows": 0}
+            return {"ticker_base_rates": {"status": "no_data", "rows": 0}}
 
         # Write to Gold
         if not dry_run:
@@ -291,10 +291,12 @@ class TickerBaseRatesPipeline:
             output_path = None
 
         return {
-            "status": "success",
-            "rows": len(df),
-            "tickers": int(df["instrument_key"].nunique()),
-            "path": str(output_path) if output_path else None,
+            "ticker_base_rates": {
+                "status": "success",
+                "rows": len(df),
+                "tickers": int(df["instrument_key"].nunique()),
+                "path": str(output_path) if output_path else None,
+            }
         }
 
 
@@ -326,11 +328,12 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("TICKER BASE RATES PIPELINE RESULTS")
     print("=" * 60)
-    print(f"  Status: {stats.get('status', 'unknown')}")
-    print(f"  Rows:   {stats.get('rows', 0)}")
-    print(f"  Tickers: {stats.get('tickers', 0)}")
-    if stats.get("path"):
-        print(f"  Output: {stats['path']}")
+    info = stats.get("ticker_base_rates", {})
+    print(f"  Status: {info.get('status', 'unknown')}")
+    print(f"  Rows:   {info.get('rows', 0)}")
+    print(f"  Tickers: {info.get('tickers', 0)}")
+    if info.get("path"):
+        print(f"  Output: {info['path']}")
     print()
 
 

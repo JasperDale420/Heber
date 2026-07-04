@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from heber.config import Settings, get_settings
+from heber.gold_poller.reconcile import reconcile_eod_feeds
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -180,22 +181,6 @@ def _is_nyse_trading_day(dt: date) -> bool:
         return dt.weekday() < 5
 
 
-def _last_trading_day() -> date:
-    """Return the most recent completed trading day."""
-    et_now = datetime.now(ZoneInfo("America/New_York"))
-    today = et_now.date()
-    candidate = today
-    # If it's before 17:00 ET, the current day isn't done yet
-    if et_now.hour < 17:
-        candidate = today - timedelta(days=1)
-    # Walk backward to find a trading day
-    for _ in range(10):
-        if _is_nyse_trading_day(candidate):
-            return candidate
-        candidate -= timedelta(days=1)
-    return today - timedelta(days=1)
-
-
 def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     """Lazy-import and instantiate a pipeline class."""
     import importlib
@@ -262,6 +247,7 @@ class GoldFeaturePoller:
         self._task: asyncio.Task[None] | None = None
         self._reader = HeberReader()
         self._last_run_date: date | None = None
+        self._last_reconcile_date: date | None = None
         self._run_history: list[dict[str, Any]] = []
 
     async def start(self) -> None:
@@ -298,6 +284,8 @@ class GoldFeaturePoller:
             try:
                 if self._should_run():
                     await self._run_all_pipelines()
+                if self._should_reconcile():
+                    await self._run_reconcile()
             except Exception:
                 logger.error("gold_poller_loop_error", exc_info=True)
 
@@ -325,12 +313,50 @@ class GoldFeaturePoller:
 
         return True
 
+    def _should_reconcile(self) -> bool:
+        """Return True if the EOD self-heal reconcile is due (enabled, trading day,
+        past its trigger time, not yet run today)."""
+        if not self._settings.eod_reconcile_enabled:
+            return False
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        today = et_now.date()
+        if self._last_reconcile_date == today:
+            return False
+        if not _is_nyse_trading_day(today):
+            return False
+        hour = self._settings.eod_reconcile_hour
+        minute = self._settings.eod_reconcile_minute
+        if et_now.hour < hour or (et_now.hour == hour and et_now.minute < minute):
+            return False
+        return True
+
+    async def _run_reconcile(self) -> None:
+        """Re-pull any daily UW feed missing today's Silver via the gateway backfill.
+
+        Marks today done even on failure so a persistent gateway/credential error
+        does not retry-storm every check interval — the next attempt is tomorrow,
+        and the liveness alarm still surfaces a genuinely missing feed today.
+        """
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        try:
+            await reconcile_eod_feeds(self._settings, self._reader, today=today)
+        except Exception:
+            logger.error("gold_poller_reconcile_error", exc_info=True)
+        finally:
+            self._last_reconcile_date = today
+
     # ----- Pipeline execution -----
 
     async def _run_all_pipelines(self) -> None:
         """Execute all registered pipelines for the lookback window."""
         settings = self._settings
-        today = _last_trading_day()
+        # _should_run() has already validated that today is a trading day whose
+        # configured EOD trigger time has passed, so the just-closed session is
+        # today. (Using the old _last_trading_day() helper here gated on a
+        # hardcoded 17:00 ET and returned *yesterday* for the default 16:35
+        # trigger — and because _last_run_date is then set to today, the 17:00
+        # re-run never happened, leaving the lakehouse one trading day stale.)
+        today = datetime.now(ZoneInfo("America/New_York")).date()
         lookback = settings.gold_poller_lookback_days
         start_date = today - timedelta(days=lookback)
         end_date = today
@@ -426,19 +452,19 @@ class GoldFeaturePoller:
                     end_date,
                 )
 
-                # Normalize the result shape. Pipelines disagree on whether to
-                # return {gold_name: {"status": ..., "rows": N}} (used by
-                # darkpool / oi_momentum / iv_surface / flow_toxicity / etc.)
-                # or a flat {"status": ..., "rows": N, ...} (used by
-                # sector_flow / trend_scan / flow_context / straddle_momentum /
-                # ticker_base_rates / excursion_analytics / alert_labels).
-                # The flat shape made `total_rows` always 0 and the
-                # `pipeline_done` log report `["status","rows","path"]` as the
-                # "datasets" list, masking real successes (e.g. sector_flow
-                # writing 17,107 rows on 2026-04-28 was reported as 0).
-                if isinstance(stats, dict) and "status" in stats and isinstance(stats.get("status"), str):
-                    wrapper_key = (entry.get("gold_datasets") or [entry["name"]])[0]
-                    stats = {wrapper_key: stats}
+                # Every pipeline `run()` returns the single nested result shape:
+                # {gold_dataset_name: {"status", "rows", "path"}}. A flat
+                # {"status": ..., "rows": N} at the top level is a contract
+                # violation — historically it made `total_rows` always 0 and
+                # logged `["status","rows","path"]` as the "datasets" list,
+                # masking real successes. Reject it loudly instead of silently
+                # papering over it.
+                if isinstance(stats, dict) and "status" in stats:
+                    raise ValueError(
+                        f"pipeline '{entry['name']}' returned a flat result "
+                        f"{{'status': ...}}; pipelines must return the nested shape "
+                        f"{{gold_dataset_name: {{'status', 'rows', 'path'}}}}"
+                    )
 
                 total_rows = sum(s.get("rows", 0) for s in stats.values() if isinstance(s, dict))
                 error_datasets = [k for k, v in stats.items() if isinstance(v, dict) and v.get("status") == "error"]

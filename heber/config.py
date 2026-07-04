@@ -4,9 +4,26 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple
+from urllib.parse import unquote, urlsplit
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Fallback Postgres password used only when HEBER_POSTGRES_PASSWORD is unset.
+# Safe for local dev; a model validator rejects it outside the dev environment.
+DEV_POSTGRES_PASSWORD = "heber_dev_password"  # pragma: allowlist secret — dev-only fallback, rejected outside dev
+
+
+def _postgres_url_uses_dev_password(postgres_url: str) -> bool:
+    """Return True when the URL password exactly matches the dev fallback."""
+    try:
+        password = urlsplit(postgres_url).password
+    except ValueError:
+        return False
+    if password is None:
+        return False
+    return unquote(password) == DEV_POSTGRES_PASSWORD
+
 
 # ---------------------------------------------------------------------------
 # Typed section accessors (NamedTuples)
@@ -136,28 +153,6 @@ class LLMConfig(NamedTuple):
     effective_base_url: str | None
 
 
-class IcebergConfig(NamedTuple):
-    """Grouped view of Iceberg catalog settings."""
-
-    catalog_type: str
-    catalog_uri: str
-    warehouse: str
-    s3_endpoint: str | None
-    s3_access_key: str | None
-    s3_secret_key: str | None
-
-
-class LakeFSConfig(NamedTuple):
-    """Grouped view of LakeFS versioning settings."""
-
-    endpoint: str
-    access_key: str
-    secret_key: str
-    default_repo: str
-    storage_namespace_base: str
-    storage_namespace_template: str | None
-
-
 class Settings(BaseSettings):
     """Heber application settings loaded from environment."""
 
@@ -181,7 +176,7 @@ class Settings(BaseSettings):
     # Postgres (Catalog)
     postgres_url: str = Field(
         default_factory=lambda: (
-            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', 'heber_dev_password')}"
+            f"postgresql+asyncpg://heber:{os.environ.get('HEBER_POSTGRES_PASSWORD', DEV_POSTGRES_PASSWORD)}"
             f"@localhost:5433/heber_catalog"
         ),
         description="PostgreSQL connection URL for Catalog DB",
@@ -204,6 +199,13 @@ class Settings(BaseSettings):
         default="heber:events:dlq",
         description="Redis stream for failed consumer messages",
     )
+    redis_dlq_max_stream_len: int = Field(
+        default=100_000,
+        ge=1000,
+        description="Approximate MAXLEN cap applied to the DLQ stream on XADD. The "
+        "DLQ lives on a cache-mode Redis; this bounds the best-effort reprocessing "
+        "queue so it cannot grow unbounded. Durable on-disk files remain the audit record.",
+    )
     dlq_fallback_dir: Path | None = Field(
         default=None,
         validation_alias=AliasChoices("HEBER_DLQ_FALLBACK_DIR"),
@@ -216,7 +218,16 @@ class Settings(BaseSettings):
     )
     redis_claim_batch_size: int = Field(
         default=100,
-        description="Max pending messages to claim per recovery cycle",
+        description="Max pending messages to claim per recovery batch (a recovery cycle drains in batches until empty)",
+    )
+    redis_recover_interval_seconds: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "How often the running consumer re-runs pending-message recovery to "
+            "reclaim messages stranded by a dead consumer; 0 disables periodic recovery "
+            "(startup recovery still runs)"
+        ),
     )
     redis_process_max_retries: int = Field(
         default=3,
@@ -244,9 +255,27 @@ class Settings(BaseSettings):
         le=50,
         description="Max messages processed concurrently within each XREADGROUP batch",
     )
+    dedupe_redis_enabled: bool = Field(
+        default=False,
+        description="Verify Bloom-filter dedupe hits against an exact Redis store "
+        "(eliminates false-positive drops, but issues a synchronous Redis SET per "
+        "event on register). Kept OFF: benchmarked against the live Data-Gateway "
+        "event bus (redis://localhost:6379, ~4.5k ops/s real traffic, "
+        "scripts/debug/bench_dedupe_store.py), synchronous register added "
+        "~2.1-5.6 ms/event (170-680% overhead at 1,215 ev/s avg, far over the 5% "
+        "gate). A pipelined batch-100 register was ~10-12 us/event when the bus was "
+        "idle but degraded to ~375-400 us/event under contention — 5.2% to 188% at "
+        "the 5,000 ev/s peak — so even batched registration does not reliably clear "
+        "the <10 us/event (5% at peak) gate. False-positive drops are instead "
+        "absorbed by Bloom saturation fail-open plus exact dedupe in the compactor",
+    )
+    dedupe_redis_ttl_seconds: int = Field(
+        default=7200,
+        ge=60,
+        description="TTL for exact dedupe keys in Redis (should cover the Bloom rotation window)",
+    )
 
     # API
-    api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)
     catalog_url: str = Field(
         default="http://localhost:8085/api/v1",
@@ -340,7 +369,13 @@ class Settings(BaseSettings):
     )
 
     # Backfill service
-    backfill_host: str = Field(default="0.0.0.0")
+    backfill_host: str = Field(
+        default="127.0.0.1",
+        description="Bind address for the backfill HTTP service. Loopback by "
+        "default — the catalog/backfill APIs have no authentication, so they "
+        "must not listen on LAN interfaces. Containers override to 0.0.0.0 "
+        "(exposure is controlled by host-side port publishing).",
+    )
     backfill_port: int = Field(default=8080)
     backfill_log_level: str = Field(default="info")
 
@@ -464,6 +499,51 @@ class Settings(BaseSettings):
             return set()
         return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
 
+    # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
+    # (e.g. evicted from the capped stream while the consumer was down) via the
+    # Data-Gateway backfill API. Off by default.
+    eod_reconcile_enabled: bool = Field(
+        default=True,
+        description="Enable the post-EOD self-heal reconcile (re-pull missing daily UW feeds via gateway backfill)",
+    )
+    eod_reconcile_hour: int = Field(
+        default=17,
+        ge=0,
+        le=23,
+        description="ET hour to run the EOD reconcile — after the feeds' EOD deadline so in-flight data is not flagged",
+    )
+    eod_reconcile_minute: int = Field(
+        default=45,
+        ge=0,
+        le=59,
+        description="ET minute to run the EOD reconcile",
+    )
+    eod_reconcile_feeds: str = Field(
+        default="oi_change,iv_rank,historic_option_volume",
+        description=(
+            "Comma-separated daily UW feeds to self-heal if today's Silver is missing "
+            "(iv_term_structure excluded — its provider method is snapshot-only and cannot backfill a past date)"
+        ),
+    )
+    eod_reconcile_symbols: str = Field(
+        default=(
+            "SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD,NFLX,JPM,GS,BAC,"
+            "XLF,XLE,XLK,XLV,XLI,XLP,XLU,XLB,XLRE,XLC,GLD,TLT,HYG"
+        ),
+        description=(
+            "Comma-separated symbols for the gateway backfill (it requires an explicit list); "
+            "defaults to the core ticker set"
+        ),
+    )
+
+    @property
+    def eod_reconcile_feed_list(self) -> list[str]:
+        return [f.strip() for f in self.eod_reconcile_feeds.split(",") if f.strip()]
+
+    @property
+    def eod_reconcile_symbol_list(self) -> list[str]:
+        return [s.strip() for s in self.eod_reconcile_symbols.split(",") if s.strip()]
+
     # Health Monitor
     health_monitor_enabled: bool = Field(
         default=True,
@@ -544,6 +624,15 @@ class Settings(BaseSettings):
     alert_send_recovery: bool = Field(
         default=True,
         description="Send a one-line recovery note when a previously-alerting feed returns to healthy",
+    )
+    alert_debounce_cycles: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Consecutive failing liveness cycles required before the first alert. "
+            "Suppresses single-cycle flaps (transient bind-mount read errors, "
+            "deadline-edge blips); 1 = alert on the first failure"
+        ),
     )
     alert_liveness_check_interval_seconds: int = Field(
         default=300,
@@ -634,71 +723,21 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("HEBER_OPENMETADATA_API_KEY", "OPENMETADATA_API_KEY"),
     )
 
-    # Schema Registry
-    schema_registry_url: str = Field(
-        default="http://localhost:8081",
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_URL", "SCHEMA_REGISTRY_URL"),
-    )
-    schema_registry_user: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_USER", "SCHEMA_REGISTRY_USER"),
-    )
-    schema_registry_password: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_SCHEMA_REGISTRY_PASSWORD", "SCHEMA_REGISTRY_PASSWORD"),
-    )
+    @model_validator(mode="after")
+    def _reject_default_postgres_password_outside_dev(self) -> "Settings":
+        """Fail fast if a non-dev environment still uses the dev Postgres password.
 
-    # Iceberg catalog
-    iceberg_catalog_type: str = Field(
-        default="sql",
-        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_TYPE", "ICEBERG_CATALOG_TYPE"),
-    )
-    iceberg_catalog_uri: str = Field(
-        default="sqlite:///iceberg_catalog.db",
-        validation_alias=AliasChoices("HEBER_ICEBERG_CATALOG_URI", "ICEBERG_CATALOG_URI"),
-    )
-    iceberg_warehouse: str = Field(
-        default="s3://heber-lakehouse/warehouse",
-        validation_alias=AliasChoices("HEBER_ICEBERG_WAREHOUSE", "ICEBERG_WAREHOUSE"),
-    )
-    iceberg_s3_endpoint: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ENDPOINT", "ICEBERG_S3_ENDPOINT"),
-    )
-    iceberg_s3_access_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_ACCESS_KEY", "ICEBERG_S3_ACCESS_KEY"),
-    )
-    iceberg_s3_secret_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_ICEBERG_S3_SECRET_KEY", "ICEBERG_S3_SECRET_KEY"),
-    )
-
-    # LakeFS versioning
-    lakefs_endpoint: str = Field(
-        default="http://localhost:8000",
-        validation_alias=AliasChoices("HEBER_LAKEFS_ENDPOINT", "LAKEFS_ENDPOINT"),
-    )
-    lakefs_access_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("HEBER_LAKEFS_ACCESS_KEY", "LAKEFS_ACCESS_KEY"),
-    )
-    lakefs_secret_key: str = Field(
-        default="",
-        validation_alias=AliasChoices("HEBER_LAKEFS_SECRET_KEY", "LAKEFS_SECRET_KEY"),
-    )
-    lakefs_default_repo: str = Field(
-        default="heber-gold",
-        validation_alias=AliasChoices("HEBER_LAKEFS_DEFAULT_REPO", "LAKEFS_DEFAULT_REPO"),
-    )
-    lakefs_storage_namespace_base: str = Field(
-        default="s3://heber-lakehouse",
-        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_BASE", "LAKEFS_STORAGE_NAMESPACE_BASE"),
-    )
-    lakefs_storage_namespace_template: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("HEBER_LAKEFS_STORAGE_NAMESPACE_TEMPLATE", "LAKEFS_STORAGE_NAMESPACE_TEMPLATE"),
-    )
+        The ``postgres_url`` default falls back to ``DEV_POSTGRES_PASSWORD`` when
+        ``HEBER_POSTGRES_PASSWORD`` is unset. That fallback is convenient for local
+        development but must never reach staging/prod, so we refuse to start.
+        """
+        if self.environment != "dev" and _postgres_url_uses_dev_password(self.postgres_url):
+            raise ValueError(
+                f"Refusing to start in environment='{self.environment}' with the default "
+                f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "
+                f"HEBER_POSTGRES_URL) to real credentials for non-dev environments."
+            )
+        return self
 
     @property
     def bronze_path(self) -> Path:
@@ -865,30 +904,6 @@ class Settings(BaseSettings):
             api_key=self.llm_api_key,
             qwen_region=self.llm_qwen_region,
             effective_base_url=self.llm_effective_base_url,
-        )
-
-    @property
-    def iceberg(self) -> IcebergConfig:
-        """Grouped Iceberg catalog settings."""
-        return IcebergConfig(
-            catalog_type=self.iceberg_catalog_type,
-            catalog_uri=self.iceberg_catalog_uri,
-            warehouse=self.iceberg_warehouse,
-            s3_endpoint=self.iceberg_s3_endpoint,
-            s3_access_key=self.iceberg_s3_access_key,
-            s3_secret_key=self.iceberg_s3_secret_key,
-        )
-
-    @property
-    def lakefs(self) -> LakeFSConfig:
-        """Grouped LakeFS versioning settings."""
-        return LakeFSConfig(
-            endpoint=self.lakefs_endpoint,
-            access_key=self.lakefs_access_key,
-            secret_key=self.lakefs_secret_key,
-            default_repo=self.lakefs_default_repo,
-            storage_namespace_base=self.lakefs_storage_namespace_base,
-            storage_namespace_template=self.lakefs_storage_namespace_template,
         )
 
 

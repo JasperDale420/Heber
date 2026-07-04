@@ -50,11 +50,14 @@ sonar_scan.log
 # Log files (empire_core daily rotation)
 logs/
 
-# Debug investigation artifacts
-debug/
+# Debug investigation artifacts (repo root only — scripts/debug/ is tracked)
+/debug/
 
 # Local dev data
 .local_heber_data/
 
 # Sourcegraph SCIP indexes (build artifact)
 *.scip
+
+# Claude Code agent worktrees (embedded git repos — never commit)
+.claude/worktrees/

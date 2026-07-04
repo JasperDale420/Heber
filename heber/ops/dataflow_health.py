@@ -92,15 +92,34 @@ def _parse_prometheus_text(payload: str) -> list[tuple[str, dict[str, str], floa
     return samples
 
 
-def _fetch_metrics_samples(metrics_url: str) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
-    try:
-        with create_http_client(timeout=5.0) as client:
-            response = client.get(metrics_url)
-        raise_for_status(response)
-        return _parse_prometheus_text(response.text), None
-    except Exception as exc:
-        logger.warning("dataflow_metrics_fetch_failed", url=metrics_url, error=str(exc), exc_info=True)
-        return None, str(exc)
+def _fetch_metrics_samples(
+    metrics_url: str, *, attempts: int = 2, retry_delay: float = 0.5
+) -> tuple[list[tuple[str, dict[str, str], float]] | None, str | None]:
+    """Fetch and parse Prometheus metrics, retrying once on a transient blip.
+
+    The co-located metrics endpoint occasionally takes longer than the client
+    timeout to respond when the consumer event loop is briefly busy (a large
+    flush or GC pause), yielding a single ReadTimeout that recovers on the very
+    next request. One short retry absorbs that transient without masking a
+    genuinely-unreachable endpoint — both attempts must fail before it is logged
+    and reported down. Mirrors _collect_redis_signals.
+
+    The failure is logged without a traceback: the stack is the identical httpx
+    timeout every time and adds only noise; the url + error string is the signal.
+    """
+    last_error: str | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with create_http_client(timeout=5.0) as client:
+                response = client.get(metrics_url)
+            raise_for_status(response)
+            return _parse_prometheus_text(response.text), None
+        except Exception as exc:  # noqa: BLE001 — any fetch failure degrades to filesystem fallback
+            last_error = str(exc)
+            if attempt < attempts:
+                time.sleep(retry_delay)
+    logger.warning("dataflow_metrics_fetch_failed", url=metrics_url, error=last_error, attempts=attempts)
+    return None, last_error
 
 
 def _metric_max(
@@ -242,7 +261,24 @@ def _decode_redis_field(value: Any) -> str:
     return str(value)
 
 
-def _collect_redis_signals(settings: Settings) -> dict[str, Any]:
+def _collect_redis_signals(settings: Settings, *, attempts: int = 2, retry_delay: float = 0.5) -> dict[str, Any]:
+    """Collect Redis stream signals, retrying once on failure.
+
+    A single transient blip (e.g. a 2s connect timeout during a Redis restart)
+    otherwise flips both redis_connection and redis_consumer_group to fail for a
+    whole report cycle. One short retry absorbs the blip without masking a
+    genuinely-down Redis.
+    """
+    result = _collect_redis_signals_once(settings)
+    tries = 1
+    while not result["ok"] and tries < attempts:
+        time.sleep(retry_delay)
+        result = _collect_redis_signals_once(settings)
+        tries += 1
+    return result
+
+
+def _collect_redis_signals_once(settings: Settings) -> dict[str, Any]:
     client: redis.Redis | None = None
     try:
         client = redis.Redis.from_url(
@@ -468,7 +504,12 @@ _CONSUMER_LAG_MIN_FLOOR = 5_000
 
 # A DLQ in the hundreds of thousands is a rejection flood, not steady-state
 # trickle — escalate from warning to a critical page.
-_DLQ_CRITICAL_THRESHOLD = 100_000
+# DLQ health is measured from the durable on-disk audit files (the dedup-by-event-id
+# record of truth), counted per day. The real failure rate is a handful/day, so a
+# spike past these thresholds signals a genuine rejection flood — unlike the Redis
+# DLQ xlen, which oscillates into the millions purely from cache-mode eviction.
+_DLQ_DAILY_WARN_THRESHOLD = 100
+_DLQ_DAILY_CRITICAL_THRESHOLD = 1_000
 
 
 def _build_consumer_lag_check(redis_signal: dict[str, Any]) -> dict[str, Any]:
@@ -515,28 +556,59 @@ def _build_consumer_lag_check(redis_signal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _collect_dlq_size_check(active_settings: Settings, threshold: int = 10_000) -> dict[str, Any]:
-    """Check DLQ stream length and return a health check dict.
+def _collect_dlq_size_check(active_settings: Settings) -> dict[str, Any]:
+    """Report DLQ health from the durable audit record, not the Redis xlen.
 
-    Escalates to a critical failure when the DLQ has grown into a flood
-    (``_DLQ_CRITICAL_THRESHOLD``), rather than staying at warning severity.
+    The Redis DLQ stream lives on a cache-mode Redis (LRU/TTL eviction) and is
+    now bounded by an approximate MAXLEN, so its length reflects reprocessing-queue
+    depth, not real failures (historically it oscillated into the millions purely
+    from eviction churn). The dedup-by-event-id durable files are the audit record
+    of truth; today's file count is the genuine failure signal.
     """
-    from heber.writer.dlq_reprocessor import check_dlq_size
+    from heber.writer.dlq_fallback import count_fallback_files_for_today
 
-    check = check_dlq_size(
-        redis_url=active_settings.redis_url,
-        dlq_stream_name=active_settings.redis_dlq_stream_name,
-        threshold=threshold,
-    )
-    length = check.get("observed", {}).get("length")
-    if length is not None and length > _DLQ_CRITICAL_THRESHOLD:
-        check["status"] = "fail"
-        check["severity"] = "critical"
-        check.setdefault("threshold", {})["critical_length"] = _DLQ_CRITICAL_THRESHOLD
-        check["message"] = (
-            f"DLQ has {length} entries (exceeds critical {_DLQ_CRITICAL_THRESHOLD}) — likely a rejection flood."
+    threshold = {"warn": _DLQ_DAILY_WARN_THRESHOLD, "critical": _DLQ_DAILY_CRITICAL_THRESHOLD}
+    try:
+        daily_count = count_fallback_files_for_today(active_settings.dlq_fallback_path)
+    except OSError as exc:
+        return {
+            "id": "dlq_queue_size",
+            "status": "warn",
+            "severity": "warning",
+            "observed": {"durable_files_today": None},
+            "threshold": threshold,
+            "message": f"Could not count durable DLQ files: {exc}",
+        }
+
+    if daily_count > _DLQ_DAILY_CRITICAL_THRESHOLD:
+        status, severity = "fail", "critical"
+        message = (
+            f"{daily_count} DLQ failures today (exceeds critical "
+            f"{_DLQ_DAILY_CRITICAL_THRESHOLD}) — likely a rejection flood."
         )
-    return check
+    elif daily_count > _DLQ_DAILY_WARN_THRESHOLD:
+        status, severity = "warn", "warning"
+        message = f"{daily_count} DLQ failures today (exceeds {_DLQ_DAILY_WARN_THRESHOLD})."
+    else:
+        status, severity = "ok", "info"
+        message = f"{daily_count} DLQ failures today."
+
+    if status != "ok":
+        logger.warning(
+            "dlq_size_exceeded",
+            durable_files_today=daily_count,
+            warn_threshold=_DLQ_DAILY_WARN_THRESHOLD,
+            critical_threshold=_DLQ_DAILY_CRITICAL_THRESHOLD,
+        )
+
+    return {
+        "id": "dlq_queue_size",
+        "status": status,
+        "severity": severity,
+        "observed": {"durable_files_today": daily_count},
+        "threshold": threshold,
+        "message": message,
+    }
 
 
 def generate_dataflow_report(

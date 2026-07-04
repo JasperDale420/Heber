@@ -3505,9 +3505,12 @@ write_label(
     label_time_col="ts_label",       # Feature cutoff time (T)
     forward_window="5d",             # Label observes T to T+5d
 
-    # ts_available = ts_label + forward_window + market_close_delay
-    # E.g., for T=2025-01-10, forward_window=5d:
-    #   Label becomes available at 2025-01-15 16:05 (after market close)
+    # Daily windows resolve on TRADING sessions (not calendar days):
+    #   ts_available = close of the Nth trading session after ts_label (+ lag),
+    #   using the session's real close (handles weekends, holidays, 13:00 ET
+    #   half-days). E.g. for T=Fri 2025-01-10, forward_window=5d the label
+    #   becomes available at the Fri 2025-01-17 close. Intraday windows
+    #   ("Nh"/"Nm") use plain wall-clock arithmetic.
 )
 ```
 

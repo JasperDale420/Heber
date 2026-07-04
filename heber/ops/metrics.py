@@ -77,6 +77,26 @@ consumer_dedupe_drops_total = _get_or_create(
     ["feed"],
 )
 
+consumer_dedupe_saturated_passes_total = _get_or_create(
+    Counter,
+    "heber_consumer_dedupe_saturated_passes_total",
+    "Events passed through dedupe because the Bloom filter exceeded its false-positive budget",
+)
+
+consumer_dedupe_store_errors_total = _get_or_create(
+    Counter,
+    "heber_consumer_dedupe_store_errors_total",
+    "Redis dedupe backing-store errors (dedupe failed open)",
+    ["operation"],
+)
+
+consumer_loop_heartbeat_unixtime = _get_or_create(
+    Gauge,
+    "heber_consumer_loop_heartbeat_unixtime",
+    "Unix timestamp set at the top of every consumer run-loop iteration (liveness signal; "
+    "stays fresh while the event loop spins even when no data is flowing — unlike last-write)",
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)
@@ -327,6 +347,16 @@ def record_batch_processed(feed: str, batch_size: int) -> None:
 def record_dedupe_drop(feed: str) -> None:
     """Record a deduplication drop."""
     consumer_dedupe_drops_total.labels(feed=feed).inc()
+
+
+def record_dedupe_saturated_pass() -> None:
+    """Record an event passed through dedupe due to Bloom filter saturation."""
+    consumer_dedupe_saturated_passes_total.inc()
+
+
+def record_dedupe_store_error(operation: str) -> None:
+    """Record a Redis dedupe backing-store error (dedupe failed open)."""
+    consumer_dedupe_store_errors_total.labels(operation=operation).inc()
 
 
 def record_write(

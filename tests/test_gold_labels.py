@@ -72,21 +72,23 @@ class TestComputeAvailabilityTime:
         label_time = datetime(2025, 1, 10, 9, 30, tzinfo=UTC)
         availability = compute_availability_time(label_time, "5d")
 
-        assert availability.date() == datetime(2025, 1, 15).date()
-        assert availability.hour == 16
-        assert availability.minute == 5
+        # Fri 2025-01-10 + 5 trading sessions resolves at the Fri 2025-01-17
+        # close: 16:00 ET = 21:00 UTC.
+        assert availability == datetime(2025, 1, 17, 21, 0, tzinfo=UTC)
 
     def test_1d_forward_window(self):
         label_time = datetime(2025, 1, 10, 9, 30, tzinfo=UTC)
         availability = compute_availability_time(label_time, "1d")
 
-        assert availability.date() == datetime(2025, 1, 11).date()
+        # Fri + 1 trading session skips the weekend -> Mon 2025-01-13.
+        assert availability.date() == datetime(2025, 1, 13).date()
 
     def test_with_availability_lag(self):
         label_time = datetime(2025, 1, 10, 9, 30, tzinfo=UTC)
         availability = compute_availability_time(label_time, "5d", "1h")
 
-        assert availability.date() == datetime(2025, 1, 15).date()
+        # Fri 2025-01-17 16:00 ET (21:00 UTC) + 1h lag.
+        assert availability == datetime(2025, 1, 17, 22, 0, tzinfo=UTC)
 
 
 class TestLabelDataset:

@@ -151,34 +151,39 @@ heber health-daily --date 2026-03-09 --verbose  # specific date, full JSON
 
 ## Documentation
 
-- `PRD.md` - product requirements and system scope
-- `docs/ARCHITECTURE.md` - system overview, data flow, and layers
-- `docs/RUNBOOK.md` - operational startup, health checks, and recovery
-- `docs/API_REFERENCE.md` - catalog API endpoint reference
-- `docs/DATA_CONTRACTS.md` - shared envelope/schema contracts
-- `docs/DEPLOYMENT.md` - deployment and rollback procedures
-- `docs/MIGRATION_GUIDE.md` - migration procedures and schema evolution notes
-- `docs/catalog_api.md` - detailed request/response examples for catalog endpoints
-- `docs/data_contract.md` - canonical EventEnvelope and feed schema detail
-- `docs/silver_gold_scope.md` - Silver keep/drop matrix + Gold input plan
-- `docs/schema_registry.md` - schema registry usage
-- `docs/iceberg_migration.md` - Iceberg migration status
-- `docs/configuration.md` - environment variables and local vs container settings
-- `docs/sdk.md` - HeberReader usage and semantics
-- `docs/labeling_strategy.md` - ML labeling strategy (triple-barrier, meta-labeling)
-- `docs/schemaaudit.md` - schema audit between Data Gateway and Heber
-- `docs/operations/` - runbooks (deployment, monitoring, backup/DR, daily ops)
-- `TESTING.md` - test layout, commands, and quality gate
-- `.env.example` - required environment variable template
+Primary docs (standard set, kept current):
+
+- `docs/project-overview-pdr.md` — scope, mission, services, stakeholders
+- `docs/system-architecture.md` — Mermaid diagrams, layer flow, zero-leakage mechanics
+- `docs/codebase-summary.md` — package-by-package map of `heber/`
+- `docs/code-standards.md` — Empire + Heber conventions (logging, errors, data rules)
+- `docs/configuration-guide.md` — every `HEBER_*` env var, host vs container URLs
+- `docs/deployment-guide.md` — Docker, launchd, rollout, rollback, DR
+- `docs/api-reference.md` — `HeberReader` Python API, Catalog REST, CLI
+- `docs/testing-guide.md` — markers, layout, quality gate
+- `PRD.md` — product requirements and system scope
+- `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `TESTING.md`
+
+Supporting / topic-specific docs:
+
+- `docs/data_contract.md` — canonical EventEnvelope and feed schema detail
+- `docs/silver_gold_scope.md` — Silver keep/drop matrix + Gold input plan
+- `docs/labeling_strategy.md` — ML labeling strategy (triple-barrier, meta-labeling)
+- `docs/MIGRATION_GUIDE.md` — Parquet schema-evolution / migration notes
+- `docs/schemaaudit.md` — schema audit between Data Gateway and Heber
+- `docs/operations/` — runbooks (deployment, monitoring, backup/DR, daily ops, troubleshooting)
+- `.env.example` — required environment variable template
+
+Superseded docs live under `docs/legacy/` (`ARCHITECTURE.md`, `RUNBOOK.md`, `API_REFERENCE.md`, `DATA_CONTRACTS.md`, `DEPLOYMENT.md`, `catalog_api.md`, `configuration.md`, `sdk.md`) for historical reference; each carries a banner pointing at its current successor. New contributors should read the standard set above.
 
 ## Repository Structure
 
 The `heber/` package contains the core logic:
 
 - **Core**: `catalog`, `bus`, `models`, `config`
-- **Lake**: `writer`, `storage` (Iceberg)
+- **Lake**: `writer` (Bronze JSONL.gz, Silver/Gold Parquet)
 - **Data Layers**: `bronze` (raw), `silver` (normalized), `gold` (features)
-- **Intelligence**: `ml` (meta-labeling), `backtest`, `universe`
+- **Intelligence**: `ml` (meta-labeling), `universe`
 - **Serving**: `reader`, `watch` (real-time)
 - **Ops**: `ops` (metrics), `sre`, `quality` (Soda)
 

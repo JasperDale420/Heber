@@ -28,19 +28,22 @@ def compute_return_labels(
 
     def calc_labels(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
+        ts = df["bar_start_ts"]
         result = {
             "instrument_key": df.name,
-            "ts_label": df["bar_start_ts"],
-            "ts_event": df["bar_start_ts"],
+            "ts_label": ts,
+            "ts_event": ts,
         }
 
         for h in horizons:
             # Forward return (what we're predicting)
             result[f"return_{h}d"] = close.shift(-h) / close - 1
-            # ts_available = ts_label + horizon (label only observable after horizon passes)
-            result[f"ts_available_{h}d"] = df["bar_start_ts"] + pd.Timedelta(days=h)
+            # ts_available = the resolving bar's timestamp (h TRADING bars ahead),
+            # +1 day so its close is observable. Adding h *calendar* days instead
+            # leaks every label spanning a weekend/holiday.
+            result[f"ts_available_{h}d"] = ts.shift(-h) + pd.Timedelta(days=1)
 
-        result["ts_available"] = df["bar_start_ts"] + pd.Timedelta(days=max(horizons))
+        result["ts_available"] = ts.shift(-max(horizons)) + pd.Timedelta(days=1)
 
         return pd.DataFrame(result)
 
@@ -65,6 +68,7 @@ def compute_classification_labels(
 
     def calc_labels(df: pd.DataFrame) -> pd.DataFrame:
         close = df["close"]
+        ts = df["bar_start_ts"]
         forward_return = close.shift(-horizon) / close - 1
 
         # Classify: 1 = up, 0 = neutral, -1 = down
@@ -73,9 +77,11 @@ def compute_classification_labels(
         return pd.DataFrame(
             {
                 "instrument_key": df.name,
-                "ts_label": df["bar_start_ts"],
-                "ts_event": df["bar_start_ts"],
-                "ts_available": df["bar_start_ts"] + pd.Timedelta(days=horizon),
+                "ts_label": ts,
+                "ts_event": ts,
+                # Resolving bar (horizon TRADING bars ahead) + 1 day, not horizon
+                # calendar days — see compute_return_labels.
+                "ts_available": ts.shift(-horizon) + pd.Timedelta(days=1),
                 f"return_{horizon}d": forward_return,
                 f"direction_{horizon}d": classification,
                 f"is_up_{horizon}d": (forward_return > threshold).astype(int),

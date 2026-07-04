@@ -17,17 +17,28 @@ def test_resolve_gateway_api_key_falls_back_to_settings_value() -> None:
     assert resolved == "gw_settings_key"
 
 
-def test_resolve_gateway_api_key_allows_missing_key_in_dev() -> None:
-    resolved = writer_module._resolve_gateway_api_key(None, "   ")
-
-    assert resolved == ""
-
-
 def test_resolve_gateway_api_key_raises_when_missing_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     from heber.config import get_settings
 
-    get_settings.cache_clear()
     monkeypatch.setenv("HEBER_ENVIRONMENT", "prod")
-    with pytest.raises(ValueError, match="HEBER_WATCH_GATEWAY_API_KEY"):
-        writer_module._resolve_gateway_api_key(None, "   ")
+    # Satisfy the non-dev credential guard so this test reaches the
+    # gateway-key check it actually targets.
+    monkeypatch.setenv("HEBER_POSTGRES_PASSWORD", "test-prod-password")
     get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="HEBER_WATCH_GATEWAY_API_KEY"):
+            writer_module._resolve_gateway_api_key(None, "   ")
+    finally:
+        # Restore settings cache for subsequent tests
+        get_settings.cache_clear()
+
+
+def test_resolve_gateway_api_key_missing_in_dev_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from heber.config import get_settings
+
+    monkeypatch.setenv("HEBER_ENVIRONMENT", "dev")
+    get_settings.cache_clear()
+    try:
+        assert writer_module._resolve_gateway_api_key(None, "   ") == ""
+    finally:
+        get_settings.cache_clear()

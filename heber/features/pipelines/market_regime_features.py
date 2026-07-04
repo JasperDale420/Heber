@@ -16,32 +16,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import ensure_market_instrument_key, ensure_ts_available, gold_dataset_result
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 120  # Extra history for 90d rolling median + daily returns
 INSTRUMENT_KEY = "market:regime"
-
-
-def _ensure_ts_available(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ts_available column for zero-leakage Gold writes."""
-    if "ts_available" not in df.columns:
-        df["ts_available"] = datetime.now(UTC)
-    return df
-
-
-def _ensure_market_instrument_key(df: pd.DataFrame) -> pd.DataFrame:
-    """Set instrument_key to the market-level regime key."""
-    df["instrument_key"] = INSTRUMENT_KEY
-    return df
+OUTPUT_DATASET = "market_regime_features"
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +255,7 @@ class MarketRegimePipeline:
         if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
             end_date = end_date.replace(hour=23, minute=59, second=59)
 
-        stats: dict[str, Any] = {}
+        component_stats: dict[str, dict[str, Any]] = {}
         feature_frames: dict[str, pd.DataFrame] = {}
 
         # Compute each requested feature
@@ -288,7 +277,7 @@ class MarketRegimePipeline:
 
             except Exception as exc:
                 logger.error("Failed to compute feature", feature=ds_name, error=str(exc), exc_info=True)
-                stats[ds_name] = {"status": "error", "error": str(exc)}
+                component_stats[ds_name] = {"status": "error", "rows": 0, "error": str(exc)}
 
         # Merge all feature frames on ts_event into a single Gold output
         merged = self._merge_features(feature_frames)
@@ -296,9 +285,22 @@ class MarketRegimePipeline:
         if merged.empty:
             logger.warning("No regime features computed")
             for ds_name in datasets:
-                if ds_name not in stats:
-                    stats[ds_name] = {"status": "no_data", "rows": 0}
-            return stats
+                if ds_name not in component_stats:
+                    component_stats[ds_name] = {"status": "no_data", "rows": 0}
+            status = "error" if any(s["status"] == "error" for s in component_stats.values()) else "no_data"
+            errors = [
+                f"{name}: {info['error']}"
+                for name, info in component_stats.items()
+                if info.get("status") == "error" and info.get("error")
+            ]
+            return {
+                OUTPUT_DATASET: gold_dataset_result(
+                    status=status,
+                    rows=0,
+                    error="; ".join(errors) if errors else None,
+                    components=component_stats,
+                )
+            }
 
         # Filter to requested date range
         merged["ts_event"] = pd.to_datetime(merged["ts_event"], utc=True)
@@ -306,12 +308,12 @@ class MarketRegimePipeline:
         merged = merged[merged["ts_event"] <= pd.to_datetime(end_date, utc=True)]
 
         # Add Gold schema columns
-        merged = _ensure_ts_available(merged)
-        merged = _ensure_market_instrument_key(merged)
+        merged = ensure_ts_available(merged)
+        merged = ensure_market_instrument_key(merged, INSTRUMENT_KEY)
 
         if not dry_run:
             output_path = self.reader.write_gold(
-                dataset="market_regime_features",
+                dataset=OUTPUT_DATASET,
                 df=merged,
                 project=self.project,
                 version=self.version,
@@ -322,21 +324,29 @@ class MarketRegimePipeline:
             output_path = None
 
         for ds_name in datasets:
-            if ds_name in stats:
+            if ds_name in component_stats:
                 continue  # Already has an error entry
             has_data = ds_name in feature_frames and not feature_frames[ds_name].empty
-            stats[ds_name] = {
+            component_stats[ds_name] = {
                 "status": "success" if has_data else "no_data",
                 "rows": len(feature_frames.get(ds_name, pd.DataFrame())),
             }
 
-        stats["_merged"] = {
-            "status": "success",
-            "rows": len(merged),
-            "path": str(output_path) if output_path else None,
+        status = "error" if any(s["status"] == "error" for s in component_stats.values()) else "success"
+        errors = [
+            f"{name}: {info['error']}"
+            for name, info in component_stats.items()
+            if info.get("status") == "error" and info.get("error")
+        ]
+        return {
+            OUTPUT_DATASET: gold_dataset_result(
+                status=status,
+                rows=len(merged),
+                path=str(output_path) if output_path else None,
+                error="; ".join(errors) if errors else None,
+                components=component_stats,
+            )
         }
-
-        return stats
 
     def _compute_dispersion(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Load Silver bars and compute dispersion."""

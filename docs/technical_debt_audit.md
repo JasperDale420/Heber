@@ -1,5 +1,7 @@
 # Heber Technical Debt Audit
 
+> ⚠️ **STALE — superseded by [audit-2026-06-10.md](audit-2026-06-10.md).** This audit predates four months of active development (massive backfill rewrite, DLQ durability work, Silver restoration). Verify any finding against the current tree before acting on it.
+
 Date: 2026-02-05
 
 This audit is based on static code inspection only. No services were run and no tests or linters were executed.

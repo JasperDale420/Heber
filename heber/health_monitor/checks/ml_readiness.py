@@ -59,16 +59,21 @@ def compute_psi(expected: np.ndarray, actual: np.ndarray) -> float:
     return float(np.sum((actual - expected) * np.log(actual / expected)))
 
 
-def _safe_read_gold(ctx: CheckContext, dataset: str, today_str: str) -> pd.DataFrame:
-    """Read a Gold dataset, returning empty DataFrame on any error."""
+def _safe_read_gold(ctx: CheckContext, dataset: str, today_str: str) -> pd.DataFrame | None:
+    """Read a Gold dataset for the audit window.
+
+    Returns an empty DataFrame when the read SUCCEEDS with no rows, and ``None``
+    when the read FAILS. Callers must distinguish the two: a failed read is not
+    "no data", and reporting it as a clean PASS hides the failure on a
+    safety-critical check (the zero-leakage audit). Logged at WARNING so the
+    failure is visible at the default INFO level.
+    """
     try:
         df = ctx.reader.read_gold(dataset, time_range=(today_str, today_str))
-        if df is None:
-            return pd.DataFrame()
-        return df
+        return pd.DataFrame() if df is None else df
     except Exception:
-        logger.debug("ml_readiness_gold_read_failed", dataset=dataset, exc_info=True)
-        return pd.DataFrame()
+        logger.warning("ml_readiness_gold_read_failed", dataset=dataset, exc_info=True)
+        return None
 
 
 async def _check_leakage(ctx: CheckContext, today_str: str, now: datetime) -> list[CheckResult]:
@@ -78,6 +83,22 @@ async def _check_leakage(ctx: CheckContext, today_str: str, now: datetime) -> li
 
     for dataset in GOLD_DATASETS_TO_AUDIT:
         df = _safe_read_gold(ctx, dataset, today_str)
+
+        if df is None:
+            # The read FAILED — the zero-leakage guardrail could not run. Never
+            # report a clean PASS for an unverified safety-critical check.
+            results.append(
+                CheckResult(
+                    check_name="ml_leakage_audit",
+                    feed=dataset,
+                    severity=Severity.P1_WARNING,
+                    status=Status.ERROR,
+                    message=f"Could not read dataset={dataset}; leakage audit did not run",
+                    details={"dataset": dataset, "date": today_str},
+                    ts_checked=now,
+                )
+            )
+            continue
 
         if df.empty or "ts_available" not in df.columns or "ts_event" not in df.columns:
             results.append(
@@ -154,7 +175,7 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
     """11b: Label distribution stability via PSI."""
     df = _safe_read_gold(ctx, LABEL_DATASET, today_str)
 
-    if df.empty or LABEL_COLUMN not in df.columns:
+    if df is None or df.empty or LABEL_COLUMN not in df.columns:
         return [
             CheckResult(
                 check_name="ml_label_stability",
@@ -277,7 +298,7 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
     for dataset in FEATURE_DATASETS:
         df = _safe_read_gold(ctx, dataset, today_str)
 
-        if df.empty:
+        if df is None or df.empty:
             results.append(
                 CheckResult(
                     check_name="ml_feature_nulls",
@@ -363,7 +384,7 @@ async def _check_cross_sectional_completeness(ctx: CheckContext, today_str: str,
     for dataset in FEATURE_DATASETS + [LABEL_DATASET]:
         df = _safe_read_gold(ctx, dataset, today_str)
 
-        if df.empty or "instrument_key" not in df.columns:
+        if df is None or df.empty or "instrument_key" not in df.columns:
             continue
 
         distinct_keys = df["instrument_key"].nunique()

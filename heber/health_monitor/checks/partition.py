@@ -60,12 +60,12 @@ async def run_partition_checks(ctx: CheckContext, check_date: date | None = None
 
     for feed in _silver_feeds():
         dt_str = today.isoformat()
-        # Silver partitions may use different instrument_type subdirectories;
-        # check for the feed partition at the top level.
+        # The writer nests dt under instrument_type= (feed={feed}/instrument_type=
+        # {type}/dt={dt}), so resolve every instrument_type partition for the day.
         feed_dir = silver_root / f"feed={feed}"
-        dt_dir = feed_dir / f"dt={dt_str}"
+        dt_dirs = sorted(feed_dir.glob(f"instrument_type=*/dt={dt_str}")) if feed_dir.exists() else []
 
-        if not dt_dir.exists():
+        if not dt_dirs:
             severity = ctx.calendar.adjust_severity(Severity.P0_CRITICAL, now)
             results.append(
                 CheckResult(
@@ -74,14 +74,18 @@ async def run_partition_checks(ctx: CheckContext, check_date: date | None = None
                     severity=severity,
                     status=Status.FAIL,
                     message=f"Missing dt={dt_str} partition for feed={feed}",
-                    details={"feed": feed, "date": dt_str, "expected_path": str(dt_dir)},
+                    details={
+                        "feed": feed,
+                        "date": dt_str,
+                        "expected_path": f"{feed_dir}/instrument_type=*/dt={dt_str}",
+                    },
                     ts_checked=now,
                 )
             )
             continue
 
-        # Check if partition has data
-        if not _partition_has_rows(dt_dir):
+        # Check if any instrument_type partition has data
+        if not any(_partition_has_rows(d) for d in dt_dirs):
             severity = ctx.calendar.adjust_severity(Severity.P1_WARNING, now)
             results.append(
                 CheckResult(
@@ -90,19 +94,18 @@ async def run_partition_checks(ctx: CheckContext, check_date: date | None = None
                     severity=severity,
                     status=Status.WARN,
                     message=f"Empty partition dt={dt_str} for feed={feed}",
-                    details={"feed": feed, "date": dt_str, "path": str(dt_dir)},
+                    details={"feed": feed, "date": dt_str, "paths": [str(d) for d in dt_dirs]},
                     ts_checked=now,
                 )
             )
             continue
 
-        # For hourly feeds, check hour= subdirectories
+        # For hourly feeds, check hour= subdirectories (present under any instrument_type)
         if feed in HOURLY_FEEDS:
             elapsed = ctx.calendar.elapsed_hours(now)
             missing_hours: list[int] = []
             for hour in elapsed:
-                hour_dir = dt_dir / f"hour={hour:02d}"
-                if not hour_dir.exists():
+                if not any((d / f"hour={hour:02d}").exists() for d in dt_dirs):
                     missing_hours.append(hour)
 
             if missing_hours:

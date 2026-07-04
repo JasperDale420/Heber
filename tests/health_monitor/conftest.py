@@ -106,8 +106,12 @@ def create_feed_partition(
     num_rows: int = 10,
     hours: list[int] | None = None,
     empty: bool = False,
+    instrument_type: str = "equity",
 ) -> None:
     """Create a synthetic Silver partition for *feed* on *dt*.
+
+    Mirrors the writer's real layout ``feed={feed}/instrument_type={type}/dt={dt}``
+    (``get_partition_key``); the checks resolve partitions the same way.
 
     Parameters
     ----------
@@ -115,8 +119,10 @@ def create_feed_partition(
         If given, create ``hour=HH`` sub-partitions instead of a flat file.
     empty:
         Write a 0-row Parquet file instead of a populated one.
+    instrument_type:
+        Hive ``instrument_type=`` level the writer always nests dt under.
     """
-    dt_dir = silver_root / f"feed={feed}" / f"dt={dt.isoformat()}"
+    dt_dir = silver_root / f"feed={feed}" / f"instrument_type={instrument_type}" / f"dt={dt.isoformat()}"
     if hours is not None:
         for h in hours:
             hour_dir = dt_dir / f"hour={h:02d}"

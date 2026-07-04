@@ -18,6 +18,7 @@ from typing import Any, Literal
 import pandas as pd
 import structlog
 
+from heber.calendar.market import get_calendar
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -130,31 +131,52 @@ def compute_availability_time(
     label_time: datetime,
     forward_window: str,
     availability_lag: str = "0s",
-    market_close_time: str = "16:05:00",
 ) -> datetime:
     """Compute when a label becomes available (PRD §29.3).
 
-    ts_available = ts_label + forward_window + availability_lag
+    Daily windows resolve on TRADING sessions, not calendar days. A daily
+    ``forward_window`` advances N trading sessions from the label's own session
+    and snaps to that session's real close (``MarketCalendar.session_close``),
+    which accounts for weekends, holidays, and early-close half-days (13:00 ET).
+    That close is when a ``close_to_close`` label actually becomes observable —
+    calendar-day arithmetic marked a Friday 1d label available on Saturday, days
+    before the next session's close resolves it, violating the zero-leakage
+    contract (``HeberReader.read_asof`` pushes ``ts_available <= asof`` into the
+    scan).
 
-    For market data, this typically aligns with market close.
+    Intraday and longer wall-clock windows ("Nh", "Nm", "Nw", "NM") use plain
+    forward arithmetic with no session snap.
+
+        ts_available = <Nth trading-session close after ts_label> + availability_lag  # daily
+        ts_available = ts_label + forward_window + availability_lag                   # other
 
     Args:
         label_time: The feature cutoff time (T)
-        forward_window: How far forward the label looks
-        availability_lag: Additional delay (e.g., market close delay)
-        market_close_time: Time of market close (for daily labels)
+        forward_window: How far forward the label looks (e.g. "5d", "1h")
+        availability_lag: Additional processing delay added after resolution
 
     Returns:
-        datetime when label becomes available
+        datetime when label becomes available, in label_time's timezone
     """
     forward_delta = parse_duration(forward_window)
     lag_delta = parse_duration(availability_lag)
 
-    availability = label_time + forward_delta
+    if label_time.tzinfo is None:
+        label_time = label_time.replace(tzinfo=UTC)
+
+    output_tz = label_time.tzinfo
 
     if "d" in forward_window:
-        close_h, close_m, close_s = map(int, market_close_time.split(":"))
-        availability = availability.replace(hour=close_h, minute=close_m, second=close_s, microsecond=0)
+        # Anchor on the label's own session close (session_close rolls a
+        # non-trading label_time forward to the next session), then step N
+        # trading sessions ahead, snapping to each real close along the way.
+        cal = get_calendar()
+        availability = cal.session_close(label_time)
+        for _ in range(forward_delta.days):
+            availability = cal.next_close(availability + timedelta(minutes=1))
+        availability = availability.astimezone(output_tz)
+    else:
+        availability = label_time + forward_delta
 
     availability += lag_delta
 

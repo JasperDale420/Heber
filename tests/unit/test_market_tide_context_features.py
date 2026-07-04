@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from heber.features.pipelines.market_tide_context_features import (
+    OUTPUT_DATASET,
     MarketTideContextPipeline,
     compute_market_premium_momentum,
     compute_market_sentiment_score,
@@ -260,10 +261,12 @@ class TestMarketTideContextPipeline:
         pipeline = MarketTideContextPipeline(reader=reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-20")
 
-        assert stats["market_sentiment_score"]["status"] == "success"
-        assert stats["market_premium_momentum"]["status"] == "success"
-        assert stats["_merged"]["status"] == "success"
-        assert stats["_merged"]["rows"] > 0
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["status"] == "success"
+        assert stats[OUTPUT_DATASET]["rows"] > 0
+        components = stats[OUTPUT_DATASET]["components"]
+        assert components["market_sentiment_score"]["status"] == "success"
+        assert components["market_premium_momentum"]["status"] == "success"
 
         # Verify write_gold was called with correct dataset
         reader.write_gold.assert_called_once()
@@ -278,7 +281,8 @@ class TestMarketTideContextPipeline:
         pipeline = MarketTideContextPipeline(reader=reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-20", dry_run=True)
 
-        assert stats["_merged"]["status"] == "success"
+        assert stats[OUTPUT_DATASET]["status"] == "success"
+        assert stats[OUTPUT_DATASET]["path"] is None
         reader.write_gold.assert_not_called()
 
     def test_pipeline_empty_silver_returns_no_data(self) -> None:
@@ -288,8 +292,11 @@ class TestMarketTideContextPipeline:
         pipeline = MarketTideContextPipeline(reader=reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-20")
 
-        assert stats["market_sentiment_score"]["status"] == "no_data"
-        assert stats["market_premium_momentum"]["status"] == "no_data"
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["status"] == "no_data"
+        components = stats[OUTPUT_DATASET]["components"]
+        assert components["market_sentiment_score"]["status"] == "no_data"
+        assert components["market_premium_momentum"]["status"] == "no_data"
         reader.write_gold.assert_not_called()
 
     def test_pipeline_writes_ts_available_and_instrument_key(self) -> None:
@@ -317,6 +324,9 @@ class TestMarketTideContextPipeline:
         pipeline = MarketTideContextPipeline(reader=reader)
         stats = pipeline.run(start_date="2025-01-01", end_date="2025-01-20")
 
-        assert stats["market_sentiment_score"]["status"] == "error"
-        assert stats["market_premium_momentum"]["status"] == "error"
+        assert set(stats) == {OUTPUT_DATASET}
+        assert stats[OUTPUT_DATASET]["status"] == "error"
+        components = stats[OUTPUT_DATASET]["components"]
+        assert components["market_sentiment_score"]["status"] == "error"
+        assert components["market_premium_momentum"]["status"] == "error"
         reader.write_gold.assert_not_called()
