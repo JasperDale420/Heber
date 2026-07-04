@@ -24,9 +24,7 @@ PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS: tuple[str, ...] = (
     "account",
     "alerts",
     "assets",
-    "balance-sheet",
     "calendar",
-    "cash-flow",
     "clock",
     "company",
     "concept",
@@ -45,7 +43,6 @@ PREVIOUSLY_UNCONTRACTED_BRONZE_ONLY_FEEDS: tuple[str, ...] = (
     "forex",
     "frames",
     "fund-ownership",
-    "income-statement",
     "index",
     "indicator",
     "insider",
@@ -596,6 +593,70 @@ def _cases() -> list[tuple[str, str, EventEnvelope]]:
             ),
         ),
         (
+            "income_statement",
+            "income_statement",
+            _envelope(
+                feed="income_statement",
+                provider="unusual_whales",
+                payload={
+                    # Real UW /api/stock/{ticker}/income-statements row (verified 2026-07-03).
+                    "ticker": "AAPL",
+                    "fiscal_date_ending": "2026-03-31",  # maps -> fiscal_date
+                    "report_type": "quarterly",
+                    "reported_currency": "USD",
+                    "total_revenue": "111184000000",
+                    "gross_profit": "54781000000",
+                    "operating_income": "35885000000",
+                    "ebit": "35885000000",
+                    "ebitda": "39324000000",
+                    "net_income": "29578000000",
+                },
+            ),
+        ),
+        (
+            "balance-sheet",  # hyphenated REST-path name aliases -> balance_sheet
+            "balance_sheet",
+            _envelope(
+                feed="balance-sheet",
+                provider="unusual_whales",
+                payload={
+                    # Real UW /api/stock/{ticker}/balance-sheets row (verified 2026-07-03).
+                    "ticker": "AAPL",
+                    "fiscal_date_ending": "2026-03-31",  # maps -> fiscal_date
+                    "report_type": "quarterly",
+                    "reported_currency": "USD",
+                    "total_assets": "371082000000",
+                    "total_liabilities": "264591000000",
+                    "total_shareholder_equity": "106491000000",
+                    "cash_and_cash_equivalents": "36328000000",
+                    "short_term_debt": "10307000000",
+                    "long_term_debt": "74404000000",
+                    "retained_earnings": "12359000000",
+                },
+            ),
+        ),
+        (
+            "cash_flow",
+            "cash_flow",
+            _envelope(
+                feed="cash_flow",
+                provider="unusual_whales",
+                payload={
+                    # Real UW /api/stock/{ticker}/cash-flows row (verified 2026-07-03).
+                    "ticker": "AAPL",
+                    "fiscal_date_ending": "2026-03-31",  # maps -> fiscal_date
+                    "report_type": "quarterly",
+                    "reported_currency": "USD",
+                    "operating_cashflow": "28702000000",
+                    "cashflow_from_investment": "-6168000000",
+                    "cashflow_from_financing": "-22279000000",
+                    "capital_expenditures": "1971000000",
+                    "dividend_payout": "3822000000",
+                    "stock_based_compensation": "3528000000",
+                },
+            ),
+        ),
+        (
             "treasury_yields",
             "treasury_yields",
             _envelope(
@@ -679,6 +740,52 @@ def test_short_data_feeds_route_to_silver_not_bronze_only() -> None:
     for feed in ("short_data", "short_interest", "short_volume"):
         assert resolve_feed_alias(feed) == "short_data"
         assert not is_bronze_only_feed(feed), f"{feed} must route to Silver, not Bronze-only"
+
+
+def test_financial_statement_feeds_route_to_silver_not_bronze_only() -> None:
+    """Company financial statements were promoted from Bronze-only to typed Silver.
+    balance-sheet / cash-flow / income-statement (hyphenated REST-path names) alias
+    to balance_sheet / cash_flow / income_statement and must route to Silver.
+    """
+    for canonical in ("income_statement", "balance_sheet", "cash_flow"):
+        assert canonical in SILVER_SCHEMAS
+        assert not is_bronze_only_feed(canonical), f"{canonical} must route to Silver"
+    for hyphenated, canonical in (
+        ("income-statement", "income_statement"),
+        ("balance-sheet", "balance_sheet"),
+        ("cash-flow", "cash_flow"),
+    ):
+        assert resolve_feed_alias(hyphenated) == canonical
+        assert is_contracted_feed(hyphenated), f"{hyphenated} must stay contracted (no DLQ)"
+        assert not is_bronze_only_feed(hyphenated), f"{hyphenated} must route to Silver"
+
+
+def test_financial_statement_payload_keys_map_to_silver_columns() -> None:
+    """Real UW line items must land in the identity-mapped Silver columns, and the
+    one rename (fiscal_date_ending -> fiscal_date) must resolve. A wrong key silently
+    drops the value at Bronze->Silver.
+    """
+    cases = {case[0]: case for case in _cases()}
+
+    income = envelope_to_silver_row(normalize_envelope_for_silver(cases["income_statement"][2]))
+    assert income["fiscal_date"].isoformat() == "2026-03-31"  # from "fiscal_date_ending"
+    assert income["total_revenue"] == 111184000000.0
+    assert income["operating_income"] == 35885000000.0
+    assert income["ebitda"] == 39324000000.0
+    assert income["report_type"] == "quarterly"
+    assert income["reported_currency"] == "USD"
+
+    balance = envelope_to_silver_row(normalize_envelope_for_silver(cases["balance-sheet"][2]))
+    assert balance["fiscal_date"].isoformat() == "2026-03-31"  # from "fiscal_date_ending"
+    assert balance["total_shareholder_equity"] == 106491000000.0
+    assert balance["cash_and_cash_equivalents"] == 36328000000.0
+    assert balance["retained_earnings"] == 12359000000.0
+
+    cash = envelope_to_silver_row(normalize_envelope_for_silver(cases["cash_flow"][2]))
+    assert cash["fiscal_date"].isoformat() == "2026-03-31"  # from "fiscal_date_ending"
+    assert cash["operating_cashflow"] == 28702000000.0
+    assert cash["cashflow_from_financing"] == -22279000000.0
+    assert cash["capital_expenditures"] == 1971000000.0
 
 
 def test_option_chain_snapshot_preserves_underlying_price() -> None:
