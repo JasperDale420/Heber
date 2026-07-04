@@ -874,6 +874,36 @@ class TestSendToDlq:
         result = await consumer._send_to_dlq("1-0", {"data": "{}"}, "test_error", 3, feed="bars")
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_send_to_dlq_redis_failure_uses_file_fallback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ):
+        """Returns True when Redis DLQ fails but durable fallback succeeds."""
+        import redis.asyncio as aioredis
+
+        import heber.writer.consumer as consumer_module
+        import heber.writer.dlq_fallback as dlq_fallback_module
+
+        consumer = EventConsumer()
+
+        class FakeRedis:
+            async def xadd(self, stream, payload, **_kwargs):
+                raise aioredis.RedisError("DLQ unavailable")
+
+        consumer.redis = FakeRedis()
+        monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
+
+        result = await consumer._send_to_dlq("1-0", {"data": "{}"}, "test_error", 3, feed="bars")
+        assert result is True
+        assert len(list(tmp_path.rglob("*.json"))) == 1
+
 
 class TestWriteSilverCandidates:
     """Tests for _write_silver_candidates on EventConsumer."""

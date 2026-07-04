@@ -3,6 +3,8 @@
 import argparse
 import json
 import sys
+from datetime import date
+from pathlib import Path
 
 from heber import __version__
 from heber.ops.notifier import DiscordNotifier
@@ -18,7 +20,7 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
-def _is_research_artifact(feed_dir) -> bool:
+def _is_research_artifact(feed_dir: Path) -> bool:
     """Return True for non-Heber-managed feed dirs (Atlas hypothesis materializations).
 
     Atlas writes hypothesis outputs directly to ``silver/feed=atlas_features_*/``
@@ -210,6 +212,39 @@ def _cmd_alert_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_iso_date(value: str) -> date:
+    return date.fromisoformat(value)
+
+
+def _cmd_massive_daily(args: argparse.Namespace) -> int:
+    """Sync publishable Massive stock flat files into the raw vendor archive."""
+    import structlog
+
+    from heber.backfill.massive.daily import MassiveDailySync
+
+    try:
+        sync = MassiveDailySync(
+            archive_root=args.archive_root,
+            bucket=args.bucket,
+            endpoint_url=args.endpoint_url,
+            api_key=args.api_key,
+        )
+        result = sync.run(
+            target_date=_parse_iso_date(args.date) if args.date else None,
+            start_date=_parse_iso_date(args.start_date) if args.start_date else None,
+            end_date=_parse_iso_date(args.end_date) if args.end_date else None,
+            sync_corporate_actions=not args.skip_corporate_actions,
+        )
+        print(json.dumps(result, default=str))
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:
+        structlog.get_logger(__name__).error("massive_daily_cli_failed", error=str(e), exc_info=True)
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 _SUBCOMMAND_HANDLERS = {
     "info": _cmd_info,
     "datasets": _cmd_datasets,
@@ -220,6 +255,7 @@ _SUBCOMMAND_HANDLERS = {
     "alert-calibrate": _cmd_alert_calibrate,
     "alert-test": _cmd_alert_test,
     "alert-check": _cmd_alert_check,
+    "massive-daily": _cmd_massive_daily,
 }
 
 
@@ -285,6 +321,35 @@ def main() -> int:
 
     # Alert check command (one-shot; scheduled via launchd StartInterval)
     subparsers.add_parser("alert-check", help="Run one liveness cycle and alert on criticals")
+
+    massive_daily_parser = subparsers.add_parser(
+        "massive-daily",
+        help="Sync Massive stock aggregates and daily corporate actions into raw storage",
+    )
+    massive_daily_parser.add_argument("--date", help="One trading date to sync (YYYY-MM-DD)")
+    massive_daily_parser.add_argument("--start-date", help="First trading date for catch-up sync (YYYY-MM-DD)")
+    massive_daily_parser.add_argument("--end-date", help="Last trading date for catch-up sync (YYYY-MM-DD)")
+    massive_daily_parser.add_argument(
+        "--archive-root",
+        default=str(s.data_root / "_vendor_raw" / "massive"),
+        help="Massive raw archive root",
+    )
+    massive_daily_parser.add_argument("--bucket", default="flatfiles", help="Massive S3 bucket name")
+    massive_daily_parser.add_argument(
+        "--endpoint-url",
+        default="https://files.massive.com",
+        help="Massive S3-compatible endpoint URL",
+    )
+    massive_daily_parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Massive REST API key; defaults to MASSIVE_API_KEY",
+    )
+    massive_daily_parser.add_argument(
+        "--skip-corporate-actions",
+        action="store_true",
+        help="Only sync flat files; skip splits/dividends/ticker snapshot",
+    )
 
     args = parser.parse_args()
 

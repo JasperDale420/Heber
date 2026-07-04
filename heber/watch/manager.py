@@ -211,13 +211,25 @@ class WatchManager:
         """Get all watches for a specific contract."""
         key = WatchKeys.by_symbol_key(occ_symbol)
         watch_ids = self.redis.smembers(key)
+        if not watch_ids:
+            return []
+
+        keys = [WatchKeys.watch_key(self._normalize_redis_id(watch_id)) for watch_id in watch_ids]
+        data_list = self.redis.mget(keys)
 
         watches = []
-        for watch_id in watch_ids:
-            watch_id = self._normalize_redis_id(watch_id)
-            watch = self.get_watch(watch_id)
-            if watch:
-                watches.append(watch)
+        for watch_key, data in zip(keys, data_list, strict=False):
+            if data:
+                try:
+                    watch = AlertWatch.model_validate_json(data)
+                    watches.append(watch)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to deserialize watch during bulk fetch",
+                        watch_key=watch_key,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
         return watches
 

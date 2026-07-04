@@ -756,6 +756,130 @@ class StockFundamentalsRecord(SilverBase):
     low_52w: float | None = None
 
 
+class IncomeStatementRecord(SilverBase):
+    """Company income statement — one row per fiscal period per report_type.
+
+    Columns are the raw UnusualWhales line items (verified 2026-07-03); the only
+    rename is fiscal_date_ending → fiscal_date.
+    """
+
+    fiscal_date: date
+    report_type: str | None = Field(None, description="annual or quarterly")
+    reported_currency: str | None = None
+    total_revenue: float | None = None
+    cost_of_revenue: float | None = None
+    cost_of_goods_and_services_sold: float | None = None
+    gross_profit: float | None = None
+    operating_expenses: float | None = None
+    selling_general_and_administrative: float | None = None
+    research_and_development: float | None = None
+    operating_income: float | None = None
+    ebit: float | None = None
+    ebitda: float | None = None
+    depreciation: float | None = None
+    depreciation_and_amortization: float | None = None
+    income_before_tax: float | None = None
+    income_tax_expense: float | None = None
+    interest_expense: float | None = None
+    interest_and_debt_expense: float | None = None
+    interest_income: float | None = None
+    net_interest_income: float | None = None
+    non_interest_income: float | None = None
+    investment_income_net: float | None = None
+    other_non_operating_income: float | None = None
+    comprehensive_income_net_of_tax: float | None = None
+    net_income: float | None = None
+    net_income_from_continuing_operations: float | None = None
+
+
+class BalanceSheetRecord(SilverBase):
+    """Company balance sheet — one row per fiscal period per report_type.
+
+    Columns are the raw UnusualWhales line items (verified 2026-07-03); the only
+    rename is fiscal_date_ending → fiscal_date.
+    """
+
+    fiscal_date: date
+    report_type: str | None = Field(None, description="annual or quarterly")
+    reported_currency: str | None = None
+    total_assets: float | None = None
+    total_current_assets: float | None = None
+    total_non_current_assets: float | None = None
+    cash_and_cash_equivalents: float | None = None
+    cash_and_short_term_investments: float | None = None
+    short_term_investments: float | None = None
+    long_term_investments: float | None = None
+    investments: float | None = None
+    current_net_receivables: float | None = None
+    inventory: float | None = None
+    other_current_assets: float | None = None
+    other_non_current_assets: float | None = None
+    property_plant_equipment: float | None = None
+    accumulated_depreciation_amortization_ppe: float | None = None
+    goodwill: float | None = None
+    intangible_assets: float | None = None
+    intangible_assets_excluding_goodwill: float | None = None
+    total_liabilities: float | None = None
+    total_current_liabilities: float | None = None
+    total_non_current_liabilities: float | None = None
+    current_accounts_payable: float | None = None
+    deferred_revenue: float | None = None
+    current_debt: float | None = None
+    short_term_debt: float | None = None
+    current_long_term_debt: float | None = None
+    long_term_debt: float | None = None
+    long_term_debt_noncurrent: float | None = None
+    short_long_term_debt_total: float | None = None
+    capital_lease_obligations: float | None = None
+    other_current_liabilities: float | None = None
+    other_non_current_liabilities: float | None = None
+    total_shareholder_equity: float | None = None
+    treasury_stock: float | None = None
+    retained_earnings: float | None = None
+    common_stock: float | None = None
+    common_stock_shares_outstanding: float | None = None
+
+
+class CashFlowRecord(SilverBase):
+    """Company cash flow statement — one row per fiscal period per report_type.
+
+    Columns are the raw UnusualWhales line items (verified 2026-07-03); the only
+    rename is fiscal_date_ending → fiscal_date.
+    """
+
+    fiscal_date: date
+    report_type: str | None = Field(None, description="annual or quarterly")
+    reported_currency: str | None = None
+    operating_cashflow: float | None = None
+    cashflow_from_investment: float | None = None
+    cashflow_from_financing: float | None = None
+    capital_expenditures: float | None = None
+    change_in_cash_and_cash_equivalents: float | None = None
+    change_in_exchange_rate: float | None = None
+    change_in_inventory: float | None = None
+    change_in_operating_assets: float | None = None
+    change_in_operating_liabilities: float | None = None
+    change_in_receivables: float | None = None
+    depreciation_depletion_and_amortization: float | None = None
+    dividend_payout: float | None = None
+    dividend_payout_common_stock: float | None = None
+    dividend_payout_preferred_stock: float | None = None
+    net_income: float | None = None
+    profit_loss: float | None = None
+    stock_based_compensation: float | None = None
+    payments_for_operating_activities: float | None = None
+    payments_for_repurchase_of_common_stock: float | None = None
+    payments_for_repurchase_of_equity: float | None = None
+    payments_for_repurchase_of_preferred_stock: float | None = None
+    proceeds_from_issuance_of_common_stock: float | None = None
+    proceeds_from_issuance_of_long_term_debt: float | None = None
+    proceeds_from_issuance_of_preferred_stock: float | None = None
+    proceeds_from_operating_activities: float | None = None
+    proceeds_from_repayments_of_short_term_debt: float | None = None
+    proceeds_from_repurchase_of_equity: float | None = None
+    proceeds_from_sale_of_treasury_stock: float | None = None
+
+
 class EconomicEventRecord(SilverBase):
     """Economic calendar events (FOMC, CPI, GDP, etc.)."""
 

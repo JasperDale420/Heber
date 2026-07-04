@@ -79,6 +79,10 @@ DATASET_DESCRIPTIONS: dict[str, str] = {
     # Market Analytics
     "analyst_ratings": "Analyst ratings, price targets, and upgrades/downgrades",
     "stock_fundamentals": "Company fundamentals snapshot (market cap, P/E, etc.)",
+    # Company financial statements (quarterly + annual, 20+ year history)
+    "income_statement": "Company income statements by fiscal period from Unusual Whales",
+    "balance_sheet": "Company balance sheets by fiscal period from Unusual Whales",
+    "cash_flow": "Company cash flow statements by fiscal period from Unusual Whales",
     "economic_events": "Economic calendar events (GDP, CPI, etc.)",
     "market_indicators": "Market-wide indicators and breadth metrics",
     # Options Deep Data
@@ -159,6 +163,14 @@ FEED_MAPPING_SEEDS: list[dict[str, str]] = [
     {"provider": "unusual_whales", "gateway_feed": "stock_fundamentals", "silver_dataset_name": "stock_fundamentals"},
     {"provider": "unusual_whales", "gateway_feed": "earnings", "silver_dataset_name": "earnings"},
     {"provider": "unusual_whales", "gateway_feed": "corporate_actions", "silver_dataset_name": "corporate_action"},
+    # Unusual Whales — Company financial statements (backfill driver emits snake_case;
+    # hyphenated REST-path names alias to the same Silver dataset via FEED_ALIASES).
+    {"provider": "unusual_whales", "gateway_feed": "income_statement", "silver_dataset_name": "income_statement"},
+    {"provider": "unusual_whales", "gateway_feed": "income-statement", "silver_dataset_name": "income_statement"},
+    {"provider": "unusual_whales", "gateway_feed": "balance_sheet", "silver_dataset_name": "balance_sheet"},
+    {"provider": "unusual_whales", "gateway_feed": "balance-sheet", "silver_dataset_name": "balance_sheet"},
+    {"provider": "unusual_whales", "gateway_feed": "cash_flow", "silver_dataset_name": "cash_flow"},
+    {"provider": "unusual_whales", "gateway_feed": "cash-flow", "silver_dataset_name": "cash_flow"},
     {"provider": "unusual_whales", "gateway_feed": "economic_events", "silver_dataset_name": "economic_events"},
     {"provider": "unusual_whales", "gateway_feed": "market_indicators", "silver_dataset_name": "market_indicators"},
     # Unusual Whales — Screeners

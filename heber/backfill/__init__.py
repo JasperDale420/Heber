@@ -844,6 +844,135 @@ class BackfillCoordinator:
 
         return job
 
+    def _trading_sessions(self, job: BackfillJob) -> list[date]:
+        """Trading-session dates in [start, end] not already completed (XNYS calendar)."""
+        import exchange_calendars as xcals
+        import pandas as pd
+
+        calendar = xcals.get_calendar("XNYS")
+        sessions = calendar.sessions_in_range(pd.Timestamp(job.date_range_start), pd.Timestamp(job.date_range_end))
+        dates = [s.date() for s in sessions]
+        return [d for d in dates if d.isoformat() not in job.progress_dates_completed]
+
+    async def run_job_chunked(
+        self,
+        backfill_id: str,
+        definition: BackfillJobDefinition,
+        chunk_fetcher: Callable[..., Any],
+        post_date_hook: Callable[[date], None] | None = None,
+    ) -> BackfillJob:
+        """Run a backfill job over trading sessions, pulling data from an async-generator chunk_fetcher.
+
+        Like run_job, but data comes from `chunk_fetcher(date, symbols)` (an async generator yielding
+        record-list chunks), iterating trading sessions only. `post_date_hook(date)` runs after a date's
+        chunks are written, before the date is marked complete.
+        """
+        job = self._jobs.get(backfill_id)
+        if not job:
+            raise ValueError(f"Job not found: {backfill_id}")
+
+        if job.status == BackfillStatus.RUNNING:
+            raise ValueError(f"Job already running: {backfill_id}")
+
+        # Start job
+        job.status = BackfillStatus.RUNNING
+        job.started_at = datetime.now(UTC)
+        job.completed_at = None
+        job.error_message = None
+        self._active_job = backfill_id
+        self._persist_job(job)
+        backfill_active_jobs.inc()
+
+        writer = self.writer_factory(
+            storage_root=self.storage_root,
+            ts_available_policy=job.ts_available_policy,
+            custom_delay_seconds=definition.custom_delay_seconds,
+        )
+
+        sessions = self._trading_sessions(job)
+        total_sessions = len(sessions)
+
+        try:
+            for i, chunk_date in enumerate(sessions):
+                rows = 0
+                async for chunk in chunk_fetcher(date=chunk_date, symbols=job.symbols):
+                    rows += writer.write_batch(job, chunk, chunk_date)
+
+                if post_date_hook:
+                    post_date_hook(chunk_date)
+
+                await self._update_catalog_metadata(job, [], chunk_date, rows)
+
+                # Update progress
+                job.rows_written += rows
+                job.files_written += 1
+                job.progress_dates_completed.append(chunk_date.isoformat())
+                self._persist_job(job)
+
+                progress = (i + 1) / total_sessions * 100 if total_sessions else 100.0
+                backfill_progress_percent.labels(backfill_id=backfill_id).set(progress)
+
+                # Update metrics
+                backfill_rows_written.labels(
+                    provider=job.provider,
+                    feed=job.feed,
+                ).inc(rows)
+                backfill_files_written.labels(
+                    provider=job.provider,
+                    feed=job.feed,
+                ).inc()
+
+            # Complete job
+            job.status = BackfillStatus.COMPLETED
+            job.completed_at = datetime.now(UTC)
+
+            duration = (job.completed_at - job.started_at).total_seconds()
+            backfill_duration_seconds.labels(
+                provider=job.provider,
+                feed=job.feed,
+            ).observe(duration)
+
+            backfill_jobs_total.labels(
+                provider=job.provider,
+                feed=job.feed,
+                status="completed",
+            ).inc()
+
+            logger.info(
+                "backfill_job_completed",
+                backfill_id=backfill_id,
+                rows=job.rows_written,
+                files=job.files_written,
+                duration_seconds=duration,
+            )
+            self._persist_job(job)
+
+        except Exception as e:
+            job.status = BackfillStatus.FAILED
+            job.completed_at = datetime.now(UTC)
+            job.error_message = str(e)
+
+            backfill_jobs_total.labels(
+                provider=job.provider,
+                feed=job.feed,
+                status="failed",
+            ).inc()
+
+            logger.error(
+                "backfill_job_failed",
+                backfill_id=backfill_id,
+                error=str(e),
+                exc_info=True,
+            )
+            self._persist_job(job)
+            raise
+
+        finally:
+            self._active_job = None
+            backfill_active_jobs.dec()
+
+        return job
+
     def cancel_job(self, backfill_id: str) -> BackfillJob:
         """Cancel a running backfill job."""
         job = self._jobs.get(backfill_id)

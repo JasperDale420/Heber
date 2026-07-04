@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import heber.writer.consumer as consumer_module
+import heber.writer.dlq_fallback as dlq_fallback_module
 from heber.writer.consumer import EventConsumer
 
 
@@ -101,6 +102,34 @@ async def test_error_isolation_between_concurrent_messages(monkeypatch: pytest.M
     assert len(failed_ids) == 0
     assert len(redis.added) == 1  # One DLQ entry
     assert redis.added[0][0] == "heber:events:dlq"
+
+
+@pytest.mark.asyncio
+async def test_dlq_failure_under_concurrency_acks_after_durable_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Redis DLQ failure still ACKs when the durable fallback file is written."""
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    redis.fail_xadd = True
+    consumer.redis = redis
+    monkeypatch.setattr(consumer_module.settings, "dlq_fallback_dir", tmp_path)
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(dlq_fallback_module.asyncio, "sleep", _no_sleep)
+
+    consumer._process_with_retry = AsyncMock(return_value=(False, "boom", 3))
+
+    messages = [("2-0", {"data": "{}"})]
+
+    ack_ids, failed_ids = await consumer._process_stream_messages(messages)
+
+    assert ack_ids == ["2-0"]
+    assert failed_ids == []
+    assert len(list(tmp_path.rglob("*.json"))) == 1
 
 
 @pytest.mark.asyncio
