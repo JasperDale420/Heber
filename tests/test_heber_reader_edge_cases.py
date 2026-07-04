@@ -17,6 +17,7 @@ built in ``tmp_path`` with hive partitions ``feed=X/instrument_type=Y/dt=Z``.
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -669,7 +670,11 @@ class TestManualSchemaUnification:
             "n": n,
         }
 
-    @pytest.mark.xfail(strict=True, reason=_NUMERIC_UNIFICATION_BUG)
+    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
+    # but not on Linux (CI and the production Docker image), where pyarrow widens
+    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
+    # CI; the reason still documents the macOS manifestation.
+    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_int64_and_float64_fragments_widen_to_float(self, tmp_path: Path) -> None:
         int_schema = pa.schema(
             [
@@ -707,7 +712,11 @@ class TestManualSchemaUnification:
         # Both values readable; int fragment widened to float losslessly.
         assert set(df["n"]) == {5.0, 2.5}
 
-    @pytest.mark.xfail(strict=True, reason=_NUMERIC_UNIFICATION_BUG)
+    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
+    # but not on Linux (CI and the production Docker image), where pyarrow widens
+    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
+    # CI; the reason still documents the macOS manifestation.
+    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_filter_pushdown_survives_numeric_unification(self, tmp_path: Path) -> None:
         """instrument_key pruning still works through the manual-unification
         fallback (the unified schema must retain the partition column)."""
