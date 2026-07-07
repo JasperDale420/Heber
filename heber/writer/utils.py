@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,70 @@ from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_fee
 from heber.writer.normalizer import explode_aggregate_payload
 
 logger = structlog.get_logger(__name__)
+
+
+def flush_partitions_concurrent(
+    buffers: dict[str, list[Any]],
+    flush_partition: Callable[[str, list[Any]], None],
+    partition_keys: list[str],
+    max_workers: int,
+) -> bool:
+    """Flush the given partitions, concurrently when there are several.
+
+    A backfill batch scatters records across hundreds of date partitions;
+    writing them serially to the slow macOS bind mount caps consumer drain
+    throughput and lets the capped stream evict un-consumed live events. Each
+    partition writes a distinct file, so the writes never contend and can run
+    in parallel.
+
+    Safety is unchanged from the serial path: a partition is removed from
+    ``buffers`` only after its write succeeds, so a failed write keeps its
+    records buffered for redelivery, and the first error is re-raised so the
+    caller does not acknowledge the batch. ``del`` happens on the calling
+    thread (never inside a worker), so ``buffers`` is not mutated concurrently.
+
+    Returns True if any non-empty partition was flushed (so the caller can
+    advance its flush clock).
+    """
+    workers = min(len(partition_keys), max(1, max_workers))
+    errors: list[Exception] = []
+    attempted = False
+
+    if workers <= 1:
+        for pk in partition_keys:
+            records = buffers.get(pk)
+            if not records:
+                buffers.pop(pk, None)
+                continue
+            attempted = True
+            try:
+                flush_partition(pk, records)
+            except Exception as exc:  # noqa: BLE001 — retain buffer, surface to caller
+                errors.append(exc)
+            else:
+                del buffers[pk]
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="heber-flush") as pool:
+            futures: dict[Future[None], str] = {}
+            for pk in partition_keys:
+                records = buffers.get(pk)
+                if not records:
+                    buffers.pop(pk, None)
+                    continue
+                attempted = True
+                futures[pool.submit(flush_partition, pk, records)] = pk
+            for fut in as_completed(futures):
+                pk = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:  # noqa: BLE001 — retain buffer, surface to caller
+                    errors.append(exc)
+                else:
+                    del buffers[pk]
+
+    if errors:
+        raise errors[0]
+    return attempted
 
 
 def get_bronze_partition_key(envelope: EventEnvelope) -> str:

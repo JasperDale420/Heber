@@ -17,7 +17,7 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
-from heber.writer.utils import get_bronze_partition_key
+from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key
 
 logger = structlog.get_logger(__name__)
 
@@ -51,27 +51,29 @@ class BronzeWriter:
         self.buffers[partition_key].append(event_dict)
 
     def flush_if_needed(self) -> None:
-        """Flush buffers if conditions are met."""
+        """Flush buffers if conditions are met.
+
+        Due partitions are flushed concurrently (``writer_flush_max_workers``);
+        a backfill batch scatters events across hundreds of date partitions and
+        writing them serially to the bind mount starves the consumer. Each flush
+        drops its key only on success — partition keys embed dt=/hour=, so
+        retaining emptied entries would leak one dead key per
+        (provider,feed,dt,hour) forever, and a failed flush keeps its events
+        buffered for redelivery.
+        """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
 
-        flushed = False
-        for partition_key in list(self.buffers):
-            events = self.buffers[partition_key]
-            should_flush = (
-                len(events) >= settings.bronze_max_batch_size or elapsed >= settings.bronze_flush_interval_seconds
+        due = [
+            partition_key
+            for partition_key in list(self.buffers)
+            if self.buffers[partition_key]
+            and (
+                len(self.buffers[partition_key]) >= settings.bronze_max_batch_size
+                or elapsed >= settings.bronze_flush_interval_seconds
             )
-            if should_flush and events:
-                self._flush_partition(partition_key, events)
-                # Drop the key, not just its contents: partition keys embed
-                # dt=/hour=, so retaining emptied entries leaks one dead key per
-                # (provider,feed,dt,hour) forever. The defaultdict recreates it
-                # on the next write. (del runs only after a successful flush, so
-                # a flush failure retains the buffered events for redelivery.)
-                del self.buffers[partition_key]
-                flushed = True
-
-        if flushed:
+        ]
+        if flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers):
             self.last_flush = now
 
     def flush(self) -> None:
