@@ -101,6 +101,49 @@ services:
         max-file: "5"
     restart: always
 
+  # Dedicated consumer for the backfill stream, isolated from the live heber-consumer so a
+  # multi-year UW backfill flood (Data-Gateway uw_backfill_driver.py publishes here by default)
+  # can never fill the live heber:events stream to MAXLEN and evict un-read live feeds. Same
+  # writer code as heber-consumer — only the source stream + consumer group differ.
+  heber-backfill-consumer:
+    build:
+      context: ..
+      dockerfile: Heber/Dockerfile
+    container_name: heber-backfill-consumer
+    command: [ "python", "-m", "heber.writer.consumer" ]
+    environment:
+      - HEBER_DATA_ROOT=/data
+      - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
+      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_STREAM_NAME=heber:events:backfill
+      - HEBER_REDIS_CONSUMER_GROUP=heber-backfill-writers
+      - HEBER_REDIS_READ_BATCH_SIZE=5000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
+    ports:
+      - "127.0.0.1:9095:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      heber-catalog:
+        condition: service_healthy
+    healthcheck:
+      # Same run-loop heartbeat liveness as heber-consumer (gauge on :9090, fresh even on idle
+      # no-data cycles). Fails if the loop has not ticked in 180s.
+      test: [ "CMD-SHELL", "python -c \"import urllib.request,time,re,sys; b=urllib.request.urlopen('http://localhost:9090/',timeout=5).read().decode(); m=re.search(r'^heber_consumer_loop_heartbeat_unixtime (\\S+)',b,re.M); sys.exit(0 if m and time.time()-float(m.group(1))<180 else 1)\"" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    restart: always
+
   heber-compactor:
     build:
       context: ..

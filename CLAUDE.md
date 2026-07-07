@@ -56,7 +56,8 @@ Gold    → ML features, labels, enriched datasets
 
 | Service | Entry Point | Port | Purpose |
 |---------|-------------|------|---------|
-| heber-consumer | `heber.writer.consumer` | — | Redis Streams → Bronze + Silver writer |
+| heber-consumer | `heber.writer.consumer` | — | Redis Streams (`heber:events`) → Bronze + Silver writer |
+| heber-backfill-consumer | `heber.writer.consumer` | — | Same writer on the dedicated `heber:events:backfill` stream (group `heber-backfill-writers`), isolated so bulk UW backfill can't evict live feeds |
 | heber-watch | `heber.watch` | — | flow_alerts stream → watch creation, snapshot polling, Gold feature enrichment |
 | heber-catalog | `heber.catalog.api` | 8085 | Dataset/instrument/coverage metadata API (Postgres-backed) |
 | gold-poller | `heber.gold_poller` | — | EOD scheduled Gold feature pipeline (16:35 ET default) |
