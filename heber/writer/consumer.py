@@ -631,8 +631,11 @@ class EventConsumer:
 
         ack_ids, failed_ids = await self._process_stream_messages(claimed)
 
-        # Flush to disk before acking claimed messages.
-        flush_ok = self._flush_layers()
+        # Flush to disk before acking claimed messages. Offloaded to a thread
+        # (like _consume_iteration) so a large recovery drain — up to
+        # _MAX_RECOVERY_BATCHES iterations — does not block the event loop and
+        # stall the liveness heartbeat.
+        flush_ok = await asyncio.to_thread(self._flush_layers)
 
         if ack_ids and flush_ok:
             await self.redis.xack(
