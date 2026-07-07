@@ -299,6 +299,58 @@ def test_dataflow_health_trades_and_flow_alerts_stale_are_warning(monkeypatch) -
     assert flow_check["status"] == "warn"
 
 
+def test_redis_unreachable_skips_group_check_instead_of_reporting_missing(monkeypatch) -> None:
+    """A timed-out Redis probe must NOT fabricate a 'Consumer group is missing' critical.
+
+    The group is not actually gone; redis_connection already carries the
+    unreachable signal, so redis_consumer_group is reported skipped, not fail.
+    """
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"] = {
+        "ok": False,
+        "group_exists": False,
+        "lag": None,
+        "pending": None,
+        "stream_len": None,
+        "error": "Timeout reading from socket",
+    }
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    conn = _find_check(report, "redis_connection")
+    group = _find_check(report, "redis_consumer_group")
+    assert conn["status"] == "fail"  # the real unreachable signal is still reported
+    assert group["status"] == "skipped"  # but no phantom "missing" critical
+    assert "skipped" in group["message"].lower()
+
+
+def test_redis_reachable_but_group_absent_still_fails(monkeypatch) -> None:
+    """When Redis IS reachable and the group genuinely does not exist, still fail."""
+    now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
+    signals = _signals(now)
+    signals["redis"] = {
+        "ok": True,
+        "group_exists": False,
+        "lag": None,
+        "pending": None,
+        "stream_len": 100_000,
+        "error": None,
+    }
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
+
+    report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
+
+    group = _find_check(report, "redis_consumer_group")
+    assert group["status"] == "fail"
+    assert group["message"] == "Consumer group is missing."
+
+
 def test_dataflow_health_market_closed_skips_freshness_checks(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 2, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
