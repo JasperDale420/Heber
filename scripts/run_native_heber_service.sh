@@ -54,6 +54,16 @@ mkdir -p "${HEBER_HEALTH_REPORT_DIR}"
 
 cd "${PROJECT_DIR}"
 
+# Sync dependencies explicitly. `uv run` does this implicitly on every launch,
+# but silently: a broken lock (e.g. an unresolved `<<<<<<< HEAD` merge conflict
+# in uv.lock) then just exits and relaunches every StartInterval with the parse
+# error buried in stderr. Do it up front with a distinct, greppable diagnostic
+# so the failure is alertable instead of looping quietly.
+if ! uv sync 2>&1; then
+  echo "HEBER_RUNNER_ERROR: uv sync failed for service '${SERVICE}' — dependency lock may be broken (check uv.lock for merge conflicts)." >&2
+  exit 70
+fi
+
 source_massive_env() {
   if [[ -z "${MASSIVE_API_KEY:-}" && -f "/Users/jacobmcmillan/Empire/Data-Gateway/.env" ]]; then
     set -a

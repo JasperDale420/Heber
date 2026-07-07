@@ -512,7 +512,7 @@ class Settings(BaseSettings):
 
     # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
     # (e.g. evicted from the capped stream while the consumer was down) via the
-    # Data-Gateway backfill API. Off by default.
+    # Data-Gateway backfill API. On by default (set HEBER_EOD_RECONCILE_ENABLED=false to opt out).
     eod_reconcile_enabled: bool = Field(
         default=True,
         description="Enable the post-EOD self-heal reconcile (re-pull missing daily UW feeds via gateway backfill)",
