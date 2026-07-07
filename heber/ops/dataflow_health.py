@@ -661,14 +661,26 @@ def generate_dataflow_report(
     )
 
     group_exists = bool(redis_signal.get("group_exists"))
+    if not redis_ok:
+        # A failed/timed-out connection cannot observe the group. Reporting
+        # "missing" here fabricates a phantom critical every time the 2s probe
+        # times out (docker-proxy jitter) — the group is not actually gone
+        # (Redis uptime and the group's monotonic entries-read confirm it).
+        # redis_connection already carries the unreachable signal, so skip this
+        # check instead of doubling the alert.
+        group_status, group_message = "skipped", "Consumer group check skipped: Redis unreachable."
+    elif group_exists:
+        group_status, group_message = "ok", "Consumer group exists."
+    else:
+        group_status, group_message = "fail", "Consumer group is missing."
     checks.append(
         {
             "id": "redis_consumer_group",
-            "status": "ok" if group_exists else "fail",
+            "status": group_status,
             "severity": "critical",
-            "observed": {"group_exists": group_exists},
+            "observed": {"group_exists": group_exists, "redis_ok": redis_ok},
             "threshold": {"required": True},
-            "message": "Consumer group exists." if group_exists else "Consumer group is missing.",
+            "message": group_message,
         }
     )
 

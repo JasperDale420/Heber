@@ -322,6 +322,17 @@ class Settings(BaseSettings):
     # Writer settings (PRD §7.5 - File sizing, batching, compaction)
     bronze_flush_interval_seconds: int = Field(default=30, description="Max time before flushing Bronze")
     bronze_max_batch_size: int = Field(default=10000, description="Max events per Bronze file")
+    writer_flush_max_workers: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description=(
+            "Max concurrent partition writes per flush cycle. A backfill batch scatters records "
+            "across hundreds of date partitions; writing them serially to the slow macOS bind mount "
+            "starves the consumer and lets the capped stream evict live feeds. Set to 1 for the old "
+            "serial behavior."
+        ),
+    )
 
     # Silver file sizing targets (PRD §7.5)
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
@@ -501,7 +512,7 @@ class Settings(BaseSettings):
 
     # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
     # (e.g. evicted from the capped stream while the consumer was down) via the
-    # Data-Gateway backfill API. Off by default.
+    # Data-Gateway backfill API. On by default (set HEBER_EOD_RECONCILE_ENABLED=false to opt out).
     eod_reconcile_enabled: bool = Field(
         default=True,
         description="Enable the post-EOD self-heal reconcile (re-pull missing daily UW feeds via gateway backfill)",

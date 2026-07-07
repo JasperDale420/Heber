@@ -24,7 +24,7 @@ from heber.schemas.silver import get_silver_schema
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
-from heber.writer.utils import get_partition_key, write_silver_parquet
+from heber.writer.utils import flush_partitions_concurrent, get_partition_key, write_silver_parquet
 
 logger = structlog.get_logger(__name__)
 
@@ -119,27 +119,22 @@ class SilverWriter:
         elapsed = (now - self.last_flush).total_seconds()
         time_triggered = elapsed >= settings.silver_max_flush_time_seconds
 
-        flushed = False
-        for partition_key in list(self.buffers):
-            rows = self.buffers[partition_key]
-            if not rows:
-                continue
-            should_flush = (
-                len(rows) >= settings.silver_max_rows_per_file
-                or len(rows) >= settings.silver_min_rows_per_flush
+        # Due partitions are flushed concurrently (``writer_flush_max_workers``).
+        # Each drops its key only on success — partition keys embed dt=/hour=, so
+        # retaining emptied entries would leak one dead key per
+        # (feed,instrument_type,dt,hour) forever, and a failed flush keeps its
+        # rows buffered for redelivery.
+        due = [
+            partition_key
+            for partition_key in list(self.buffers)
+            if self.buffers[partition_key]
+            and (
+                len(self.buffers[partition_key]) >= settings.silver_max_rows_per_file
+                or len(self.buffers[partition_key]) >= settings.silver_min_rows_per_flush
                 or time_triggered
             )
-            if should_flush:
-                self._flush_partition(partition_key, rows)
-                # Drop the key, not just its contents: partition keys embed
-                # dt=/hour=, so retaining emptied entries leaks one dead key per
-                # (feed,instrument_type,dt,hour) forever. The defaultdict
-                # recreates it on the next write. (del runs only after a
-                # successful flush, so a failure retains the rows for redelivery.)
-                del self.buffers[partition_key]
-                flushed = True
-
-        if flushed:
+        ]
+        if flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers):
             self.last_flush = now
 
     def flush(self) -> None:
