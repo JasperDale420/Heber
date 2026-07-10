@@ -39,7 +39,7 @@ if [[ "$FORCE" != "1" && "$et_num" -ge 1625 && "$et_num" -le 1645 ]]; then
   exit 1
 fi
 
-DEFAULT_SERVICES="heber-consumer heber-watch heber-catalog heber-gold-poller heber-compactor heber-dataflow-health heber-health-monitor"
+DEFAULT_SERVICES="heber-consumer heber-backfill-consumer heber-watch heber-catalog heber-gold-poller heber-compactor heber-dataflow-health heber-health-monitor"
 SERVICES="${*:-$DEFAULT_SERVICES}"
 
 echo "Rebuilding + recreating: ${SERVICES}"
