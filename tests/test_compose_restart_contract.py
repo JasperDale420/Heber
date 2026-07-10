@@ -35,13 +35,13 @@ def test_healthchecked_services_have_start_period() -> None:
     compose = _load_compose()
     min_start_period_seconds = 120
 
-    # heber-consumer's healthcheck is a self-heartbeat liveness probe (added in the
-    # EOD-incident hardening) that passes whenever the consumer's loop heartbeat is
-    # fresh within a 180s window — that window already absorbs slow dependency
-    # startup, so its shorter start_period is intentional for fast liveness
-    # detection. It is exempt from the Postgres-init 120s floor but must still
-    # declare a start_period.
-    heartbeat_healthcheck_services = {"heber-consumer"}
+    # heber-consumer and heber-backfill-consumer share the same self-heartbeat
+    # liveness probe (added in the EOD-incident hardening) that passes whenever the
+    # consumer's loop heartbeat is fresh within a 180s window — that window already
+    # absorbs slow dependency startup, so the shorter start_period is intentional for
+    # fast liveness detection. They are exempt from the Postgres-init 120s floor but
+    # must still declare a start_period.
+    heartbeat_healthcheck_services = {"heber-consumer", "heber-backfill-consumer"}
 
     for name, svc in compose["services"].items():
         hc = svc.get("healthcheck", {})
