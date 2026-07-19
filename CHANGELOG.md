@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Logging service-binding tests no longer race the empire-core log queue** (`tests/test_configure_logging_service_binding.py`): empire-core moved stdout log writes onto a `QueueListener` background thread, so the three tests asserting on `capsys` output read the capture before any record landed and failed with empty output. The tests now drain the queue (via `shutdown_logging()`) before asserting; `pytest -m unit` is green again.
 - **UW `=`-suffixed tickers (units/warrants: AAC=, SAMO=, VII=) no longer dead-letter** (`heber/writer/key_normalization.py`): the trailing `=` is stripped during equity symbol normalization — including for pre-set symbols on fallback-path feeds like darkpool — producing valid `equity:{SYM}` keys; the raw ticker stays in the Bronze payload.
 - **Silent-kill services now have memory ceilings** (`docker-compose.yml`): `heber-health-monitor` (1.5g), `heber-compactor` (2g), `heber-gold-poller` (3g). With no cgroup limit, VM-level OOM kills left no `OOMKilled` flag or exit code — 32 health-monitor and 6 compactor deaths the week of Jul 6 were unattributable. Kills now surface as observable container OOMs.
 - **`HEBER_REDIS_URL` default corrected to 6379** (`heber/config.py`, `CLAUDE.md`, `docs/configuration-guide.md`): the documented/default `localhost:6380` pointed at a Redis that no longer exists anywhere; the actual instance is `data-gateway-redis` on 6379.
