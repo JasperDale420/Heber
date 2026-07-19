@@ -258,6 +258,17 @@ was `pg_publication` (empty, 0-byte relfilenode) — healed by the Jul 19 WAL cr
 - **Unrecoverable:** `darkpool` Jul 13–17. The per-ticker `get_darkpool_ticker` endpoint
   returns `count=0` with no error even for a liquid ticker on a recent date; pre-outage
   darkpool came from the live market-wide `darkpool_recent` feed, which cannot be backfilled.
+- **Gold:** 15/16 pipelines succeeded; the 12 core flow/GEX/momentum/volatility features
+  landed for all 5 trading days. Getting equity momentum/volatility/labels required also
+  backfilling **daily** (`timeframe=1Day`) bars — the equity pipeline's OOM guard drops
+  intraday bars above 1M rows and computes from 1Day bars only, and my first pass backfilled
+  only 1-minute bars. (Note: 1Day bars are sparsely populated upstream even pre-outage —
+  24–238/day vs 506 symbols — so momentum coverage is inherently partial; the pipeline should
+  resample intraday when 1Day is absent, but the OOM guard prevents it. Filed as follow-up.)
+  `labels_returns_5d` (and Jul 17 `returns_1d`) are empty by design — forward-looking labels
+  need post-window data that doesn't exist yet. `market_regime_features` timed out (chronic).
+  `iv_surface`/`straddle`/`darkpool` Gold are empty (depend on the snapshot-only iv feeds /
+  option chain / unrecoverable darkpool).
 - **Latent bug found + worked around:** the dedicated backfill stream (#35) inherited the live
   stream's 500K MAXLEN, so a 976K-row bars flood self-evicted the UW feeds published just
   before it — the exact eviction failure #35 was meant to isolate, resurfaced. Worked around by
