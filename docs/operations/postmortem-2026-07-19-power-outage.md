@@ -207,3 +207,68 @@ The 3-lens review **refuted** or corrected the following before publication:
 - Fix `iv_term_structure` call_iv/put_iv mapping; UW `=`‑suffix ticker normalization decision.
 - Memory limits for health-monitor/compactor/gold-poller (turns silent kills into observable OOMKilled).
 - Isolate Kairos test fixtures from production logs; fix the `database "heber"` misconfigured job; update stale Redis docs (6380 → data-gateway-redis:6379).
+
+---
+
+## Remediation executed (2026-07-19)
+
+Scope: P0+P1+P2 per user decision. Cerberus left offline (user decision); Postgres
+kept on exFAT and hardened in place (user decision).
+
+**Committed & deployed:**
+- Data-Gateway: sink Redis AOF-persistent + localhost-only bind; backfill API routes to
+  `heber:events:backfill`; delisted MATIC/USD dropped from crypto pairs; `iv_term_structure`
+  now maps the real `volatility` field (was 0/null on every row).
+- Heber (deployed via `scripts/deploy.sh`, commit 9e67627): catalog `/health` exercises the
+  DB (503 when down); dataflow-health gains mount-sentinel + catalog checks that run in **all**
+  modes + Discord dispatch; compactor raises on missing sentinel; consumer dead-letters
+  future-dated `ts_event` + warns on stale live-source ts; `=`-suffix tickers normalize
+  instead of DLQ; memory ceilings on health-monitor (1.5g)/compactor (2g)/gold-poller (3g);
+  `HEBER_REDIS_URL` default corrected 6380→6379.
+- Orion: `sync-heber-cache.sh` fails loudly on empty/broken mount. Kairos: test logging
+  isolated to a temp dir. `mount-heber.sh`: logs the drive-absent branch.
+- Ops: 3× Heber-massive launchd plists repointed to the real runner (running); dead agents
+  (binancews/chronos/hippocrates) unloaded; kairos live-exit-monitor loaded; `.heber-sentinel`
+  created on the volume; Postgres `idle_in_transaction_session_timeout=5min` (caught a
+  37-min lock-holding catalog session during remediation).
+- Data quality: MATIC poisoned `dt=2023-06-23` partitions quarantined to
+  `ops/quarantine/misdated-matic-20260719/` (1,612 Bronze + 10 Silver files; Bronze immutable
+  → relocated, not deleted).
+
+**Verified (fault injection, 2026-07-19):**
+- Rename `.heber-sentinel` → compactor raises `RuntimeError` (was: silent `partitions_scanned: 0`).
+- `docker stop heber-postgres` → catalog `/health` returns **503** with the DB error surfaced
+  (was: static 200 for 46.8h). Confirmed 200 again after recovery. **Note:** a SIGKILL'd
+  Postgres on exFAT took **~130 s** of full-data-dir fsync recovery to accept connections —
+  the concrete cost of the "keep Postgres on exFAT" decision; the watchdog handles it but
+  recovery is slow.
+- dataflow-health `latest.json` shows `mount_liveness: ok` + `catalog_health: ok` with
+  `market_open: false` (checks no longer skipped when market closed).
+
+**Postgres integrity:** `pg_amcheck` clean; the since-Jun-27 `base/16384/6104` "missing file"
+was `pg_publication` (empty, 0-byte relfilenode) — healed by the Jul 19 WAL crash recovery;
+`data_coverage` UPDATEs work again.
+
+**Backfill outcome (Jul 13–17 equity/UW + Jul 13–19 crypto):**
+- **Complete:** equity 1-min bars (976,651 rows), crypto bars + trades (incl. Jul 18),
+  market_tide, sector_tide, oi_change, historic_option_volume, greek_exposure (49/day, matches
+  the pre-outage baseline), flow_alerts (18,314 rows, `instrument_type=option`).
+- **Best-effort:** `iv_rank`/`iv_term_structure` land under `dt=2026-07-19` — these UW
+  endpoints return a *current snapshot*, not historically datable data.
+- **Unrecoverable:** `darkpool` Jul 13–17. The per-ticker `get_darkpool_ticker` endpoint
+  returns `count=0` with no error even for a liquid ticker on a recent date; pre-outage
+  darkpool came from the live market-wide `darkpool_recent` feed, which cannot be backfilled.
+- **Latent bug found + worked around:** the dedicated backfill stream (#35) inherited the live
+  stream's 500K MAXLEN, so a 976K-row bars flood self-evicted the UW feeds published just
+  before it — the exact eviction failure #35 was meant to isolate, resurfaced. Worked around by
+  pacing the re-run under the cap (one feed at a time, drain between). **Durable fix (per-stream
+  MAXLEN in the gateway sink) is filed as a follow-up.**
+
+**Follow-ups filed (not done here):**
+- Per-stream MAXLEN so the backfill stream can't self-evict (gateway `redis_sink.py`).
+- Identify the daily ~12:58 UTC `database "heber" does not exist` client (enable
+  `log_connections`, catch it, fix its DSN).
+- Fix 3 pre-existing `test_configure_logging_service_binding` unit failures (broken by the
+  empire-core queue-logging change — assert on now-async stdout).
+- gold-poller `market_regime_features` chronic failure (now that mem_limit makes OOM
+  observable); Cerberus README/deployment discrepancy cleanup.
