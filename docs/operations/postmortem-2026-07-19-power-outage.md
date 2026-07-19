@@ -175,12 +175,24 @@ The 3-lens review **refuted** or corrected the following before publication:
 
 ## Remediation (feeds the recovery plan)
 
-**P0 — before Monday 09:30 ET open (2026-07-20):**
-- Recreate `cerberus_trader` (container destroyed; `docker compose up` from Cerberus repo).
-- Deploy `heber-backfill-consumer` (committed Jul 10, never created) via `scripts/deploy.sh`.
-- Load `com.empire.kairos.live-exit-monitor` (plist exists, not loaded — will not fire Monday).
-- Kick the exit-78 launchd jobs now that the volume is back: 3× Heber-massive, chronos, binancews (hippocrates is dead-project noise).
-- Restart/verify EmpireUI (nothing listening on 5173/8004).
+**P0 — before Monday 09:30 ET open (2026-07-20)** *(updated during remediation, 2026-07-19)*:
+- ~~Recreate `cerberus_trader`~~ — **user decision: Cerberus stays offline.** Its README declares
+  it offline-by-request since 2026-06-05, yet the container demonstrably ran Jul 3–10; the
+  README/deployment discrepancy is flagged for cleanup.
+- Deploy `heber-backfill-consumer` via `scripts/deploy.sh` — **done**; first-ever deploy,
+  group `heber-backfill-writers` live on `heber:events:backfill`.
+- Load `com.empire.kairos.live-exit-monitor` — **done**; note it was found *disabled* in the
+  launchd domain (someone had disabled it deliberately at some point), re-enabled + bootstrapped.
+- Exit-78 launchd jobs: root cause was **missing target paths, not the volume** —
+  `Heber-massive/` is empty (runner script lives in `Heber/scripts/` and supports the massive
+  services), `algov2/` and `Chronos/` are gone entirely. Fixed: 3× massive plists repointed to
+  `Heber/scripts/run_native_heber_service.sh` and running; binancews/chronos/hippocrates unloaded.
+- Restart EmpireUI — **done** (API :8004 + Vite :5173 up; note it has no launchd unit and will
+  not survive a reboot).
+- Broker-side verification (adversarial-review gap) — **done, read-only**: paper account holds a
+  pre-existing 400-share BABA long (~$46k) that sat unmonitored through the outage; **no open
+  orders and zero order activity Jul 10 → Jul 19**. "All systems flat" was wrong at the broker
+  level, though financially inert (paper).
 
 **P1 — durability (this week):**
 - Enable Redis AOF (`appendonly yes`) and drop allkeys-lru for the stream instance; bind to 127.0.0.1.
