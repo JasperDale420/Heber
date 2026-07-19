@@ -149,6 +149,10 @@ services:
       context: ..
       dockerfile: Heber/Dockerfile
     container_name: heber-compactor
+    # Ceiling makes kills observable: with no limit, VM-level OOM kills are
+    # silent (no OOMKilled flag, no exit code survives) — 6 such deaths the
+    # week of Jul 6, two mid-compaction of ~3070-file massive_taq partitions.
+    mem_limit: 2g
     command: [ "python", "-m", "heber.writer.compactor" ]
     environment:
       - HEBER_DATA_ROOT=/data
@@ -205,6 +209,9 @@ services:
       context: ..
       dockerfile: Heber/Dockerfile
     container_name: heber-gold-poller
+    # Ceiling makes kills observable (see compactor note). market_regime's
+    # nightly exitcode=-9 deaths were unattributable without a cgroup.
+    mem_limit: 3g
     command: [ "python", "-m", "heber.gold_poller" ]
     environment:
       - HEBER_DATA_ROOT=/data
@@ -268,6 +275,9 @@ services:
       context: ..
       dockerfile: Heber/Dockerfile
     container_name: heber-health-monitor
+    # Ceiling makes kills observable (see compactor note). 32 silent deaths
+    # the week of Jul 6, ~hourly during market hours.
+    mem_limit: 1500m
     command: [ "python", "-m", "heber.health_monitor" ]
     environment:
       - HEBER_DATA_ROOT=/data

@@ -35,7 +35,7 @@ docker compose up -d            # bring up the stack
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HEBER_REDIS_URL` | `redis://localhost:6380` | Redis endpoint |
+| `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Ingest stream |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Consumer group |
 | `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed messages |
@@ -189,7 +189,7 @@ See `.env.example` for the canonical list.
 | Service | URL |
 |---------|-----|
 | Postgres | `postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog` |
-| Redis | `redis://localhost:6380` |
+| Redis | `redis://localhost:6379` |
 | Catalog API | `http://localhost:8085` |
 | ClickHouse HTTP | `localhost:8124` |
 | ClickHouse native | `localhost:9002` |

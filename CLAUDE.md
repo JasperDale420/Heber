@@ -201,7 +201,7 @@ All settings via `HEBER_*` env vars (Pydantic Settings in `heber/config.py`). Ke
 |----------|---------|---------|
 | `HEBER_DATA_ROOT` | `/Volumes/heber/data` | Bronze/Silver/Gold root |
 | `HEBER_POSTGRES_URL` | `postgresql+asyncpg://...localhost:5433/heber_catalog` | Catalog DB |
-| `HEBER_REDIS_URL` | `redis://localhost:6380` | Event stream |
+| `HEBER_REDIS_URL` | `redis://localhost:6379` | Event stream |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Ingest stream key |
 | `HEBER_REDIS_READ_BATCH_SIZE` | `500` | Messages per XREADGROUP (10-5000) |
 | `HEBER_SILVER_TARGET_FILE_SIZE_MB` | `256` | Target Parquet file size |

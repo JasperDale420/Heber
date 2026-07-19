@@ -182,10 +182,11 @@ class Settings(BaseSettings):
         description="PostgreSQL connection URL for Catalog DB",
     )
 
-    # Redis (Event Bus)
+    # Redis (Event Bus) — the actual instance is data-gateway-redis on 6379;
+    # the old 6380 default pointed at a Redis that no longer exists anywhere.
     redis_url: str = Field(
-        default="redis://localhost:6380",
-        description="Redis connection URL for event streams",
+        default="redis://localhost:6379",
+        description="Redis connection URL for event streams (data-gateway-redis)",
     )
     redis_stream_name: str = Field(
         default="heber:events",

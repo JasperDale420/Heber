@@ -215,8 +215,14 @@ def _normalize_by_feed(
     # Fallback: generic symbol extraction
     if symbol is None:
         symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
-        if symbol is not None and instrument_type == "equity":
-            instrument_key = f"equity:{symbol}"
+    if symbol is not None and instrument_type == "equity":
+        # Re-normalize even when the symbol came pre-set: UW darkpool emits
+        # units/warrants tickers with a trailing "=" (AAC=, SAMO=) that
+        # otherwise ride through to strict key validation and the DLQ.
+        cleaned = _normalize_equity_symbol(symbol)
+        if cleaned is not None:
+            symbol = cleaned
+            instrument_key = f"equity:{cleaned}"
     return symbol, instrument_type, instrument_key
 
 
@@ -378,6 +384,12 @@ def _normalize_equity_symbol(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip().upper()
+    if not text:
+        return None
+    # UW emits units/warrants-style tickers with a trailing "=" (AAC=, SAMO=,
+    # VII=) that fail instrument-key validation and were dead-lettered. Strip
+    # the suffix; the raw ticker is preserved in the Bronze payload.
+    text = text.rstrip("=")
     if not text:
         return None
     if EQUITY_EXTENDED_SYMBOL_PATTERN.fullmatch(text):
