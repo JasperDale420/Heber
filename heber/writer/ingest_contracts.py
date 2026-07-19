@@ -526,6 +526,7 @@ PAYLOAD_ALLOWED_FIELDS: dict[str, set[str]] = {
 }
 
 DLQ_REASON_UNCONTRACTED = "uncontracted_feed"
+DLQ_REASON_TS_OUT_OF_RANGE = "ts_event_out_of_range"
 
 LEGACY_MAPPABLE_FEEDS: tuple[str, ...] = (
     "borrow_cost",
@@ -881,6 +882,10 @@ REQUIRED_NON_NULL_FIELDS = REQUIRED_FIELDS_BY_FEED
 
 class UnmappedFeedError(ValueError):
     """Raised when a feed cannot be routed to a known Silver schema."""
+
+
+class TimestampOutOfRangeError(ValueError):
+    """Raised when an event's ts_event is implausible (e.g. in the future)."""
 
 
 _NUM_PATTERN = r"[\d,]+(?:\.\d+)?"

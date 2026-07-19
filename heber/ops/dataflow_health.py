@@ -24,8 +24,16 @@ import structlog
 from heber.calendar import MarketCalendar
 from heber.config import Settings, get_settings
 from heber.core.http_client import create_http_client, raise_for_status
+from heber.health_monitor.models import CheckResult, Severity, Status
+from heber.ops.notifier import DiscordNotifier
 
 logger = structlog.get_logger(__name__)
+
+# Sentinel file created once on the real data volume. If the bind mount breaks
+# or resolves to an empty placeholder directory, the sentinel disappears — the
+# only reliable mount-liveness signal (the 2026-07-11 volume drop surfaced only
+# as scattered per-service EPERM symptoms with no dedicated check).
+_MOUNT_SENTINEL_NAME = ".heber-sentinel"
 
 _PROM_METRIC_RE = re.compile(
     r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)$"
@@ -611,6 +619,46 @@ def _collect_dlq_size_check(active_settings: Settings) -> dict[str, Any]:
     }
 
 
+def _mount_liveness_check(settings: Settings) -> dict[str, Any]:
+    sentinel = Path(settings.data_root) / _MOUNT_SENTINEL_NAME
+    try:
+        present = sentinel.exists()
+        error = None
+    except OSError as exc:  # zombie mount: stat itself can fail with EPERM
+        present, error = False, str(exc)
+    return {
+        "id": "mount_liveness",
+        "status": "ok" if present else "fail",
+        "severity": "critical",
+        "observed": {"sentinel": str(sentinel), "present": present, "error": error},
+        "threshold": {"required": True},
+        "message": (
+            "Data volume sentinel present."
+            if present
+            else "Data volume missing or unmounted: sentinel not found."
+        ),
+    }
+
+
+def _catalog_health_check(settings: Settings) -> dict[str, Any]:
+    url = settings.health_catalog_url
+    try:
+        with create_http_client(timeout=5.0) as client:
+            resp = client.get(url)
+        ok = resp.status_code == 200
+        detail = None if ok else f"HTTP {resp.status_code}"
+    except Exception as exc:  # noqa: BLE001 — any failure means the catalog is unreachable
+        ok, detail = False, str(exc)[:200]
+    return {
+        "id": "catalog_health",
+        "status": "ok" if ok else "fail",
+        "severity": "critical",
+        "observed": {"url": url, "error": detail},
+        "threshold": {"required": True},
+        "message": "Catalog healthy (DB exercised)." if ok else f"Catalog unhealthy: {detail}",
+    }
+
+
 def generate_dataflow_report(
     *,
     window_seconds: int,
@@ -711,6 +759,13 @@ def generate_dataflow_report(
     dlq_check = _collect_dlq_size_check(active_settings)
     checks.append(dlq_check)
 
+    # Run in ALL modes, never behind the market_open gate: the Jul 10-13 incident
+    # (dead postgres + dropped volume) went unreported for the whole weekend
+    # because every existing check was either skipped when the market was closed
+    # or never looked at the catalog/volume at all.
+    checks.append(_mount_liveness_check(active_settings))
+    checks.append(_catalog_health_check(active_settings))
+
     summary = {"ok": 0, "warn": 0, "fail": 0, "skipped": 0}
     for check in checks:
         summary[check["status"]] += 1
@@ -736,6 +791,39 @@ def _write_report(report: dict[str, Any], report_dir: Path) -> None:
     latest_path.write_text(payload + "\n", encoding="utf-8")
 
 
+_notifier: DiscordNotifier | None = None
+
+
+def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -> None:
+    """Send failing checks to Discord; debounce/cooldown/recovery live in the notifier."""
+    global _notifier
+    try:
+        if _notifier is None:
+            _notifier = DiscordNotifier(settings or get_settings())
+        now = datetime.now(UTC)
+        results = [
+            CheckResult(
+                check_name=f"dataflow:{check['id']}",
+                feed=None,
+                severity=(
+                    Severity.P0_CRITICAL
+                    if check.get("severity") == "critical"
+                    else Severity.P1_WARNING
+                ),
+                status=Status.FAIL if check["status"] == "fail" else Status.PASS,
+                message=f"dataflow {check['id']}: {check.get('message', '')}",
+                details=check.get("observed") or {},
+                ts_checked=now,
+            )
+            for check in report.get("checks", [])
+            if check["status"] in ("fail", "ok")
+        ]
+        if results:
+            _notifier.dispatch(results)
+    except Exception:  # noqa: BLE001 — alerting must never break the health loop
+        logger.warning("dataflow_alert_dispatch_failed", exc_info=True)
+
+
 def run_dataflow_health_once(
     *,
     window_seconds: int,
@@ -752,6 +840,7 @@ def run_dataflow_health_once(
         watch_metrics_url=watch_metrics_url,
         settings=settings,
     )
+    _dispatch_alerts(report, settings)
     if report_dir:
         try:
             _write_report(report, Path(report_dir))

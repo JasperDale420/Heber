@@ -14,6 +14,7 @@ from typing import Any
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from heber.catalog.db import Base
@@ -192,9 +193,19 @@ class FeedMappingResponse(BaseModel):
     silver_dataset_name: str
 
 
-# Health check
+# Health check. Must exercise the DB: during the 2026-07-11 postgres outage this
+# endpoint returned 200 for 46.8 hours while every data endpoint served 500s, so
+# docker kept the container "healthy" and nothing alerted.
 @app.get("/health")
 async def health() -> dict[str, str]:
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unhealthy", "service": "heber-catalog", "error": str(exc)[:200]},
+        ) from exc
     return {"status": "healthy", "service": "heber-catalog"}
 
 

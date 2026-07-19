@@ -12,7 +12,7 @@ import json
 import signal
 import time
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis.asyncio as redis
@@ -41,9 +41,11 @@ from heber.writer.dlq_fallback import (
     write_dlq_fallback_file,
 )
 from heber.writer.ingest_contracts import (
+    DLQ_REASON_TS_OUT_OF_RANGE,
     DLQ_REASON_UNCONTRACTED,
     PAYLOAD_ALLOWED_FIELDS,
     PAYLOAD_REQUIRED_FIELDS,
+    TimestampOutOfRangeError,
     UnmappedFeedError,
     is_bronze_only_feed,
     is_contracted_feed,
@@ -359,6 +361,31 @@ class EventConsumer:
             provider = envelope.provider
             record_event_received(feed=feed, provider=provider)
 
+            # Future-dated events must not mint partitions (dt= is derived from
+            # ts_event). Past-dated events are legal — historical backfills carry
+            # old timestamps — but a *live* source emitting an ancient ts is the
+            # poisoned-record signature (the recurring dt=2023-06-23 crypto bar),
+            # so log it for tracing without dead-lettering.
+            now_utc = datetime.now(UTC)
+            if envelope.ts_event > now_utc + timedelta(hours=1):
+                logger.warning(
+                    "ts_event_out_of_range",
+                    event_id=envelope.event_id,
+                    feed=feed,
+                    provider=provider,
+                    ts_event=envelope.ts_event.isoformat(),
+                )
+                raise TimestampOutOfRangeError(DLQ_REASON_TS_OUT_OF_RANGE)
+            if envelope.source != "backfill" and envelope.ts_event < now_utc - timedelta(days=30):
+                logger.warning(
+                    "stale_ts_event_live_source",
+                    event_id=envelope.event_id,
+                    feed=feed,
+                    provider=provider,
+                    source=envelope.source,
+                    ts_event=envelope.ts_event.isoformat(),
+                )
+
             ingest_lag = max((envelope.ts_ingest - envelope.ts_event).total_seconds(), 0.0)
             availability_lag = max((envelope.ts_available - envelope.ts_event).total_seconds(), 0.0)
             record_ingest_latency(
@@ -423,7 +450,7 @@ class EventConsumer:
             record_event_processed(feed=feed, provider=provider, status="success")
             register_success = True
             return True, None, True
-        except UnmappedFeedError as exc:
+        except (UnmappedFeedError, TimestampOutOfRangeError) as exc:
             record_event_processed(feed=feed, provider=provider, status="error")
             return False, str(exc), False
         except json.JSONDecodeError as exc:

@@ -509,6 +509,17 @@ class Compactor:
         """Scan layer for partitions that need compaction."""
         layer_path = settings.data_root / layer
 
+        # A broken/unmounted volume must fail loudly, not read as an empty
+        # lakehouse: during the 2026-07-11 volume drop this method logged
+        # "Compaction cycle complete, partitions_scanned: 0" while the mount
+        # was gone. The sentinel is created once on the real volume.
+        sentinel = settings.data_root / ".heber-sentinel"
+        if not sentinel.exists():
+            raise RuntimeError(
+                f"Data volume sentinel missing ({sentinel}) — mount broken or "
+                "pointing at an empty directory; refusing to scan."
+            )
+
         if not layer_path.exists():
             return {"partitions_scanned": 0, "files_merged": 0}
 

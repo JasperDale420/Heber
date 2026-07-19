@@ -685,6 +685,10 @@ class Settings(BaseSettings):
         default="http://localhost:9091/metrics",
         description="Metrics endpoint for heber-watch dataflow health checks",
     )
+    health_catalog_url: str = Field(
+        default="http://localhost:8085/health",
+        description="Catalog /health URL for dataflow health checks (DB-exercising)",
+    )
     health_freshness_seconds: int = Field(
         default=900,
         description="Maximum allowed freshness window (seconds) for dataflow checks",
