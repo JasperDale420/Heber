@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
+
 ### Security
 
 - **Redacted a still-live Data-Gateway credential from tracked files** (`docs/audit-2026-06-10.md`, `.env.example`): the `heber-watch` gateway key was committed in plaintext in the audit doc, and `.env.example` shipped a real-looking key value. Both are now redacted/placeholdered. **The durable fix is rotation in Data-Gateway** — the committed value remains in git history and (per audit verification) still authenticates against `Data-Gateway/config/clients.yaml` despite a rotation handoff that was never applied; redacting HEAD does not revoke it.
