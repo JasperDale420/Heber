@@ -5,6 +5,8 @@
 # Crontab entry (ET timezone):
 #   0 2 * * * /Users/jacobmcmillan/Empire/Heber/scripts/run_gold_pipelines.sh >> /tmp/gold_pipelines.log 2>&1
 set -euo pipefail
+# cron runs with a minimal PATH that omits ~/.local/bin where uv lives
+export PATH="$HOME/.local/bin:$PATH"
 cd /Users/jacobmcmillan/Empire/Heber
 START=$(date -v-7d +%Y-%m-%d)
 END=$(date +%Y-%m-%d)
