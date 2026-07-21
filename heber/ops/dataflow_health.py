@@ -640,6 +640,33 @@ def _mount_liveness_check(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _backup_freshness_check(settings: Settings) -> dict[str, Any]:
+    """The lakehouse backup marker must be recent (twin marker written by
+    scripts/backup_lakehouse.sh onto the data volume)."""
+    marker = Path(settings.data_root) / "ops" / "backup-last-ok"
+    max_age_s = settings.backup_freshness_hours * 3600
+    try:
+        age_s = time.time() - marker.stat().st_mtime
+        fresh = age_s <= max_age_s
+        observed: dict[str, Any] = {"marker": str(marker), "age_hours": round(age_s / 3600, 1)}
+    except FileNotFoundError:
+        fresh, observed = False, {"marker": str(marker), "age_hours": None}
+    except OSError as exc:
+        fresh, observed = False, {"marker": str(marker), "error": str(exc)}
+    return {
+        "id": "backup_freshness",
+        "status": "ok" if fresh else "fail",
+        "severity": "warning",
+        "observed": observed,
+        "threshold": {"max_age_hours": settings.backup_freshness_hours},
+        "message": (
+            "Lakehouse backup is fresh."
+            if fresh
+            else "Lakehouse backup marker missing or stale — the second copy is not current."
+        ),
+    }
+
+
 def _catalog_health_check(settings: Settings) -> dict[str, Any]:
     url = settings.health_catalog_url
     try:
@@ -765,10 +792,19 @@ def generate_dataflow_report(
     # or never looked at the catalog/volume at all.
     checks.append(_mount_liveness_check(active_settings))
     checks.append(_catalog_health_check(active_settings))
+    checks.append(_backup_freshness_check(active_settings))
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "skipped": 0}
     for check in checks:
         summary[check["status"]] += 1
+
+    # Info-only deployment provenance (no alarm): what deploy.sh last baked.
+    deployed_sha = None
+    try:
+        sha_file = Path(active_settings.data_root) / "ops" / "deployed_sha"
+        deployed_sha = sha_file.read_text().split()[0][:12]
+    except (OSError, IndexError):
+        pass
 
     return {
         "ts_utc": now_utc.isoformat(),
@@ -776,6 +812,7 @@ def generate_dataflow_report(
         "market_open": market_open,
         "overall_status": _overall_status(summary),
         "window_seconds": window_seconds,
+        "deployed_sha": deployed_sha,
         "checks": checks,
         "summary": summary,
     }
@@ -824,6 +861,21 @@ def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -
         logger.warning("dataflow_alert_dispatch_failed", exc_info=True)
 
 
+def _ping_heartbeat(report: dict[str, Any], settings: Settings | None = None) -> None:
+    """Off-machine dead-man heartbeat: ping after every cycle; append /fail when
+    the report is failing. If pings stop entirely (machine dead, mount gone, loop
+    wedged) the external service alerts — the only signal that survives host death."""
+    url = (settings or get_settings()).heartbeat_url.strip()
+    if not url:
+        return
+    target = url if report.get("overall_status") != "fail" else f"{url}/fail"
+    try:
+        with create_http_client(timeout=10.0) as client:
+            client.get(target)
+    except Exception:  # noqa: BLE001 — heartbeat must never break the health loop
+        logger.warning("heartbeat_ping_failed", url=target)
+
+
 def run_dataflow_health_once(
     *,
     window_seconds: int,
@@ -841,6 +893,7 @@ def run_dataflow_health_once(
         settings=settings,
     )
     _dispatch_alerts(report, settings)
+    _ping_heartbeat(report, settings)
     if report_dir:
         try:
             _write_report(report, Path(report_dir))

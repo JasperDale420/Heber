@@ -75,6 +75,13 @@ done
 
 sha="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
 echo "Deployed ${sha}: $(git log -1 --format='%s' 2>/dev/null || echo '?')"
+# Record what's actually running so dataflow-health can surface it (the #35
+# fix sat committed-but-undeployed for 9 days with nothing making that visible).
+ops_dir="${HEBER_VOLUME_ROOT:-/Volumes/heber}/data/ops"
+if [[ -d "$(dirname "$ops_dir")" ]]; then
+  mkdir -p "$ops_dir"
+  printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo '?')" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$ops_dir/deployed_sha"
+fi
 if [[ -n "${failed}" ]]; then
   echo "Not healthy:${failed}"
   echo "  check: docker compose logs --tail 50${failed}"

@@ -114,12 +114,26 @@ def _resample_bars_to_daily(bars: pd.DataFrame) -> pd.DataFrame:
         if "trade_count" in intraday.columns:
             agg_spec["trade_count"] = ("trade_count", "sum")
 
-        resampled = (
-            intraday.sort_values(["instrument_key", "ts_event"])
-            .groupby(["instrument_key", "date"])
-            .agg(**agg_spec)
-            .reset_index()
-        )
+        def _agg(frame: pd.DataFrame) -> pd.DataFrame:
+            return (
+                frame.sort_values(["instrument_key", "ts_event"])
+                .groupby(["instrument_key", "date"])
+                .agg(**agg_spec)
+                .reset_index()
+            )
+
+        if len(intraday) > 1_000_000:
+            # Bound the sort/groupby working set: chunk by instrument so a
+            # multi-million-row intraday residual never sorts in one shot.
+            keys = intraday["instrument_key"].unique()
+            chunk_frames = []
+            for i in range(0, len(keys), 100):
+                sub = intraday[intraday["instrument_key"].isin(keys[i : i + 100])]
+                if not sub.empty:
+                    chunk_frames.append(_agg(sub))
+            resampled = pd.concat(chunk_frames, ignore_index=True)
+        else:
+            resampled = _agg(intraday)
 
         # Carry symbol from instrument_key
         if "symbol" not in resampled.columns:
@@ -656,20 +670,32 @@ class EquityFeaturePipeline:
                 batch_size=_BARS_BATCH_SIZE,
             )
             logger.info("Loaded bars", rows=len(bars))
-            # Drop intraday rows early when daily bars are available.
-            # _resample_bars_to_daily prefers 1Day bars and only falls back
-            # to intraday for uncovered dates, but sorting/grouping millions
-            # of intraday rows causes OOM.  Filtering here is safe because
-            # daily bars have been available for all dates since mid-2025.
+            # Memory guard: drop intraday rows early — but only for
+            # (instrument, date) combos that pre-aggregated 1Day bars already
+            # cover.  The old guard dropped ALL intraday whenever any daily
+            # bars existed, which zeroed out momentum/volatility/labels for
+            # dates with minute bars but sparse 1Day coverage (1Day bars run
+            # 24-238/day vs a ~500-symbol universe — the Jul 13-17 2026
+            # backfill produced empty features because of this).  Uncovered
+            # intraday survives and is resampled (chunked) downstream.
             if "timeframe" in bars.columns and len(bars) > 1_000_000:
-                daily_only = bars[bars["timeframe"] == "1Day"]
-                if not daily_only.empty:
-                    logger.info(
-                        "Dropped intraday bars to reduce memory",
-                        before=len(bars),
-                        after=len(daily_only),
+                daily_mask = bars["timeframe"] == "1Day"
+                if daily_mask.any():
+                    dates = pd.to_datetime(bars["ts_event"], utc=True).dt.date
+                    daily_keys = set(
+                        zip(bars.loc[daily_mask, "instrument_key"], dates[daily_mask], strict=False)
                     )
-                    bars = daily_only
+                    covered = pd.Series(
+                        list(zip(bars["instrument_key"], dates, strict=False)),
+                        index=bars.index,
+                    ).isin(daily_keys)
+                    keep = daily_mask | ~covered
+                    logger.info(
+                        "Dropped daily-covered intraday bars to reduce memory",
+                        before=len(bars),
+                        after=int(keep.sum()),
+                    )
+                    bars = bars[keep]
             bars = _resample_bars_to_daily(bars)
 
         if "microstructure" in datasets:

@@ -690,6 +690,18 @@ class Settings(BaseSettings):
         default="http://localhost:8085/health",
         description="Catalog /health URL for dataflow health checks (DB-exercising)",
     )
+    heartbeat_url: str = Field(
+        default="",
+        description=(
+            "Off-machine dead-man heartbeat URL (e.g. healthchecks.io check). "
+            "Pinged after each dataflow-health cycle; /fail appended on overall "
+            "failure. Empty disables. The only monitoring that survives machine death."
+        ),
+    )
+    backup_freshness_hours: int = Field(
+        default=30,
+        description="Max age (hours) of the lakehouse backup marker before backup_freshness fails",
+    )
     health_freshness_seconds: int = Field(
         default=900,
         description="Maximum allowed freshness window (seconds) for dataflow checks",
