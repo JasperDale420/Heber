@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The consumer liveness heartbeat now ticks per processed message, not per batch** (`heber/writer/consumer.py`): a 2000-message batch fanned out across hundreds of historical partitions could outlast the 180s healthcheck window, so a consumer actively draining backlog read as "stalled" and got restarted mid-drain by the watchdog. Heartbeat staleness now genuinely means no forward progress.
+
 - **The docker watchdog now restarts running-but-wedged services** (`scripts/heber_docker_watchdog.sh`): it previously only reconciled containers that were stopped or missing, so a consumer whose process wedged (container "running", healthcheck unhealthy) sat dead indefinitely — that is how the 2026-07-20 16:30 ET EOD publish was lost to stream eviction. Services with an unhealthy healthcheck are now `docker restart`ed on the next 2-minute tick; services without a healthcheck are left alone.
 
 - **The flow_alerts liveness alarm no longer flaps at the market open** (`heber/health_monitor/feed_registry.py`): its window now starts at 10:30 ET instead of 09:30, so the 60-minute lookback can never reach into pre-market quiet — which read as "degraded" and fired false CRITICAL/RECOVERED pairs at nearly every open (observed 7/8–7/21). A truly dead feed still alarms at 10:30. Repeat reminders for a sustained outage are also spaced 4h apart instead of hourly (`HEBER_ALERT_COOLDOWN_SECONDS=14400` in `.env` — the 7/20 oi_change outage sent 8 overnight pings).

@@ -555,6 +555,11 @@ class EventConsumer:
         async def _process_one(message_id: Any, message_data: dict) -> tuple[str, bool, str | None, int]:
             async with sem:
                 success, error, attempts = await self._process_with_retry(message_data)
+                # Forward-progress heartbeat: a batch fanned out across many
+                # historical partitions can outlast the healthcheck window between
+                # loop-top ticks, reading as "stalled" and getting restarted
+                # mid-drain. Ticking per message keeps liveness honest.
+                consumer_loop_heartbeat_unixtime.set(time.time())
                 return self._decode_string(message_id), success, error, attempts
 
         results = await asyncio.gather(
