@@ -27,12 +27,33 @@ if ! "$DOCKER" info >/dev/null 2>&1; then
 fi
 
 down=""
+unhealthy=""
 for svc in $SERVICES; do
   state="$("$DOCKER" inspect -f '{{.State.Status}}' "$svc" 2>/dev/null || echo missing)"
-  [[ "$state" == "running" ]] || down="${down:+$down }$svc"
+  if [[ "$state" != "running" ]]; then
+    down="${down:+$down }$svc"
+    continue
+  fi
+  # Running is not enough: a wedged process stays "running" while its healthcheck
+  # (e.g. heber-consumer's run-loop heartbeat) goes unhealthy. That is exactly how
+  # the 2026-07-20 EOD ingest was lost — the consumer stalled through the 16:30
+  # publish and nothing restarted it. Containers without a healthcheck report
+  # "none" and are left alone.
+  health="$("$DOCKER" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$svc" 2>/dev/null || echo none)"
+  [[ "$health" == "unhealthy" ]] && unhealthy="${unhealthy:+$unhealthy }$svc"
 done
 
-# Steady state: everything running. Do not invoke compose (avoid racing a deploy).
+# Steady state: everything running and healthy. Do not touch docker (avoid racing a deploy).
+[[ -z "$down" && -z "$unhealthy" ]] && exit 0
+
+if [[ -n "$unhealthy" ]]; then
+  echo "$(now) restarting unhealthy service(s): $unhealthy"
+  # Plain restart (not compose up): the container exists and is running, its
+  # process is just wedged. restart:always does not cover this case.
+  # shellcheck disable=SC2086
+  "$DOCKER" restart $unhealthy
+fi
+
 [[ -z "$down" ]] && exit 0
 
 echo "$(now) reconciling down service(s): $down"
