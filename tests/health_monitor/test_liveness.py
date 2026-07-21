@@ -116,6 +116,32 @@ async def test_daily_feed_missing_past_deadline_fails(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+async def test_flow_alerts_first_trading_hour_no_result(tmp_path: Path) -> None:
+    # 09:45 ET: the 60m lookback still reaches into pre-market, where flow
+    # alerts are legitimately quiet — a low/zero reading is a window-fill
+    # artifact, not an outage. This fired false CRITICAL/RECOVERED pairs at
+    # nearly every open; the window start must not begin before 10:30.
+    early_et = datetime(2026, 3, 25, 9, 45, tzinfo=ET)
+    reader = _reader_returning({"flow_alerts": 0, "darkpool": 50, "bars": 50, "trades": 50})
+    ctx = _ctx(tmp_path, reader)
+    results = await run_liveness_checks(ctx, now=early_et)
+    assert all(r.feed != "flow_alerts" for r in results)
+
+
+@pytest.mark.unit
+async def test_flow_alerts_dark_after_window_fill_fails(tmp_path: Path) -> None:
+    # 10:35 ET: a full 60m lookback now fits inside market hours, so a dark
+    # feed must FAIL — the delayed start must not leave the feed unmonitored.
+    filled_et = datetime(2026, 3, 25, 10, 35, tzinfo=ET)
+    reader = _reader_returning({"flow_alerts": 0, "darkpool": 50, "bars": 50, "trades": 50})
+    ctx = _ctx(tmp_path, reader)
+    results = await run_liveness_checks(ctx, now=filled_et)
+    flow = [r for r in results if r.feed == "flow_alerts"]
+    assert len(flow) == 1
+    assert flow[0].status == Status.FAIL
+
+
+@pytest.mark.unit
 async def test_darkpool_premarket_no_result(tmp_path: Path) -> None:
     # Darkpool's window starts at the open (09:30); pre-market it has no prints, so
     # at 06:00 ET a dark darkpool feed must NOT fire — this is the pre-market

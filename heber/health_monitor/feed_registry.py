@@ -26,7 +26,12 @@ class FeedRule:
 
 
 DEFAULT_REGISTRY: list[FeedRule] = [
-    FeedRule("flow_alerts", "continuous", "09:30", "16:00", 60, 1),
+    # Start at 10:30, not the 09:30 open: the 60m lookback otherwise reaches into
+    # pre-market where flow alerts are legitimately quiet, so the first trading
+    # hour read as degraded and flapped CRITICAL/RECOVERED at nearly every open
+    # (observed 7/8-7/21 with the calibrated floor). From 10:30 the lookback is
+    # always fully inside market hours; a truly dead feed still trips at 10:30.
+    FeedRule("flow_alerts", "continuous", "10:30", "16:00", 60, 1),
     # Darkpool prints flow from the open through after-hours (~19:00 ET), but never
     # pre-market: a 04:00 start produced ~100 false "feed appears dark" criticals per
     # pre-market hour. Start at the open; keep the after-hours tail to 20:00.

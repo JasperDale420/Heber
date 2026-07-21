@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The flow_alerts liveness alarm no longer flaps at the market open** (`heber/health_monitor/feed_registry.py`): its window now starts at 10:30 ET instead of 09:30, so the 60-minute lookback can never reach into pre-market quiet — which read as "degraded" and fired false CRITICAL/RECOVERED pairs at nearly every open (observed 7/8–7/21). A truly dead feed still alarms at 10:30. Repeat reminders for a sustained outage are also spaced 4h apart instead of hourly (`HEBER_ALERT_COOLDOWN_SECONDS=14400` in `.env` — the 7/20 oi_change outage sent 8 overnight pings).
+
 - Synced `CLAUDE.md` and `AGENTS.md` into one shared instruction set.
 
 ### Security
