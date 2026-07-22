@@ -945,10 +945,17 @@ class EventConsumer:
             processed_ids.extend(ack_ids)
             failed_ids.extend(stream_failed_ids)
 
+        # Split the iteration clock into process (CPU: parse/validate/buffer) vs
+        # flush (bind-mount gzip/parquet I/O) so the batch_processed log reveals
+        # which half caps drain throughput — the two are addressed by different
+        # fixes (more processing parallelism vs faster/overlapped flush I/O).
+        process_seconds = time.monotonic() - t0
+
         # Flush to disk BEFORE acknowledging. Offloaded to a thread so the
         # blocking gzip/parquet write does not stall the event loop (and the
         # consumer's metrics endpoint) on large batches.
         flush_ok = await asyncio.to_thread(self._flush_layers)
+        flush_seconds = time.monotonic() - t0 - process_seconds
 
         # Only ACK after successful flush — on failure, messages stay
         # pending and will be redelivered on the next iteration.
@@ -972,6 +979,8 @@ class EventConsumer:
             acked=len(processed_ids),
             failed=len(failed_ids),
             elapsed_seconds=round(elapsed, 3),
+            process_seconds=round(process_seconds, 3),
+            flush_seconds=round(flush_seconds, 3),
             messages_per_second=round(rate, 1),
             concurrency=settings.redis_process_concurrency,
         )
