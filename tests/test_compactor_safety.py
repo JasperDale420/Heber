@@ -152,6 +152,7 @@ def test_scan_and_compact_skips_macos_resource_fork_paths(tmp_path: Path, monkey
     macOS AppleDouble files (`._foo`) cannot abort the cycle. Same class
     of bug as commit 8af04ef fixed for the catalog.
     """
+    (tmp_path / ".heber-sentinel").touch()
     layer_path = tmp_path / "silver"
     real_partition = layer_path / "feed=bars" / "instrument_type=equity" / "dt=2026-04-28"
     real_partition.mkdir(parents=True)

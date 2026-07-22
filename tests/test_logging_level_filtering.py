@@ -6,8 +6,20 @@ import logging
 
 import pytest
 import structlog
+from empire_core.logger import shutdown_logging
 
 from heber.ops.logging import configure_logging, get_logger
+
+
+def _drain_log_queue() -> None:
+    """Flush queued log records to stdout before asserting on capsys.
+
+    empire_core routes records through a QueueHandler → QueueListener
+    background thread, so stdout writes are asynchronous. shutdown_logging()
+    stops the listener after draining everything already enqueued; each test
+    re-runs configure_logging() first, so stopping is safe here.
+    """
+    shutdown_logging()
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +39,7 @@ def test_info_level_filters_debug_messages(capsys: pytest.CaptureFixture[str], j
     logger.debug("debug_should_be_filtered")
     logger.info("info_should_be_emitted")
 
+    _drain_log_queue()
     output = capsys.readouterr().out
     assert "info_should_be_emitted" in output
     assert "debug_should_be_filtered" not in output
@@ -40,6 +53,7 @@ def test_debug_level_emits_debug_messages(capsys: pytest.CaptureFixture[str], js
 
     logger.debug("debug_should_be_emitted")
 
+    _drain_log_queue()
     output = capsys.readouterr().out
     assert "debug_should_be_emitted" in output
     assert logging.getLogger().level == logging.DEBUG

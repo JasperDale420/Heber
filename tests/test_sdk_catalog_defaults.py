@@ -25,7 +25,7 @@ def test_settings_defaults_for_api_and_catalog_url(monkeypatch) -> None:
     assert settings.postgres_url == (
         "postgresql+asyncpg://heber:heber_dev_password@localhost:5433/heber_catalog"  # pragma: allowlist secret
     )
-    assert settings.redis_url == "redis://localhost:6380"
+    assert settings.redis_url == "redis://localhost:6379"
 
 
 def test_settings_accept_legacy_feast_repo_path_env(monkeypatch) -> None:

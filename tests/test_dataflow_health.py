@@ -39,6 +39,17 @@ def _ok_dlq_check(*_args, **_kwargs) -> dict:
     }
 
 
+def _ok_backup_check(*_args, **_kwargs) -> dict:
+    return {
+        "id": "backup_freshness",
+        "status": "ok",
+        "severity": "warning",
+        "observed": {"marker": "/tmp/backup-last-ok", "age_hours": 1.0},
+        "threshold": {"max_age_hours": 26},
+        "message": "Lakehouse backup is fresh.",
+    }
+
+
 def _find_check(report: dict, check_id: str) -> dict:
     return next(c for c in report["checks"] if c["id"] == check_id)
 
@@ -258,6 +269,7 @@ def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
     monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
@@ -289,6 +301,7 @@ def test_dataflow_health_trades_and_flow_alerts_stale_are_warning(monkeypatch) -
     signals["feeds"]["flow_alerts"] = stale
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -369,6 +382,7 @@ def test_dataflow_health_market_closed_skips_gateway_passive_check_when_metric_m
     signals["gateway_last_success"] = None
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: False)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
     monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
@@ -406,6 +420,7 @@ def test_dataflow_health_market_open_warns_when_gateway_passive_metric_missing(m
     signals["gateway_last_success"] = None
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -426,6 +441,7 @@ def test_dataflow_health_uses_filesystem_fallback_when_metrics_unavailable(monke
     }
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
     monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
@@ -459,6 +475,7 @@ def test_dataflow_health_report_write_failure_is_warn_only(monkeypatch) -> None:
     now = datetime(2026, 2, 12, 15, 0, tzinfo=UTC)
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: _signals(now))
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
+    monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
     monkeypatch.setattr(dataflow_health_module, "_utc_now", lambda: now)
     monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
@@ -557,3 +574,21 @@ def test_collect_filesystem_feed_timestamps_avoids_full_feed_scan(tmp_path, monk
     timestamps = dataflow_health_module._collect_filesystem_feed_timestamps(settings)
 
     assert timestamps["bars"] == new_file.stat().st_mtime
+
+
+def test_backup_freshness_fresh_marker_is_ok(tmp_path) -> None:
+    marker = tmp_path / "ops" / "backup-last-ok"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+
+    check = dataflow_health_module._backup_freshness_check(Settings(data_root=tmp_path))
+
+    assert check["id"] == "backup_freshness"
+    assert check["status"] == "ok"
+
+
+def test_backup_freshness_missing_marker_is_fail(tmp_path) -> None:
+    check = dataflow_health_module._backup_freshness_check(Settings(data_root=tmp_path))
+
+    assert check["status"] == "fail"
+    assert check["observed"]["age_hours"] is None
