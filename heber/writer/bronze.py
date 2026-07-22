@@ -8,6 +8,7 @@ Path: bronze/provider={}/feed={}/dt={}/hour={}/
 import gzip
 import json
 import time
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,10 @@ class BronzeWriter:
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
         self.last_flush: datetime = datetime.now(UTC)
+        # Per-writer id keeps filenames unique when multiple sharded consumer
+        # containers write the same partition concurrently (their .tmp staging
+        # names would otherwise collide and clobber each other's partial write).
+        self._writer_id = uuid.uuid4().hex[:8]
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -38,9 +43,9 @@ class BronzeWriter:
         base = settings.bronze_path / partition_key
         base.mkdir(parents=True, exist_ok=True)
 
-        # Use timestamp-based filename for uniqueness
+        # Timestamp + per-writer id for cross-process uniqueness.
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-        return base / f"events-{ts}.jsonl.gz"
+        return base / f"events-{ts}-{self._writer_id}.jsonl.gz"
 
     def write(self, envelope: EventEnvelope) -> None:
         """Buffer an event for writing."""

@@ -11,6 +11,7 @@ import asyncio
 import json
 import signal
 import time
+import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -81,7 +82,10 @@ class EventConsumer:
         self.bronze_writer = BronzeWriter()
         self.silver_writer = SilverWriter()
         self.running = False
-        self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        # uuid suffix makes the group-consumer name unique across sharded
+        # containers even when two start within the same second — a bare
+        # timestamp would collide and share one identity in the consumer group.
+        self.consumer_name = f"consumer-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
         self.event_deduplicator = event_deduplicator or EventDeduplicator(
             backing_store=self._build_dedupe_store(),
         )
