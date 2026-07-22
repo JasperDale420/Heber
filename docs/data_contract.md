@@ -99,14 +99,14 @@ consumers treat them as source-data limitations, not pipeline bugs.
 
 | Feed | Missing partitions | Cause | Recoverable? |
 |------|--------------------|-------|--------------|
-| `iv_rank` | `dt=2026-07-20`, `dt=2026-07-21` | 2026-07-20/07-21 EOD publishes were evicted from the live stream (overload); source endpoint is a **current snapshot** with no history API, so the values for those dates no longer exist upstream | **No** — permanent |
-| `iv_term_structure` | `dt=2026-07-20`, `dt=2026-07-21` | Same event as above; also a current-snapshot endpoint | **No** — permanent |
+| `iv_rank` | `dt=2026-07-20`, `dt=2026-07-21` | The 07-20/07-21 EOD publishes were evicted from the live stream (overload). The `/api/stock/{sym}/iv-rank` endpoint returns HTTP 422 for a historical `date` param, so the client falls back to the **current** snapshot (`gateway/providers/uw/options.py:383`). A re-pull can only ever produce today's value — verified: a 2026-07-22 backfill re-landed iv_rank only under `dt=2026-07-22`, never 07-20/07-21. | **No** — permanent |
+| `iv_term_structure` | `dt=2026-07-20`, `dt=2026-07-21` | Same eviction event. The provider method takes **no date param** — snapshot-only, returns the current term structure regardless of the requested range (`gateway/core/backfill.py:248`). The lost dates cannot be re-fetched. | **No** — permanent |
 
-Both feeds resume normally from the next daily snapshot; only 07-20 and 07-21
-are lost. Other feeds affected by the same overload (`oi_change`, `darkpool`,
-`greek_exposure`, `historic_option_volume`, `short_data`, `ftd`) are
-recoverable — they have history/trailing-series APIs and were backfilled or
-self-heal on subsequent EOD runs. See
+Only 07-20 and 07-21 are lost; both feeds resume from the next daily snapshot.
+Other feeds hit by the same overload (`oi_change`, `darkpool`,
+`greek_exposure`, `historic_option_volume`, `short_data`, `ftd`) **are**
+recoverable — their endpoints accept a `date_str` param (or are trailing-series
+pulls), so per-date backfill restores them. See
 `docs/operations/postmortem-2026-07-19-power-outage.md` and the
 2026-07-21 CHANGELOG entries for the overload remediation.
 
