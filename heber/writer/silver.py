@@ -10,8 +10,10 @@ Path: silver/feed={}/instrument_type={}/dt={}/[hour={}]/
 """
 
 import json
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
@@ -46,6 +48,17 @@ class SilverWriter:
     def __init__(self):
         self.buffers: dict[str, list[dict]] = defaultdict(list)
         self.last_flush: datetime = datetime.now(UTC)
+        # Per-writer id keeps filenames unique when multiple sharded consumer
+        # containers write the same partition concurrently (their .tmp staging
+        # names would otherwise collide and clobber each other's partial write).
+        self._writer_id = uuid.uuid4().hex[:8]
+
+    def _get_file_path(self, partition_key: str) -> Path:
+        """Build the output Parquet path for a partition (unique per writer)."""
+        partition_path = settings.silver_path / partition_key
+        partition_path.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+        return partition_path / f"part-{ts}-{self._writer_id}.parquet"
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -154,12 +167,7 @@ class SilverWriter:
         feed = partition_key.split("/")[0].split("=")[1]
         schema = self._get_schema(feed)
 
-        # Path management
-        partition_path = settings.silver_path / partition_key
-        partition_path.mkdir(parents=True, exist_ok=True)
-
-        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-        file_path = partition_path / f"part-{ts}.parquet"
+        file_path = self._get_file_path(partition_key)
 
         try:
             t0 = datetime.now(UTC)
