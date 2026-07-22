@@ -92,6 +92,24 @@ Training-feed raw contract (stream + UW poller + backfill):
 
 Feed aliases are defined in `heber/writer/ingest_contracts.py`.
 
+## Known Coverage Gaps
+
+Permanent, non-recoverable Silver gaps. These are documented so downstream
+consumers treat them as source-data limitations, not pipeline bugs.
+
+| Feed | Missing partitions | Cause | Recoverable? |
+|------|--------------------|-------|--------------|
+| `iv_rank` | `dt=2026-07-20`, `dt=2026-07-21` | 2026-07-20/07-21 EOD publishes were evicted from the live stream (overload); source endpoint is a **current snapshot** with no history API, so the values for those dates no longer exist upstream | **No** — permanent |
+| `iv_term_structure` | `dt=2026-07-20`, `dt=2026-07-21` | Same event as above; also a current-snapshot endpoint | **No** — permanent |
+
+Both feeds resume normally from the next daily snapshot; only 07-20 and 07-21
+are lost. Other feeds affected by the same overload (`oi_change`, `darkpool`,
+`greek_exposure`, `historic_option_volume`, `short_data`, `ftd`) are
+recoverable — they have history/trailing-series APIs and were backfilled or
+self-heal on subsequent EOD runs. See
+`docs/operations/postmortem-2026-07-19-power-outage.md` and the
+2026-07-21 CHANGELOG entries for the overload remediation.
+
 ## Silver Schemas (Parquet Writer)
 
 Source: `heber/schemas/silver.py`
