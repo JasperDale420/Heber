@@ -399,16 +399,24 @@ def _count_parquet_rows(dt_dir: Path) -> int:
 
     Reads only footer metadata — never loads actual data.
     """
+
+    def _visible_parquet_files() -> list[Path]:
+        # rglob so hour=* sub-partitions are counted; skip macOS ._ sidecar
+        # files and anything nested inside a ._ sidecar directory.
+        return [
+            pf
+            for pf in dt_dir.rglob("*.parquet")
+            if not any(part.startswith(".") for part in pf.relative_to(dt_dir).parts)
+        ]
+
     try:
         import pyarrow.parquet as pq
     except ImportError:
         # Fallback: count files if pyarrow not available
-        return sum(1 for f in dt_dir.glob("*.parquet"))
+        return len(_visible_parquet_files())
 
     total = 0
-    for pf in dt_dir.glob("*.parquet"):
-        if pf.name.startswith("."):
-            continue
+    for pf in _visible_parquet_files():
         try:
             meta = pq.read_metadata(pf)
             total += meta.num_rows

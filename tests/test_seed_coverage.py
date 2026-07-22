@@ -41,6 +41,18 @@ class TestCountParquetRows:
         (tmp_path / "_SUCCESS").touch()
         assert _count_parquet_rows(tmp_path) == 100
 
+    def test_counts_rows_in_hourly_subpartitions(self, tmp_path: Path) -> None:
+        for hour, rows in (("hour=13", 100), ("hour=14", 250)):
+            (tmp_path / hour).mkdir()
+            _write_parquet(tmp_path / hour / "part-00000.parquet", rows)
+        assert _count_parquet_rows(tmp_path) == 350
+
+    def test_skips_files_inside_sidecar_directories(self, tmp_path: Path) -> None:
+        _write_parquet(tmp_path / "part-00000.parquet", 100)
+        (tmp_path / "._hour=13").mkdir()
+        _write_parquet(tmp_path / "._hour=13" / "part-00000.parquet", 999)
+        assert _count_parquet_rows(tmp_path) == 100
+
     def test_skips_corrupt_parquet(self, tmp_path: Path) -> None:
         _write_parquet(tmp_path / "good.parquet", 50)
         (tmp_path / "bad.parquet").write_bytes(b"not parquet data")
