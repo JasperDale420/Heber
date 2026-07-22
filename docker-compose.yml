@@ -218,6 +218,14 @@ services:
       - HEBER_GOLD_POLLER_ENABLED=true
       - HEBER_GOLD_POLLER_EOD_HOUR=16
       - HEBER_GOLD_POLLER_EOD_MINUTE=35
+      # EOD reconcile re-pulls missing daily feeds through the Data-Gateway, which
+      # runs on a separate compose network — reach it over the host bridge and send
+      # the same gateway key heber-watch uses (from .env, never committed). Without
+      # these the reconcile POST cannot resolve/authenticate and every backfill fails.
+      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
