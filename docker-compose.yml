@@ -224,6 +224,10 @@ services:
       # these the reconcile POST cannot resolve/authenticate and every backfill fails.
       - DATA_GATEWAY_URL=http://host.docker.internal:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
+      # Only feeds that can be back-dated. iv_rank/iv_term_structure are snapshot-only —
+      # a re-pull lands under today, not the missing date. Matches the config.py default;
+      # set here so the running image drops iv_rank before its next rebuild.
+      - HEBER_EOD_RECONCILE_FEEDS=oi_change,historic_option_volume
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -531,10 +531,13 @@ class Settings(BaseSettings):
         description="ET minute to run the EOD reconcile",
     )
     eod_reconcile_feeds: str = Field(
-        default="oi_change,iv_rank,historic_option_volume",
+        default="oi_change,historic_option_volume",
         description=(
-            "Comma-separated daily UW feeds to self-heal if today's Silver is missing "
-            "(iv_term_structure excluded — its provider method is snapshot-only and cannot backfill a past date)"
+            "Comma-separated daily UW feeds to self-heal if today's Silver is missing. "
+            "iv_rank and iv_term_structure are excluded — their UW provider methods are "
+            "snapshot-only: a re-pull returns the current value stamped now, landing under "
+            "today's partition instead of reconstructing the missing date, so back-dated "
+            "recovery of those feeds is futile."
         ),
     )
     eod_reconcile_symbols: str = Field(
