@@ -20,8 +20,20 @@ import logging
 
 import pytest
 import structlog
+from empire_core.logger import shutdown_logging
 
 from heber.ops.logging import configure_logging, get_logger
+
+
+def _drain_log_queue() -> None:
+    """Flush queued log records to stdout before asserting on capsys.
+
+    empire_core routes records through a QueueHandler → QueueListener
+    background thread, so stdout writes are asynchronous. shutdown_logging()
+    stops the listener after draining everything already enqueued; each test
+    re-runs configure_logging() first, so stopping is safe here.
+    """
+    shutdown_logging()
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +69,7 @@ def test_configure_logging_second_call_changes_service_name(
     logger = get_logger("test.service_rebinding")
     logger.info("after_second_configure")
 
+    _drain_log_queue()
     out = capsys.readouterr().out
     assert '"service": "heber-consumer"' in out, (
         "Expected service=heber-consumer after the second configure_logging() "
@@ -76,6 +89,7 @@ def test_configure_logging_default_service_is_heber(
     capsys.readouterr()
 
     get_logger("test.default_service").info("default_service_check")
+    _drain_log_queue()
     out = capsys.readouterr().out
     assert '"service": "heber"' in out, f"expected service=heber, got:\n{out}"
 
@@ -100,6 +114,7 @@ def test_configure_logging_force_false_can_skip_rebind(
     configure_logging(service_name="heber-second", log_level="INFO", force=False)
     get_logger("test.force_false").info("after_force_false")
 
+    _drain_log_queue()
     out = capsys.readouterr().out
     # Under PYTEST_CURRENT_TEST the underlying setup_logging will still
     # re-bind, but the API contract is: force=False is accepted as a kwarg.
