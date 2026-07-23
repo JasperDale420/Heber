@@ -53,6 +53,8 @@ BRONZE_SRC="$SRC_ROOT/data/bronze"
 BRONZE_DST="$DST_ROOT/data/bronze"
 if [[ -d "$BRONZE_SRC" ]]; then
     echo "--- bronze archive $(date -u '+%H:%M:%SZ')"
+    # Clear temp archives orphaned by an interrupted/killed previous run.
+    find "$BRONZE_DST" -name '*.tar.tmp.*' -delete 2>/dev/null || true
     archived=0
     skipped=0
     # -prune stops the walk at the dt= level, so find never enumerates the
