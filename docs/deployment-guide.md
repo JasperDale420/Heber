@@ -2,7 +2,7 @@
 
 How to bring Heber up locally (Docker Compose), run it natively (launchd), and execute a controlled rollout / rollback. Operational runbooks live under [`docs/operations/`](./operations/).
 
-Sister docs: [system architecture](./system-architecture.md), [configuration guide](./configuration-guide.md), [API reference](./api-reference.md).
+Sister docs: [system architecture](./ARCHITECTURE.md), [configuration guide](./configuration-guide.md), [API reference](./API_REFERENCE.md).
 
 ## Prerequisites
 

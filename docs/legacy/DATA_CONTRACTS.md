@@ -1,4 +1,4 @@
-> **Legacy doc — superseded by [`../data_contract.md`](../data_contract.md). Kept for historical reference only.**
+> **Legacy doc — superseded by [`../DATA_CONTRACTS.md`](../DATA_CONTRACTS.md). Kept for historical reference only.**
 
 # DATA_CONTRACTS
 
@@ -50,4 +50,4 @@ Examples:
 
 ## Reference
 
-Canonical detailed contract: `/Users/jacobmcmillan/Empire/Heber/docs/data_contract.md`.
+Canonical detailed contract: `/Users/jacobmcmillan/Empire/Heber/docs/DATA_CONTRACTS.md`.

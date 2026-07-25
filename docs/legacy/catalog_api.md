@@ -1,4 +1,4 @@
-> **Legacy doc — superseded by the Catalog REST section of [`../api-reference.md`](../api-reference.md). Kept for historical reference only.**
+> **Legacy doc — superseded by the Catalog REST section of [`../API_REFERENCE.md`](../API_REFERENCE.md). Kept for historical reference only.**
 
 # Catalog API
 

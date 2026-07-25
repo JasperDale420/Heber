@@ -32,7 +32,7 @@ Out of scope:
 
 | Pillar | Implementation |
 |--------|----------------|
-| **Zero leakage** | Every record carries `ts_available`. Reads filter `ts_available <= asof_time` via pyarrow predicate pushdown (not post-filter). See [system architecture](./system-architecture.md#zero-leakage). |
+| **Zero leakage** | Every record carries `ts_available`. Reads filter `ts_available <= asof_time` via pyarrow predicate pushdown (not post-filter). See [system architecture](./ARCHITECTURE.md#zero-leakage). |
 | **Contract-driven Silver** | `heber/writer/ingest_contracts.py` defines contracted feeds, aliases, and field mappings. Uncontracted feeds go to DLQ with explicit reason. |
 | **Bronze-first immutability** | Bronze persists every validated envelope as gzipped JSONL before Silver normalization. Silver/Gold can always be rebuilt from Bronze. |
 | **Filesystem reader** | `HeberReader` is a thin pyarrow.dataset wrapper. No HTTP, no Catalog, no lakeFS required to read data. Lightweight `pip install heber[reader]` for external consumers. |
@@ -51,7 +51,7 @@ Gold     ML features, labels, enriched datasets
          gold/dataset={}/project={}/version={}/dt={}/
 ```
 
-Full path layout, partition keys, and rebuild semantics: [system architecture](./system-architecture.md#storage-layers).
+Full path layout, partition keys, and rebuild semantics: [system architecture](./ARCHITECTURE.md#storage-layers).
 
 ## Services
 
@@ -74,12 +74,12 @@ Full path layout, partition keys, and rebuild semantics: [system architecture](.
 
 ## Key Documents
 
-- [System architecture](./system-architecture.md) — Mermaid diagrams, layer flow, zero-leakage mechanics.
+- [System architecture](./ARCHITECTURE.md) — Mermaid diagrams, layer flow, zero-leakage mechanics.
 - [Codebase summary](./codebase-summary.md) — package-by-package map.
 - [Code standards](./code-standards.md) — Empire-wide and Heber-specific conventions.
 - [Configuration guide](./configuration-guide.md) — every `HEBER_*` env var.
 - [Deployment guide](./deployment-guide.md) — Docker, launchd, rollback.
-- [API reference](./api-reference.md) — Catalog REST + `HeberReader` Python API.
+- [API reference](./API_REFERENCE.md) — Catalog REST + `HeberReader` Python API.
 - [Testing guide](./testing-guide.md) — markers, layout, quality gate.
 - Root-level: [PRD.md](../PRD.md), [CHANGELOG.md](../CHANGELOG.md), [AGENTS.md](../AGENTS.md), [CLAUDE.md](../CLAUDE.md).
 

@@ -214,7 +214,7 @@ Postgres-backed metadata (`heber/catalog/db.py`):
 
 The catalog API (`heber-catalog`, port `8085`) periodically scans Silver on disk for new feed partitions and updates coverage in the background (`_periodic_discovery_loop`, controlled by `HEBER_CATALOG_DISCOVER_INTERVAL_SECONDS`). It auto-creates tables in `dev`; staging/prod use Alembic (`alembic/`).
 
-See [API reference](./api-reference.md#catalog-rest-api) for endpoints.
+See [API reference](./API_REFERENCE.md#catalog-rest-api) for endpoints.
 
 ## Watch & ML Meta-Labeling
 

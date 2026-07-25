@@ -26,13 +26,13 @@ Local ports from `docker-compose.yml`:
 
 - Catalog API: `http://localhost:8085`
 - Postgres: `localhost:5433`
-- Redis: `localhost:6380`
 - Consumer metrics: `http://localhost:9090/metrics`
+- Backfill-consumer metrics: `http://localhost:9095/metrics`
 - Watch metrics: `http://localhost:9091/metrics`
-- lakeFS: `http://localhost:8000`
-- MinIO: `http://localhost:19000` (S3), `http://localhost:19001` (console)
-- Apicurio Registry: `http://localhost:18081`
-- OpenMetadata: `http://localhost:8585`
+- Gold-poller metrics: `http://localhost:9092/metrics`
+- Health-monitor metrics: `http://localhost:9093/metrics`
+
+There is no Redis, ClickHouse, MinIO, lakeFS, Apicurio, or OpenMetadata container in this `docker-compose.yml` — every service's `HEBER_REDIS_URL` points at the Data-Gateway repo's own Redis (`redis://host.docker.internal:6379`), and the other OSS components are staged-but-unwired (see [architecture — Optional / Staged OSS Components](docs/ARCHITECTURE.md#optional--staged-oss-components)).
 
 ## Architecture (Current)
 
@@ -154,19 +154,20 @@ heber health-daily --date 2026-03-09 --verbose  # specific date, full JSON
 Primary docs (standard set, kept current):
 
 - `docs/project-overview-pdr.md` — scope, mission, services, stakeholders
-- `docs/system-architecture.md` — Mermaid diagrams, layer flow, zero-leakage mechanics
+- `docs/ARCHITECTURE.md` — Mermaid diagrams, layer flow, zero-leakage mechanics
 - `docs/codebase-summary.md` — package-by-package map of `heber/`
 - `docs/code-standards.md` — Empire + Heber conventions (logging, errors, data rules)
 - `docs/configuration-guide.md` — every `HEBER_*` env var, host vs container URLs
 - `docs/deployment-guide.md` — Docker, launchd, rollout, rollback, DR
-- `docs/api-reference.md` — `HeberReader` Python API, Catalog REST, CLI
+- `docs/API_REFERENCE.md` — `HeberReader` Python API, Catalog REST, CLI
+- `docs/RUNBOOK.md` — startup/shutdown, health checks, troubleshooting, monitoring, DR, maintenance
 - `docs/testing-guide.md` — markers, layout, quality gate
 - `PRD.md` — product requirements and system scope
 - `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `TESTING.md`
 
 Supporting / topic-specific docs:
 
-- `docs/data_contract.md` — canonical EventEnvelope and feed schema detail
+- `docs/DATA_CONTRACTS.md` — canonical EventEnvelope and feed schema detail
 - `docs/silver_gold_scope.md` — Silver keep/drop matrix + Gold input plan
 - `docs/labeling_strategy.md` — ML labeling strategy (triple-barrier, meta-labeling)
 - `docs/MIGRATION_GUIDE.md` — Parquet schema-evolution / migration notes

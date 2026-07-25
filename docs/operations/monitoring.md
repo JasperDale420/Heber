@@ -2,11 +2,13 @@
 
 Guide to monitoring Heber services and responding to alerts.
 
+> **Note:** this predates the metrics exporter being wired up. Consumer and watch metrics are now exposed at `http://localhost:9090/metrics` and `http://localhost:9091/metrics` respectively (see [`docs/RUNBOOK.md`](../RUNBOOK.md#monitoring--alerting)) and back the `heber-consumer` / `heber-backfill-consumer` Docker healthchecks. The alerting guidance below is still useful context.
+
 ---
 
 ## Metrics Endpoints
 
-Prometheus metrics are instrumented in code, but there is no HTTP exporter wired in the services yet. Metrics exposure needs to be added (e.g., `prometheus_client` HTTP server or FastAPI middleware).
+Prometheus metrics are instrumented in code and exposed over HTTP for `heber-consumer` (`:9090`) and `heber-watch` (`:9091`); see the note above. The rest of this section (added before that exporter existed) is kept for the alerting-threshold guidance further down.
 
 Current state:
 

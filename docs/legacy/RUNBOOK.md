@@ -1,4 +1,4 @@
-> **Legacy doc — superseded by [`../operations/runbook.md`](../operations/runbook.md) and [`../deployment-guide.md`](../deployment-guide.md). Kept for historical reference only.**
+> **Legacy doc — superseded by [`../RUNBOOK.md`](../RUNBOOK.md) (canonical), with deeper procedures in [`../operations/runbook.md`](../operations/runbook.md) and [`../deployment-guide.md`](../deployment-guide.md). Kept for historical reference only.**
 
 # RUNBOOK
 

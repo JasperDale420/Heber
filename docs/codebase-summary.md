@@ -1,6 +1,6 @@
 # Codebase Summary
 
-A package-by-package map of the `heber/` Python source tree. Sister docs: [system architecture](./system-architecture.md), [code standards](./code-standards.md), [API reference](./api-reference.md).
+A package-by-package map of the `heber/` Python source tree. Sister docs: [system architecture](./ARCHITECTURE.md), [code standards](./code-standards.md), [API reference](./API_REFERENCE.md).
 
 Repo root: `/Users/jacobmcmillan/Empire/Heber`. Source package: `heber/`. Tests: `tests/`. Operational runbooks: `docs/operations/`.
 
@@ -185,7 +185,7 @@ Misc utilities.
 
 ### `heber/cli.py`
 
-Argparse-based CLI. See [API reference / CLI](./api-reference.md#cli) for subcommand details.
+Argparse-based CLI. See [API reference / CLI](./API_REFERENCE.md#cli) for subcommand details.
 
 ## Cross-Cutting Files
 

@@ -6,7 +6,7 @@ Heber exposes three programmatic surfaces:
 2. **Catalog REST API** — FastAPI service at `http://localhost:8085`.
 3. **`heber` CLI** — operator-facing console script.
 
-Sister docs: [system architecture](./system-architecture.md), [code standards](./code-standards.md), [configuration guide](./configuration-guide.md).
+Sister docs: [architecture](./ARCHITECTURE.md), [code standards](./code-standards.md), [configuration guide](./configuration-guide.md).
 
 ---
 

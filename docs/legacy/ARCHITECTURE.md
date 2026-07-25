@@ -1,4 +1,4 @@
-> **Legacy doc — superseded by [`../system-architecture.md`](../system-architecture.md). Kept for historical reference only.**
+> **Legacy doc — superseded by [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Kept for historical reference only.**
 
 # Architecture
 

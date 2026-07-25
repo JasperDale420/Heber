@@ -2,6 +2,8 @@
 
 Day-to-day operational guide for the Heber Data Lakehouse.
 
+> **Note:** [`docs/RUNBOOK.md`](../RUNBOOK.md) is the current canonical runbook — start there. The System Overview and Configuration Reference below predate a June 2026 cleanup: this repo's `docker-compose.yml` no longer defines `heber-redis`, `heber-clickhouse`, `heber-minio`, `heber-lakefs`, `heber-apicurio`, `heber-openmetadata`, or `heber-elasticsearch` containers, and `HEBER_REDIS_URL` now defaults to `redis://localhost:6379` (not `6380`). The startup/shutdown, daily-operations, and incident-response procedures below are still accurate.
+
 ---
 
 ## System Overview

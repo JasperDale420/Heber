@@ -1,4 +1,4 @@
-> **Legacy doc — superseded by [`../api-reference.md`](../api-reference.md). Kept for historical reference only.**
+> **Legacy doc — superseded by [`../API_REFERENCE.md`](../API_REFERENCE.md). Kept for historical reference only.**
 
 # API_REFERENCE
 

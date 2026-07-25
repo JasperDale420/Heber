@@ -185,5 +185,5 @@ Ensure train/test splits respect purge and embargo windows:
 ## See Also
 
 - [Watch Service](../heber/watch/) - Implementation of barrier labeling
-- [HeberReader](api-reference.md) - Zero-leakage enforcement via `read_asof()` predicate pushdown
+- [HeberReader](API_REFERENCE.md) - Zero-leakage enforcement via `read_asof()` predicate pushdown
 - [Feature Store](../heber/feast/) - Feast integration for features
