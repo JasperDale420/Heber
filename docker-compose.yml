@@ -188,6 +188,12 @@ services:
       - DATA_GATEWAY_URL=http://host.docker.internal:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
+      # Every path derived from data_root must resolve to the bind mount, not the
+      # host path baked into the config default. Without this the durable DLQ
+      # fallback targets /Volumes/heber/data/dlq_fallback — absent inside the
+      # container — so a failed Redis DLQ write had no on-disk audit record.
+      # HEBER_GOLD_PATH alone only covered Gold writes.
+      - HEBER_DATA_ROOT=/data
       - HEBER_GOLD_PATH=/data/gold
     extra_hosts:
       - "host.docker.internal:host-gateway"
