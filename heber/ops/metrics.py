@@ -123,6 +123,30 @@ writer_files_written_total = _get_or_create(
     ["layer", "dataset"],
 )
 
+consumer_pending_ack_messages = _get_or_create(
+    Gauge,
+    "heber_consumer_pending_ack_messages",
+    "Messages processed but not yet acknowledged, waiting for a flush to make them durable. "
+    "Expected to saw-tooth back to zero every flush cycle; a monotonic rise means the flush "
+    "is stuck and the Redis pending list is growing toward the stream's retention limit.",
+)
+
+consumer_pending_ack_age_seconds = _get_or_create(
+    Gauge,
+    "heber_consumer_pending_ack_age_seconds",
+    "Age of the oldest unacknowledged held message. Must stay below redis_claim_idle_ms or "
+    "recovery will reclaim messages the consumer is still holding.",
+)
+
+consumer_forced_flush_total = _get_or_create(
+    Counter,
+    "heber_consumer_forced_flush_total",
+    "Full flushes forced because held messages exceeded a size or age bound rather than a "
+    "natural flush threshold. Steady growth means the hold bounds are too tight for the "
+    "current ingest rate.",
+    ["reason", "drained"],
+)
+
 writer_silver_rows_rejected_total = _get_or_create(
     Counter,
     "heber_writer_silver_rows_rejected_total",
@@ -366,6 +390,17 @@ def record_dedupe_saturated_pass() -> None:
 def record_dedupe_store_error(operation: str) -> None:
     """Record a Redis dedupe backing-store error (dedupe failed open)."""
     consumer_dedupe_store_errors_total.labels(operation=operation).inc()
+
+
+def record_pending_ack_state(count: int, age_seconds: float) -> None:
+    """Record how many messages are held unacknowledged, and for how long."""
+    consumer_pending_ack_messages.set(count)
+    consumer_pending_ack_age_seconds.set(age_seconds)
+
+
+def record_forced_flush(reason: str, drained: bool) -> None:
+    """Record a flush forced by a hold bound rather than a natural threshold."""
+    consumer_forced_flush_total.labels(reason=reason, drained=str(drained).lower()).inc()
 
 
 def record_silver_rows_rejected(dataset: str, rows: int) -> None:

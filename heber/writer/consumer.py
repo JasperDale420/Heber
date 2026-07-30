@@ -30,7 +30,9 @@ from heber.ops.metrics import (
     record_dlq_event,
     record_event_processed,
     record_event_received,
+    record_forced_flush,
     record_ingest_latency,
+    record_pending_ack_state,
     start_metrics_server_from_env,
 )
 from heber.ops.reliability import EventDeduplicator, RedisDedupeStore
@@ -73,6 +75,16 @@ logger = structlog.get_logger(__name__)
 # pending; raise only if a real backlog can exceed this many batches.
 _MAX_RECOVERY_BATCHES = 100
 
+# A held batch can reach tens of thousands of ids, which is far too many for one
+# XACK command, so the commit sends them in chunks.
+_ACK_CHUNK_SIZE = 1000
+
+# Multiple of writer_max_unacked_messages at which the consumer stops reading
+# entirely. Past this point the forced flush is already failing, so continuing to
+# read only grows a pending list that the stream will trim out from under us —
+# turning a recoverable stall into permanent loss.
+_BACKPRESSURE_FACTOR = 10
+
 
 class EventConsumer:
     """Consumes events from Redis Streams and writes to Lake layers."""
@@ -90,6 +102,14 @@ class EventConsumer:
             backing_store=self._build_dedupe_store(),
         )
         self._inflight_event_ids: set[str] = set()
+        # Message ids processed but not yet acknowledged, and event ids not yet
+        # in the dedupe store. Both are released by _settle_and_commit() once a
+        # flush proves the events are on disk. They must move together: acking
+        # without registering permits duplicates, registering without acking
+        # makes a redelivery look like one and drops it.
+        self._pending_ack_ids: set[str] = set()
+        self._pending_register_ids: set[str] = set()
+        self._pending_since: float | None = None
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
@@ -109,6 +129,12 @@ class EventConsumer:
         """Claim an event_id for processing or return a duplicate reason."""
         if event_id in self._inflight_event_ids:
             return "inflight_duplicate"
+
+        # Already processed this cycle and waiting on the flush. Not yet in the
+        # dedupe store — registration waits for durability — so it has to be
+        # caught here or the same event would be buffered twice.
+        if event_id in self._pending_register_ids:
+            return "pending_flush_duplicate"
 
         dedupe_result = self.event_deduplicator.check(event_id)
         if dedupe_result.is_duplicate:
@@ -500,7 +526,12 @@ class EventConsumer:
             if envelope is not None and claimed_event_id:
                 self._inflight_event_ids.discard(envelope.event_id)
                 if register_success:
-                    self.event_deduplicator.register(envelope.event_id)
+                    # Held, not registered: the event is only buffered at this
+                    # point. Registering now would make a redelivery of data that
+                    # was never written look like a duplicate, and it would be
+                    # dropped — the loss this deferral exists to prevent.
+                    # _settle_and_commit() registers these once they are durable.
+                    self._pending_register_ids.add(envelope.event_id)
 
     def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
@@ -926,13 +957,127 @@ class EventConsumer:
 
         return not (self.bronze_writer.has_buffered() or self.silver_writer.has_buffered())
 
+    def _force_flush_layers(self, reason: str) -> bool:
+        """Flush every partition regardless of threshold. The durability backstop.
+
+        ``_flush_layers`` only writes what the size/time thresholds make due, so
+        a slow trickle of events can stay buffered indefinitely while their
+        messages accumulate unacknowledged. This writes everything, at the cost
+        of smaller files, and is expected to be rare — in steady state the
+        thresholds fire first.
+        """
+        ok = True
+        for writer, layer in ((self.bronze_writer, "bronze"), (self.silver_writer, "silver")):
+            try:
+                writer.flush()
+            except Exception as e:  # noqa: BLE001 — a failed layer must not skip the other
+                logger.error("forced_flush_failed", layer=layer, reason=reason, error=str(e), exc_info=True)
+                ok = False
+
+        drained = ok and not (self.bronze_writer.has_buffered() or self.silver_writer.has_buffered())
+        record_forced_flush(reason=reason, drained=drained)
+        logger.info("forced_flush", reason=reason, drained=drained, held_messages=len(self._pending_ack_ids))
+        return drained
+
+    def _deferral_bound_exceeded(self) -> str | None:
+        """Name the exceeded hold bound, or None while both are satisfied."""
+        if len(self._pending_ack_ids) >= settings.writer_max_unacked_messages:
+            return "count_bound"
+        if (
+            self._pending_since is not None
+            and (time.monotonic() - self._pending_since) >= settings.writer_max_unacked_seconds
+        ):
+            return "age_bound"
+        return None
+
+    async def _settle_and_commit(self) -> None:
+        """Make buffered events durable, then register and acknowledge them.
+
+        This is the only place the consumer acknowledges. Nothing is released
+        until a flush reports that no buffered event remains, so a message stays
+        pending — and therefore redeliverable — until its event is on disk.
+
+        Registration happens before the ACK. A crash between the two redelivers
+        the message to a process whose in-memory dedupe filter is empty, so the
+        event is written again: a duplicate, which Bronze tolerates and the
+        compactor removes. The reverse order would drop a redelivery as a
+        duplicate of something never written.
+        """
+        drained = await asyncio.to_thread(self._flush_layers)
+
+        if not drained:
+            bound = self._deferral_bound_exceeded()
+            if bound is not None:
+                drained = await asyncio.to_thread(self._force_flush_layers, bound)
+
+        self._record_pending_ack_gauges()
+
+        if not drained:
+            if self._pending_ack_ids:
+                logger.warning(
+                    "ack_deferred_flush_incomplete",
+                    held_messages=len(self._pending_ack_ids),
+                    held_seconds=round(time.monotonic() - self._pending_since, 1) if self._pending_since else 0.0,
+                )
+            return
+
+        for event_id in self._pending_register_ids:
+            self.event_deduplicator.register(event_id)
+        self._pending_register_ids.clear()
+
+        # Chunked: a held batch can be tens of thousands of ids. On failure the
+        # un-acked remainder stays held so the next commit retries it.
+        ids = list(self._pending_ack_ids)
+        for start in range(0, len(ids), _ACK_CHUNK_SIZE):
+            chunk = ids[start : start + _ACK_CHUNK_SIZE]
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                *chunk,
+            )
+            self._pending_ack_ids.difference_update(chunk)
+
+        self._pending_since = None
+        self._record_pending_ack_gauges()
+
+    def _record_pending_ack_gauges(self) -> None:
+        held_seconds = time.monotonic() - self._pending_since if self._pending_since else 0.0
+        record_pending_ack_state(count=len(self._pending_ack_ids), age_seconds=held_seconds)
+
+    def _hold_for_commit(self, message_ids: list[str]) -> None:
+        """Take ownership of processed message ids until the next commit."""
+        if not message_ids:
+            return
+        self._pending_ack_ids.update(message_ids)
+        if self._pending_since is None:
+            self._pending_since = time.monotonic()
+
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
 
-        Flow: read batch → process all concurrently → flush to disk → ACK all.
-        This ensures data is persisted before we acknowledge to Redis,
-        preventing data loss on crash.
+        Flow: read batch → process concurrently → flush → register → ACK.
+
+        Messages are only acknowledged once a flush confirms no buffered event
+        remains, so an interrupted iteration leaves them pending and
+        redeliverable rather than acknowledged and lost.
+
+        If the held set has grown past the backpressure cap the iteration stops
+        reading and only tries to settle. Continuing to read at that point would
+        grow the pending list toward the stream's retention limit, where entries
+        are trimmed and become permanently unrecoverable — strictly worse than
+        pausing.
         """
+        hard_cap = settings.writer_max_unacked_messages * _BACKPRESSURE_FACTOR
+        if len(self._pending_ack_ids) >= hard_cap:
+            logger.critical(
+                "consumer_backpressure_stop_reading",
+                held_messages=len(self._pending_ack_ids),
+                hard_cap=hard_cap,
+                reason="flush is not draining; pausing reads to bound the pending list",
+            )
+            await self._settle_and_commit()
+            return
+
         messages = await self.redis.xreadgroup(
             groupname=settings.redis_consumer_group,
             consumername=self.consumer_name,
@@ -942,12 +1087,11 @@ class EventConsumer:
         )
 
         if not messages:
-            # Flush on idle iterations to respect time-based flush thresholds.
-            # Offloaded to a thread so the gzip/parquet I/O does not block the
-            # event loop (keeps the Prometheus metrics endpoint and Redis
-            # heartbeats responsive). Safe: flush never runs concurrently with
-            # buffer appends or another flush within the single consume loop.
-            await asyncio.to_thread(self._flush_layers)
+            # An idle iteration is where a partly-filled buffer finally crosses
+            # its time threshold, so it is also where held messages usually get
+            # committed. Settling here (rather than only flushing) is what keeps
+            # a quiet stream from holding acknowledgements indefinitely.
+            await self._settle_and_commit()
             return
 
         t0 = time.monotonic()
@@ -970,32 +1114,22 @@ class EventConsumer:
         # fixes (more processing parallelism vs faster/overlapped flush I/O).
         process_seconds = time.monotonic() - t0
 
-        # Flush to disk BEFORE acknowledging. Offloaded to a thread so the
-        # blocking gzip/parquet write does not stall the event loop (and the
-        # consumer's metrics endpoint) on large batches.
-        flush_ok = await asyncio.to_thread(self._flush_layers)
+        # Hold these ids, then try to make the buffers durable and release them.
+        # Anything not released stays pending in Redis and is committed by a
+        # later iteration — or reclaimed by recovery if this process dies.
+        held_before = len(self._pending_ack_ids)
+        self._hold_for_commit(processed_ids)
+        await self._settle_and_commit()
         flush_seconds = time.monotonic() - t0 - process_seconds
-
-        # Only ACK after successful flush — on failure, messages stay
-        # pending and will be redelivered on the next iteration.
-        if processed_ids and flush_ok:
-            await self.redis.xack(
-                settings.redis_stream_name,
-                settings.redis_consumer_group,
-                *processed_ids,
-            )
-        elif processed_ids and not flush_ok:
-            logger.warning(
-                "Skipping ACK due to flush failure — messages will be redelivered",
-                pending_ack_count=len(processed_ids),
-            )
+        acked_now = held_before + len(processed_ids) - len(self._pending_ack_ids)
 
         elapsed = time.monotonic() - t0
         rate = total_messages / elapsed if elapsed > 0 else 0
         logger.info(
             "batch_processed",
             total=total_messages,
-            acked=len(processed_ids),
+            acked=max(acked_now, 0),
+            held=len(self._pending_ack_ids),
             failed=len(failed_ids),
             elapsed_seconds=round(elapsed, 3),
             process_seconds=round(process_seconds, 3),

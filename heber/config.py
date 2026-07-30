@@ -334,6 +334,29 @@ class Settings(BaseSettings):
             "serial behavior."
         ),
     )
+    writer_max_unacked_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=45.0,
+        description=(
+            "How long processed messages may stay unacknowledged, waiting for a flush to make them "
+            "durable, before a full flush is forced. Matched to the Bronze/Silver flush intervals so "
+            "the backstop normally coincides with the natural flush and file counts are unchanged. "
+            "Must stay well below redis_claim_idle_ms or the consumer's own recovery drain will "
+            "reclaim messages it is still holding."
+        ),
+    )
+    writer_max_unacked_messages: int = Field(
+        default=50_000,
+        ge=1_000,
+        le=1_000_000,
+        description=(
+            "How many processed messages may stay unacknowledged before a full flush is forced. "
+            "Bounds how far the Redis pending list can grow toward the stream's retention window, "
+            "past which un-acknowledged entries are trimmed and can never be re-read. Lowering this "
+            "is always safe — it only costs more, smaller files."
+        ),
+    )
 
     # Silver file sizing targets (PRD §7.5)
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
@@ -767,6 +790,28 @@ class Settings(BaseSettings):
                 f"Refusing to start in environment='{self.environment}' with the default "
                 f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "
                 f"HEBER_POSTGRES_URL) to real credentials for non-dev environments."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_unacked_hold_longer_than_claim_idle(self) -> "Settings":
+        """Refuse a deferral window that lets recovery reclaim in-flight messages.
+
+        Processed messages stay pending until a flush makes them durable. Once a
+        pending message exceeds ``redis_claim_idle_ms`` it becomes claimable — by
+        this consumer's own recovery drain, or by another consumer sharing the
+        group — and gets processed a second time while the first copy is still
+        buffered. The hold must therefore finish comfortably inside the claim
+        window, with room for processing, the flush itself, and scheduler jitter.
+        """
+        claim_idle_seconds = self.redis_claim_idle_ms / 1000
+        safe_ceiling = claim_idle_seconds * 0.75
+        if self.writer_max_unacked_seconds > safe_ceiling:
+            raise ValueError(
+                f"writer_max_unacked_seconds={self.writer_max_unacked_seconds} exceeds 75% of "
+                f"redis_claim_idle_ms ({claim_idle_seconds}s → {safe_ceiling}s). Messages held "
+                f"that long become claimable while still buffered, causing duplicate writes. "
+                f"Lower writer_max_unacked_seconds or raise redis_claim_idle_ms."
             )
         return self
 
