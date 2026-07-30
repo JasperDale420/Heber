@@ -116,3 +116,48 @@ def test_reads_prune_non_matching_partitions() -> None:
 
     unpruned = [c["dataset"] for c in reader.calls if not c.get("prune_by_dt")]
     assert not unpruned, f"these reads scan every partition: {unpruned}"
+
+
+def test_ftd_features_omits_the_invalid_days_outstanding_column() -> None:
+    """``ftd_days_outstanding`` was structurally always 1 and is now gone.
+
+    Data-Gateway maps the upstream ``date`` field to both the envelope's
+    ``ts_event`` and Silver's ``ftd_date``. The feature grouped by the date
+    derived from ``ts_event`` and then counted distinct ``ftd_date`` within that
+    group — the same value, so the count could never exceed one. It reached ML
+    training as a constant.
+
+    It is removed rather than repaired: SEC fails-to-deliver records are
+    aggregate outstanding balances, so how long a fail has been open cannot be
+    derived from them at all.
+    """
+    from heber.features.pipelines.market_intel_features import compute_ftd_features
+
+    day = datetime(2026, 6, 30, tzinfo=UTC)
+    ftd = pd.DataFrame(
+        [
+            {
+                "instrument_key": "equity:AAPL",
+                "ts_event": day,
+                "quantity": 1000,
+                "price": 10.0,
+                "value": 10000.0,
+                "ftd_date": "2026-06-30",
+            },
+            {
+                "instrument_key": "equity:AAPL",
+                "ts_event": day,
+                "quantity": 500,
+                "price": 11.0,
+                "value": 5500.0,
+                "ftd_date": "2026-06-30",
+            },
+        ]
+    )
+
+    out = compute_ftd_features(ftd)
+
+    assert "ftd_days_outstanding" not in out.columns
+    # The genuine aggregates are untouched.
+    assert out["ftd_quantity"].iloc[0] == 1500
+    assert out["ftd_trade_count"].iloc[0] == 2

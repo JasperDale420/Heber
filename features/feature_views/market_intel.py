@@ -135,7 +135,6 @@ ftd_features = FeatureView(
         Field(name="ftd_value", dtype=Float32),
         Field(name="ftd_trade_count", dtype=Int64),
         Field(name="ftd_avg_price", dtype=Float32),
-        Field(name="ftd_days_outstanding", dtype=Int64),
     ],
     source=ftd_source,
     online=True,

@@ -370,12 +370,13 @@ def compute_ftd_features(ftd: pd.DataFrame) -> pd.DataFrame:
         ftd_avg_price=("price", "mean"),
     ).reset_index()
 
-    # Days outstanding: count distinct ftd_dates per (symbol, date) as proxy
-    if "ftd_date" in df.columns:
-        days_out = groups["ftd_date"].nunique().reset_index(name="ftd_days_outstanding")
-        agg = agg.merge(days_out, on=["instrument_key", "date"], how="left")
-    else:
-        agg["ftd_days_outstanding"] = 1
+    # No days-outstanding column: it was structurally always 1, and the concept
+    # is not derivable from this data. Data-Gateway maps the upstream `date`
+    # field to both the envelope's ts_event and Silver's ftd_date, so counting
+    # distinct ftd_date within a group keyed on the ts_event date counted one
+    # value against itself. Beyond that, SEC fails-to-deliver records are
+    # aggregate outstanding balances — how long a fail has been open cannot be
+    # recovered from them, so there is no correct version of this feature.
 
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
