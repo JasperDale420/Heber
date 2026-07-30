@@ -13,6 +13,7 @@ class _BytesRedis:
     def __init__(self) -> None:
         self._kv: dict[str, bytes] = {}
         self._sets: dict[str, set[bytes]] = {}
+        self._ttls: dict[str, int] = {}
 
     @staticmethod
     def _to_bytes(value: str | bytes) -> bytes:
@@ -20,8 +21,14 @@ class _BytesRedis:
             return value
         return value.encode("utf-8")
 
-    def set(self, key: str, value: str | bytes) -> None:
+    def set(self, key: str, value: str | bytes, nx: bool = False, ex: int | None = None):
+        """Mirror redis-py: NX refuses an existing key and returns None."""
+        if nx and key in self._kv:
+            return None
         self._kv[key] = self._to_bytes(value)
+        if ex is not None:
+            self._ttls[key] = ex
+        return True
 
     def get(self, key: str) -> bytes | None:
         return self._kv.get(key)

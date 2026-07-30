@@ -22,6 +22,13 @@ from heber.watch.models import (
 
 logger = structlog.get_logger(__name__)
 
+# How long an alert's claim on its watch survives. Must outlast the longest
+# watch window — LEAP runs 720 hours (30 days) — or the guard could expire while
+# its watch is still polling and let a redelivery create a second one. Bounded so
+# the keyspace does not grow forever; at a few thousand alerts a day this is a
+# handful of megabytes.
+ALERT_CLAIM_TTL_SECONDS = 31 * 86400
+
 
 class WatchManager:
     """Manages alert watches in Redis.
@@ -78,9 +85,45 @@ class WatchManager:
             atr_at_alert: ATR value (optional)
 
         Returns:
-            Created AlertWatch
+            The watch for this alert — the existing one if the alert has already
+            been watched, otherwise a newly created one.
         """
         watch_id = str(uuid.uuid4())
+
+        # Claim the alert before doing anything else. SET NX is atomic, so of two
+        # concurrent deliveries exactly one proceeds; a check-then-set would let
+        # both observe "no watch yet" and create one each. The loser returns the
+        # winner's watch, which makes this method idempotent per alert_id.
+        claimed = self.redis.set(
+            WatchKeys.by_alert_key(alert_id),
+            watch_id,
+            nx=True,
+            ex=ALERT_CLAIM_TTL_SECONDS,
+        )
+
+        if not claimed:
+            existing_id = self._normalize_redis_id(self.redis.get(WatchKeys.by_alert_key(alert_id)))
+            existing = self.get_watch(existing_id) if existing_id else None
+            if existing is not None:
+                logger.info(
+                    "Alert already watched — returning existing watch",
+                    alert_id=alert_id,
+                    watch_id=existing.watch_id,
+                    occ_symbol=occ_symbol,
+                )
+                return existing
+            # The claim outlived its watch (deleted, or evicted). Nothing is
+            # being duplicated, so take the claim over and create a fresh watch.
+            logger.warning(
+                "Alert claim had no watch behind it — recreating",
+                alert_id=alert_id,
+                stale_watch_id=existing_id,
+            )
+            self.redis.set(
+                WatchKeys.by_alert_key(alert_id),
+                watch_id,
+                ex=ALERT_CLAIM_TTL_SECONDS,
+            )
 
         # Calculate window end in trading time (skips non-market hours)
         config = POLL_CONFIG[horizon]

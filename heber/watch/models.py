@@ -182,9 +182,19 @@ class WatchKeys:
     # List: snapshots:{watch_id} -> list of WatchSnapshot JSON
     SNAPSHOTS = "heber:snapshots:{watch_id}"
 
+    # String: watch:by_alert:{alert_id} -> watch_id
+    # Claimed with SET NX so one alert can only ever own one watch, however many
+    # times it is delivered. Without it a redelivery creates a second watch that
+    # polls the same contract and writes its own Gold label rows.
+    BY_ALERT = "heber:watch:by_alert:{alert_id}"
+
     @classmethod
     def watch_key(cls, watch_id: str) -> str:
         return cls.WATCH.format(watch_id=watch_id)
+
+    @classmethod
+    def by_alert_key(cls, alert_id: str) -> str:
+        return cls.BY_ALERT.format(alert_id=alert_id)
 
     @classmethod
     def by_symbol_key(cls, occ_symbol: str) -> str:
