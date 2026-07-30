@@ -47,6 +47,7 @@ def _audit_payloads(fallback_root) -> list[dict]:
 def test_all_invalid_silver_rows_are_audited_not_silently_dropped(tmp_path, monkeypatch) -> None:
     from heber.config import settings
 
+    monkeypatch.setattr(settings, "data_root", tmp_path)
     fallback = tmp_path / "dlq_fallback"
     monkeypatch.setattr(settings, "dlq_fallback_dir", fallback)
 
@@ -65,6 +66,7 @@ def test_partially_invalid_silver_rows_are_audited(tmp_path, monkeypatch) -> Non
     """The salvage path must audit what it drops, not just log the survivors."""
     from heber.config import settings
 
+    monkeypatch.setattr(settings, "data_root", tmp_path)
     fallback = tmp_path / "dlq_fallback"
     monkeypatch.setattr(settings, "dlq_fallback_dir", fallback)
 
@@ -91,6 +93,7 @@ def test_rejected_rows_do_not_poison_the_caller(tmp_path, monkeypatch) -> None:
     """
     from heber.config import settings
 
+    monkeypatch.setattr(settings, "data_root", tmp_path)
     monkeypatch.setattr(settings, "dlq_fallback_dir", tmp_path / "dlq_fallback")
 
     write_silver_parquet(
@@ -107,6 +110,7 @@ def test_audit_failure_does_not_break_the_flush(tmp_path, monkeypatch) -> None:
     from heber.config import settings
     from heber.writer import utils as writer_utils
 
+    monkeypatch.setattr(settings, "data_root", tmp_path)
     monkeypatch.setattr(settings, "dlq_fallback_dir", tmp_path / "dlq_fallback")
 
     def boom(*args, **kwargs):

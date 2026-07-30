@@ -16,7 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -389,6 +389,20 @@ def compute_ftd_features(ftd: pd.DataFrame) -> pd.DataFrame:
 
 ALL_DATASETS = ("darkpool", "greek_exposure", "options_sentiment", "ftd")
 
+# Extra history to read for feeds whose source publishes on a lag, keyed by
+# dataset. The poller runs with a one-day lookback, which is right for feeds that
+# arrive the same day — but fails-to-deliver data is published by the SEC roughly
+# 15-30 days after the settlement date it describes, so a one-day window can
+# never contain an FTD record and the dataset produced zero rows every night.
+# 45 days covers the observed lag with margin for the SEC's twice-monthly
+# release cadence.
+#
+# Deliberately per-dataset: the other feeds in this pipeline are timely, and
+# widening their reads would multiply the scan cost for nothing.
+FTD_LOOKBACK_DAYS = 45
+
+DATASET_EXTRA_LOOKBACK_DAYS = {"ftd": FTD_LOOKBACK_DAYS}
+
 DATASET_TO_GOLD_NAME = {
     "darkpool": "darkpool_features",
     "greek_exposure": "greek_exposure_features",
@@ -440,6 +454,13 @@ class MarketIntelPipeline:
         stats: dict[str, Any] = {}
         time_range = (start_date, end_date)
 
+        def window_for(dataset: str) -> tuple[datetime, datetime]:
+            """Read window for a dataset, extended if its source publishes late."""
+            extra = DATASET_EXTRA_LOOKBACK_DAYS.get(dataset, 0)
+            if not extra:
+                return time_range
+            return (start_date - timedelta(days=extra), end_date)
+
         # Pre-load Silver data for requested datasets
         darkpool_data = None
         greek_data = None
@@ -450,19 +471,25 @@ class MarketIntelPipeline:
 
         if "darkpool" in datasets:
             logger.info("Loading Silver darkpool", start=start_date.isoformat(), end=end_date.isoformat())
-            darkpool_data = self.reader.read_silver("darkpool", time_range=time_range)
+            darkpool_data = self.reader.read_silver("darkpool", time_range=window_for("darkpool"), prune_by_dt=True)
             logger.info("Loaded darkpool", rows=len(darkpool_data))
 
         if "greek_exposure" in datasets:
             logger.info("Loading Silver greek_exposure")
-            greek_data = self.reader.read_silver("greek_exposure", time_range=time_range)
+            greek_data = self.reader.read_silver(
+                "greek_exposure", time_range=window_for("greek_exposure"), prune_by_dt=True
+            )
             logger.info("Loaded greek_exposure", rows=len(greek_data))
 
         if "options_sentiment" in datasets:
             logger.info("Loading Silver iv_rank, market_tide, sector_tide")
-            iv_rank_data = self.reader.read_silver("iv_rank", time_range=time_range)
-            market_tide_data = self.reader.read_silver("market_tide", time_range=time_range)
-            sector_tide_data = self.reader.read_silver("sector_tide", time_range=time_range)
+            iv_rank_data = self.reader.read_silver("iv_rank", time_range=window_for("iv_rank"), prune_by_dt=True)
+            market_tide_data = self.reader.read_silver(
+                "market_tide", time_range=window_for("market_tide"), prune_by_dt=True
+            )
+            sector_tide_data = self.reader.read_silver(
+                "sector_tide", time_range=window_for("sector_tide"), prune_by_dt=True
+            )
             logger.info(
                 "Loaded sentiment sources",
                 iv_rank_rows=len(iv_rank_data),
@@ -472,7 +499,7 @@ class MarketIntelPipeline:
 
         if "ftd" in datasets:
             logger.info("Loading Silver ftd")
-            ftd_data = self.reader.read_silver("ftd", time_range=time_range)
+            ftd_data = self.reader.read_silver("ftd", time_range=window_for("ftd"), prune_by_dt=True)
             logger.info("Loaded ftd", rows=len(ftd_data))
 
         # Compute each dataset
@@ -503,9 +530,13 @@ class MarketIntelPipeline:
 
                 # Filter to requested date range only
                 if "ts_event" in df.columns:
+                    # Filter on the same window this dataset was read over. Using
+                    # the requested range here would throw away the lagged rows
+                    # the extended window exists to fetch.
+                    ds_start, ds_end = window_for(ds_name)
                     df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-                    df = df[df["ts_event"] >= pd.to_datetime(start_date, utc=True)]
-                    df = df[df["ts_event"] <= pd.to_datetime(end_date, utc=True)]
+                    df = df[df["ts_event"] >= pd.to_datetime(ds_start, utc=True)]
+                    df = df[df["ts_event"] <= pd.to_datetime(ds_end, utc=True)]
 
                 if not dry_run:
                     output_path = self.reader.write_gold(
