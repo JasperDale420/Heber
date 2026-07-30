@@ -82,12 +82,24 @@ class BronzeWriter:
             self.last_flush = now
 
     def flush(self) -> None:
-        """Flush all buffers immediately."""
-        for partition_key in list(self.buffers):
-            events = self.buffers[partition_key]
-            if events:
-                self._flush_partition(partition_key, events)
-            del self.buffers[partition_key]
+        """Flush every buffered partition, regardless of size or elapsed time.
+
+        This is the shutdown and durability-backstop path, so every partition
+        must be attempted even when one fails: a serial loop that propagated the
+        first error left every partition behind it unwritten, and at shutdown
+        those buffers are simply discarded. The shared helper attempts all of
+        them, drops a partition only once its write succeeds, keeps a failed
+        partition's events buffered, and re-raises the first error so the caller
+        does not acknowledge the batch.
+        """
+        now = datetime.now(UTC)
+        if flush_partitions_concurrent(
+            self.buffers,
+            self._flush_partition,
+            list(self.buffers),
+            settings.writer_flush_max_workers,
+        ):
+            self.last_flush = now
 
     def _flush_partition(self, partition_key: str, events: list[dict]) -> None:
         """Write events to a partition file."""
