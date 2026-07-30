@@ -123,6 +123,15 @@ writer_files_written_total = _get_or_create(
     ["layer", "dataset"],
 )
 
+writer_silver_rows_rejected_total = _get_or_create(
+    Counter,
+    "heber_writer_silver_rows_rejected_total",
+    "Silver rows dropped because Arrow could not coerce them to the feed schema. "
+    "The rows are written to the DLQ fallback directory for replay from Bronze; a "
+    "non-zero rate means a feed's payload has drifted from its Silver schema.",
+    ["dataset"],
+)
+
 writer_flush_duration_seconds = _get_or_create(
     Histogram,
     "heber_writer_flush_duration_seconds",
@@ -357,6 +366,11 @@ def record_dedupe_saturated_pass() -> None:
 def record_dedupe_store_error(operation: str) -> None:
     """Record a Redis dedupe backing-store error (dedupe failed open)."""
     consumer_dedupe_store_errors_total.labels(operation=operation).inc()
+
+
+def record_silver_rows_rejected(dataset: str, rows: int) -> None:
+    """Record Silver rows Arrow could not coerce to the feed schema."""
+    writer_silver_rows_rejected_total.labels(dataset=dataset).inc(rows)
 
 
 def record_write(

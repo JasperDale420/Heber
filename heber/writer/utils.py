@@ -13,11 +13,67 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.models.envelope import EventEnvelope
-from heber.ops.metrics import record_write, record_write_error
+from heber.ops.metrics import record_silver_rows_rejected, record_write, record_write_error
+from heber.writer.dlq_fallback import write_dlq_fallback_file
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.normalizer import explode_aggregate_payload
 
 logger = structlog.get_logger(__name__)
+
+
+def _audit_rejected_silver_rows(
+    rejected: list[dict[str, Any]],
+    partition_key: str,
+    dataset: str,
+    reason: str,
+) -> None:
+    """Persist Silver rows Arrow refused, so a schema drift is recoverable.
+
+    Bronze holds the raw envelopes, so these rows can be rebuilt — but only if
+    something records which ones were rejected. Writing them to the DLQ fallback
+    directory turns a silent drop into a countable, replayable audit record.
+
+    Never raises: the flush that triggered this must still complete, and the
+    caller must still be able to acknowledge. A failure here is logged and the
+    rows are reported in the log line as a last resort.
+    """
+    from heber.config import settings
+
+    sample = [row.get("event_id") for row in rejected[:5]]
+    try:
+        fallback_path = write_dlq_fallback_file(
+            settings.dlq_fallback_path,
+            "silver_rejected_rows",
+            f"{dataset}:{partition_key}:{datetime.now(UTC).isoformat()}",
+            {
+                "reason": reason,
+                "dataset": dataset,
+                "partition": partition_key,
+                "rejected_rows": rejected,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — the flush must not fail on its own audit
+        logger.error(
+            "silver_rejected_rows_audit_failed",
+            partition=partition_key,
+            dataset=dataset,
+            rejected=len(rejected),
+            sample_event_ids=sample,
+            error=str(exc),
+            exc_info=True,
+        )
+        return
+
+    record_silver_rows_rejected(dataset, len(rejected))
+    logger.error(
+        "silver_rows_rejected",
+        partition=partition_key,
+        dataset=dataset,
+        rejected=len(rejected),
+        sample_event_ids=sample,
+        reason=reason,
+        audit_path=str(fallback_path),
+    )
 
 
 def flush_partitions_concurrent(
@@ -214,12 +270,25 @@ def write_silver_parquet(
             total_rows=len(rows),
         )
         valid_rows = []
+        rejected_rows = []
         for i, row in enumerate(rows):
             try:
                 pa.Table.from_pylist([row], schema=schema)
                 valid_rows.append(row)
             except (pa.ArrowTypeError, pa.ArrowInvalid):
                 logger.debug("Skipping bad Silver row", index=i, feed=dataset)
+                rejected_rows.append(row)
+
+        # Every rejected row gets an audit record whether some rows survived or
+        # none did. Without this the caller sees a successful flush, drops the
+        # buffer and acknowledges, and the rows exist nowhere afterwards.
+        if rejected_rows:
+            _audit_rejected_silver_rows(
+                rejected_rows,
+                partition_key,
+                dataset,
+                reason=type(e).__name__,
+            )
 
         if valid_rows:
             table = pa.Table.from_pylist(valid_rows, schema=schema)
@@ -249,6 +318,10 @@ def write_silver_parquet(
                 file=str(file_path),
             )
         else:
+            # No Parquet is written, but the rows were audited above. Returning
+            # normally is deliberate: raising would make a permanently-bad
+            # partition a poison pill that stays buffered, keeps the writer's
+            # durability predicate false, and halts the consumer.
             record_write_error(layer="silver", error_type=type(e).__name__)
             logger.error("All Silver rows invalid, partition skipped", partition=partition_key)
     except OSError as e:
