@@ -853,6 +853,13 @@ class EventConsumer:
             consumer=self.consumer_name,
         )
 
+        try:
+            await self._run_loop(error_streak)
+        finally:
+            await self._shutdown()
+
+    async def _run_loop(self, error_streak: int) -> None:
+        """The consume loop proper. Exceptions propagate to ``run``'s finally."""
         while self.running:
             try:
                 # Liveness heartbeat at the top of every iteration — stays fresh while
@@ -919,7 +926,44 @@ class EventConsumer:
                     )
                 await asyncio.sleep(delay)
 
-        self._final_flush()
+    async def _shutdown(self) -> None:
+        """Flush, commit held acknowledgements, then close Redis — in that order.
+
+        Runs from ``run``'s ``finally``, so it covers the exits that re-raise
+        (cancellation, a fatal ``ResponseError``) as well as a clean stop. Each
+        step is isolated: a failure here must never replace the exception that
+        caused the shutdown, which is the actual diagnostic.
+
+        The unconditional flush comes first and is synchronous, so it always
+        completes. The commit that follows is best-effort — under cancellation
+        its ``await`` re-raises immediately and the acknowledgements are skipped.
+        That is the safe direction: unacknowledged means redelivered, never lost.
+        """
+        try:
+            self._final_flush()
+        except Exception as e:  # noqa: BLE001 — must not mask the shutdown cause
+            logger.error("final_flush_failed", error=str(e), exc_info=True)
+
+        try:
+            await self._settle_and_commit()
+        except Exception as e:  # noqa: BLE001 — must not mask the shutdown cause
+            logger.error("final_commit_failed", error=str(e), exc_info=True)
+        except asyncio.CancelledError:
+            logger.info(
+                "final_commit_skipped_cancelled",
+                held_messages=len(self._pending_ack_ids),
+            )
+
+        if self.redis is not None:
+            try:
+                # aclose(), not close(): redis-py deprecated close() in 5.0.1 in
+                # favour of aclose(). The bundled type stubs still only describe
+                # the sync client's surface, hence the narrow ignore.
+                await self.redis.aclose()  # type: ignore[attr-defined]
+            except Exception as e:  # noqa: BLE001 — must not mask the shutdown cause
+                logger.error("redis_close_failed", error=str(e), exc_info=True)
+
+        logger.info("Consumer stopped", held_messages=len(self._pending_ack_ids))
 
     def _flush_layers(self) -> bool:
         """Flush Bronze and Silver, reporting whether everything reached storage.
@@ -1146,16 +1190,21 @@ class EventConsumer:
             )
 
     def _final_flush(self) -> None:
-        """Perform final flush when consumer stops."""
-        self.bronze_writer.flush()
-        self.silver_writer.flush()
-        logger.info("Consumer stopped")
+        """Write every buffered partition, isolating a failure to its own layer."""
+        for writer, layer in ((self.bronze_writer, "bronze"), (self.silver_writer, "silver")):
+            try:
+                writer.flush()
+            except Exception as e:  # noqa: BLE001 — a broken layer must not skip the other
+                logger.error("final_flush_layer_failed", layer=layer, error=str(e), exc_info=True)
 
     async def stop(self):
-        """Stop the consumer."""
+        """Signal the loop to stop.
+
+        Deliberately does not close Redis: the shutdown path still needs the
+        connection to acknowledge whatever it manages to flush. Closing here left
+        a final acknowledgement impossible.
+        """
         self.running = False
-        if self.redis:
-            await self.redis.close()
 
 
 async def main():

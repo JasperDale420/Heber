@@ -103,6 +103,10 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    # Shutdown flushes every buffered partition and then acknowledges what it
+    # wrote. Docker's 10s default SIGKILLs mid-flush on a large buffer, which
+    # discards exactly the events the deferred-ACK path is protecting.
+    stop_grace_period: 60s
     restart: always
 
   # Dedicated consumer for the backfill stream, isolated from the live heber-consumer so a
@@ -146,6 +150,10 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    # See heber-consumer: a backfill batch scatters across hundreds of date
+    # partitions, so its shutdown flush needs even more headroom than the live
+    # consumer's before Docker escalates to SIGKILL.
+    stop_grace_period: 60s
     restart: always
 
   heber-compactor:
