@@ -60,7 +60,15 @@ cd "${PROJECT_DIR}"
 # in uv.lock) then just exits and relaunches every StartInterval with the parse
 # error buried in stderr. Do it up front with a distinct, greppable diagnostic
 # so the failure is alertable instead of looping quietly.
-if ! uv sync 2>&1; then
+#
+# --inexact: install what the lock requires, but do not uninstall anything else.
+# These launchd services share the project venv with whoever is working in the
+# repo, and several of them run every few minutes. A plain `uv sync` prunes every
+# package outside the default dependency set on each run — so it repeatedly
+# deleted the `dev` extra (pytest, mypy, ruff) out from under an active session.
+# The runner only needs its own dependencies present; removing other people's is
+# not its job.
+if ! uv sync --inexact 2>&1; then
   echo "HEBER_RUNNER_ERROR: uv sync failed for service '${SERVICE}' — dependency lock may be broken (check uv.lock for merge conflicts)." >&2
   exit 70
 fi
