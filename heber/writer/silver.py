@@ -115,7 +115,15 @@ class SilverWriter:
         """
         self.buffers[partition_key].append(row)
 
-    def flush_if_needed(self) -> None:
+    def has_buffered(self) -> bool:
+        """True while any row is held in memory and not yet written.
+
+        Emptied partition keys can linger as empty lists, so test the values
+        rather than the key count.
+        """
+        return any(self.buffers.values())
+
+    def flush_if_needed(self) -> bool:
         """Flush buffers if conditions are met.
 
         A partition is flushed when:
@@ -127,6 +135,11 @@ class SilverWriter:
         The min-rows gate prevents creating tiny parquet files during backfill,
         where a single XREADGROUP batch scatters records across hundreds of
         date partitions with only 2-4 rows each.
+
+        Returns whether any partition was actually written. That is a reporting
+        signal only — it says "something was flushed", not "everything is
+        durable", so callers deciding whether to acknowledge must use
+        ``has_buffered()`` instead.
         """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
@@ -147,8 +160,10 @@ class SilverWriter:
                 or time_triggered
             )
         ]
-        if flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers):
+        wrote = flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers)
+        if wrote:
             self.last_flush = now
+        return wrote
 
     def flush(self) -> None:
         """Flush every buffered partition, regardless of row count or elapsed time.

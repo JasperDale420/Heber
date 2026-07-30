@@ -55,7 +55,15 @@ class BronzeWriter:
         event_dict = envelope.model_dump(mode="json")
         self.buffers[partition_key].append(event_dict)
 
-    def flush_if_needed(self) -> None:
+    def has_buffered(self) -> bool:
+        """True while any event is held in memory and not yet written.
+
+        Emptied partition keys can linger as empty lists, so test the values
+        rather than the key count.
+        """
+        return any(self.buffers.values())
+
+    def flush_if_needed(self) -> bool:
         """Flush buffers if conditions are met.
 
         Due partitions are flushed concurrently (``writer_flush_max_workers``);
@@ -65,6 +73,11 @@ class BronzeWriter:
         retaining emptied entries would leak one dead key per
         (provider,feed,dt,hour) forever, and a failed flush keeps its events
         buffered for redelivery.
+
+        Returns whether any partition was actually written. That is a reporting
+        signal only — it says "something was flushed", not "everything is
+        durable", so callers deciding whether to acknowledge must use
+        ``has_buffered()`` instead.
         """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
@@ -78,8 +91,10 @@ class BronzeWriter:
                 or elapsed >= settings.bronze_flush_interval_seconds
             )
         ]
-        if flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers):
+        wrote = flush_partitions_concurrent(self.buffers, self._flush_partition, due, settings.writer_flush_max_workers)
+        if wrote:
             self.last_flush = now
+        return wrote
 
     def flush(self) -> None:
         """Flush every buffered partition, regardless of size or elapsed time.

@@ -891,11 +891,22 @@ class EventConsumer:
         self._final_flush()
 
     def _flush_layers(self) -> bool:
-        """Flush Bronze and Silver independently.
+        """Flush Bronze and Silver, reporting whether everything reached storage.
 
-        Returns True if both flushes succeed. On failure the data remains
-        buffered and the caller must NOT acknowledge the messages so that
-        Redis can redeliver them on the next iteration.
+        Returns True only when no buffered event remains in either writer. A
+        successful call to ``flush_if_needed()`` is not enough on its own: it
+        writes only the partitions past a size or elapsed-time threshold, so on a
+        quiet iteration it writes nothing and still returns normally. Treating
+        that as success is what allowed a batch to be acknowledged while its
+        events were still in RAM, where a container kill lost them for good —
+        an acknowledged message is never redelivered.
+
+        Callers must not acknowledge when this returns False; the events stay
+        buffered and the messages stay pending for a later attempt.
+
+        The guarantee is scoped to process death and container kill. Partitions
+        are published with an atomic rename and no ``fsync``, so a host power
+        loss can still lose an acknowledged record.
         """
         ok = True
         try:
@@ -910,7 +921,10 @@ class EventConsumer:
             logger.error("Silver flush failed", error=str(e), exc_info=True)
             ok = False
 
-        return ok
+        if not ok:
+            return False
+
+        return not (self.bronze_writer.has_buffered() or self.silver_writer.has_buffered())
 
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
