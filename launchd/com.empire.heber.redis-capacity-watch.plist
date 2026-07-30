@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.heber.redis-capacity-watch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Heber/scripts/redis_capacity_watch.sh</string>
+    </array>
+    <!-- Every 60s: per-container memory, Redis persistence/fork stats, and a
+         self-verifying kernel OOM probe. Correlate against the die/kill
+         timestamps from the event collector. -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Heber</string>
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/redis-capacity-watch.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/redis-capacity-watch.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

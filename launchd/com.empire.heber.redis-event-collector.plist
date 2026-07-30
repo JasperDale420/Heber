@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.heber.redis-event-collector</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jacobmcmillan/Empire/Heber/scripts/redis_event_collector.sh</string>
+    </array>
+    <!-- KeepAlive, not StartInterval: `docker events` is a blocking stream, so
+         this is a long-running attach rather than a poll. It must come back
+         after a Docker daemon restart, which is itself one of the events being
+         investigated. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Heber</string>
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/redis-event-collector.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/redis-event-collector.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
