@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -15,10 +18,74 @@ import structlog
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_silver_rows_rejected, record_write, record_write_error
 from heber.writer.dlq_fallback import write_dlq_fallback_file
+from heber.writer.durability import create_durable_directory
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.normalizer import explode_aggregate_payload
 
 logger = structlog.get_logger(__name__)
+
+
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def durable_replace(tmp_path: Path, target_path: Path) -> None:
+    """Publish a completed file so its bytes and directory entry survive power loss."""
+    with tmp_path.open("rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, target_path)
+    _fsync_directory(target_path.parent)
+
+
+def commit_id_for_message_ids(message_ids: list[str]) -> str:
+    """Return the stable identifier shared by a commit receipt and chunk ACK."""
+    return hashlib.sha256("\n".join(sorted(message_ids)).encode()).hexdigest()
+
+
+def write_batch_commit_marker(
+    data_root: Path,
+    *,
+    stream: str,
+    group: str,
+    consumer: str,
+    message_ids: list[str],
+) -> Path:
+    """Durably record the Redis batch that reached both storage layers."""
+    ordered_ids = sorted(message_ids)
+    ids_digest = commit_id_for_message_ids(ordered_ids)
+    committed_at = datetime.now(UTC)
+    marker_dir = data_root / "_ingest_commits" / f"dt={committed_at:%Y-%m-%d}"
+    create_durable_directory(marker_dir, root=data_root)
+    marker_path = marker_dir / "commits.jsonl"
+    payload = {
+        "stream": stream,
+        "group": group,
+        "consumer": consumer,
+        "message_count": len(ordered_ids),
+        "first_message_id": ordered_ids[0],
+        "last_message_id": ordered_ids[-1],
+        "message_ids_sha256": ids_digest,
+        "committed_at": committed_at.isoformat(),
+    }
+
+    serialized = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    fd = os.open(marker_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+    try:
+        remaining = memoryview(serialized)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError("commit marker write made no progress")
+            remaining = remaining[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _fsync_directory(marker_dir)
+    return marker_path
 
 
 def _audit_rejected_silver_rows(
@@ -41,8 +108,11 @@ def _audit_rejected_silver_rows(
 
     sample = [row.get("event_id") for row in rejected[:5]]
     try:
+        fallback_root = settings.dlq_fallback_path
+        data_root = settings.data_root.resolve(strict=True)
+        durable_root = data_root if fallback_root.resolve(strict=False).is_relative_to(data_root) else fallback_root
         fallback_path = write_dlq_fallback_file(
-            settings.dlq_fallback_path,
+            fallback_root,
             "silver_rejected_rows",
             f"{dataset}:{partition_key}:{datetime.now(UTC).isoformat()}",
             {
@@ -51,6 +121,7 @@ def _audit_rejected_silver_rows(
                 "partition": partition_key,
                 "rejected_rows": rejected,
             },
+            durable_root=durable_root,
         )
     except Exception as exc:  # noqa: BLE001 — the flush must not fail on its own audit
         logger.error(
@@ -229,7 +300,8 @@ def write_silver_parquet(
             context={"partition": partition_key, "file": str(file_path)},
         )
 
-        # Write Parquet with compression.
+        # Write Parquet to a temporary file; durable_replace fsyncs and
+        # atomically publishes it below.
         # use_dictionary=False prevents dictionary encoding of low-cardinality
         # string columns (feed, instrument_type, provider, source) so that all
         # Silver files use plain string types.  Mixed encoding (plain vs
@@ -244,7 +316,7 @@ def write_silver_parquet(
             row_group_size=100_000,
             use_dictionary=False,
         )
-        tmp_path.rename(file_path)
+        durable_replace(tmp_path, file_path)
         elapsed = (datetime.now(UTC) - started_at).total_seconds()
         bytes_written = file_path.stat().st_size if file_path.exists() else 0
         record_write(
@@ -300,7 +372,7 @@ def write_silver_parquet(
             )
             salvage_tmp = file_path.with_suffix(".parquet.tmp")
             pq.write_table(table, salvage_tmp, compression="snappy", row_group_size=100_000, use_dictionary=False)
-            salvage_tmp.rename(file_path)
+            durable_replace(salvage_tmp, file_path)
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             bytes_written = file_path.stat().st_size if file_path.exists() else 0
             record_write(

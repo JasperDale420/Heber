@@ -77,7 +77,7 @@ class _ConsumeStubRedis:
         self.acked.append([i if isinstance(i, str) else i.decode() for i in ids])
         if self._data_root is not None:
             self.ack_snapshots.append(
-                sorted(p.name for p in self._data_root.rglob("*") if p.suffix in {".gz", ".parquet", ".tmp"})
+                sorted(p.name for p in self._data_root.rglob("*") if p.suffix in {".gz", ".parquet", ".jsonl", ".tmp"})
             )
         return len(ids)
 
@@ -148,7 +148,6 @@ async def test_pending_acks_accumulate_then_commit_together(tmp_path, monkeypatc
     await consumer._consume_iteration()
     assert stub.acked == []
 
-    # Let the real thresholds fire, then settle.
     monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
     monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
     await consumer._settle_and_commit()
@@ -175,6 +174,31 @@ async def test_ack_happens_only_after_the_files_exist(tmp_path, monkeypatch) -> 
     snapshot = stub.ack_snapshots[0]
     assert any(name.endswith(".jsonl.gz") for name in snapshot)
     assert not any(name.endswith(".tmp") for name in snapshot)
+
+
+async def test_commit_marker_failure_keeps_batch_unacknowledged(tmp_path, monkeypatch) -> None:
+    """Files without the durable receipt are recoverable, but not ACK-safe."""
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
+    monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
+    _wide_bounds(monkeypatch)
+    stub = _ConsumeStubRedis(data_root=tmp_path)
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+    stub.batches = [[_entry("1-0", _make_envelope("evt-marker-fail"))]]
+
+    def fail_marker(*_args, **_kwargs):
+        raise OSError("marker disk unavailable")
+
+    monkeypatch.setattr(consumer_module, "write_batch_commit_marker", fail_marker)
+
+    with pytest.raises(OSError, match="marker disk unavailable"):
+        await consumer._consume_iteration()
+
+    assert stub.acked == []
+    assert consumer._pending_ack_ids == {"1-0"}
+    assert list((tmp_path / "bronze").rglob("*.jsonl.gz"))
+    assert list((tmp_path / "silver").rglob("*.parquet"))
 
 
 async def test_register_is_deferred_until_the_flush_commits(tmp_path, monkeypatch) -> None:
@@ -297,7 +321,6 @@ async def test_forced_flush_when_held_count_exceeds_bound(tmp_path, monkeypatch)
 
     await consumer._consume_iteration()
 
-    # No threshold was met, so only the count bound can have produced this.
     assert stub.all_acked == {"1-0", "2-0"}
     assert consumer.bronze_writer.has_buffered() is False
 
@@ -315,7 +338,6 @@ async def test_forced_flush_when_held_age_exceeds_bound(tmp_path, monkeypatch) -
     await consumer._consume_iteration()
     assert stub.acked == []
 
-    # Age the hold past the bound.
     consumer._pending_since = consumer._pending_since - 60.0
     await consumer._settle_and_commit()
 
@@ -323,7 +345,7 @@ async def test_forced_flush_when_held_age_exceeds_bound(tmp_path, monkeypatch) -
 
 
 async def test_no_forced_flush_while_within_both_bounds(tmp_path, monkeypatch) -> None:
-    """Protects throughput: the backstop must stay rare in steady state."""
+    """Protect throughput: the backstop must stay rare in steady state."""
     _never_flush(monkeypatch)
     _wide_bounds(monkeypatch)
     stub = _ConsumeStubRedis()

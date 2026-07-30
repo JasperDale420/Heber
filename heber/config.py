@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 from urllib.parse import unquote, urlsplit
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Fallback Postgres password used only when HEBER_POSTGRES_PASSWORD is unset.
@@ -256,6 +256,37 @@ class Settings(BaseSettings):
         le=50,
         description="Max messages processed concurrently within each XREADGROUP batch",
     )
+
+    # Writer transport. Redis remains the default until the JetStream consumer
+    # has passed the production replay and fault-injection gates.
+    ingest_transport: Literal["redis", "jetstream"] = Field(default="redis")
+    ingest_lane: Literal["live", "backfill"] = Field(default="live")
+    nats_url: str = Field(default="nats://localhost:4222")
+    nats_username: str | None = Field(default=None)
+    nats_password: SecretStr | None = Field(default=None)
+    jetstream_live_stream_name: str = Field(default="HEBER_LIVE", min_length=1)
+    jetstream_backfill_stream_name: str = Field(default="HEBER_BACKFILL", min_length=1)
+    jetstream_live_durable_name: str = Field(default="heber-live-writers", min_length=1)
+    jetstream_backfill_durable_name: str = Field(default="heber-backfill-writers", min_length=1)
+    jetstream_ack_wait_seconds: int = Field(default=300, ge=1)
+    jetstream_max_ack_pending: int = Field(
+        default=0,
+        ge=0,
+        description="Maximum unacknowledged JetStream messages; 0 derives twice the Redis read batch size",
+    )
+    jetstream_reconnect_backoff_seconds: float = Field(default=1.0, ge=0.1, le=60)
+    backfill_proof_max_expected_records: int = Field(
+        default=5000,
+        ge=1,
+        description="Largest accepted backfill chunk proof; must fit inside JetStream max_ack_pending",
+    )
+    backfill_proof_ttl_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description="Expiry for incomplete Redis proof accumulators; final acknowledgements do not expire",
+    )
+    backfill_readiness_check_timeout_seconds: float = Field(default=5.0, ge=0.1, le=60)
+
     dedupe_redis_enabled: bool = Field(
         default=False,
         description="Verify Bloom-filter dedupe hits against an exact Redis store "
@@ -794,6 +825,37 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_ingest_transport(self) -> "Settings":
+        """Derive safe consumer limits and reject incomplete JetStream credentials."""
+        if self.jetstream_max_ack_pending == 0:
+            self.jetstream_max_ack_pending = self.redis_read_batch_size * 2
+            if self.ingest_lane == "backfill":
+                self.jetstream_max_ack_pending = max(
+                    self.jetstream_max_ack_pending,
+                    self.backfill_proof_max_expected_records,
+                )
+
+        if self.ingest_transport != "jetstream":
+            return self
+
+        credentials_present = (
+            self.nats_username is not None
+            and bool(self.nats_username.strip())
+            and self.nats_password is not None
+            and bool(self.nats_password.get_secret_value())
+        )
+        if not credentials_present:
+            raise ValueError("JetStream transport requires HEBER_NATS_USERNAME and HEBER_NATS_PASSWORD")
+        if not self.nats_url.startswith(("nats://", "tls://")):
+            raise ValueError("HEBER_NATS_URL must use nats:// or tls://")
+        if self.ingest_lane == "backfill" and self.jetstream_max_ack_pending < self.backfill_proof_max_expected_records:
+            raise ValueError(
+                "jetstream_max_ack_pending must be at least "
+                "HEBER_BACKFILL_PROOF_MAX_EXPECTED_RECORDS for the backfill lane"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _reject_unacked_hold_longer_than_claim_idle(self) -> "Settings":
         """Refuse a deferral window that lets recovery reclaim in-flight messages.
 
@@ -834,6 +896,20 @@ class Settings(BaseSettings):
         if self.dlq_fallback_dir:
             return self.dlq_fallback_dir
         return self.data_root / "dlq_fallback"
+
+    @property
+    def jetstream_stream_name(self) -> str:
+        """Return the stream assigned to this writer lane."""
+        if self.ingest_lane == "backfill":
+            return self.jetstream_backfill_stream_name
+        return self.jetstream_live_stream_name
+
+    @property
+    def jetstream_durable_name(self) -> str:
+        """Return the durable consumer assigned to this writer lane."""
+        if self.ingest_lane == "backfill":
+            return self.jetstream_backfill_durable_name
+        return self.jetstream_live_durable_name
 
     @property
     def llm_effective_base_url(self) -> str | None:

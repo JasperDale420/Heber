@@ -26,7 +26,10 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_write_dlq_fallback_file_atomic_write(tmp_path) -> None:
+def test_write_dlq_fallback_file_atomic_write(tmp_path, monkeypatch) -> None:
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(dlq_fallback_module.os, "fsync", fsync_calls.append)
+
     path = write_dlq_fallback_file(
         fallback_root=tmp_path,
         stream="heber:events:dlq",
@@ -41,6 +44,23 @@ def test_write_dlq_fallback_file_atomic_write(tmp_path) -> None:
 
     sibling_temps = [p for p in path.parent.iterdir() if p.suffix == ".tmp"]
     assert sibling_temps == []
+    assert len(fsync_calls) == 3
+
+
+def test_write_dlq_fallback_file_persists_new_fallback_and_partition_links(tmp_path, monkeypatch) -> None:
+    fsync_calls: list[int] = []
+    monkeypatch.setattr(dlq_fallback_module.os, "fsync", fsync_calls.append)
+
+    path = write_dlq_fallback_file(
+        fallback_root=tmp_path / "dlq",
+        durable_root=tmp_path,
+        stream="heber:events:dlq",
+        event_id="evt-first-write",
+        payload={"foo": "bar"},
+    )
+
+    assert path.exists()
+    assert len(fsync_calls) == 4
 
 
 def test_write_dlq_fallback_file_filename_safe_for_colon_streams(tmp_path) -> None:

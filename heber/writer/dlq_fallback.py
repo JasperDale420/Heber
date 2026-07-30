@@ -24,6 +24,8 @@ from typing import Any
 
 import structlog
 
+from heber.writer.durability import create_durable_directory
+
 logger = structlog.get_logger(__name__)
 
 
@@ -76,6 +78,7 @@ def write_dlq_fallback_file(
     payload: dict[str, Any],
     *,
     now: datetime | None = None,
+    durable_root: Path | None = None,
 ) -> Path:
     """Persist a DLQ payload to disk and return the resulting file path.
 
@@ -86,7 +89,7 @@ def write_dlq_fallback_file(
     """
     timestamp = now or datetime.now(UTC)
     partition_dir = fallback_root / f"dt={timestamp.strftime('%Y-%m-%d')}"
-    partition_dir.mkdir(parents=True, exist_ok=True)
+    create_durable_directory(partition_dir, root=durable_root or fallback_root)
 
     filename = f"{_stream_basename(stream)}_{_event_id_hash(event_id)}.json"
     target = partition_dir / filename
@@ -105,6 +108,11 @@ def write_dlq_fallback_file(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, target)
+        directory_fd = os.open(partition_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except Exception:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()

@@ -73,6 +73,11 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_INGEST_TRANSPORT=${HEBER_LIVE_INGEST_TRANSPORT:-redis}
+      - HEBER_INGEST_LANE=live
+      - HEBER_NATS_URL=${HEBER_NATS_URL:-nats://host.docker.internal:4222}
+      - HEBER_NATS_USERNAME=${HEBER_NATS_USERNAME:-}
+      - HEBER_NATS_PASSWORD=${HEBER_NATS_PASSWORD:-}
       # 5000 (config max) matches the backfill consumer: the SIP quotes firehose can
       # exceed 4k events/s in the final trading hour, and the serial read->flush->ack
       # loop amortizes its flush cost over the batch — 2000 left the live consumer
@@ -126,6 +131,11 @@ services:
       - HEBER_REDIS_STREAM_NAME=heber:events:backfill
       - HEBER_REDIS_CONSUMER_GROUP=heber-backfill-writers
       - HEBER_REDIS_READ_BATCH_SIZE=5000
+      - HEBER_INGEST_TRANSPORT=${HEBER_BACKFILL_INGEST_TRANSPORT:-redis}
+      - HEBER_INGEST_LANE=backfill
+      - HEBER_NATS_URL=${HEBER_NATS_URL:-nats://host.docker.internal:4222}
+      - HEBER_NATS_USERNAME=${HEBER_NATS_USERNAME:-}
+      - HEBER_NATS_PASSWORD=${HEBER_NATS_PASSWORD:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -9,12 +9,15 @@ because it requires low-level stream control (``XREADGROUP``, ``XACK``, ``XCLAIM
 
 import asyncio
 import json
+import os
 import signal
+import tempfile
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import redis.asyncio as redis
 import structlog
@@ -37,12 +40,19 @@ from heber.ops.metrics import (
 )
 from heber.ops.reliability import EventDeduplicator, RedisDedupeStore
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
+from heber.writer.backfill_ack import (
+    BackfillAckWriter,
+    BackfillEventProof,
+    BackfillProofMismatch,
+    backfill_event_proof,
+)
 from heber.writer.bronze import BronzeWriter
 from heber.writer.dlq_fallback import (
     log_fallback_backlog,
     try_xadd_with_retry,
     write_dlq_fallback_file,
 )
+from heber.writer.durability import create_durable_directory
 from heber.writer.ingest_contracts import (
     DLQ_REASON_TS_OUT_OF_RANGE,
     DLQ_REASON_UNCONTRACTED,
@@ -66,19 +76,14 @@ from heber.writer.normalizer import (
     envelope_to_silver_row,
 )
 from heber.writer.silver import SilverWriter
-from heber.writer.utils import build_silver_candidates, get_partition_key
+from heber.writer.utils import (
+    build_silver_candidates,
+    commit_id_for_message_ids,
+    get_partition_key,
+    write_batch_commit_marker,
+)
 
 logger = structlog.get_logger(__name__)
-
-# ponytail: safety bound on a single recovery drain (× redis_claim_batch_size
-# messages). Caps worst-case round-trips if Redis kept returning claimable
-# pending; raise only if a real backlog can exceed this many batches.
-_MAX_RECOVERY_BATCHES = 100
-
-# How many consecutive XPENDING pages a single claim attempt may skip past when
-# every id on them is one this consumer is already holding. Bounds the scan when
-# the head of the PEL is entirely our own in-flight work.
-_MAX_RECOVERY_SKIP_PAGES = 5
 
 # Pause when the held set is over the backpressure cap. Without it the loop
 # retries a failing flush with no delay, turning a stuck disk into a hot loop.
@@ -93,6 +98,7 @@ _ACK_CHUNK_SIZE = 1000
 # read only grows a pending list that the stream will trim out from under us —
 # turning a recoverable stall into permanent loss.
 _BACKPRESSURE_FACTOR = 10
+_BACKFILL_READINESS_INTERVAL_SECONDS = 20.0
 
 
 class EventConsumer:
@@ -118,11 +124,18 @@ class EventConsumer:
         # makes a redelivery look like one and drops it.
         self._pending_ack_ids: set[str] = set()
         self._pending_register_ids: set[str] = set()
+        self._pending_backfill_proofs: dict[str, BackfillEventProof] = {}
+        self._pending_backfill_proof_errors: dict[str, str] = {}
+        self._pending_message_chunks: dict[str, tuple[str, str] | None] = {}
+        self._transport_ack_eligible_chunks: set[tuple[str, str]] = set()
+        self._backfill_ack_writer: BackfillAckWriter | None = None
+        self._backfill_binding: tuple[str, str, str, str] | None = None
         self._pending_since: float | None = None
         self._payload_required = PAYLOAD_REQUIRED_FIELDS
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
         self._last_recovery_monotonic = 0.0
+        self._last_backfill_readiness_monotonic = 0.0
 
     @staticmethod
     def _build_dedupe_store() -> RedisDedupeStore | None:
@@ -152,6 +165,21 @@ class EventConsumer:
         self._inflight_event_ids.add(event_id)
         return None
 
+    def _stage_backfill_proof(self, envelope: EventEnvelope) -> None:
+        """Hold backfill proof data until the same event crosses the fsync boundary."""
+        try:
+            proof = backfill_event_proof(envelope)
+        except BackfillProofMismatch as exc:
+            self._pending_backfill_proof_errors[envelope.event_id] = str(exc)
+            return
+        if proof is None:
+            return
+        existing = self._pending_backfill_proofs.get(envelope.event_id)
+        if existing is not None and existing != proof:
+            self._pending_backfill_proof_errors[envelope.event_id] = "backfill proof changed before durable commit"
+            return
+        self._pending_backfill_proofs[envelope.event_id] = proof
+
     async def connect(self):
         """Connect to Redis."""
         self.redis = redis.from_url(settings.redis_url)
@@ -178,6 +206,12 @@ class EventConsumer:
             else:
                 raise
 
+        self._backfill_binding = (
+            "redis",
+            settings.ingest_lane,
+            settings.redis_stream_name,
+            settings.redis_consumer_group,
+        )
         recovered = await self._recover_pending_messages()
         if recovered > 0:
             logger.info(
@@ -186,6 +220,101 @@ class EventConsumer:
                 stream=settings.redis_stream_name,
                 group=settings.redis_consumer_group,
             )
+
+    def _backfill_consumer_bound(self) -> bool:
+        """Whether this transport is bound and able to receive backfill work."""
+        return self.redis is not None and self._backfill_binding is not None
+
+    @staticmethod
+    def _durability_probe(path: Path, *, root: Path) -> None:
+        """Prove a writer directory can persist and remove a small file."""
+        create_durable_directory(path, root=root)
+        fd, name = tempfile.mkstemp(prefix=".readiness-", dir=path)
+        try:
+            os.write(fd, b"ready")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(name)
+            finally:
+                directory_fd = os.open(path, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+
+    async def _check_backfill_writer_durability(self) -> None:
+        """Bounded Bronze/Silver durable-write probes."""
+        timeout = settings.backfill_readiness_check_timeout_seconds
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                self._durability_probe,
+                settings.bronze_path,
+                root=settings.data_root,
+            ),
+            timeout=timeout,
+        )
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                self._durability_probe,
+                settings.silver_path,
+                root=settings.data_root,
+            ),
+            timeout=timeout,
+        )
+
+    async def _write_backfill_readiness(self) -> None:
+        """Publish true readiness only after transport, storage, and ACK checks."""
+        if self.redis is None:
+            self.redis = redis.from_url(settings.redis_url)
+
+        failure: Exception | None = None
+        consumer_ready = self._backfill_consumer_bound()
+        binding = self._backfill_binding or ("", "", "", "")
+        if not consumer_ready:
+            failure = RuntimeError("backfill transport consumer is not bound")
+        writer_ready = False
+        try:
+            await self._check_backfill_writer_durability()
+            writer_ready = True
+        except Exception as exc:
+            failure = failure or exc
+        ack_store_ready = False
+        try:
+            pong = await asyncio.wait_for(
+                cast(Awaitable[Any], self.redis.eval("return redis.call('PING')", 0)),
+                timeout=settings.backfill_readiness_check_timeout_seconds,
+            )
+            ack_store_ready = self._decode_string(pong).upper() == "PONG"
+            if not ack_store_ready:
+                failure = failure or RuntimeError("backfill ACK store Lua probe failed")
+        except Exception as exc:
+            failure = failure or exc
+
+        await asyncio.wait_for(
+            cast(
+                Awaitable[Any],
+                self.redis.hset(
+                    "gateway:backfill:heber:readiness:v1",
+                    mapping={
+                        "consumer_healthy": str(consumer_ready).lower(),
+                        "writer_healthy": str(writer_ready).lower(),
+                        "ack_store_ready": str(ack_store_ready).lower(),
+                        "protocol_version": "1",
+                        "transport": binding[0],
+                        "lane": binding[1],
+                        "stream": binding[2],
+                        "durable_consumer": binding[3],
+                        "observed_at": datetime.now(UTC).isoformat(),
+                    },
+                ),
+            ),
+            timeout=settings.backfill_readiness_check_timeout_seconds,
+        )
+        if failure is not None:
+            raise failure
+        self._last_backfill_readiness_monotonic = time.monotonic()
 
     @staticmethod
     def _decode_string(value: Any) -> str:
@@ -302,12 +431,16 @@ class EventConsumer:
     ) -> Any | None:
         """Persist a DLQ event to the on-disk fallback dir; return the path or None."""
         try:
+            fallback_root = settings.dlq_fallback_path
+            data_root = settings.data_root.resolve(strict=True)
+            durable_root = data_root if fallback_root.resolve(strict=False).is_relative_to(data_root) else fallback_root
             return await asyncio.to_thread(
                 write_dlq_fallback_file,
-                settings.dlq_fallback_path,
+                fallback_root,
                 settings.redis_dlq_stream_name,
                 source_message_id,
                 dlq_event,
+                durable_root=durable_root,
             )
         except Exception as fallback_exc:  # noqa: BLE001 — last-resort fallback must not crash consumer
             logger.error(
@@ -438,6 +571,7 @@ class EventConsumer:
 
             dedupe_reason = self._claim_event_id(envelope.event_id)
             if dedupe_reason is not None:
+                self._stage_backfill_proof(envelope)
                 record_dedupe_drop(feed=feed)
                 logger.info(
                     "consumer_dedupe_dropped",
@@ -541,6 +675,7 @@ class EventConsumer:
                     # dropped — the loss this deferral exists to prevent.
                     # _settle_and_commit() registers these once they are durable.
                     self._pending_register_ids.add(envelope.event_id)
+                    self._stage_backfill_proof(envelope)
 
     def process_event(self, event_data: dict) -> bool:
         """Process a single event through Bronze and Silver layers.
@@ -587,6 +722,24 @@ class EventConsumer:
             return "unknown"
         return str(event_dict.get("feed") or "unknown")
 
+    def _backfill_chunk_for_message(self, message_data: dict[Any, Any]) -> tuple[str, str] | None:
+        """Return the staged proof chunk for a successfully processed message."""
+        payload = self._extract_payload_value(message_data)
+        if payload is None:
+            return None
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="replace")
+        if not isinstance(payload, dict):
+            try:
+                payload = json.loads(payload)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return None
+        event_id = payload.get("event_id")
+        proof = self._pending_backfill_proofs.get(str(event_id))
+        if proof is None:
+            return None
+        return proof.job_id, proof.chunk_id
+
     async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
         """Process a list of stream messages concurrently and return `(acked_ids, failed_ids)`.
 
@@ -629,6 +782,7 @@ class EventConsumer:
             message_id_str, success, error, attempts = result
             if success:
                 processed_ids.append(message_id_str)
+                self._pending_message_chunks[message_id_str] = self._backfill_chunk_for_message(stream_messages[i][1])
                 continue
 
             feed = self._extract_feed_from_message(stream_messages[i][1])
@@ -641,6 +795,7 @@ class EventConsumer:
             )
             if moved_to_dlq:
                 processed_ids.append(message_id_str)
+                self._pending_message_chunks[message_id_str] = None
             else:
                 failed_ids.append(message_id_str)
 
@@ -657,12 +812,21 @@ class EventConsumer:
         also invoked periodically from the run loop (``_maybe_recover_pending``).
         """
         total = 0
-        for _ in range(_MAX_RECOVERY_BATCHES):
+        for _ in range(self._recovery_page_limit()):
+            held_before = len(self._pending_ack_ids)
             recovered = await self._recover_pending_batch()
-            if recovered == 0:
+            newly_held = max(len(self._pending_ack_ids) - held_before, 0)
+            if recovered == 0 and newly_held == 0:
                 break
             total += recovered
         return total
+
+    @staticmethod
+    def _recovery_page_limit() -> int:
+        """Bound one recovery drain by the largest accepted proof chunk."""
+        batch_size = max(settings.redis_claim_batch_size, 1)
+        ceiling = settings.backfill_proof_max_expected_records
+        return max((ceiling + batch_size - 1) // batch_size, 1)
 
     async def _maybe_recover_pending(self, now_monotonic: float) -> int:
         """Run a recovery drain if the periodic interval has elapsed. Returns count recovered."""
@@ -693,7 +857,9 @@ class EventConsumer:
         # behind it. Page forward past our own ids instead of giving up.
         message_ids: list[str] = []
         cursor = "-"
-        for _ in range(_MAX_RECOVERY_SKIP_PAGES):
+        # One extra page is needed to look immediately beyond a complete held
+        # chunk whose size equals the configured proof ceiling.
+        for _ in range(self._recovery_page_limit() + 1):
             last_seen: str | None = None
             for entry in pending:
                 if not isinstance(entry, dict):
@@ -901,6 +1067,12 @@ class EventConsumer:
                 # healthcheck reads this to detect a stalled-but-running consumer.
                 consumer_loop_heartbeat_unixtime.set(time.time())
                 await self._consume_iteration()
+                now_monotonic = time.monotonic()
+                if (
+                    settings.ingest_lane == "backfill"
+                    and now_monotonic - self._last_backfill_readiness_monotonic >= _BACKFILL_READINESS_INTERVAL_SECONDS
+                ):
+                    await self._write_backfill_readiness()
                 error_streak = 0
                 recovered = await self._maybe_recover_pending(time.monotonic())
                 if recovered:
@@ -1013,9 +1185,9 @@ class EventConsumer:
         Callers must not acknowledge when this returns False; the events stay
         buffered and the messages stay pending for a later attempt.
 
-        The guarantee is scoped to process death and container kill. Partitions
-        are published with an atomic rename and no ``fsync``, so a host power
-        loss can still lose an acknowledged record.
+        Each writer fsyncs the completed file and its parent directory around
+        the atomic rename, so a drained buffer is safe across process, container,
+        and intact-filesystem power loss.
         """
         ok = True
         try:
@@ -1068,18 +1240,16 @@ class EventConsumer:
             return "age_bound"
         return None
 
-    async def _settle_and_commit(self) -> None:
-        """Make buffered events durable, then register and acknowledge them.
+    async def _prepare_durable_commit(
+        self,
+        *,
+        stream: str,
+        group: str,
+    ) -> set[tuple[str, str]] | None:
+        """Make held events durable and register them before a transport ACK.
 
-        This is the only place the consumer acknowledges. Nothing is released
-        until a flush reports that no buffered event remains, so a message stays
-        pending — and therefore redeliverable — until its event is on disk.
-
-        Registration happens before the ACK. A crash between the two redelivers
-        the message to a process whose in-memory dedupe filter is empty, so the
-        event is written again: a duplicate, which Bronze tolerates and the
-        compactor removes. The reverse order would drop a redelivery as a
-        duplicate of something never written.
+        Redis and JetStream share this boundary so neither transport can
+        acknowledge before Bronze, Silver, and the batch receipt are fsynced.
         """
         drained = await asyncio.to_thread(self._flush_layers)
 
@@ -1097,15 +1267,66 @@ class EventConsumer:
                     held_messages=len(self._pending_ack_ids),
                     held_seconds=round(time.monotonic() - self._pending_since, 1) if self._pending_since else 0.0,
                 )
-            return
+            return None
+
+        ids = list(self._pending_ack_ids)
+        if ids:
+            await asyncio.to_thread(
+                write_batch_commit_marker,
+                settings.data_root,
+                stream=stream,
+                group=group,
+                consumer=self.consumer_name,
+                message_ids=ids,
+            )
+
+        finalized_chunks: set[tuple[str, str]] = set()
+        if self._pending_backfill_proof_errors:
+            event_id, error = next(iter(self._pending_backfill_proof_errors.items()))
+            raise BackfillProofMismatch(f"{event_id}: {error}")
+        if self._pending_backfill_proofs:
+            if self.redis is None:
+                self.redis = redis.from_url(settings.redis_url)
+            if self._backfill_ack_writer is None:
+                self._backfill_ack_writer = BackfillAckWriter(
+                    self.redis,
+                    proof_ttl_seconds=settings.backfill_proof_ttl_seconds,
+                )
+            finalized_chunks = await self._backfill_ack_writer.record_committed(
+                list(self._pending_backfill_proofs.values()),
+                commit_id=commit_id_for_message_ids(ids),
+                committed_at=datetime.now(UTC),
+            )
+            self._pending_backfill_proofs.clear()
 
         for event_id in self._pending_register_ids:
             self.event_deduplicator.register(event_id)
         self._pending_register_ids.clear()
+        return finalized_chunks
+
+    async def _settle_and_commit(self) -> None:
+        """Make buffered events durable, then register and acknowledge them.
+
+        This is the only place the Redis consumer acknowledges. Nothing is
+        released until the shared durability boundary confirms both storage
+        layers and the commit receipt reached disk.
+        """
+        prepared = await self._prepare_durable_commit(
+            stream=settings.redis_stream_name,
+            group=settings.redis_consumer_group,
+        )
+        if prepared is None:
+            return
+        self._transport_ack_eligible_chunks.update(prepared)
 
         # Chunked: a held batch can be tens of thousands of ids. On failure the
         # un-acked remainder stays held so the next commit retries it.
-        ids = list(self._pending_ack_ids)
+        ids = [
+            message_id
+            for message_id in self._pending_ack_ids
+            if self._pending_message_chunks.get(message_id) is None
+            or self._pending_message_chunks[message_id] in self._transport_ack_eligible_chunks
+        ]
         for start in range(0, len(ids), _ACK_CHUNK_SIZE):
             chunk = ids[start : start + _ACK_CHUNK_SIZE]
             await self.redis.xack(
@@ -1114,9 +1335,22 @@ class EventConsumer:
                 *chunk,
             )
             self._pending_ack_ids.difference_update(chunk)
+            for message_id in chunk:
+                self._pending_message_chunks.pop(message_id, None)
 
-        self._pending_since = None
+        if not self._pending_ack_ids:
+            self._pending_since = None
+        self._prune_transport_ack_eligible_chunks()
         self._record_pending_ack_gauges()
+
+    def _prune_transport_ack_eligible_chunks(self) -> None:
+        """Forget finalized chunks only after all mapped transport ACKs succeed."""
+        pending_chunks = {
+            chunk
+            for message_id in self._pending_ack_ids
+            if (chunk := self._pending_message_chunks.get(message_id)) is not None
+        }
+        self._transport_ack_eligible_chunks.intersection_update(pending_chunks)
 
     def commit_pending_registrations(self) -> int:
         """Register held event ids after a caller has flushed the writers itself.
@@ -1270,7 +1504,7 @@ async def main():
         start_metrics_server_from_env(default_port=9090)
     except Exception as exc:
         logger.warning("metrics_server_startup_skipped", error=str(exc))
-    consumer = EventConsumer()
+    consumer = build_ingest_consumer()
 
     # Handle signals
     loop = asyncio.get_event_loop()
@@ -1278,6 +1512,15 @@ async def main():
         loop.add_signal_handler(sig, lambda: asyncio.create_task(consumer.stop()))
 
     await consumer.run()
+
+
+def build_ingest_consumer() -> EventConsumer:
+    """Select the configured transport while keeping Redis as the default."""
+    if settings.ingest_transport == "jetstream":
+        from heber.writer.jetstream_consumer import JetStreamEventConsumer
+
+        return JetStreamEventConsumer()
+    return EventConsumer()
 
 
 if __name__ == "__main__":

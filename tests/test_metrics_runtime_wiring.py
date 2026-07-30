@@ -80,7 +80,8 @@ def test_consumer_process_records_core_metrics(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_consumer_iteration_records_batch_size_metric(monkeypatch) -> None:
+async def test_consumer_iteration_records_batch_size_metric(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(consumer_module.settings, "data_root", tmp_path)
     consumer = consumer_module.EventConsumer()
     consumer.redis = AsyncMock()
     consumer.redis.xreadgroup.return_value = [(b"heber:events", [(b"1-0", {}), (b"2-0", {})])]

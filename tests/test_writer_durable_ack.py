@@ -9,19 +9,21 @@ events still in RAM. A container kill then lost them, and an acknowledged
 message is never redelivered.
 
 The predicate that matters is "did every buffered event get written", which is
-exactly "are the buffers now empty". Note the deliberate limit of that claim:
-the writers finish with an atomic rename and no ``fsync``, so this establishes
-"survives process death and container kill", not "survives host power loss".
+exactly "are the buffers now empty". Published files and their directory entries
+are fsynced before the consumer can acknowledge the batch.
 """
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from heber.models.envelope import EventEnvelope
 from heber.writer.bronze import BronzeWriter
 from heber.writer.consumer import EventConsumer
+from heber.writer.durability import create_durable_directory
 from heber.writer.silver import SilverWriter
+from heber.writer.utils import durable_replace, write_batch_commit_marker
 
 pytestmark = pytest.mark.unit
 
@@ -131,3 +133,56 @@ def test_flush_if_needed_reports_whether_it_wrote(tmp_path, monkeypatch) -> None
 
     _always_flush(monkeypatch)
     assert bronze.flush_if_needed() is True
+
+
+def test_durable_replace_fsyncs_file_and_parent_directory(tmp_path, monkeypatch) -> None:
+    tmp_file = tmp_path / "event.tmp"
+    target = tmp_path / "event.json"
+    tmp_file.write_text("durable", encoding="utf-8")
+    fsync_calls: list[int] = []
+    monkeypatch.setattr("heber.writer.utils.os.fsync", fsync_calls.append)
+
+    durable_replace(tmp_file, target)
+
+    assert target.read_text(encoding="utf-8") == "durable"
+    assert len(fsync_calls) == 2
+
+
+def test_create_durable_directory_fsyncs_each_new_parent_link(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    fsynced: list[Path] = []
+    monkeypatch.setattr("heber.writer.durability._fsync_directory", fsynced.append)
+
+    target = root / "silver" / "feed=bars" / "dt=2026-07-29"
+    create_durable_directory(target, root=root)
+
+    assert target.is_dir()
+    assert fsynced == [root, root / "silver", root / "silver" / "feed=bars"]
+
+
+def test_create_durable_directory_rejects_path_outside_root(tmp_path) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match="outside durable root"):
+        create_durable_directory(tmp_path / "other" / "partition", root=root)
+
+
+def test_commit_marker_persists_first_write_directory_chain(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    fsynced: list[Path] = []
+    monkeypatch.setattr("heber.writer.durability._fsync_directory", fsynced.append)
+    monkeypatch.setattr("heber.writer.utils._fsync_directory", fsynced.append)
+
+    marker = write_batch_commit_marker(
+        data_root,
+        stream="HEBER_LIVE",
+        group="heber-live",
+        consumer="writer-1",
+        message_ids=["1"],
+    )
+
+    assert marker.exists()
+    assert fsynced == [data_root, data_root / "_ingest_commits", marker.parent]

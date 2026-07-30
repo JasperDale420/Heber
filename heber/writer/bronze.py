@@ -18,7 +18,8 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
-from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key
+from heber.writer.durability import create_durable_directory
+from heber.writer.utils import durable_replace, flush_partitions_concurrent, get_bronze_partition_key
 
 logger = structlog.get_logger(__name__)
 
@@ -41,7 +42,7 @@ class BronzeWriter:
     def _get_file_path(self, partition_key: str) -> Path:
         """Get file path for a partition."""
         base = settings.bronze_path / partition_key
-        base.mkdir(parents=True, exist_ok=True)
+        create_durable_directory(base, root=settings.data_root)
 
         # Timestamp + per-writer id for cross-process uniqueness.
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
@@ -123,12 +124,12 @@ class BronzeWriter:
         dataset = self._dataset_from_partition(partition_key)
 
         try:
-            # Write as gzipped JSONL (atomic: write to tmp, then rename)
+            # Write to a temporary file, fsync, then atomically publish it.
             tmp_path = file_path.with_suffix(".tmp")
             with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
                 for event in events:
                     f.write(json.dumps(event, default=str) + "\n")
-            tmp_path.rename(file_path)
+            durable_replace(tmp_path, file_path)
 
             duration_seconds = max(0.0, time.perf_counter() - started)
             bytes_written = file_path.stat().st_size if file_path.exists() else 0

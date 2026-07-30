@@ -38,6 +38,20 @@ docker compose up -d            # bring up the stack
 | `HEBER_REDIS_URL` | `redis://localhost:6379` | Redis endpoint |
 | `HEBER_REDIS_STREAM_NAME` | `heber:events` | Ingest stream |
 | `HEBER_REDIS_CONSUMER_GROUP` | `heber-writers` | Consumer group |
+| `HEBER_INGEST_TRANSPORT` | `redis` | `redis` (default) or opt-in `jetstream` |
+| `HEBER_LIVE_INGEST_TRANSPORT` | `redis` | Compose host variable selecting the live consumer transport |
+| `HEBER_BACKFILL_INGEST_TRANSPORT` | `redis` | Compose host variable selecting the backfill consumer transport independently |
+| `HEBER_INGEST_LANE` | `live` | Select the `live` or `backfill` JetStream work queue |
+| `HEBER_NATS_URL` | `nats://localhost:4222` | JetStream broker URL |
+| `HEBER_NATS_USERNAME` / `HEBER_NATS_PASSWORD` | — | Required when `HEBER_INGEST_TRANSPORT=jetstream` |
+
+The backfill consumer publishes its actual transport, lane, stream, and
+consumer-group/durable name in the Gateway readiness hash. Gateway requires an
+exact match before admitting a replay.
+| `HEBER_JETSTREAM_ACK_WAIT_SECONDS` | `300` | Redelivery timeout for unacknowledged messages |
+| `HEBER_JETSTREAM_MAX_ACK_PENDING` | `2 × read batch` | Broker-side bound on uncommitted deliveries; backfill must set this to at least the proof record ceiling |
+| `HEBER_BACKFILL_PROOF_MAX_EXPECTED_RECORDS` | `5000` | Reject larger backfill chunks before they can deadlock the pending window |
+| `HEBER_BACKFILL_PROOF_TTL_SECONDS` | `86400` | Expiry for incomplete proof hashes; completed ACK hashes do not expire |
 | `HEBER_REDIS_DLQ_STREAM_NAME` | `heber:events:dlq` | Dead-letter stream for failed messages |
 | `HEBER_REDIS_CLAIM_IDLE_MS` | `60000` | Idle threshold before claiming pending messages |
 | `HEBER_REDIS_CLAIM_BATCH_SIZE` | `100` | Max pending messages claimed per recovery cycle |

@@ -23,6 +23,7 @@ from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
 from heber.schemas.silver import get_silver_schema
+from heber.writer.durability import create_durable_directory
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
 from heber.writer.normalizer import enforce_required_non_null_fields, envelope_to_silver_row
@@ -56,7 +57,7 @@ class SilverWriter:
     def _get_file_path(self, partition_key: str) -> Path:
         """Build the output Parquet path for a partition (unique per writer)."""
         partition_path = settings.silver_path / partition_key
-        partition_path.mkdir(parents=True, exist_ok=True)
+        create_durable_directory(partition_path, root=settings.data_root)
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         return partition_path / f"part-{ts}-{self._writer_id}.parquet"
 

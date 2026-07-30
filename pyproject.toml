@@ -30,6 +30,7 @@ dependencies = [
 
     # Event bus
     "redis>=5.0",
+    "nats-py==2.15.0",
 
     # Feature Store
     "feast>=0.38",

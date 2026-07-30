@@ -59,7 +59,8 @@ def test_extract_payload_value_prefers_data_over_payload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recover_pending_messages_claims_and_acks() -> None:
+async def test_recover_pending_messages_claims_and_acks(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(consumer_module.settings, "data_root", tmp_path)
     consumer = EventConsumer()
     redis = _StubRedis()
     redis.pending = [{"message_id": "1-0"}]
@@ -80,10 +81,11 @@ async def test_recover_pending_messages_claims_and_acks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recover_pending_messages_drains_all_batches() -> None:
+async def test_recover_pending_messages_drains_all_batches(tmp_path, monkeypatch) -> None:
     # A consumer that died holding more than one claim-batch of pending messages
     # must have ALL of them reclaimed in a single recovery cycle, not just the
     # first batch (the bug that stranded ~1,800 of 1,900 messages forever).
+    monkeypatch.setattr(consumer_module.settings, "data_root", tmp_path)
     consumer = EventConsumer()
     redis = _StubRedis()
     ids = [f"{i}-0" for i in range(250)]  # > default claim batch of 100
@@ -103,6 +105,72 @@ async def test_recover_pending_messages_drains_all_batches() -> None:
     assert recovered == 250
     assert sum(len(a) - 2 for a in redis.acked) == 250  # every id acked across batches
     assert redis.pending == []
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_messages_completes_chunk_beyond_five_pages(monkeypatch) -> None:
+    monkeypatch.setattr(consumer_module.settings, "redis_claim_batch_size", 100)
+    monkeypatch.setattr(consumer_module.settings, "backfill_proof_max_expected_records", 5_000)
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    ids = [f"{i}-0" for i in range(5_000)]
+    redis.pending = [{"message_id": message_id} for message_id in ids]
+    redis.claim_payloads = {message_id: {"data": "{}"} for message_id in ids}
+    consumer.redis = redis
+
+    async def _process(messages):  # noqa: ANN001
+        processed = [mid for mid, _ in messages]
+        for message_id in processed:
+            consumer._pending_message_chunks[message_id] = ("bf-job", "chunk-1")
+        return processed, []
+
+    async def _prepare(**_kwargs):  # noqa: ANN003
+        if len(consumer._pending_ack_ids) == len(ids):
+            return {("bf-job", "chunk-1")}
+        return set()
+
+    consumer._process_stream_messages = _process  # type: ignore[assignment]
+    monkeypatch.setattr(consumer, "_prepare_durable_commit", _prepare)
+
+    recovered = await consumer._recover_pending_messages()
+
+    assert recovered == 5_000
+    assert sum(len(ack) - 2 for ack in redis.acked) == 5_000
+    assert consumer._pending_ack_ids == set()
+    assert redis.pending == []
+
+
+@pytest.mark.asyncio
+async def test_recovered_backfill_page_stays_pending_until_whole_chunk_finalizes(monkeypatch) -> None:
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+    redis.pending = [{"message_id": "1-0"}]
+    redis.claim_payloads = {"1-0": {"data": "{}"}}
+
+    async def _process(messages):  # noqa: ANN001
+        ids = [mid for mid, _ in messages]
+        for message_id in ids:
+            consumer._pending_message_chunks[message_id] = ("bf-job", "chunk-1")
+        return ids, []
+
+    consumer._process_stream_messages = _process  # type: ignore[assignment]
+    prepare = AsyncMock(side_effect=[set(), {("bf-job", "chunk-1")}])
+    monkeypatch.setattr(consumer, "_prepare_durable_commit", prepare)
+
+    assert await consumer._recover_pending_batch() == 0
+    assert redis.acked == []
+    assert consumer._pending_ack_ids == {"1-0"}
+
+    redis.pending = [{"message_id": "2-0"}]
+    redis.claim_payloads = {"2-0": {"data": "{}"}}
+
+    assert await consumer._recover_pending_batch() == 2
+    assert {message_id for ack in redis.acked for message_id in ack[2:]} == {
+        "1-0",
+        "2-0",
+    }
+    assert consumer._pending_ack_ids == set()
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ class TestWriterRefactor(unittest.TestCase):
 
         # Mock settings object
         self.mock_settings = MagicMock()
+        self.mock_settings.data_root = Path(self.test_dir)
         self.mock_settings.silver_path = self.silver_path
 
         # Sample data
