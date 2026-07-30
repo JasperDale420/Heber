@@ -359,6 +359,77 @@ async def test_ack_is_chunked(tmp_path, monkeypatch) -> None:
     assert consumer._pending_ack_ids == set()
 
 
+class _RecoveryStubRedis(_ConsumeStubRedis):
+    """Adds the pending/claim surface the recovery drain uses."""
+
+    def __init__(self, data_root=None):
+        super().__init__(data_root=data_root)
+        self.pending: list[dict] = []
+        self.claim_payloads: dict = {}
+        self.claim_requests: list[list[str]] = []
+
+    async def xpending_range(self, _stream, _group, _min, _max, count, idle=0):
+        return self.pending[:count]
+
+    async def xclaim(self, _stream, _group, _consumer, _idle, message_ids):
+        self.claim_requests.append(list(message_ids))
+        claimed = [(mid, self.claim_payloads.pop(mid)) for mid in message_ids if mid in self.claim_payloads]
+        ids = set(message_ids)
+        self.pending = [p for p in self.pending if p["message_id"] not in ids]
+        return claimed
+
+
+async def test_recovery_does_not_claim_messages_this_consumer_holds(tmp_path, monkeypatch) -> None:
+    """Reclaiming our own held message would write the same event twice."""
+    _never_flush(monkeypatch)
+    _wide_bounds(monkeypatch)
+    stub = _RecoveryStubRedis()
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+
+    consumer._pending_ack_ids = {"1-0"}
+    stub.pending = [{"message_id": "1-0"}, {"message_id": "2-0"}]
+    stub.claim_payloads = {"2-0": {b"data": json.dumps(_make_envelope("evt-2").model_dump(mode="json")).encode()}}
+
+    await consumer._recover_pending_batch()
+
+    assert stub.claim_requests == [["2-0"]], "tried to reclaim a message it was already holding"
+
+
+async def test_recovery_commits_through_the_same_path(tmp_path, monkeypatch) -> None:
+    """Recovered events must register on commit, not leak as pending forever."""
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
+    monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
+    _wide_bounds(monkeypatch)
+    stub = _RecoveryStubRedis()
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+
+    stub.pending = [{"message_id": "5-0"}]
+    stub.claim_payloads = {"5-0": {b"data": json.dumps(_make_envelope("evt-5").model_dump(mode="json")).encode()}}
+
+    await consumer._recover_pending_batch()
+
+    assert stub.all_acked == {"5-0"}
+    assert consumer._pending_register_ids == set(), "recovered event never reached the dedupe store"
+    assert consumer.event_deduplicator.check("evt-5").is_duplicate is True
+
+
+async def test_recovery_does_not_ack_when_the_flush_is_incomplete(tmp_path, monkeypatch) -> None:
+    _never_flush(monkeypatch)
+    _wide_bounds(monkeypatch)
+    stub = _RecoveryStubRedis()
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+
+    stub.pending = [{"message_id": "6-0"}]
+    stub.claim_payloads = {"6-0": {b"data": json.dumps(_make_envelope("evt-6").model_dump(mode="json")).encode()}}
+
+    recovered = await consumer._recover_pending_batch()
+
+    assert stub.acked == []
+    assert recovered == 0, "reported progress on messages it did not acknowledge"
+
+
 async def test_backpressure_stops_reading_when_hard_cap_exceeded(tmp_path, monkeypatch) -> None:
     """An unbounded pending set is worse than the bug — stop consuming instead."""
     from heber.config import settings

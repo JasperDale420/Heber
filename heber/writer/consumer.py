@@ -681,7 +681,12 @@ class EventConsumer:
             if isinstance(entry, dict):
                 msg_id = entry.get("message_id") or entry.get(b"message_id")
                 if msg_id is not None:
-                    message_ids.append(self._decode_string(msg_id))
+                    decoded = self._decode_string(msg_id)
+                    # Skip what this consumer is already holding for commit. Its
+                    # event is buffered here; reclaiming it would process and
+                    # write the same event a second time.
+                    if decoded not in self._pending_ack_ids:
+                        message_ids.append(decoded)
 
         if not message_ids:
             return 0
@@ -698,23 +703,14 @@ class EventConsumer:
 
         ack_ids, failed_ids = await self._process_stream_messages(claimed)
 
-        # Flush to disk before acking claimed messages. Offloaded to a thread
-        # (like _consume_iteration) so a large recovery drain — up to
-        # _MAX_RECOVERY_BATCHES iterations — does not block the event loop and
-        # stall the liveness heartbeat.
-        flush_ok = await asyncio.to_thread(self._flush_layers)
-
-        if ack_ids and flush_ok:
-            await self.redis.xack(
-                settings.redis_stream_name,
-                settings.redis_consumer_group,
-                *ack_ids,
-            )
-        elif ack_ids and not flush_ok:
-            logger.warning(
-                "Skipping ACK for recovered messages due to flush failure",
-                pending_ack_count=len(ack_ids),
-            )
+        # Commit through the same path as the main loop. Going straight to XACK
+        # here would leave the recovered events' ids stuck in
+        # _pending_register_ids — never reaching the dedupe store and never
+        # released — because registration is what the commit performs.
+        held_before = len(self._pending_ack_ids)
+        self._hold_for_commit(ack_ids)
+        await self._settle_and_commit()
+        released = held_before + len(ack_ids) - len(self._pending_ack_ids)
 
         if failed_ids:
             logger.warning(
@@ -723,7 +719,11 @@ class EventConsumer:
                 failed_ids=failed_ids[:10],
             )
 
-        return len(ack_ids)
+        # Only what was actually acknowledged counts as progress. Reporting
+        # claimed-but-unacknowledged messages would let the drain loop advance on
+        # work it has not finished — and the claim has already reset their idle
+        # timers, so they will not resurface for another claim-idle window.
+        return max(released, 0)
 
     def _validate_payload_schema(self, envelope: EventEnvelope) -> None:
         """Warn on missing/unknown payload keys for selected feeds."""
