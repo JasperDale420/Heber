@@ -19,11 +19,13 @@ failure than the bug being fixed.
 """
 
 import json
+import time
 from datetime import UTC, datetime
 
 import pytest
 
 from heber.models.envelope import EventEnvelope
+from heber.writer import consumer as consumer_module
 from heber.writer.consumer import EventConsumer
 
 pytestmark = pytest.mark.unit
@@ -368,8 +370,12 @@ class _RecoveryStubRedis(_ConsumeStubRedis):
         self.claim_payloads: dict = {}
         self.claim_requests: list[list[str]] = []
 
-    async def xpending_range(self, _stream, _group, _min, _max, count, idle=0):
-        return self.pending[:count]
+    async def xpending_range(self, _stream, _group, start, _max, count, idle=0):
+        entries = self.pending
+        if isinstance(start, str) and start.startswith("("):
+            after = start[1:]
+            entries = [e for e in entries if e["message_id"] > after]
+        return entries[:count]
 
     async def xclaim(self, _stream, _group, _consumer, _idle, message_ids):
         self.claim_requests.append(list(message_ids))
@@ -449,3 +455,81 @@ async def test_backpressure_stops_reading_when_hard_cap_exceeded(tmp_path, monke
     await consumer._consume_iteration()
 
     assert stub.read_calls == 0, "kept reading while the pending set was over the hard cap"
+
+
+async def test_recovery_pages_past_ids_this_consumer_holds(tmp_path, monkeypatch) -> None:
+    """Held ids must not crowd a claim page and stall the whole drain.
+
+    XPENDING returns oldest-first and has no cursor, so if every id on the first
+    page belongs to this consumer the naive filter yields an empty candidate
+    list, the batch reports zero, and the drain loop treats that as "nothing left
+    to recover" — never reaching the reclaimable entries behind them.
+    """
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "redis_claim_batch_size", 2)
+    _never_flush(monkeypatch)
+    _wide_bounds(monkeypatch)
+    stub = _RecoveryStubRedis()
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+
+    consumer._pending_ack_ids = {"1-0", "2-0"}
+    stub.pending = [{"message_id": "1-0"}, {"message_id": "2-0"}, {"message_id": "3-0"}]
+    stub.claim_payloads = {"3-0": {b"data": json.dumps(_make_envelope("evt-3").model_dump(mode="json")).encode()}}
+
+    await consumer._recover_pending_batch()
+
+    claimed_ids = [i for req in stub.claim_requests for i in req]
+    assert "3-0" in claimed_ids, "drain stalled behind ids this consumer was holding"
+    assert "1-0" not in claimed_ids and "2-0" not in claimed_ids
+
+
+async def test_backpressure_branch_does_not_hot_loop(tmp_path, monkeypatch) -> None:
+    """Over the cap with a failing flush, back off instead of spinning."""
+    from heber.config import settings
+
+    _never_flush(monkeypatch)
+    monkeypatch.setattr(settings, "writer_max_unacked_messages", 10)
+    monkeypatch.setattr(settings, "writer_max_unacked_seconds", 9_999.0)
+    stub = _ConsumeStubRedis()
+    consumer = _consumer(monkeypatch, tmp_path, stub)
+
+    consumer._pending_ack_ids = {f"{i}-0" for i in range(500)}
+    # Genuinely unflushable: a buffered row plus a forced flush that cannot
+    # drain it, so the held set stays over the cap after settling.
+    consumer.bronze_writer.buffers["provider=t/feed=bars/dt=2026-01-01/hour=00"] = [{"event_id": "stuck"}]
+    monkeypatch.setattr(consumer, "_force_flush_layers", lambda reason: False)
+
+    monkeypatch.setattr(consumer_module, "_BACKPRESSURE_SLEEP_SECONDS", 0.05)
+
+    started = time.monotonic()
+    await consumer._consume_iteration()
+    elapsed = time.monotonic() - started
+
+    assert elapsed >= 0.04, "spun on a stuck flush without backing off"
+    assert stub.read_calls == 0
+
+
+def test_direct_flush_callers_can_commit_registrations(tmp_path, monkeypatch) -> None:
+    """process_event + a direct flush must still reach the dedupe store.
+
+    The DLQ reprocessor flushes the writers itself instead of going through the
+    consumer's commit. Without an explicit registration step its events land on
+    disk but are never recorded as seen, so a later replay writes them again —
+    and the held set grows for the life of the run.
+    """
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    consumer = EventConsumer()
+
+    envelope = _make_envelope("evt-dlq")
+    assert consumer.process_event({"data": json.dumps(envelope.model_dump(mode="json"))}) is True
+    assert consumer.event_deduplicator.check("evt-dlq").is_duplicate is False
+
+    consumer.bronze_writer.flush()
+    consumer.silver_writer.flush()
+    assert consumer.commit_pending_registrations() == 1
+
+    assert consumer.event_deduplicator.check("evt-dlq").is_duplicate is True
+    assert consumer._pending_register_ids == set()

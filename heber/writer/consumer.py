@@ -75,6 +75,15 @@ logger = structlog.get_logger(__name__)
 # pending; raise only if a real backlog can exceed this many batches.
 _MAX_RECOVERY_BATCHES = 100
 
+# How many consecutive XPENDING pages a single claim attempt may skip past when
+# every id on them is one this consumer is already holding. Bounds the scan when
+# the head of the PEL is entirely our own in-flight work.
+_MAX_RECOVERY_SKIP_PAGES = 5
+
+# Pause when the held set is over the backpressure cap. Without it the loop
+# retries a failing flush with no delay, turning a stuck disk into a hot loop.
+_BACKPRESSURE_SLEEP_SECONDS = 1.0
+
 # A held batch can reach tens of thousands of ids, which is far too many for one
 # XACK command, so the commit sends them in chunks.
 _ACK_CHUNK_SIZE = 1000
@@ -676,17 +685,42 @@ class EventConsumer:
         if not pending:
             return 0
 
+        # Skip what this consumer is already holding for commit: its event is
+        # buffered here, so reclaiming it would process and write the same event
+        # twice. XPENDING is oldest-first with no cursor, so if a whole page is
+        # ours the candidate list comes back empty — and an empty batch reads as
+        # "drain complete" to the caller, stranding the reclaimable entries
+        # behind it. Page forward past our own ids instead of giving up.
         message_ids: list[str] = []
-        for entry in pending:
-            if isinstance(entry, dict):
+        cursor = "-"
+        for _ in range(_MAX_RECOVERY_SKIP_PAGES):
+            last_seen: str | None = None
+            for entry in pending:
+                if not isinstance(entry, dict):
+                    continue
                 msg_id = entry.get("message_id") or entry.get(b"message_id")
-                if msg_id is not None:
-                    decoded = self._decode_string(msg_id)
-                    # Skip what this consumer is already holding for commit. Its
-                    # event is buffered here; reclaiming it would process and
-                    # write the same event a second time.
-                    if decoded not in self._pending_ack_ids:
-                        message_ids.append(decoded)
+                if msg_id is None:
+                    continue
+                last_seen = self._decode_string(msg_id)
+                if last_seen not in self._pending_ack_ids:
+                    message_ids.append(last_seen)
+
+            if message_ids or last_seen is None or len(pending) < settings.redis_claim_batch_size:
+                break
+
+            # Whole page was ours and the page was full — there may be more
+            # behind it. "(" makes the next scan exclusive of the last id seen.
+            cursor = f"({last_seen}"
+            pending = await self.redis.xpending_range(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                cursor,
+                "+",
+                settings.redis_claim_batch_size,
+                idle=settings.redis_claim_idle_ms,
+            )
+            if not pending:
+                break
 
         if not message_ids:
             return 0
@@ -1084,6 +1118,23 @@ class EventConsumer:
         self._pending_since = None
         self._record_pending_ack_gauges()
 
+    def commit_pending_registrations(self) -> int:
+        """Register held event ids after a caller has flushed the writers itself.
+
+        For synchronous users of ``process_event`` (the DLQ reprocessor) that
+        flush directly rather than going through ``_settle_and_commit``. Without
+        this their events reach disk but never enter the dedupe store, so a later
+        replay writes them a second time, and the held set grows for the life of
+        the process.
+
+        Call only after the writers have actually been flushed.
+        """
+        count = len(self._pending_register_ids)
+        for event_id in self._pending_register_ids:
+            self.event_deduplicator.register(event_id)
+        self._pending_register_ids.clear()
+        return count
+
     def _record_pending_ack_gauges(self) -> None:
         held_seconds = time.monotonic() - self._pending_since if self._pending_since else 0.0
         record_pending_ack_state(count=len(self._pending_ack_ids), age_seconds=held_seconds)
@@ -1120,6 +1171,11 @@ class EventConsumer:
                 reason="flush is not draining; pausing reads to bound the pending list",
             )
             await self._settle_and_commit()
+            if len(self._pending_ack_ids) >= hard_cap:
+                # Still stuck. Back off rather than spinning on a failing flush,
+                # which would flood the logs and add I/O load to whatever is
+                # already wedged.
+                await asyncio.sleep(_BACKPRESSURE_SLEEP_SECONDS)
             return
 
         messages = await self.redis.xreadgroup(

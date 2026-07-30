@@ -317,7 +317,13 @@ async def reprocess_dlq(
 
 
 def _flush_writers(consumer: EventConsumer) -> None:
-    """Flush Bronze and Silver writers on the consumer."""
+    """Flush Bronze and Silver writers, then register what reached disk.
+
+    ``process_event`` defers dedupe registration to the consumer's commit step,
+    which this path does not use. Registering here keeps the contract: an event
+    enters the dedupe store only once its bytes are written, and the consumer's
+    held set does not grow for the life of the reprocessing run.
+    """
     try:
         consumer.bronze_writer.flush()
     except Exception as exc:  # noqa: BLE001
@@ -326,6 +332,10 @@ def _flush_writers(consumer: EventConsumer) -> None:
         consumer.silver_writer.flush()
     except Exception as exc:  # noqa: BLE001
         logger.error("dlq_silver_flush_failed", error=str(exc), exc_info=True)
+
+    registered = consumer.commit_pending_registrations()
+    if registered:
+        logger.debug("dlq_reprocess_registered", events=registered)
 
 
 # ---------------------------------------------------------------------------
