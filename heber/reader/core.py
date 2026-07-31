@@ -171,9 +171,46 @@ def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
     return dt
 
 
+def _date_partition_roots(
+    root: str | Path,
+    time_range: tuple[str | datetime, str | datetime],
+) -> list[Path]:
+    """Return in-range ``dt=`` directories without walking Parquet files."""
+    start = _to_utc(time_range[0]).as_py().date().isoformat()
+    end = _to_utc(time_range[1]).as_py().date().isoformat()
+    pending = [Path(root)]
+    matches: list[Path] = []
+
+    # Silver is feed/instrument_type/dt; Gold may add project/version. Bound
+    # directory discovery to those layout levels before any recursive file walk.
+    for _ in range(3):
+        next_dirs: list[Path] = []
+        for directory in pending:
+            try:
+                children = list(directory.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if child.name.startswith("._"):
+                    continue
+                if child.name.startswith("dt="):
+                    partition_date = child.name.removeprefix("dt=")
+                    if start <= partition_date <= end:
+                        matches.append(child)
+                elif "=" in child.name:
+                    try:
+                        if child.is_dir():
+                            next_dirs.append(child)
+                    except OSError:
+                        continue
+        pending = next_dirs
+    return matches
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
+    physical_time_range: tuple[str | datetime, str | datetime] | None = None,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
@@ -189,12 +226,19 @@ def _open_dataset_safe(
     individual files, fold all string-family types down to plain
     ``pa.string()``, and re-open the dataset with the explicit schema.
     """
-    file_list = _collect_parquet_files(path)
+    roots = _date_partition_roots(path, physical_time_range) if physical_time_range else [Path(path)]
+    file_list = [file_path for root in roots for file_path in _collect_parquet_files(root)]
     if not file_list:
         return None
 
+    dataset_kwargs: dict[str, Any] = {
+        "format": "parquet",
+        "partitioning": partitioning,
+        "partition_base_dir": path,
+    }
+
     try:
-        return ds.dataset(file_list, format="parquet", partitioning=partitioning)
+        return ds.dataset(file_list, **dataset_kwargs)
     except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError, pa.lib.ArrowTypeError):
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
@@ -254,11 +298,10 @@ def _open_dataset_safe(
         # of the file list. We replicate that scope here and type each
         # discovered key as ``pa.string()`` to match pyarrow's default
         # hive-partitioning behaviour.
-        common_root = os.path.commonpath(file_list)
         partition_columns: list[str] = []
         seen_partition: set[str] = set()
         for fp in file_list:
-            rel = os.path.relpath(fp, common_root)
+            rel = os.path.relpath(fp, path)
             for segment in rel.split(os.sep):
                 eq = segment.find("=")
                 if eq <= 0:
@@ -273,7 +316,7 @@ def _open_dataset_safe(
         unified_fields.extend(pa.field(n, pa.string()) for n in partition_columns)
         unified = pa.schema(unified_fields)
 
-        return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
+        return ds.dataset(file_list, schema=unified, **dataset_kwargs)
     except Exception:
         logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
         return None
@@ -483,6 +526,7 @@ class HeberReader:
             dataset_obj = _open_dataset_safe(
                 str(base_path),
                 partitioning=ds.partitioning(flavor="hive"),
+                physical_time_range=time_range if prune_by_dt and time_range else None,
             )
         except OSError:
             logger.warning("heber_reader_open_failed", path=str(base_path), exc_info=True)
@@ -540,6 +584,55 @@ class HeberReader:
             asof=str(asof_time) if asof_time else None,
         )
         return df
+
+    def completed_silver_partitions(
+        self,
+        dataset: str,
+        time_range: tuple[str | datetime, str | datetime],
+    ) -> frozenset[str]:
+        """Return in-range Silver dates with at least one completed Parquet file."""
+        base_path = self._root / "silver" / f"feed={dataset}"
+        if not base_path.exists():
+            return frozenset()
+        return frozenset(
+            partition.name.removeprefix("dt=")
+            for partition in _date_partition_roots(base_path, time_range)
+            if _collect_parquet_files(partition)
+        )
+
+    def completed_gold_partitions(
+        self,
+        dataset: str,
+        *,
+        time_range: tuple[str | datetime, str | datetime],
+        project: str | None = None,
+        version: str | None = None,
+    ) -> frozenset[str]:
+        """Return in-range Gold dates with a completed file in the resolved version.
+
+        This is intentionally a filesystem-only readiness check. It avoids
+        opening Parquet schemas while the scheduler snapshots its immutable
+        source expectations at the beginning of a Gold run.
+        """
+        gold_path = self._gold_root / f"dataset={dataset}"
+        if project:
+            gold_path = gold_path / f"project={project}"
+        if not gold_path.exists():
+            return frozenset()
+
+        scan_result = self._resolve_gold_scan_path(gold_path, version)
+        if scan_result is None:
+            return frozenset()
+        _scan_path, resolved_version = scan_result
+        version_path = gold_path / f"{_VERSION_PREFIX}{resolved_version}"
+        if not version_path.exists():
+            return frozenset()
+
+        return frozenset(
+            partition.name.removeprefix("dt=")
+            for partition in _date_partition_roots(version_path, time_range)
+            if _collect_parquet_files(partition)
+        )
 
     def read_asof(
         self,
@@ -674,6 +767,7 @@ class HeberReader:
         time_range: tuple[str | datetime, str | datetime] | None = None,
         instrument_keys: list[str] | None = None,
         asof_time: str | datetime | None = None,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
         """Read Gold layer features/labels.
 
@@ -697,6 +791,9 @@ class HeberReader:
             Pushed as an ``instrument_key`` scan filter.
         asof_time:
             When set, adds ``ts_available <= asof_time`` to the scan.
+        columns:
+            Optional projection. ``ts_event``, ``ts_available``, and
+            ``instrument_key`` remain available when present.
         """
         gold_path = self._gold_root / f"dataset={dataset}"
         if project:
@@ -715,6 +812,7 @@ class HeberReader:
             dataset_obj = _open_dataset_safe(
                 str(scan_path),
                 partitioning=ds.partitioning(flavor="hive"),
+                physical_time_range=time_range,
             )
         except OSError:
             logger.warning("heber_reader_gold_open_failed", path=str(scan_path), exc_info=True)
@@ -727,6 +825,11 @@ class HeberReader:
         schema_names = set(dataset_obj.schema.names)
 
         time_col = _detect_time_col(schema_names)
+
+        projection: list[str] | None = None
+        if columns:
+            essential = {"ts_event", "ts_available", "instrument_key"}
+            projection = sorted((set(columns) | (essential & schema_names)) & schema_names)
 
         exprs: list[ds.Expression] = []
 
@@ -746,7 +849,7 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter)
+            table = dataset_obj.to_table(filter=scan_filter, columns=projection)
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):

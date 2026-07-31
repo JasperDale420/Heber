@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Heber can consume flow-alert watches from JetStream with explicit acknowledgement after the existing idempotent watch/DLQ handler settles the message.
+- Writer event-id receipts now persist at the Bronze/Silver commit boundary, so JetStream redelivery after an ambiguous broker acknowledgement does not depend on Redis deduplication.
+- Backfill commit proofs now survive Redis outages and Heber restarts in a local durable queue, allowing JetStream messages to acknowledge after Bronze/Silver durability without losing Gateway verification evidence.
+- Backfill redelivery now revalidates the exact event proof against the local committed event and finalized-chunk ledger before JetStream acknowledgement; altered manifest or digest authority cannot reuse a prior event receipt.
+- Dataflow health now checks the selected live, backfill, and watch JetStream durable consumers from their own metrics endpoints; Redis consumer groups remain authoritative only for Redis-selected lanes.
+- A Redis control-plane outage now reports a warning without crashing JetStream-selected dataflow health reporting.
+- JetStream consumer binding, backlog, and availability-lag alerts now use sustained Prometheus rules and the existing notifier's failure/recovery state.
+- Durable receipt indexes are lane-scoped, capacity-gated, and expose operator-visible storage telemetry; pruning requires explicit Gateway-outbox and JetStream-drain proof.
+- Backfill proof, outcome, and finalized-chunk ledgers now have explicit capacity telemetry and reclaim rows only after confirmed JetStream acknowledgement; chunk finalization reads only the affected chunks.
+- JetStream watch delivery retains a durable raw-envelope receipt until both Redis projection and confirmed broker acknowledgement complete.
+- JetStream watch delivery rejects an event ID whose redelivered envelope bytes differ from its durable pending receipt.
+- Watch receipt cleanup reconciles only JetStream sequences at or below the broker-confirmed ACK floor after restart.
+- JetStream writer acknowledgements now settle in bounded 32-message waves and reclaim confirmed receipts in one durable transaction, removing the serial broker round-trip bottleneck without releasing ambiguous messages.
+- Gold refreshes now physically skip out-of-range partitions, read only the columns needed by scheduled features, and reduce Darkpool source data to daily ticker totals before rolling calculations.
+- Gold pipeline outcomes now distinguish success, no data, disabled, and error states; completed source partitions with zero Gold output are errors, per-pipeline and nightly deadlines are capped at 15 and 90 minutes, and nightly errors raise a critical alert.
+- Gold completion now records the requested market session even when the work finishes after midnight.
+- Gold source discovery, subprocess launch, and feature children now run under the same nightly deadline; if a child cannot be reaped at that deadline, Gold records a terminal failure and fences later runs until a non-blocking check confirms it has exited.
+- Excursion analytics is excluded from the scheduled Gold refresh while its source requirements are repaired.
+
 - **Documentation refreshed to the Empire standard set**: `docs/system-architecture.md`, `docs/api-reference.md`, and `docs/data_contract.md` are renamed to `docs/ARCHITECTURE.md`, `docs/API_REFERENCE.md`, and `docs/DATA_CONTRACTS.md` (content unchanged, cross-links updated repo-wide). Added `docs/RUNBOOK.md` as the canonical operations entry point. Corrected the README and `docs/operations/{runbook,monitoring}.md` — they still described `heber-redis`, `heber-clickhouse`, `heber-minio`, `heber-lakefs`, `heber-apicurio`, and `heber-openmetadata` as running containers and an unwired Prometheus exporter; none of that has been true for this `docker-compose.yml` since a June 2026 cleanup (no service/behavior change, docs only).
 
 ### Added

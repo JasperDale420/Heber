@@ -6,11 +6,17 @@ Does NOT test the DarkpoolPipeline class (that requires a real Heber volume).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+from pandas.testing import assert_frame_equal
 
+import heber.features.pipelines.darkpool_features as darkpool_module
 from heber.features.pipelines.darkpool_features import (
     OUTPUT_COLUMNS,
+    DarkpoolPipeline,
     compute_darkpool_features,
 )
 
@@ -378,3 +384,81 @@ class TestManyRecordsPerformance:
         result = compute_darkpool_features(dp, fa)
         # 25 days * 2 tickers = 50 rows
         assert len(result) == 50
+
+
+class _DailyBoundedReader:
+    """In-memory reader that records the pipeline's Silver read boundaries."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame]) -> None:
+        self.frames = frames
+        self.calls: list[tuple[str, tuple[datetime, datetime], dict[str, object]]] = []
+        self.written: pd.DataFrame | None = None
+
+    def read_silver(
+        self,
+        dataset: str,
+        *,
+        time_range: tuple[datetime, datetime],
+        **kwargs: object,
+    ) -> pd.DataFrame:
+        self.calls.append((dataset, time_range, kwargs))
+        start, end = (pd.Timestamp(value) for value in time_range)
+        source = self.frames[dataset]
+        event_times = pd.to_datetime(source["ts_event"], utc=True)
+        return source.loc[(event_times >= start) & (event_times <= end)].copy()
+
+    def write_gold(self, *, df: pd.DataFrame, **_kwargs: object) -> Path:
+        self.written = df.copy()
+        return Path("/tmp/darkpool-features.parquet")
+
+
+class TestDarkpoolPipelineReduction:
+    """The orchestration reads one physical day at a time before rolling work."""
+
+    def test_daily_reads_reduce_source_frames_without_changing_features(self, monkeypatch) -> None:
+        darkpool = _dp_df(
+            [
+                _make_darkpool_trade("AAPL", "2026-03-01 10:00:00", notional=100),
+                _make_darkpool_trade("AAPL", "2026-03-01 14:00:00", notional=150),
+                _make_darkpool_trade("AAPL", "2026-03-02 10:00:00", notional=300),
+                _make_darkpool_trade("MSFT", "2026-03-03 11:00:00", notional=500),
+                _make_darkpool_trade("AAPL", "2026-03-03 13:00:00", notional=200),
+            ]
+        )
+        flow_alerts = _fa_df(
+            [
+                _make_flow_alert("AAPL", "2026-03-01 10:00:00", premium=25),
+                _make_flow_alert("AAPL", "2026-03-02 10:00:00", premium=75),
+                _make_flow_alert("MSFT", "2026-03-03 11:00:00", premium=100),
+                _make_flow_alert("AAPL", "2026-03-03 13:00:00", premium=50),
+            ]
+        )
+        reader = _DailyBoundedReader({"darkpool": darkpool, "flow_alerts": flow_alerts})
+        monkeypatch.setattr(darkpool_module, "LOOKBACK_DAYS", 1)
+
+        result = DarkpoolPipeline(reader=reader).run("2026-03-02", "2026-03-03")
+
+        assert result["darkpool_features"]["status"] == "success"
+        assert len(reader.calls) == 6
+        for dataset, (start, end), kwargs in reader.calls:
+            assert dataset in {"darkpool", "flow_alerts"}
+            assert start.tzinfo == UTC
+            assert end.tzinfo == UTC
+            assert start.date() == end.date()
+            assert end - start == pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+            assert kwargs["prune_by_dt"] is True
+            assert kwargs["columns"] == ["underlying", "notional" if dataset == "darkpool" else "premium", "ts_event"]
+
+        expected = compute_darkpool_features(darkpool, flow_alerts)
+        expected = (
+            expected[
+                (expected["ts_event"] >= pd.Timestamp("2026-03-02", tz="UTC"))
+                & (expected["ts_event"] <= pd.Timestamp("2026-03-03 23:59:59", tz="UTC"))
+            ]
+            .drop(columns=["ts_available"])
+            .sort_values(["symbol", "date"])
+            .reset_index(drop=True)
+        )
+        assert reader.written is not None
+        written = reader.written.drop(columns=["ts_available"]).sort_values(["symbol", "date"]).reset_index(drop=True)
+        assert_frame_equal(written, expected)

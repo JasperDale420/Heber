@@ -391,6 +391,18 @@ class StraddleMomentumPipeline:
             chunk = self.reader.read_silver(
                 "option_chain_snapshot",
                 time_range=(tail_start, day_end),
+                columns=[
+                    "underlying",
+                    "ts_event",
+                    "chain_json",
+                    "strike",
+                    "bid",
+                    "ask",
+                    "last",
+                    "delta",
+                    "put_call",
+                    "instrument_key",
+                ],
                 prune_by_dt=True,
             )
             if chunk.empty:

@@ -358,6 +358,7 @@ class MarketRegimePipeline:
             time_range=(bar_start, end_date),
             columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
             batch_size=500_000,
+            prune_by_dt=True,
         )
         logger.info("Loaded bars for dispersion", rows=len(bars))
 
@@ -384,6 +385,8 @@ class MarketRegimePipeline:
             "quotes",
             instrument_keys=["equity:UVXY"],
             time_range=(vix_start, end_date),
+            columns=["close", "bid_price", "bid_px", "ask_price", "ask_px"],
+            prune_by_dt=True,
         )
         logger.info("Loaded UVXY quotes", rows=len(quotes))
 
@@ -394,6 +397,8 @@ class MarketRegimePipeline:
                 "bars",
                 instrument_keys=["equity:UVXY"],
                 time_range=(vix_start, end_date),
+                columns=["close"],
+                prune_by_dt=True,
             )
             logger.info("Loaded UVXY bars", rows=len(quotes))
 
@@ -420,6 +425,7 @@ class MarketRegimePipeline:
             "momentum_features",
             project=self.project,
             time_range=(start_date, end_date),
+            columns=["momentum_1d"],
         )
         logger.info("Loaded momentum_features", rows=len(momentum))
 
@@ -431,7 +437,12 @@ class MarketRegimePipeline:
     def _compute_yield_curve_slope(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Load Silver treasury_yields and compute yield_curve_slope."""
         logger.info("Loading Silver treasury_yields")
-        yields_df = self.reader.read_silver("treasury_yields", time_range=(start_date, end_date))
+        yields_df = self.reader.read_silver(
+            "treasury_yields",
+            time_range=(start_date, end_date),
+            columns=["maturity", "yield_pct"],
+            prune_by_dt=True,
+        )
         logger.info("Loaded treasury_yields", rows=len(yields_df))
 
         if yields_df.empty:

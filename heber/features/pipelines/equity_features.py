@@ -668,6 +668,7 @@ class EquityFeaturePipeline:
                 time_range=(bar_start, bar_end),
                 columns=_BARS_COLUMNS,
                 batch_size=_BARS_BATCH_SIZE,
+                prune_by_dt=True,
             )
             logger.info("Loaded bars", rows=len(bars))
             # Memory guard: drop intraday rows early — but only for
@@ -682,9 +683,7 @@ class EquityFeaturePipeline:
                 daily_mask = bars["timeframe"] == "1Day"
                 if daily_mask.any():
                     dates = pd.to_datetime(bars["ts_event"], utc=True).dt.date
-                    daily_keys = set(
-                        zip(bars.loc[daily_mask, "instrument_key"], dates[daily_mask], strict=False)
-                    )
+                    daily_keys = set(zip(bars.loc[daily_mask, "instrument_key"], dates[daily_mask], strict=False))
                     covered = pd.Series(
                         list(zip(bars["instrument_key"], dates, strict=False)),
                         index=bars.index,
@@ -700,13 +699,31 @@ class EquityFeaturePipeline:
 
         if "microstructure" in datasets:
             logger.info("Loading Silver quotes")
-            quotes = self.reader.read_silver("quotes", instrument_type="equity", time_range=(start_date, end_date))
+            quotes = self.reader.read_silver(
+                "quotes",
+                instrument_type="equity",
+                time_range=(start_date, end_date),
+                columns=["bid_px", "ask_px", "bid_sz", "ask_sz", "bid_price", "ask_price", "bid_size", "ask_size"],
+                prune_by_dt=True,
+            )
             logger.info("Loaded quotes", rows=len(quotes))
 
         if "flow" in datasets:
             logger.info("Loading Silver flow_alerts")
             flow_alerts = self.reader.read_silver(
-                "flow_alerts", instrument_type="option", time_range=(start_date, end_date)
+                "flow_alerts",
+                instrument_type="option",
+                time_range=(start_date, end_date),
+                columns=[
+                    "underlying",
+                    "premium",
+                    "put_call",
+                    "is_sweep",
+                    "total_ask_side_prem",
+                    "total_bid_side_prem",
+                    "total_size",
+                ],
+                prune_by_dt=True,
             )
             logger.info("Loaded flow_alerts", rows=len(flow_alerts))
 

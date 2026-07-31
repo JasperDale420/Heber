@@ -43,11 +43,12 @@ async def test_run_all_pipelines_targets_todays_session(monkeypatch) -> None:
     poller._settings = SimpleNamespace(
         gold_poller_lookback_days=1,
         gold_poller_disabled_pipeline_set=set(),
+        gold_poller_run_budget_seconds=5400,
     )
 
     captured: list[tuple[date, date]] = []
 
-    async def _fake_run_pipeline(entry, start_date, end_date):
+    async def _fake_run_pipeline(entry, start_date, end_date, **_kwargs):
         captured.append((start_date, end_date))
         return {"status": "success", "rows": 0}
 

@@ -267,6 +267,8 @@ class TrendScanPipeline:
             "bars",
             instrument_type="equity",
             time_range=(start_date, bar_end),
+            columns=["close", "timeframe"],
+            prune_by_dt=True,
         )
         logger.info("Loaded bars", rows=len(bars))
 

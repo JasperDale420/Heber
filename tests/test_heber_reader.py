@@ -246,6 +246,29 @@ class TestReadSilver:
         df = reader.read_silver("nonexistent")
         assert df.empty
 
+    def test_dt_pruning_skips_corrupt_out_of_range_partition_before_schema_open(self, tmp_path: Path) -> None:
+        """A historical bad file must not break a bounded current-date read."""
+        rows = [
+            {
+                "ts_event": _ts(0),
+                "ts_available": _ts(1),
+                "instrument_key": "equity:AAPL",
+                "close": 150.0,
+            }
+        ]
+        _write_silver_parquet(tmp_path, "bars", "equity", rows)
+        old_partition = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2025-01-01"
+        old_partition.mkdir(parents=True)
+        (old_partition / "corrupt.parquet").write_bytes(b"not parquet")
+
+        df = HeberReader(tmp_path).read_silver(
+            "bars",
+            time_range=(_ts(0), _ts(0)),
+            prune_by_dt=True,
+        )
+
+        assert len(df) == 1
+
 
 class TestReadAsof:
     def test_delegates_to_read_silver(self, silver_data: tuple[Path, pd.DataFrame]) -> None:
@@ -302,6 +325,56 @@ class TestReadGold:
         reader = HeberReader(tmp_path)
         df = reader.read_gold("features", project="kairos")
         assert df.empty
+
+    def test_dt_pruning_skips_corrupt_out_of_range_partition_before_schema_open(self, tmp_path: Path) -> None:
+        rows = [
+            {
+                "ts_event": _ts(0),
+                "ts_available": _ts(1),
+                "instrument_key": "equity:AAPL",
+                "feature_a": 1.0,
+            }
+        ]
+        _write_gold_parquet(tmp_path, "features", "kairos", "v1", rows)
+        old_partition = tmp_path / "gold" / "dataset=features" / "project=kairos" / "version=v1" / "dt=2025-01-01"
+        old_partition.mkdir(parents=True)
+        (old_partition / "corrupt.parquet").write_bytes(b"not parquet")
+
+        df = HeberReader(tmp_path).read_gold(
+            "features",
+            project="kairos",
+            version="v1",
+            time_range=(_ts(0), _ts(0)),
+        )
+
+        assert len(df) == 1
+
+    def test_column_projection_keeps_gold_identity_columns(self, gold_data: tuple[Path, pd.DataFrame]) -> None:
+        root, _ = gold_data
+
+        df = HeberReader(root).read_gold(
+            "features",
+            project="kairos",
+            version="v2",
+            columns=["feature_a"],
+        )
+
+        assert set(df.columns) == {"feature_a", "instrument_key", "ts_available", "ts_event"}
+
+    def test_completed_gold_partitions_uses_declared_project_and_version(
+        self,
+        gold_data: tuple[Path, pd.DataFrame],
+    ) -> None:
+        root, _ = gold_data
+
+        partitions = HeberReader(root).completed_gold_partitions(
+            "features",
+            project="kairos",
+            version="v2",
+            time_range=(_ts(0), _ts(2)),
+        )
+
+        assert partitions == frozenset({"2026-01-15"})
 
 
 # ---------------------------------------------------------------------------

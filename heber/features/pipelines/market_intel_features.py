@@ -472,24 +472,52 @@ class MarketIntelPipeline:
 
         if "darkpool" in datasets:
             logger.info("Loading Silver darkpool", start=start_date.isoformat(), end=end_date.isoformat())
-            darkpool_data = self.reader.read_silver("darkpool", time_range=window_for("darkpool"), prune_by_dt=True)
+            darkpool_data = self.reader.read_silver(
+                "darkpool",
+                time_range=window_for("darkpool"),
+                columns=["price", "size", "notional", "nbbo_bid", "nbbo_ask"],
+                prune_by_dt=True,
+            )
             logger.info("Loaded darkpool", rows=len(darkpool_data))
 
         if "greek_exposure" in datasets:
             logger.info("Loading Silver greek_exposure")
             greek_data = self.reader.read_silver(
-                "greek_exposure", time_range=window_for("greek_exposure"), prune_by_dt=True
+                "greek_exposure",
+                time_range=window_for("greek_exposure"),
+                columns=[
+                    "gamma_exposure",
+                    "delta_exposure",
+                    "call_gamma",
+                    "put_gamma",
+                    "call_delta",
+                    "put_delta",
+                    "strike",
+                    "dte",
+                ],
+                prune_by_dt=True,
             )
             logger.info("Loaded greek_exposure", rows=len(greek_data))
 
         if "options_sentiment" in datasets:
             logger.info("Loading Silver iv_rank, market_tide, sector_tide")
-            iv_rank_data = self.reader.read_silver("iv_rank", time_range=window_for("iv_rank"), prune_by_dt=True)
+            iv_rank_data = self.reader.read_silver(
+                "iv_rank",
+                time_range=window_for("iv_rank"),
+                columns=["iv_rank", "current_iv", "iv_percentile"],
+                prune_by_dt=True,
+            )
             market_tide_data = self.reader.read_silver(
-                "market_tide", time_range=window_for("market_tide"), prune_by_dt=True
+                "market_tide",
+                time_range=window_for("market_tide"),
+                columns=["call_put_ratio", "net_volume", "sentiment"],
+                prune_by_dt=True,
             )
             sector_tide_data = self.reader.read_silver(
-                "sector_tide", time_range=window_for("sector_tide"), prune_by_dt=True
+                "sector_tide",
+                time_range=window_for("sector_tide"),
+                columns=["sector", "call_put_ratio", "net_volume", "sentiment"],
+                prune_by_dt=True,
             )
             logger.info(
                 "Loaded sentiment sources",
@@ -500,7 +528,12 @@ class MarketIntelPipeline:
 
         if "ftd" in datasets:
             logger.info("Loading Silver ftd")
-            ftd_data = self.reader.read_silver("ftd", time_range=window_for("ftd"), prune_by_dt=True)
+            ftd_data = self.reader.read_silver(
+                "ftd",
+                time_range=window_for("ftd"),
+                columns=["quantity", "price", "value"],
+                prune_by_dt=True,
+            )
             logger.info("Loaded ftd", rows=len(ftd_data))
 
         # Compute each dataset

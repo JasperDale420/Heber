@@ -253,6 +253,7 @@ class TickerBaseRatesPipeline:
             dataset=self.labels_dataset,
             project=self.labels_project,
             time_range=(label_start, end_date),
+            columns=["underlying", "hit_tp_first"],
         )
 
         if labels.empty:

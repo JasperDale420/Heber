@@ -173,6 +173,46 @@ class DarkpoolPipeline:
         self.project = project
         self.version = version
 
+    def _read_daily_source_aggregates(
+        self,
+        dataset: str,
+        metric: str,
+        start: datetime,
+        end: datetime,
+    ) -> pd.DataFrame:
+        """Read one Silver date partition at a time and retain daily ticker totals.
+
+        The 20-day z-score only consumes daily per-underlying values. Reducing
+        each date immediately prevents a high-volume source frame from staying
+        resident for the full lookback window.
+        """
+        daily_frames: list[pd.DataFrame] = []
+        current_day = start.date()
+        final_day = end.date()
+
+        while current_day <= final_day:
+            day_start = datetime(current_day.year, current_day.month, current_day.day, tzinfo=UTC)
+            day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+            frame = self.reader.read_silver(
+                dataset,
+                time_range=(day_start, day_end),
+                columns=["underlying", metric, "ts_event"],
+                prune_by_dt=True,
+            )
+            if not frame.empty:
+                frame = frame.copy()
+                frame["ts_event"] = pd.to_datetime(frame["ts_event"], utc=True)
+                frame[metric] = pd.to_numeric(frame[metric], errors="coerce").fillna(0.0)
+                frame["date"] = frame["ts_event"].dt.date
+                daily = frame.groupby(["underlying", "date"], as_index=False)[metric].sum()
+                daily["ts_event"] = pd.to_datetime(daily["date"], utc=True)
+                daily_frames.append(daily[["underlying", metric, "ts_event"]])
+            current_day += timedelta(days=1)
+
+        if not daily_frames:
+            return pd.DataFrame(columns=["underlying", metric, "ts_event"])
+        return pd.concat(daily_frames, ignore_index=True)
+
     def run(
         self,
         start_date: str | datetime,
@@ -208,22 +248,16 @@ class DarkpoolPipeline:
             read_start=read_start.isoformat(),
             end=end_date.isoformat(),
         )
-        darkpool = self.reader.read_silver(
-            "darkpool",
-            time_range=(read_start, end_date),
-        )
-        logger.info("Loaded darkpool", rows=len(darkpool))
+        darkpool = self._read_daily_source_aggregates("darkpool", "notional", read_start, end_date)
+        logger.info("Loaded darkpool daily aggregates", rows=len(darkpool))
 
         logger.info(
             "Loading Silver flow_alerts for premium data",
             read_start=read_start.isoformat(),
             end=end_date.isoformat(),
         )
-        flow_alerts = self.reader.read_silver(
-            "flow_alerts",
-            time_range=(read_start, end_date),
-        )
-        logger.info("Loaded flow_alerts", rows=len(flow_alerts))
+        flow_alerts = self._read_daily_source_aggregates("flow_alerts", "premium", read_start, end_date)
+        logger.info("Loaded flow_alerts daily aggregates", rows=len(flow_alerts))
 
         if darkpool.empty:
             logger.warning("No darkpool data found")

@@ -232,6 +232,8 @@ class GexRegimePipeline:
             greek_exposure = self.reader.read_silver(
                 "greek_exposure",
                 time_range=(greek_start, end_date),
+                columns=["call_gamma", "put_gamma", "gamma_exposure"],
+                prune_by_dt=True,
             )
             logger.info("Loaded greek_exposure", rows=len(greek_exposure))
         except Exception as exc:
