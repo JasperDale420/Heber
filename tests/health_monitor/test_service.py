@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -41,6 +42,28 @@ def _sample_result(name: str = "test_check", status: Status = Status.PASS) -> Ch
         details={},
         ts_checked=datetime.utcnow(),
     )
+
+
+@pytest.mark.unit
+async def test_start_uses_an_isolated_notifier_state_file(tmp_path: Path) -> None:
+    settings = _make_settings(
+        data_root=str(tmp_path),
+        alert_discord_enabled=True,
+        alert_discord_webhook_url="https://discord.invalid/test",
+    )
+    service = HealthMonitorService(settings=settings)
+    redis = AsyncMock()
+
+    with (
+        patch("redis.asyncio.from_url", return_value=redis),
+        patch("heber.health_monitor.service.DiscordNotifier") as notifier,
+    ):
+        await service.start()
+        notifier.assert_called_once_with(
+            settings,
+            state_path=tmp_path / "ops" / "alerts" / "health-monitor-state.json",
+        )
+        await service.stop()
 
 
 # ---------------------------------------------------------------------------

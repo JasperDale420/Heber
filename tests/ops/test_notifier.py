@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -147,6 +148,40 @@ def test_state_persists_across_instances(tmp_path: Path) -> None:
     n2 = DiscordNotifier(settings, client=client2)
     n2.dispatch([_fail()], now=T0 + timedelta(minutes=10))  # still within cooldown
     assert client2.post.call_count == 0
+
+
+@pytest.mark.unit
+def test_failed_state_replace_preserves_previous_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "ops" / "alerts" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}")
+    notifier = DiscordNotifier(_settings(tmp_path), client=_client(), state_path=state_path)
+
+    with patch.object(Path, "replace", side_effect=OSError("interrupted replace")):
+        notifier.dispatch([_fail()], now=T0)
+
+    assert json.loads(state_path.read_text()) == {}
+    assert list(state_path.parent.glob(".state.json.*.tmp")) == []
+
+
+@pytest.mark.unit
+def test_service_specific_state_files_do_not_share_cooldown(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, alert_cooldown_seconds=3600)
+    first_client = _client()
+    second_client = _client()
+    first_path = tmp_path / "ops" / "alerts" / "dataflow-health-state.json"
+    second_path = tmp_path / "ops" / "alerts" / "health-monitor-state.json"
+
+    DiscordNotifier(settings, client=first_client, state_path=first_path).dispatch([_fail()], now=T0)
+    DiscordNotifier(settings, client=second_client, state_path=second_path).dispatch(
+        [_fail()],
+        now=T0 + timedelta(minutes=10),
+    )
+
+    assert first_client.post.call_count == 1
+    assert second_client.post.call_count == 1
+    assert first_path.read_text() != ""
+    assert second_path.read_text() != ""
 
 
 @pytest.mark.unit

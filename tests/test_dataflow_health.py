@@ -3,9 +3,31 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from heber.config import Settings
 from heber.ops import dataflow_health as dataflow_health_module
+
+
+def test_dataflow_alerts_use_an_isolated_notifier_state_file(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        data_root=tmp_path,
+        alert_discord_enabled=True,
+        alert_discord_webhook_url="https://discord.invalid/test",
+    )
+    factory = MagicMock()
+
+    with (
+        patch.object(dataflow_health_module, "DiscordNotifier", factory),
+        patch.object(dataflow_health_module, "_notifier", None),
+    ):
+        dataflow_health_module._dispatch_alerts({"checks": []}, settings)
+
+    factory.assert_called_once_with(
+        settings,
+        state_path=tmp_path / "ops" / "alerts" / "dataflow-health-state.json",
+    )
 
 
 def _signals(now: datetime) -> dict:

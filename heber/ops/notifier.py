@@ -5,13 +5,16 @@ alert) so single-cycle flaps — transient bind-mount read errors, deadline-edge
 blips — never reach Discord, plus a per-(check, feed) cooldown for repeat
 reminders on a sustained outage and a recovery note when a previously-alerting
 feed returns to healthy. Network and IO errors are swallowed (logged) so a
-broken webhook never crashes the monitor. State persists to
-``${data_root}/ops/alerts/state.json``.
+broken webhook never crashes the monitor. State persists atomically under
+``${data_root}/ops/alerts``; callers may select a service-specific filename.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -66,10 +69,29 @@ class DiscordNotifier:
             return {}
 
     def _save_state(self) -> None:
+        tmp_path: Path | None = None
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps(self._state, default=str))
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{self._state_path.name}.",
+                suffix=".tmp",
+                dir=self._state_path.parent,
+            )
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(self._state, default=str))
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp_path.replace(self._state_path)
+            directory_fd = os.open(self._state_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         except OSError:
+            if tmp_path is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    tmp_path.unlink()
             logger.warning("alert_state_save_failed", path=str(self._state_path), exc_info=True)
 
     # ----- dispatch -----

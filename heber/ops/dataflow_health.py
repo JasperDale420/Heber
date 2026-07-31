@@ -922,7 +922,11 @@ def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -
     global _notifier
     try:
         if _notifier is None:
-            _notifier = DiscordNotifier(settings or get_settings())
+            active_settings = settings or get_settings()
+            _notifier = DiscordNotifier(
+                active_settings,
+                state_path=Path(active_settings.data_root) / "ops" / "alerts" / "dataflow-health-state.json",
+            )
         now = datetime.now(UTC)
         results = [
             CheckResult(

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -85,7 +86,10 @@ class HealthMonitorService:
         )
 
         if self._settings.alert_discord_enabled:
-            self._notifier = DiscordNotifier(self._settings)
+            self._notifier = DiscordNotifier(
+                self._settings,
+                state_path=Path(self._settings.data_root) / "ops" / "alerts" / "health-monitor-state.json",
+            )
 
         self._running = True
         self._tasks = [

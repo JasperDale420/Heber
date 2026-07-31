@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JetStream watch delivery rejects an event ID whose redelivered envelope bytes differ from its durable pending receipt.
 - Watch receipt cleanup reconciles only JetStream sequences at or below the broker-confirmed ACK floor after restart.
 - JetStream writer acknowledgements now settle in bounded 32-message waves and reclaim confirmed receipts in one durable transaction, removing the serial broker round-trip bottleneck without releasing ambiguous messages.
+- Dataflow and health-monitor containers now receive the complete Discord alert configuration, keep separate durable alert state, and document the required off-machine dead-man URL.
 - Gold refreshes now physically skip out-of-range partitions, read only the columns needed by scheduled features, and reduce Darkpool source data to daily ticker totals before rolling calculations.
 - Gold pipeline outcomes now distinguish success, no data, disabled, and error states; completed source partitions with zero Gold output are errors, per-pipeline and nightly deadlines are capped at 15 and 90 minutes, and nightly errors raise a critical alert.
 - Gold completion now records the requested market session even when the work finishes after midnight.
