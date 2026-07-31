@@ -102,6 +102,7 @@ class AlertWatchConsumer:
         dlq_stream_name: str | None = None,
         max_process_retries: int | None = None,
         retry_backoff_seconds: float | None = None,
+        dlq_retryable_exhaustion: bool = True,
     ):
         """Initialize the consumer.
 
@@ -133,6 +134,7 @@ class AlertWatchConsumer:
             settings.redis_retry_backoff_seconds if retry_backoff_seconds is None else retry_backoff_seconds
         )
         self.retry_backoff_seconds = max(0.0, configured_backoff)
+        self.dlq_retryable_exhaustion = dlq_retryable_exhaustion
         self._running = False
 
         # Feature extractor for meta-labeling
@@ -273,12 +275,13 @@ class AlertWatchConsumer:
 
         success, _result, last_exc = await try_xadd_with_retry(_xadd)
 
-        if fallback_path is None and not success:
+        if fallback_path is None:
             logger.error(
-                "Failed to write watch message to DLQ",
+                "watch_dlq_not_durable",
                 stream=self.dlq_stream_name,
                 msg_id=msg_id,
-                error=str(last_exc) if last_exc else "unknown",
+                redis_projected=success,
+                error=str(last_exc) if last_exc else "filesystem fallback unavailable",
             )
             return False
 
@@ -327,6 +330,9 @@ class AlertWatchConsumer:
             if attempt < self.max_process_retries:
                 await asyncio.sleep(max(0.0, self.retry_backoff_seconds * attempt))
 
+        if not self.dlq_retryable_exhaustion:
+            logger.warning("retryable_flow_alert_failure_unacknowledged", msg_id=msg_id_text, reason=last_reason)
+            return False
         return await self._dead_letter_message(
             msg_id=msg_id_text,
             data=data,

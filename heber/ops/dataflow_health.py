@@ -304,7 +304,7 @@ def _collect_redis_signals_once(settings: Settings) -> dict[str, Any]:
         groups: list[dict[Any, Any]] = []
 
         try:
-            stream_len = int(client.xlen(settings.redis_stream_name))
+            stream_len = int(cast(Any, client.xlen(settings.redis_stream_name)))
         except redis.ResponseError:
             stream_len = None
 
@@ -359,11 +359,14 @@ def _collect_runtime_signals(
     if collect_metrics:
         consumer_samples, consumer_error = _fetch_metrics_samples(consumer_metrics_url)
         watch_samples, watch_error = _fetch_metrics_samples(watch_metrics_url)
+        backfill_samples, backfill_error = _fetch_metrics_samples(settings.health_backfill_consumer_metrics_url)
     else:
         consumer_samples = None
         watch_samples = None
         consumer_error = None
         watch_error = None
+        backfill_samples = None
+        backfill_error = None
 
     feed_metric_sources = {
         "bars": _metric_max(
@@ -385,15 +388,39 @@ def _collect_runtime_signals(
 
     gateway_last_success = _metric_max(watch_samples, "heber_watch_gateway_last_success_unixtime")
 
+    def jetstream_state(
+        samples: list[tuple[str, dict[str, str], float]] | None, stream: str, consumer: str
+    ) -> dict[str, Any]:
+        labels = {"stream": stream, "consumer": consumer}
+        return {
+            "bound": _metric_max(samples, "heber_jetstream_consumer_bound", labels=labels),
+            "pending": _metric_max(samples, "heber_jetstream_consumer_pending_messages", labels=labels),
+            "ack_pending": _metric_max(samples, "heber_jetstream_consumer_ack_pending_messages", labels=labels),
+            "redelivered": _metric_max(samples, "heber_jetstream_consumer_redelivered_messages", labels=labels),
+            "heartbeat": _metric_max(samples, "heber_consumer_loop_heartbeat_unixtime"),
+        }
+
     return {
         "redis": _collect_redis_signals(settings),
         "feeds": feed_metric_sources,
         "gateway_last_success": gateway_last_success,
+        "jetstream": jetstream_state(
+            consumer_samples, settings.jetstream_live_stream_name, settings.jetstream_live_durable_name
+        ),
+        "jetstream_backfill": jetstream_state(
+            backfill_samples,
+            settings.jetstream_backfill_stream_name,
+            settings.jetstream_backfill_durable_name,
+        ),
+        "jetstream_watch": jetstream_state(
+            watch_samples, settings.watch_jetstream_stream_name, settings.watch_jetstream_durable_name
+        ),
         "metrics": {
             "consumer_url": consumer_metrics_url,
             "watch_url": watch_metrics_url,
             "consumer_error": consumer_error,
             "watch_error": watch_error,
+            "backfill_error": backfill_error,
         },
     }
 
@@ -633,9 +660,7 @@ def _mount_liveness_check(settings: Settings) -> dict[str, Any]:
         "observed": {"sentinel": str(sentinel), "present": present, "error": error},
         "threshold": {"required": True},
         "message": (
-            "Data volume sentinel present."
-            if present
-            else "Data volume missing or unmounted: sentinel not found."
+            "Data volume sentinel present." if present else "Data volume missing or unmounted: sentinel not found."
         ),
     }
 
@@ -706,7 +731,12 @@ def generate_dataflow_report(
         consumer_metrics_url=consumer_url,
         watch_metrics_url=watch_url,
         settings=active_settings,
-        collect_metrics=market_open,
+        collect_metrics=(
+            market_open
+            or active_settings.ingest_transport == "jetstream"
+            or active_settings.health_backfill_ingest_transport == "jetstream"
+            or active_settings.watch_ingest_transport == "jetstream"
+        ),
     )
 
     checks: list[dict[str, Any]] = []
@@ -720,23 +750,78 @@ def generate_dataflow_report(
 
     redis_signal = signals.get("redis", {})
     redis_ok = bool(redis_signal.get("ok"))
+    writer_transport = active_settings.ingest_transport
+    redis_required_for_writer = writer_transport == "redis"
     checks.append(
         {
-            "id": "redis_connection",
-            "status": "ok" if redis_ok else "fail",
-            "severity": "critical",
+            "id": "redis_connection" if redis_required_for_writer else "redis_control_plane",
+            "status": "ok" if redis_ok else ("fail" if redis_required_for_writer else "warn"),
+            "severity": "critical" if redis_required_for_writer else "warning",
             "observed": {
                 "ok": redis_ok,
                 "lag": redis_signal.get("lag"),
                 "pending": redis_signal.get("pending"),
+                "writer_transport": writer_transport,
             },
             "threshold": {"required": True},
-            "message": "Redis stream reachable." if redis_ok else f"Redis unavailable: {redis_signal.get('error')}",
+            "message": (
+                "Redis stream reachable."
+                if redis_ok
+                else (
+                    f"Redis unavailable: {redis_signal.get('error')}"
+                    if redis_required_for_writer
+                    else (
+                        "Redis control plane unavailable; JetStream writer ACKs are independent: "
+                        f"{redis_signal.get('error')}"
+                    )
+                )
+            ),
         }
     )
 
+    if writer_transport == "jetstream":
+        jetstream = signals["jetstream"]
+        bound = jetstream.get("bound") == 1
+        heartbeat = jetstream.get("heartbeat")
+        age = None if heartbeat is None else max(0.0, now_unixtime - heartbeat)
+        checks.append(
+            {
+                "id": "jetstream_consumer",
+                "status": "ok" if bound and age is not None and age <= window_seconds else "fail",
+                "severity": "critical",
+                "observed": {**jetstream, "availability_lag_seconds": age},
+                "threshold": {"max_availability_lag_seconds": window_seconds, "required_bound": True},
+                "message": "JetStream writer durable consumer is bound and live."
+                if bound and age is not None and age <= window_seconds
+                else "JetStream writer durable consumer is unavailable or stale.",
+            }
+        )
+    for lane, transport, state_key in (
+        ("backfill", active_settings.health_backfill_ingest_transport, "jetstream_backfill"),
+        ("watch", active_settings.watch_ingest_transport, "jetstream_watch"),
+    ):
+        if transport != "jetstream":
+            continue
+        jetstream = signals[state_key]
+        bound = jetstream.get("bound") == 1
+        heartbeat = jetstream.get("heartbeat")
+        age = None if heartbeat is None else max(0.0, now_unixtime - heartbeat)
+        checks.append(
+            {
+                "id": f"jetstream_{lane}_consumer",
+                "status": "ok" if bound and age is not None and age <= window_seconds else "fail",
+                "severity": "critical",
+                "observed": {**jetstream, "availability_lag_seconds": age},
+                "threshold": {"max_availability_lag_seconds": window_seconds, "required_bound": True},
+                "message": f"JetStream {lane} durable consumer is bound and live."
+                if bound and age is not None and age <= window_seconds
+                else f"JetStream {lane} durable consumer is unavailable or stale.",
+            }
+        )
     group_exists = bool(redis_signal.get("group_exists"))
-    if not redis_ok:
+    if writer_transport == "jetstream":
+        group_status, group_message = "skipped", "Redis group is control-plane only for JetStream writer ACKs."
+    elif not redis_ok:
         # A failed/timed-out connection cannot observe the group. Reporting
         # "missing" here fabricates a phantom critical every time the 2s probe
         # times out (docker-proxy jitter) — the group is not actually gone
@@ -759,7 +844,8 @@ def generate_dataflow_report(
         }
     )
 
-    checks.append(_build_consumer_lag_check(redis_signal))
+    if writer_transport == "redis":
+        checks.append(_build_consumer_lag_check(redis_signal))
 
     checks.append(
         _build_gateway_check(
@@ -842,18 +928,14 @@ def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -
             CheckResult(
                 check_name=f"dataflow:{check['id']}",
                 feed=None,
-                severity=(
-                    Severity.P0_CRITICAL
-                    if check.get("severity") == "critical"
-                    else Severity.P1_WARNING
-                ),
-                status=Status.FAIL if check["status"] == "fail" else Status.PASS,
+                severity=(Severity.P0_CRITICAL if check.get("severity") == "critical" else Severity.P1_WARNING),
+                status=Status.FAIL if check["status"] in ("fail", "warn", "warning") else Status.PASS,
                 message=f"dataflow {check['id']}: {check.get('message', '')}",
                 details=check.get("observed") or {},
                 ts_checked=now,
             )
             for check in report.get("checks", [])
-            if check["status"] in ("fail", "ok")
+            if check["status"] in ("fail", "warn", "warning", "ok")
         ]
         if results:
             _notifier.dispatch(results)

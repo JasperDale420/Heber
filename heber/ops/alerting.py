@@ -67,11 +67,67 @@ ALERTING_RULES = [
     ),
     AlertRule(
         name="HeberAvailabilityLagSpike",
-        expr="histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 30",
+        expr="histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 60",
         for_duration="5m",
         severity=Severity.WARNING,
         summary="Availability lag p99 is elevated",
-        description="P99 availability lag exceeds 30s, potential data freshness issue",
+        description="P99 availability lag exceeds 60s, potential data freshness issue",
+    ),
+    AlertRule(
+        name="HeberAvailabilityLagCritical",
+        expr="histogram_quantile(0.99, rate(heber_availability_lag_seconds_bucket[5m])) > 300",
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="Availability lag p99 is critical",
+        description="P99 availability lag exceeds 300s for 1 minute.",
+    ),
+    AlertRule(
+        name="HeberJetStreamConsumerUnbound",
+        expr="heber_jetstream_consumer_bound == 0",
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="Heber JetStream consumer is unbound",
+        description="A JetStream writer/watch durable consumer is not bound.",
+    ),
+    AlertRule(
+        name="HeberJetStreamAckBacklog",
+        expr="heber_jetstream_consumer_ack_pending_messages > 0",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Heber JetStream acknowledgements are held",
+        description="JetStream ACK-pending messages have persisted for 5 minutes.",
+    ),
+    AlertRule(
+        name="HeberDurableReceiptCapacityHigh",
+        expr="heber_durable_receipt_utilization_ratio > 0.8",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Heber durable receipt capacity is high",
+        description="A lane's durable receipt index exceeds 80% of its explicit capacity.",
+    ),
+    AlertRule(
+        name="HeberDurableReceiptCapacityCritical",
+        expr="heber_durable_receipt_utilization_ratio > 0.95",
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="Heber durable receipt capacity is near exhaustion",
+        description="A lane's receipt index is above 95%; ingestion will fail closed at capacity.",
+    ),
+    AlertRule(
+        name="HeberDurableBackfillLedgerCapacityHigh",
+        expr="heber_durable_backfill_ledger_utilization_ratio > 0.8",
+        for_duration="5m",
+        severity=Severity.WARNING,
+        summary="Heber durable backfill ledger capacity is high",
+        description="A durable backfill proof ledger exceeds 80% of its explicit capacity.",
+    ),
+    AlertRule(
+        name="HeberDurableBackfillLedgerCapacityCritical",
+        expr="heber_durable_backfill_ledger_utilization_ratio > 0.95",
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="Heber durable backfill ledger capacity is near exhaustion",
+        description="A proof ledger is above 95%; backfill ingestion will fail closed at capacity.",
     ),
     AlertRule(
         name="HeberDLQGrowing",
@@ -96,6 +152,17 @@ ALERTING_RULES = [
         severity=Severity.WARNING,
         summary="Compaction job failed",
         description="Compaction for {{ $labels.dataset }} has failed. Small files may accumulate.",
+    ),
+    AlertRule(
+        name="HeberGoldPipelineError",
+        expr='increase(heber_gold_poller_pipeline_outcomes_total{status="error"}[25h]) > 0',
+        for_duration="1m",
+        severity=Severity.CRITICAL,
+        summary="A nightly Gold pipeline failed",
+        description=(
+            "A Gold pipeline reported error in the last 25 hours, including when completed input partitions "
+            "produced zero Gold rows. Check the named pipeline and its source partitions."
+        ),
     ),
 ]
 

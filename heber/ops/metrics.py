@@ -97,6 +97,67 @@ consumer_loop_heartbeat_unixtime = _get_or_create(
     "stays fresh while the event loop spins even when no data is flowing — unlike last-write)",
 )
 
+jetstream_consumer_pending = _get_or_create(
+    Gauge,
+    "heber_jetstream_consumer_pending_messages",
+    "JetStream messages not yet delivered to the durable consumer",
+    ["stream", "consumer"],
+)
+jetstream_consumer_ack_pending = _get_or_create(
+    Gauge,
+    "heber_jetstream_consumer_ack_pending_messages",
+    "JetStream messages delivered but not yet acknowledged",
+    ["stream", "consumer"],
+)
+jetstream_consumer_redelivered = _get_or_create(
+    Gauge,
+    "heber_jetstream_consumer_redelivered_messages",
+    "JetStream consumer redelivery count",
+    ["stream", "consumer"],
+)
+jetstream_consumer_bound = _get_or_create(
+    Gauge,
+    "heber_jetstream_consumer_bound",
+    "Whether the expected JetStream durable consumer is bound",
+    ["stream", "consumer"],
+)
+durable_receipt_rows = _get_or_create(
+    Gauge,
+    "heber_durable_receipt_rows",
+    "Durable event receipt rows by writer lane",
+    ["lane"],
+)
+durable_receipt_bytes = _get_or_create(
+    Gauge,
+    "heber_durable_receipt_bytes",
+    "Durable event receipt SQLite bytes by writer lane",
+    ["lane"],
+)
+durable_receipt_oldest_age_seconds = _get_or_create(
+    Gauge,
+    "heber_durable_receipt_oldest_age_seconds",
+    "Age of the oldest durable receipt by writer lane",
+    ["lane"],
+)
+durable_receipt_utilization = _get_or_create(
+    Gauge,
+    "heber_durable_receipt_utilization_ratio",
+    "Durable receipt capacity utilization by writer lane",
+    ["lane"],
+)
+durable_backfill_ledger_rows = _get_or_create(
+    Gauge,
+    "heber_durable_backfill_ledger_rows",
+    "Durable backfill proof rows by ledger state",
+    ["state"],
+)
+durable_backfill_ledger_utilization = _get_or_create(
+    Gauge,
+    "heber_durable_backfill_ledger_utilization_ratio",
+    "Durable backfill proof ledger utilization by state",
+    ["state"],
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)
@@ -176,6 +237,18 @@ writer_last_write_unixtime = _get_or_create(
     "heber_writer_last_write_unixtime",
     "Unix timestamp of most recent successful write",
     ["layer", "dataset"],
+)
+
+
+# =============================================================================
+# Gold Poller Metrics
+# =============================================================================
+
+gold_poller_pipeline_outcomes_total = _get_or_create(
+    Counter,
+    "heber_gold_poller_pipeline_outcomes_total",
+    "Completed Gold pipeline outcomes by pipeline and terminal status",
+    ["pipeline", "status"],
 )
 
 
@@ -396,6 +469,34 @@ def record_pending_ack_state(count: int, age_seconds: float) -> None:
     """Record how many messages are held unacknowledged, and for how long."""
     consumer_pending_ack_messages.set(count)
     consumer_pending_ack_age_seconds.set(age_seconds)
+
+
+def record_jetstream_consumer_state(
+    *, stream: str, consumer: str, pending: int, ack_pending: int, redelivered: int, bound: bool
+) -> None:
+    """Expose broker-side delivery state for a bound durable consumer."""
+    labels = {"stream": stream, "consumer": consumer}
+    jetstream_consumer_pending.labels(**labels).set(pending)
+    jetstream_consumer_ack_pending.labels(**labels).set(ack_pending)
+    jetstream_consumer_redelivered.labels(**labels).set(redelivered)
+    jetstream_consumer_bound.labels(**labels).set(1 if bound else 0)
+
+
+def record_durable_receipt_state(
+    *, lane: str, rows: int, bytes_written: int, oldest_age_seconds: int, capacity: int
+) -> None:
+    """Publish bounded receipt-store capacity state at durable batch boundaries."""
+    durable_receipt_rows.labels(lane=lane).set(rows)
+    durable_receipt_bytes.labels(lane=lane).set(bytes_written)
+    durable_receipt_oldest_age_seconds.labels(lane=lane).set(oldest_age_seconds)
+    durable_receipt_utilization.labels(lane=lane).set(rows / capacity)
+
+
+def record_durable_backfill_ledger_state(*, rows_by_state: dict[str, int], capacity: int) -> None:
+    """Publish the explicit fail-closed capacity for each proof ledger."""
+    for state, rows in rows_by_state.items():
+        durable_backfill_ledger_rows.labels(state=state).set(rows)
+        durable_backfill_ledger_utilization.labels(state=state).set(rows / capacity)
 
 
 def record_forced_flush(reason: str, drained: bool) -> None:

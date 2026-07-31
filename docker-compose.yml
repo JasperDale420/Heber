@@ -203,6 +203,10 @@ services:
     environment:
       # Uses heber:events stream from Data Gateway's Redis
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_WATCH_INGEST_TRANSPORT=${HEBER_WATCH_INGEST_TRANSPORT:-redis}
+      - HEBER_NATS_URL=${HEBER_NATS_URL:-nats://host.docker.internal:4222}
+      - HEBER_NATS_USERNAME=${HEBER_NATS_USERNAME:-}
+      - HEBER_NATS_PASSWORD=${HEBER_NATS_PASSWORD:-}
       - DATA_GATEWAY_URL=http://host.docker.internal:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
@@ -285,8 +289,12 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_INGEST_TRANSPORT=${HEBER_LIVE_INGEST_TRANSPORT:-redis}
+      - HEBER_WATCH_INGEST_TRANSPORT=${HEBER_WATCH_INGEST_TRANSPORT:-redis}
       - HEBER_HEALTH_CONSUMER_METRICS_URL=http://heber-consumer:9090/metrics
       - HEBER_HEALTH_WATCH_METRICS_URL=http://heber-watch:9090/metrics
+      - HEBER_HEALTH_BACKFILL_CONSUMER_METRICS_URL=http://heber-backfill-consumer:9090/metrics
+      - HEBER_HEALTH_BACKFILL_INGEST_TRANSPORT=${HEBER_BACKFILL_INGEST_TRANSPORT:-redis}
       - HEBER_HEALTH_CATALOG_URL=http://heber-catalog:8080/health
       # Off-machine dead-man heartbeat (healthchecks.io-style). Set in .env;
       # empty disables. See heber/config.py heartbeat_url.
@@ -327,6 +335,8 @@ services:
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
+      - HEBER_INGEST_TRANSPORT=${HEBER_LIVE_INGEST_TRANSPORT:-redis}
+      - HEBER_HEALTH_CONSUMER_METRICS_URL=http://heber-consumer:9090/metrics
       - HEBER_HEALTH_MONITOR_ENABLED=true
       - HEBER_HEALTH_STREAM_CHECK_INTERVAL_SECONDS=30
       - HEBER_HEALTH_PARTITION_CHECK_INTERVAL_SECONDS=900

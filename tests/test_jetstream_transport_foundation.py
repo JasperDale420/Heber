@@ -132,3 +132,12 @@ def test_writer_services_are_redis_by_default_and_ready_for_jetstream() -> None:
         assert environment["HEBER_NATS_URL"] == "${HEBER_NATS_URL:-nats://host.docker.internal:4222}"
         assert environment["HEBER_NATS_USERNAME"] == "${HEBER_NATS_USERNAME:-}"
         assert environment["HEBER_NATS_PASSWORD"] == "${HEBER_NATS_PASSWORD:-}"
+
+    watch = _environment(services["heber-watch"])
+    health = _environment(services["heber-dataflow-health"])
+    assert watch["HEBER_WATCH_INGEST_TRANSPORT"] == "${HEBER_WATCH_INGEST_TRANSPORT:-redis}"
+    assert watch["HEBER_NATS_URL"] == "${HEBER_NATS_URL:-nats://host.docker.internal:4222}"
+    assert watch["HEBER_NATS_USERNAME"] == "${HEBER_NATS_USERNAME:-}"
+    assert watch["HEBER_NATS_PASSWORD"] == "${HEBER_NATS_PASSWORD:-}"
+    assert health["HEBER_INGEST_TRANSPORT"] == "${HEBER_LIVE_INGEST_TRANSPORT:-redis}"
+    assert health["HEBER_WATCH_INGEST_TRANSPORT"] == "${HEBER_WATCH_INGEST_TRANSPORT:-redis}"

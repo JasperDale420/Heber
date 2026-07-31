@@ -50,6 +50,96 @@ def _ok_backup_check(*_args, **_kwargs) -> dict:
     }
 
 
+def test_after_hours_collects_metrics_when_backfill_or_watch_uses_jetstream(monkeypatch, tmp_path) -> None:
+    now = datetime(2026, 3, 28, 12, tzinfo=UTC)  # Saturday
+    captured: list[bool] = []
+
+    def collect(**kwargs):
+        captured.append(kwargs["collect_metrics"])
+        signals = _signals(now)
+        signals.update(
+            {
+                "jetstream": {},
+                "jetstream_backfill": {},
+                "jetstream_watch": {},
+                "metrics": {},
+            }
+        )
+        return signals
+
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", collect)
+    settings = Settings(
+        _env_file=None,
+        data_root=tmp_path,
+        ingest_transport="redis",
+        health_backfill_ingest_transport="jetstream",
+    )
+
+    dataflow_health_module.generate_dataflow_report(now=now, window_seconds=900, mode="manual", settings=settings)
+
+    assert captured == [True]
+
+
+def test_selected_jetstream_lanes_get_labeled_checks_and_redis_lanes_skip(monkeypatch, tmp_path) -> None:
+    now = datetime(2026, 3, 25, 16, tzinfo=UTC)
+    fresh_state = {"bound": 1, "pending": 0, "ack_pending": 0, "redelivered": 0, "heartbeat": now.timestamp()}
+    signals = _signals(now)
+    signals.update(
+        {"jetstream": fresh_state, "jetstream_backfill": fresh_state, "jetstream_watch": fresh_state, "metrics": {}}
+    )
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    settings = Settings(
+        _env_file=None,
+        data_root=tmp_path,
+        ingest_transport="jetstream",
+        health_backfill_ingest_transport="jetstream",
+        watch_ingest_transport="jetstream",
+        nats_username="heber",
+        nats_password="test-only-password",  # pragma: allowlist secret
+    )
+
+    report = dataflow_health_module.generate_dataflow_report(
+        now=now, window_seconds=900, mode="manual", settings=settings
+    )
+    ids = {check["id"] for check in report["checks"]}
+
+    assert {"jetstream_consumer", "jetstream_backfill_consumer", "jetstream_watch_consumer"} <= ids
+    assert "redis_consumer_group" in ids  # control-plane skip is explicit
+
+
+def test_jetstream_redis_control_plane_outage_reports_warning_without_crashing(monkeypatch, tmp_path) -> None:
+    now = datetime(2026, 3, 25, 16, tzinfo=UTC)
+    fresh_state = {"bound": 1, "pending": 0, "ack_pending": 0, "redelivered": 0, "heartbeat": now.timestamp()}
+    signals = _signals(now)
+    signals["redis"] = {
+        "ok": False,
+        "group_exists": False,
+        "lag": None,
+        "pending": None,
+        "stream_len": None,
+        "error": "connection refused",
+    }
+    signals.update(
+        {"jetstream": fresh_state, "jetstream_backfill": fresh_state, "jetstream_watch": fresh_state, "metrics": {}}
+    )
+    monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
+    settings = Settings(
+        _env_file=None,
+        data_root=tmp_path,
+        ingest_transport="jetstream",
+        nats_username="heber",
+        nats_password="test-only-password",  # pragma: allowlist secret
+    )
+
+    report = dataflow_health_module.generate_dataflow_report(
+        now=now, window_seconds=900, mode="manual", settings=settings
+    )
+
+    control_plane = _find_check(report, "redis_control_plane")
+    assert control_plane["status"] == "warn"
+    assert report["summary"]["warn"] >= 1
+
+
 def _find_check(report: dict, check_id: str) -> dict:
     return next(c for c in report["checks"] if c["id"] == check_id)
 

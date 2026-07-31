@@ -31,6 +31,8 @@ from heber.ops.metrics import (
     record_batch_processed,
     record_dedupe_drop,
     record_dlq_event,
+    record_durable_backfill_ledger_state,
+    record_durable_receipt_state,
     record_event_processed,
     record_event_received,
     record_forced_flush,
@@ -53,6 +55,7 @@ from heber.writer.dlq_fallback import (
     write_dlq_fallback_file,
 )
 from heber.writer.durability import create_durable_directory
+from heber.writer.event_receipts import DurableEventReceipts
 from heber.writer.ingest_contracts import (
     DLQ_REASON_TS_OUT_OF_RANGE,
     DLQ_REASON_UNCONTRACTED,
@@ -104,6 +107,8 @@ _BACKFILL_READINESS_INTERVAL_SECONDS = 20.0
 class EventConsumer:
     """Consumes events from Redis Streams and writes to Lake layers."""
 
+    requires_durable_event_receipts = False
+
     def __init__(self, event_deduplicator: EventDeduplicator | None = None):
         self.redis: redis.Redis | None = None
         self.bronze_writer = BronzeWriter()
@@ -116,6 +121,8 @@ class EventConsumer:
         self.event_deduplicator = event_deduplicator or EventDeduplicator(
             backing_store=self._build_dedupe_store(),
         )
+        self.durable_event_receipts = DurableEventReceipts(settings.data_root)
+        self._record_durable_receipt_metrics()
         self._inflight_event_ids: set[str] = set()
         # Message ids processed but not yet acknowledged, and event ids not yet
         # in the dedupe store. Both are released by _settle_and_commit() once a
@@ -124,7 +131,9 @@ class EventConsumer:
         # makes a redelivery look like one and drops it.
         self._pending_ack_ids: set[str] = set()
         self._pending_register_ids: set[str] = set()
-        self._pending_backfill_proofs: dict[str, BackfillEventProof] = {}
+        self._pending_backfill_proofs: dict[str, BackfillEventProof] = {
+            proof.event_id: proof for proof in self.durable_event_receipts.load_pending_backfill_proofs()
+        }
         self._pending_backfill_proof_errors: dict[str, str] = {}
         self._pending_message_chunks: dict[str, tuple[str, str] | None] = {}
         self._transport_ack_eligible_chunks: set[tuple[str, str]] = set()
@@ -149,6 +158,8 @@ class EventConsumer:
 
     def _claim_event_id(self, event_id: str) -> str | None:
         """Claim an event_id for processing or return a duplicate reason."""
+        if self.durable_event_receipts.contains(event_id):
+            return "durable_commit_receipt"
         if event_id in self._inflight_event_ids:
             return "inflight_duplicate"
 
@@ -165,20 +176,38 @@ class EventConsumer:
         self._inflight_event_ids.add(event_id)
         return None
 
-    def _stage_backfill_proof(self, envelope: EventEnvelope) -> None:
+    def _record_durable_receipt_metrics(self) -> None:
+        stats = self.durable_event_receipts.stats()
+        record_durable_receipt_state(
+            lane=self.durable_event_receipts.lane,
+            rows=stats["rows"],
+            bytes_written=stats["bytes"],
+            oldest_age_seconds=stats["oldest_age_seconds"],
+            capacity=settings.durable_event_receipt_max_rows,
+        )
+        if self.durable_event_receipts.lane == "backfill":
+            record_durable_backfill_ledger_state(
+                rows_by_state=self.durable_event_receipts.backfill_ledger_stats(),
+                capacity=settings.durable_backfill_ledger_max_rows,
+            )
+
+    def _stage_backfill_proof(self, envelope: EventEnvelope) -> BackfillEventProof | None:
         """Hold backfill proof data until the same event crosses the fsync boundary."""
         try:
             proof = backfill_event_proof(envelope)
-        except BackfillProofMismatch as exc:
+            if proof is not None:
+                self.durable_event_receipts.validate_backfill_proof(proof)
+        except (BackfillProofMismatch, RuntimeError) as exc:
             self._pending_backfill_proof_errors[envelope.event_id] = str(exc)
-            return
+            return None
         if proof is None:
-            return
+            return None
         existing = self._pending_backfill_proofs.get(envelope.event_id)
         if existing is not None and existing != proof:
             self._pending_backfill_proof_errors[envelope.event_id] = "backfill proof changed before durable commit"
-            return
+            return None
         self._pending_backfill_proofs[envelope.event_id] = proof
+        return proof
 
     async def connect(self):
         """Connect to Redis."""
@@ -569,9 +598,22 @@ class EventConsumer:
 
             self._validate_payload_schema(envelope)
 
+            # Backfill proof validation precedes idempotency. A broker
+            # redelivery may be an exact ACK ambiguity, or it may reuse an
+            # event id with altered replay authority; only the former is safe
+            # to settle without another Bronze/Silver write.
+            proof = self._stage_backfill_proof(envelope)
+            if envelope.source == "backfill" and envelope.event_id in self._pending_backfill_proof_errors:
+                raise BackfillProofMismatch(self._pending_backfill_proof_errors[envelope.event_id])
+
             dedupe_reason = self._claim_event_id(envelope.event_id)
             if dedupe_reason is not None:
-                self._stage_backfill_proof(envelope)
+                if (
+                    proof is not None
+                    and self.durable_event_receipts.contains(envelope.event_id)
+                    and not self.durable_event_receipts.backfill_proof_is_finalized(proof)
+                ):
+                    raise BackfillProofMismatch("backfill duplicate proof is not locally finalized")
                 record_dedupe_drop(feed=feed)
                 logger.info(
                     "consumer_dedupe_dropped",
@@ -724,6 +766,13 @@ class EventConsumer:
 
     def _backfill_chunk_for_message(self, message_data: dict[Any, Any]) -> tuple[str, str] | None:
         """Return the staged proof chunk for a successfully processed message."""
+        proof = self._backfill_proof_for_message(message_data)
+        if proof is None:
+            return None
+        return proof.job_id, proof.chunk_id
+
+    def _backfill_proof_for_message(self, message_data: dict[Any, Any]) -> BackfillEventProof | None:
+        """Return the staged exact proof associated with a successfully processed message."""
         payload = self._extract_payload_value(message_data)
         if payload is None:
             return None
@@ -736,9 +785,7 @@ class EventConsumer:
                 return None
         event_id = payload.get("event_id")
         proof = self._pending_backfill_proofs.get(str(event_id))
-        if proof is None:
-            return None
-        return proof.job_id, proof.chunk_id
+        return proof
 
     async def _process_stream_messages(self, stream_messages: list[tuple[Any, dict]]) -> tuple[list[str], list[str]]:
         """Process a list of stream messages concurrently and return `(acked_ids, failed_ids)`.
@@ -1270,6 +1317,22 @@ class EventConsumer:
             return None
 
         ids = list(self._pending_ack_ids)
+        commit_id = commit_id_for_message_ids(ids)
+        proofs_to_publish = list(self._pending_backfill_proofs.values())
+        finalized_chunks: set[tuple[str, str]] = set()
+        if self._pending_backfill_proof_errors:
+            event_id, error = next(iter(self._pending_backfill_proof_errors.items()))
+            raise BackfillProofMismatch(f"{event_id}: {error}")
+        # The exact event-id receipt is the Redis-independent idempotency
+        # boundary: it follows both layer flushes and precedes any broker ACK.
+        if self.requires_durable_event_receipts:
+            finalized_chunks = await asyncio.to_thread(
+                self.durable_event_receipts.record_durable_commit,
+                self._pending_register_ids,
+                proofs_to_publish,
+                commit_id,
+            )
+            self._record_durable_receipt_metrics()
         if ids:
             await asyncio.to_thread(
                 write_batch_commit_marker,
@@ -1280,10 +1343,6 @@ class EventConsumer:
                 message_ids=ids,
             )
 
-        finalized_chunks: set[tuple[str, str]] = set()
-        if self._pending_backfill_proof_errors:
-            event_id, error = next(iter(self._pending_backfill_proof_errors.items()))
-            raise BackfillProofMismatch(f"{event_id}: {error}")
         if self._pending_backfill_proofs:
             if self.redis is None:
                 self.redis = redis.from_url(settings.redis_url)
@@ -1292,12 +1351,33 @@ class EventConsumer:
                     self.redis,
                     proof_ttl_seconds=settings.backfill_proof_ttl_seconds,
                 )
-            finalized_chunks = await self._backfill_ack_writer.record_committed(
-                list(self._pending_backfill_proofs.values()),
-                commit_id=commit_id_for_message_ids(ids),
-                committed_at=datetime.now(UTC),
-            )
-            self._pending_backfill_proofs.clear()
+            # The control-plane projection must be recoverable before a
+            # JetStream ACK releases the source message.  Redis is only a
+            # projection of this local durable ledger.
+            try:
+                await self._backfill_ack_writer.record_committed(
+                    proofs_to_publish,
+                    commit_id=commit_id,
+                    committed_at=datetime.now(UTC),
+                )
+            except Exception as exc:
+                if settings.ingest_transport != "jetstream":
+                    raise
+                # Bronze/Silver plus the local receipt are already durable. A
+                # Redis proof outage is a retriable control-plane degradation,
+                # not a reason to hold a JetStream broker ACK indefinitely.
+                logger.warning(
+                    "backfill_proof_publication_degraded",
+                    pending_proofs=len(self._pending_backfill_proofs),
+                    error=str(exc),
+                    exc_info=True,
+                )
+                pass
+            else:
+                await asyncio.to_thread(self.durable_event_receipts.delete_pending_backfill_proofs, proofs_to_publish)
+                await asyncio.to_thread(self.durable_event_receipts.mark_backfill_outcomes_projected, proofs_to_publish)
+                self._pending_backfill_proofs.clear()
+                self._record_durable_receipt_metrics()
 
         for event_id in self._pending_register_ids:
             self.event_deduplicator.register(event_id)

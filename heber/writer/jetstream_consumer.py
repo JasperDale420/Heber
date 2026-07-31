@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -15,24 +16,31 @@ from nats.errors import TimeoutError as NatsTimeoutError
 from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy
 
 from heber.config import settings
-from heber.ops.metrics import record_dlq_event
+from heber.ops.metrics import record_dlq_event, record_jetstream_consumer_state
 from heber.ops.reliability import EventDeduplicator
+from heber.writer.backfill_ack import BackfillEventProof
 from heber.writer.consumer import EventConsumer
 from heber.writer.dlq_fallback import log_fallback_backlog
 
 logger = structlog.get_logger(__name__)
 
+_MAX_CONCURRENT_ACKS = 32
+
 
 class JetStreamEventConsumer(EventConsumer):
     """Pull JetStream messages through ``EventConsumer`` and ACK after fsync."""
+
+    requires_durable_event_receipts = True
 
     def __init__(self, event_deduplicator: EventDeduplicator | None = None) -> None:
         super().__init__(event_deduplicator=event_deduplicator)
         self.connection: Any | None = None
         self.subscription: Any | None = None
         self._pending_messages: dict[str, Any] = {}
+        self._pending_message_proofs: dict[str, BackfillEventProof | None] = {}
         self._stopping = False
         self._readiness_downgrade_tasks: set[asyncio.Task[None]] = set()
+        self._last_metrics_refresh = 0.0
 
     @property
     def subject(self) -> str:
@@ -41,6 +49,14 @@ class JetStreamEventConsumer(EventConsumer):
 
     async def connect(self) -> None:
         """Connect and bind the configured durable pull consumer."""
+        record_jetstream_consumer_state(
+            stream=settings.jetstream_stream_name,
+            consumer=settings.jetstream_durable_name,
+            pending=0,
+            ack_pending=0,
+            redelivered=0,
+            bound=False,
+        )
         await self._write_backfill_transport_unready()
         password = settings.nats_password.get_secret_value() if settings.nats_password else None
         self.connection = await nats.connect(
@@ -66,6 +82,7 @@ class JetStreamEventConsumer(EventConsumer):
             stream=settings.jetstream_stream_name,
             config=config,
         )
+        await self._record_jetstream_state(jetstream)
         self._backfill_binding = (
             "jetstream",
             settings.ingest_lane,
@@ -80,8 +97,55 @@ class JetStreamEventConsumer(EventConsumer):
             subject=self.subject,
         )
 
+    async def _record_jetstream_state(self, jetstream: Any) -> None:
+        """Publish server-side counters; a pull bind alone does not prove config."""
+        info = await jetstream.consumer_info(settings.jetstream_stream_name, settings.jetstream_durable_name)
+        config = info.config
+        if (
+            config.filter_subject != self.subject
+            or config.ack_policy != AckPolicy.EXPLICIT
+            or config.ack_wait != settings.jetstream_ack_wait_seconds
+            or config.max_ack_pending != settings.jetstream_max_ack_pending
+        ):
+            raise RuntimeError("JetStream durable consumer binding does not match Heber ACK configuration")
+        ack_floor = getattr(getattr(info, "ack_floor", None), "stream_seq", None)
+        if ack_floor is not None:
+            await asyncio.to_thread(
+                self.durable_event_receipts.delete_confirmed_stream_sequences,
+                int(ack_floor),
+            )
+            self._record_durable_receipt_metrics()
+        record_jetstream_consumer_state(
+            stream=settings.jetstream_stream_name,
+            consumer=settings.jetstream_durable_name,
+            pending=info.num_pending,
+            ack_pending=info.num_ack_pending,
+            redelivered=info.num_redelivered,
+            bound=True,
+        )
+        self._last_metrics_refresh = time.monotonic()
+
+    async def _refresh_jetstream_state_if_due(self) -> None:
+        """Refresh broker counters rather than leaving connect-time values stale."""
+        if time.monotonic() - self._last_metrics_refresh < settings.jetstream_metrics_refresh_seconds:
+            return
+        if self.connection is None or not getattr(self.connection, "is_connected", True):
+            return
+        jetstream_factory = getattr(self.connection, "jetstream", None)
+        if jetstream_factory is None:
+            return
+        await self._record_jetstream_state(jetstream_factory())
+
     async def _on_nats_disconnected(self) -> None:
         """Fail readiness closed once for an unexpected broker disconnect."""
+        record_jetstream_consumer_state(
+            stream=settings.jetstream_stream_name,
+            consumer=settings.jetstream_durable_name,
+            pending=0,
+            ack_pending=0,
+            redelivered=0,
+            bound=False,
+        )
         was_bound = self._backfill_binding is not None
         self._backfill_binding = None
         if was_bound and not self._stopping:
@@ -164,6 +228,13 @@ class JetStreamEventConsumer(EventConsumer):
             return None
         return proof.job_id, proof.chunk_id
 
+    @staticmethod
+    def _event_id_for_message(message: Any) -> str | None:
+        try:
+            return str(json.loads(getattr(message, "data", b""))["event_id"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
     async def _write_jetstream_dlq(
         self,
         message: Any,
@@ -220,7 +291,9 @@ class JetStreamEventConsumer(EventConsumer):
                     continue
 
             self._pending_messages[message_id] = message
-            self._pending_message_chunks[message_id] = self._chunk_for_message(message)
+            proof = self._backfill_proof_for_message({"data": message.data})
+            self._pending_message_proofs[message_id] = proof
+            self._pending_message_chunks[message_id] = None if proof is None else (proof.job_id, proof.chunk_id)
             self._hold_for_commit([message_id])
 
         await self._settle_and_commit()
@@ -234,34 +307,78 @@ class JetStreamEventConsumer(EventConsumer):
         if prepared is None:
             return
         self._transport_ack_eligible_chunks.update(prepared)
+        pending_event_ids = {
+            message_id: event_id
+            for message_id, message in self._pending_messages.items()
+            if (event_id := self._event_id_for_message(message)) is not None
+        }
+        receipt_sequences = {
+            event_id: int(message_id)
+            for message_id, event_id in pending_event_ids.items()
+            if self.durable_event_receipts.contains(event_id)
+        }
+        await asyncio.to_thread(
+            self.durable_event_receipts.record_stream_sequences,
+            receipt_sequences,
+        )
 
+        eligible_message_ids: list[str] = []
         for message_id in list(self._pending_ack_ids):
             message = self._pending_messages[message_id]
             chunk = self._pending_message_chunks.get(message_id)
-            if chunk is not None and chunk not in self._transport_ack_eligible_chunks:
+            proof = self._pending_message_proofs.get(message_id)
+            if proof is not None and not self.durable_event_receipts.backfill_proof_is_finalized(proof):
                 await message.in_progress()
                 continue
-            try:
-                await message.ack()
-            except Exception as exc:  # noqa: BLE001 — unacked messages must remain redeliverable
-                logger.warning(
-                    "jetstream_ack_failed",
-                    message_id=message_id,
-                    error=str(exc),
-                    exc_info=True,
-                )
+            if proof is None and chunk is not None and chunk not in self._transport_ack_eligible_chunks:
+                await message.in_progress()
                 continue
+            eligible_message_ids.append(message_id)
+
+        acknowledged: set[str] = set()
+        for start in range(0, len(eligible_message_ids), _MAX_CONCURRENT_ACKS):
+            message_ids = eligible_message_ids[start : start + _MAX_CONCURRENT_ACKS]
+            results = await asyncio.gather(*(self._ack_message(message_id) for message_id in message_ids))
+            acknowledged.update(
+                message_id for message_id, succeeded in zip(message_ids, results, strict=True) if succeeded
+            )
+
+        pending_messages_by_event: dict[str, set[str]] = {}
+        for message_id, event_id in pending_event_ids.items():
+            pending_messages_by_event.setdefault(event_id, set()).add(message_id)
+        confirmed_event_ids = {
+            event_id for event_id, message_ids in pending_messages_by_event.items() if message_ids <= acknowledged
+        }
+        await asyncio.to_thread(self.durable_event_receipts.confirm_broker_acks, confirmed_event_ids)
+        for message_id in acknowledged:
             self._pending_messages.pop(message_id, None)
+            self._pending_message_proofs.pop(message_id, None)
             self._pending_message_chunks.pop(message_id, None)
             self._pending_ack_ids.discard(message_id)
 
         if not self._pending_ack_ids:
             self._pending_since = None
         self._prune_transport_ack_eligible_chunks()
+        self._record_durable_receipt_metrics()
         self._record_pending_ack_gauges()
+
+    async def _ack_message(self, message_id: str) -> bool:
+        """Synchronously confirm one broker ACK without serializing its peers."""
+        try:
+            await self._pending_messages[message_id].ack_sync(timeout=5)
+        except Exception as exc:  # noqa: BLE001 — unacked messages must remain redeliverable
+            logger.warning(
+                "jetstream_ack_failed",
+                message_id=message_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+        return True
 
     async def _consume_iteration(self) -> None:
         """Fetch one batch; an idle timeout is also a flush opportunity."""
+        await self._refresh_jetstream_state_if_due()
         if len(self._pending_ack_ids) >= settings.jetstream_max_ack_pending:
             await self._settle_and_commit()
             if len(self._pending_ack_ids) >= settings.jetstream_max_ack_pending:

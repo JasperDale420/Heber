@@ -221,6 +221,7 @@ class WatchService:
         from heber.watch.backfill_scanner import EnrichmentBackfillScanner
         from heber.watch.consumer import AlertWatchConsumer
         from heber.watch.features import DEFAULT_FEATURES_OUTPUT_PATH, AlertFeatureExtractor
+        from heber.watch.jetstream_consumer import JetStreamAlertWatchConsumer
         from heber.watch.manager import WatchManager
         from heber.watch.poller import SnapshotPoller
 
@@ -234,7 +235,10 @@ class WatchService:
         self._auth_preflight_timeout_seconds = 5.0
         self.redis = redis_client
         self.manager = WatchManager(redis_client)
-        self.consumer = AlertWatchConsumer(
+        consumer_class = (
+            JetStreamAlertWatchConsumer if settings.watch_ingest_transport == "jetstream" else AlertWatchConsumer
+        )
+        self.consumer = consumer_class(
             redis_client,
             self.manager,
             gateway_url=gateway_url,

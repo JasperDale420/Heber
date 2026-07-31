@@ -58,6 +58,34 @@ async def test_healthy_stream_all_pass(_mock_now: MagicMock) -> None:
 
 @pytest.mark.unit
 @patch("heber.health_monitor.checks.stream_health._now_et", return_value=MARKET_OPEN_DT)
+async def test_jetstream_uses_consumer_metrics_and_skips_redis_group_lag(_mock_now: MagicMock, monkeypatch) -> None:
+    redis = _healthy_redis()
+    ctx = _make_ctx(redis)
+    ctx.settings.ingest_transport = "jetstream"
+    monkeypatch.setattr(
+        "heber.health_monitor.checks.stream_health._fetch_metrics_samples",
+        lambda _url: (
+            [
+                ("heber_jetstream_consumer_bound", {"stream": "HEBER_LIVE", "consumer": "heber-live-writers"}, 1),
+                ("heber_jetstream_consumer_pending_messages", {}, 4),
+                ("heber_jetstream_consumer_ack_pending_messages", {}, 2),
+                ("heber_jetstream_consumer_redelivered_messages", {}, 1),
+                ("heber_consumer_loop_heartbeat_unixtime", {}, MARKET_OPEN_DT.timestamp()),
+            ],
+            None,
+        ),
+    )
+
+    results = await run_stream_health_checks(ctx)
+    statuses = {result.check_name: result.status for result in results}
+
+    assert statuses["jetstream_consumer"] == Status.PASS
+    assert "consumer_group" not in statuses
+    assert "consumer_lag" not in statuses
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.stream_health._now_et", return_value=MARKET_OPEN_DT)
 async def test_stream_unreachable_p0_fail(_mock_now: MagicMock) -> None:
     """When Redis stream is unreachable, return P0 FAIL and stop early."""
     redis = AsyncMock()

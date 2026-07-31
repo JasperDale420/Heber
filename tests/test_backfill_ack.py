@@ -158,6 +158,40 @@ async def test_control_store_failure_leaves_transport_message_unacknowledged(
 
 
 @pytest.mark.asyncio
+async def test_jetstream_acks_after_storage_when_backfill_control_store_is_degraded(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Redis proof publication cannot hold a durable JetStream acknowledgement."""
+    from types import SimpleNamespace
+
+    from heber.config import settings
+    from heber.writer.jetstream_consumer import JetStreamEventConsumer
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    monkeypatch.setattr(settings, "ingest_transport", "jetstream")
+    consumer = JetStreamEventConsumer()
+    ack = AsyncMock()
+    message = SimpleNamespace(ack=ack, ack_sync=ack, in_progress=AsyncMock())
+    consumer._pending_messages = {"1": message}
+    consumer._pending_message_chunks = {"1": ("bf-job", "chunk-1")}
+    consumer._hold_for_commit(["1"])
+    consumer.redis = AsyncMock()
+    consumer._backfill_ack_writer = AsyncMock()
+    consumer._backfill_ack_writer.record_committed.side_effect = ConnectionError("control store down")
+    consumer._stage_backfill_proof(_envelope(lineage=_lineage()))
+    consumer._pending_register_ids.add("event-a")
+    monkeypatch.setattr(consumer, "_flush_layers", lambda: True)
+
+    await consumer._settle_and_commit()
+
+    message.ack.assert_awaited_once()
+    assert consumer._pending_backfill_proofs
+    restarted = JetStreamEventConsumer()
+    assert "event-a" in restarted._pending_backfill_proofs
+
+
+@pytest.mark.asyncio
 async def test_redis_pending_backfill_waits_until_chunk_proof_finalizes(
     tmp_path,
     monkeypatch,
@@ -297,7 +331,9 @@ async def test_backfill_readiness_creates_fresh_writer_directories_durably(
 
     assert settings.bronze_path.is_dir()
     assert settings.silver_path.is_dir()
-    assert fsynced == [data_root, data_root]
+    # Bronze, Silver, and the durable event-receipt directory must all exist
+    # on stable storage before the consumer reports writer readiness.
+    assert fsynced == [data_root, data_root, data_root]
 
 
 def test_final_backfill_ack_key_has_no_expiration_command() -> None:

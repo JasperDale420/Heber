@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 from nats.js.api import AckPolicy
 
+from heber.writer.backfill_ack import proof_digests
 from heber.writer.consumer import EventConsumer, build_ingest_consumer
 from heber.writer.jetstream_consumer import JetStreamEventConsumer
 
@@ -24,6 +26,7 @@ class FakeMessage:
         self.data = data
         self.metadata = SimpleNamespace(sequence=SimpleNamespace(stream=sequence), num_delivered=1)
         self.ack = AsyncMock()
+        self.ack_sync = self.ack
         self.nak = AsyncMock()
         self.in_progress = AsyncMock()
 
@@ -52,6 +55,32 @@ def _event_bytes() -> bytes:
     ).encode()
 
 
+def _backfill_event_bytes(
+    *,
+    manifest_hash: str = "manifest-1",
+    expected_count: int | None = None,
+    event_ids_sha256: str | None = None,
+    records_sha256: str | None = None,
+    close: float = 100.5,
+) -> bytes:
+    event = json.loads(_event_bytes())
+    event["source"] = "backfill"
+    event["payload"]["c"] = close
+    payload_hash = hashlib.sha256(
+        json.dumps(event["payload"], sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    event_digest, records_digest = proof_digests({event["event_id"]: payload_hash})
+    event["lineage"] = {
+        "backfill_job_id": "job-1",
+        "backfill_chunk_id": "chunk-1",
+        "backfill_manifest_hash": manifest_hash,
+        "backfill_expected_record_count": expected_count or 1,
+        "backfill_expected_event_ids_sha256": event_ids_sha256 or event_digest,
+        "backfill_expected_records_sha256": records_sha256 or records_digest,
+    }
+    return json.dumps(event).encode()
+
+
 async def test_success_is_acked_only_after_bronze_silver_and_commit_marker(
     tmp_path,
     monkeypatch,
@@ -64,7 +93,7 @@ async def test_success_is_acked_only_after_bronze_silver_and_commit_marker(
 
     message = FakeMessage(_event_bytes())
 
-    async def assert_storage_is_durable() -> None:
+    async def assert_storage_is_durable(**_kwargs) -> None:
         assert list((tmp_path / "bronze").rglob("*.jsonl.gz"))
         assert list((tmp_path / "silver").rglob("*.parquet"))
         assert list((tmp_path / "_ingest_commits").rglob("commits.jsonl"))
@@ -76,6 +105,141 @@ async def test_success_is_acked_only_after_bronze_silver_and_commit_marker(
 
     assert message.ack.await_count == 1
     assert message.nak.await_count == 0
+    assert consumer.durable_event_receipts.stats()["rows"] == 0
+
+
+async def test_redelivery_after_restart_is_acked_from_durable_event_receipt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A broker ACK ambiguity must not depend on Redis dedupe state."""
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
+    monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
+
+    first = FakeMessage(_event_bytes(), sequence=1)
+    first.ack.side_effect = ConnectionError("ambiguous broker acknowledgement")
+    await JetStreamEventConsumer()._process_batch([first])
+
+    replay = FakeMessage(_event_bytes(), sequence=2)
+    restarted = JetStreamEventConsumer()
+    await restarted._process_batch([replay])
+
+    assert replay.ack.await_count == 1
+    assert list((tmp_path / "_ingest_commits").rglob("event_receipts-live.sqlite"))
+    assert len(list((tmp_path / "bronze").rglob("*.jsonl.gz"))) == 1
+
+
+async def test_exact_backfill_redelivery_after_ack_ambiguity_revalidates_local_proof(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
+    monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
+
+    first = FakeMessage(_backfill_event_bytes(), sequence=1)
+    first.ack.side_effect = ConnectionError("ambiguous broker acknowledgement")
+    consumer = JetStreamEventConsumer()
+    consumer.redis = AsyncMock()
+    consumer._backfill_ack_writer = AsyncMock()
+    await consumer._process_batch([first])
+
+    replay = FakeMessage(_backfill_event_bytes(), sequence=2)
+    restarted = JetStreamEventConsumer()
+    restarted.redis = AsyncMock()
+    restarted._backfill_ack_writer = AsyncMock()
+    await restarted._process_batch([replay])
+
+    assert replay.ack_sync.await_count == 1
+    assert len(list((tmp_path / "bronze").rglob("*.jsonl.gz"))) == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"manifest_hash": "manifest-altered"},
+        {"expected_count": 2},
+        {"event_ids_sha256": "altered-event-digest"},
+        {"records_sha256": "altered-record-digest"},
+        {"close": 101.25},
+    ],
+    ids=["manifest", "count", "event-digest", "record-digest", "payload"],
+)
+async def test_backfill_redelivery_with_changed_proof_never_reuses_durable_receipt(
+    tmp_path,
+    monkeypatch,
+    changes,
+) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    monkeypatch.setattr(settings, "bronze_max_batch_size", 1)
+    monkeypatch.setattr(settings, "silver_min_rows_per_flush", 1)
+
+    first = FakeMessage(_backfill_event_bytes(), sequence=1)
+    first.ack.side_effect = ConnectionError("ambiguous broker acknowledgement")
+    consumer = JetStreamEventConsumer()
+    consumer.redis = AsyncMock()
+    consumer._backfill_ack_writer = AsyncMock()
+    await consumer._process_batch([first])
+
+    conflicting = JetStreamEventConsumer()
+    conflicting.redis = AsyncMock()
+    conflicting._backfill_ack_writer = AsyncMock()
+    success, error, _attempts = await conflicting._process_with_retry({"data": _backfill_event_bytes(**changes)})
+
+    assert success is False
+    assert "proof conflict" in error
+    assert len(list((tmp_path / "bronze").rglob("*.jsonl.gz"))) == 1
+
+
+async def test_durable_event_receipt_uses_compact_exact_blob_primary_key(tmp_path, monkeypatch) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    consumer = JetStreamEventConsumer()
+
+    schema = consumer.durable_event_receipts.connection.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'committed_event_ids'"
+    ).fetchone()[0]
+
+    assert "event_id BLOB PRIMARY KEY" in schema
+    assert "WITHOUT ROWID" in schema
+    assert "committed_at INTEGER NOT NULL" in schema
+
+
+async def test_consumer_ack_floor_reclaims_crash_orphaned_receipt(tmp_path, monkeypatch) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    consumer = JetStreamEventConsumer()
+    consumer.durable_event_receipts.record({"evt-jetstream-001"})
+    consumer.durable_event_receipts.record_stream_sequences({"evt-jetstream-001": 7})
+    jetstream = SimpleNamespace(
+        consumer_info=AsyncMock(
+            return_value=SimpleNamespace(
+                config=SimpleNamespace(
+                    filter_subject="heber.live.>",
+                    ack_policy=AckPolicy.EXPLICIT,
+                    ack_wait=settings.jetstream_ack_wait_seconds,
+                    max_ack_pending=settings.jetstream_max_ack_pending,
+                ),
+                ack_floor=SimpleNamespace(stream_seq=7),
+                num_pending=0,
+                num_ack_pending=0,
+                num_redelivered=0,
+            )
+        )
+    )
+
+    await consumer._record_jetstream_state(jetstream)
+
+    assert consumer.durable_event_receipts.stats()["rows"] == 0
 
 
 async def test_poison_message_is_acked_only_after_filesystem_dlq_capture(
@@ -178,11 +342,111 @@ async def test_finalized_chunk_retries_after_transient_jetstream_ack_failure(mon
     assert consumer._transport_ack_eligible_chunks == set()
 
 
+async def test_jetstream_ack_settlement_is_bounded_and_concurrent(tmp_path, monkeypatch) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    active = 0
+    peak = 0
+
+    async def delayed_ack(**_kwargs) -> None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.001)
+        active -= 1
+
+    messages: dict[str, FakeMessage] = {}
+    event_ids: set[str] = set()
+    for sequence in range(1, 66):
+        event = json.loads(_event_bytes())
+        event["event_id"] = f"event-{sequence}"
+        event_id = event["event_id"]
+        event_ids.add(event_id)
+        message = FakeMessage(json.dumps(event).encode(), sequence=sequence)
+        message.ack_sync = AsyncMock(side_effect=delayed_ack)
+        messages[str(sequence)] = message
+
+    consumer = JetStreamEventConsumer()
+    consumer.durable_event_receipts.record(event_ids)
+    consumer._pending_messages = messages
+    consumer._hold_for_commit(messages)
+    monkeypatch.setattr(consumer, "_prepare_durable_commit", AsyncMock(return_value=set()))
+
+    await consumer._settle_and_commit()
+
+    assert 1 < peak <= 32
+    assert consumer._pending_ack_ids == set()
+    assert consumer.durable_event_receipts.stats()["rows"] == 0
+
+
+async def test_jetstream_ack_failure_keeps_only_failed_receipt(tmp_path, monkeypatch) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    first_event = json.loads(_event_bytes())
+    first_event["event_id"] = "event-success"
+    failed_event = json.loads(_event_bytes())
+    failed_event["event_id"] = "event-failed"
+    success = FakeMessage(json.dumps(first_event).encode(), sequence=1)
+    failed = FakeMessage(json.dumps(failed_event).encode(), sequence=2)
+    failed.ack_sync = AsyncMock(side_effect=ConnectionError("ambiguous broker acknowledgement"))
+
+    consumer = JetStreamEventConsumer()
+    consumer.durable_event_receipts.record({"event-success", "event-failed"})
+    consumer._pending_messages = {"1": success, "2": failed}
+    consumer._hold_for_commit(["1", "2"])
+    monkeypatch.setattr(consumer, "_prepare_durable_commit", AsyncMock(return_value=set()))
+
+    await consumer._settle_and_commit()
+
+    assert not consumer.durable_event_receipts.contains("event-success")
+    assert consumer.durable_event_receipts.contains("event-failed")
+    assert consumer._pending_ack_ids == {"2"}
+    assert set(consumer._pending_messages) == {"2"}
+
+
+async def test_duplicate_receipt_remains_until_every_delivery_is_confirmed(tmp_path, monkeypatch) -> None:
+    from heber.config import settings
+
+    monkeypatch.setattr(settings, "data_root", tmp_path)
+    success = FakeMessage(_event_bytes(), sequence=1)
+    failed = FakeMessage(_event_bytes(), sequence=2)
+    failed.ack_sync = AsyncMock(side_effect=ConnectionError("ambiguous broker acknowledgement"))
+
+    consumer = JetStreamEventConsumer()
+    consumer.durable_event_receipts.record({"evt-jetstream-001"})
+    consumer._pending_messages = {"1": success, "2": failed}
+    consumer._hold_for_commit(["1", "2"])
+    monkeypatch.setattr(consumer, "_prepare_durable_commit", AsyncMock(return_value=set()))
+
+    await consumer._settle_and_commit()
+
+    assert consumer.durable_event_receipts.contains("evt-jetstream-001")
+    assert consumer._pending_ack_ids == {"2"}
+    assert set(consumer._pending_messages) == {"2"}
+
+
 async def test_connect_uses_explicit_pull_consumer_contract(monkeypatch) -> None:
     from heber.config import settings
 
     subscription = object()
-    jetstream = SimpleNamespace(pull_subscribe=AsyncMock(return_value=subscription))
+    jetstream = SimpleNamespace(
+        pull_subscribe=AsyncMock(return_value=subscription),
+        consumer_info=AsyncMock(
+            return_value=SimpleNamespace(
+                config=SimpleNamespace(
+                    filter_subject="heber.live.>",
+                    ack_policy=AckPolicy.EXPLICIT,
+                    ack_wait=settings.jetstream_ack_wait_seconds,
+                    max_ack_pending=settings.jetstream_max_ack_pending,
+                ),
+                num_pending=0,
+                num_ack_pending=0,
+                num_redelivered=0,
+            )
+        ),
+    )
     connection = SimpleNamespace(jetstream=lambda: jetstream)
     connect = AsyncMock(return_value=connection)
     monkeypatch.setattr("heber.writer.jetstream_consumer.nats.connect", connect)
@@ -243,7 +507,22 @@ async def test_nats_disconnect_callback_downgrades_readiness(monkeypatch) -> Non
     from heber.config import settings
 
     subscription = object()
-    jetstream = SimpleNamespace(pull_subscribe=AsyncMock(return_value=subscription))
+    jetstream = SimpleNamespace(
+        pull_subscribe=AsyncMock(return_value=subscription),
+        consumer_info=AsyncMock(
+            return_value=SimpleNamespace(
+                config=SimpleNamespace(
+                    filter_subject="heber.backfill.>",
+                    ack_policy=AckPolicy.EXPLICIT,
+                    ack_wait=settings.jetstream_ack_wait_seconds,
+                    max_ack_pending=settings.jetstream_max_ack_pending,
+                ),
+                num_pending=0,
+                num_ack_pending=0,
+                num_redelivered=0,
+            )
+        ),
+    )
     connection = SimpleNamespace(jetstream=lambda: jetstream, is_connected=True)
     connect = AsyncMock(return_value=connection)
     monkeypatch.setattr("heber.writer.jetstream_consumer.nats.connect", connect)

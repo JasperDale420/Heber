@@ -8,6 +8,7 @@ it polls quotes in real-time to determine if TP/SL barriers are hit.
 from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.consumer import AlertWatchConsumer
 from heber.watch.features import AlertFeatureExtractor, AlertFeatures, get_features, store_features
+from heber.watch.jetstream_consumer import JetStreamAlertWatchConsumer
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
     POLL_CONFIG,
@@ -40,6 +41,7 @@ __all__ = [
     "SnapshotPoller",
     "BarrierChecker",
     "AlertWatchConsumer",
+    "JetStreamAlertWatchConsumer",
     "LabelWriter",
     "WatchService",
     # Functions

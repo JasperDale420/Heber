@@ -6,12 +6,14 @@ Monitors Redis stream reachability, consumer group status, consumer lag
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import structlog
 
 from heber.health_monitor.models import CheckContext, CheckResult, Severity, Status
+from heber.ops.dataflow_health import _fetch_metrics_samples, _metric_max
 
 logger = structlog.get_logger(__name__)
 
@@ -32,39 +34,101 @@ async def run_stream_health_checks(ctx: CheckContext) -> list[CheckResult]:
     """Run all Tier 1 stream health checks and return results."""
     now = _now_et()
     results: list[CheckResult] = []
+    jetstream = ctx.settings.ingest_transport == "jetstream"
+
+    if jetstream:
+        samples, metrics_error = await asyncio.to_thread(
+            _fetch_metrics_samples, ctx.settings.health_consumer_metrics_url
+        )
+        labels = {
+            "stream": ctx.settings.jetstream_stream_name,
+            "consumer": ctx.settings.jetstream_durable_name,
+        }
+        bound = _metric_max(samples, "heber_jetstream_consumer_bound", labels=labels)
+        heartbeat = _metric_max(samples, "heber_consumer_loop_heartbeat_unixtime")
+        heartbeat_age = None if heartbeat is None else max(0.0, now.timestamp() - heartbeat)
+        details = {
+            "bound": bound,
+            "pending": _metric_max(samples, "heber_jetstream_consumer_pending_messages", labels=labels),
+            "ack_pending": _metric_max(samples, "heber_jetstream_consumer_ack_pending_messages", labels=labels),
+            "redelivered": _metric_max(samples, "heber_jetstream_consumer_redelivered_messages", labels=labels),
+            "loop_heartbeat_age_seconds": heartbeat_age,
+            "metrics_error": metrics_error,
+        }
+        healthy = bound == 1 and heartbeat_age is not None and heartbeat_age <= 60
+        results.append(
+            CheckResult(
+                check_name="jetstream_consumer",
+                feed=None,
+                severity=ctx.calendar.adjust_severity(Severity.P2_INFO if healthy else Severity.P0_CRITICAL, now),
+                status=Status.PASS if healthy else Status.FAIL,
+                message=(
+                    "JetStream durable consumer bound and live"
+                    if healthy
+                    else "JetStream durable consumer unavailable or stale"
+                ),
+                details=details,
+                ts_checked=now,
+            )
+        )
 
     # --- 1. Stream reachability ---------------------------------------------------
     try:
         stream_info = await ctx.redis.xinfo_stream(ctx.settings.redis_stream_name)
     except Exception as exc:
-        severity = ctx.calendar.adjust_severity(Severity.P0_CRITICAL, now)
+        severity = ctx.calendar.adjust_severity(Severity.P1_WARNING if jetstream else Severity.P0_CRITICAL, now)
         results.append(
             CheckResult(
                 check_name="stream_reachable",
                 feed=None,
                 severity=severity,
-                status=Status.FAIL,
-                message=f"Redis stream unreachable: {exc}",
+                status=Status.WARN if jetstream else Status.FAIL,
+                message=(
+                    f"Redis control plane unreachable: {exc}" if jetstream else f"Redis stream unreachable: {exc}"
+                ),
                 details={"stream": ctx.settings.redis_stream_name, "error": str(exc)},
                 ts_checked=now,
             )
         )
-        return results
-
-    results.append(
-        CheckResult(
-            check_name="stream_reachable",
-            feed=None,
-            severity=ctx.calendar.adjust_severity(Severity.P2_INFO, now),
-            status=Status.PASS,
-            message="Redis stream reachable",
-            details={
-                "stream": ctx.settings.redis_stream_name,
-                "length": stream_info.get("length", 0),
-            },
-            ts_checked=now,
+        if not jetstream:
+            return results
+    else:
+        results.append(
+            CheckResult(
+                check_name="stream_reachable",
+                feed=None,
+                severity=ctx.calendar.adjust_severity(Severity.P2_INFO, now),
+                status=Status.PASS,
+                message="Redis stream reachable",
+                details={
+                    "stream": ctx.settings.redis_stream_name,
+                    "length": stream_info.get("length", 0),
+                },
+                ts_checked=now,
+            )
         )
-    )
+
+    if jetstream:
+        # Redis remains useful for durable DLQ observation, but cannot prove a
+        # JetStream writer ACK.  The broker metrics above are authoritative.
+        try:
+            dlq_len = await ctx.redis.xlen(ctx.settings.redis_dlq_stream_name)
+        except Exception:
+            dlq_len = 0
+        results.append(
+            CheckResult(
+                check_name="dlq_depth",
+                feed=None,
+                severity=ctx.calendar.adjust_severity(
+                    Severity.P1_WARNING if dlq_len >= DLQ_WARN else Severity.P2_INFO, now
+                ),
+                status=Status.WARN if dlq_len >= DLQ_WARN else Status.PASS,
+                message=f"DLQ has {dlq_len} messages" if dlq_len >= DLQ_WARN else "DLQ empty",
+                details={"dlq_stream": ctx.settings.redis_dlq_stream_name, "depth": dlq_len},
+                ts_checked=now,
+            )
+        )
+        return results
 
     # --- 2. Consumer group exists -------------------------------------------------
     try:

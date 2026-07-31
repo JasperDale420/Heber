@@ -260,6 +260,7 @@ class Settings(BaseSettings):
     # Writer transport. Redis remains the default until the JetStream consumer
     # has passed the production replay and fault-injection gates.
     ingest_transport: Literal["redis", "jetstream"] = Field(default="redis")
+    watch_ingest_transport: Literal["redis", "jetstream"] = Field(default="redis")
     ingest_lane: Literal["live", "backfill"] = Field(default="live")
     nats_url: str = Field(default="nats://localhost:4222")
     nats_username: str | None = Field(default=None)
@@ -268,6 +269,8 @@ class Settings(BaseSettings):
     jetstream_backfill_stream_name: str = Field(default="HEBER_BACKFILL", min_length=1)
     jetstream_live_durable_name: str = Field(default="heber-live-writers", min_length=1)
     jetstream_backfill_durable_name: str = Field(default="heber-backfill-writers", min_length=1)
+    watch_jetstream_stream_name: str = Field(default="HEBER_WATCH", min_length=1)
+    watch_jetstream_durable_name: str = Field(default="heber-watch", min_length=1)
     jetstream_ack_wait_seconds: int = Field(default=300, ge=1)
     jetstream_max_ack_pending: int = Field(
         default=0,
@@ -275,6 +278,10 @@ class Settings(BaseSettings):
         description="Maximum unacknowledged JetStream messages; 0 derives twice the Redis read batch size",
     )
     jetstream_reconnect_backoff_seconds: float = Field(default=1.0, ge=0.1, le=60)
+    jetstream_metrics_refresh_seconds: float = Field(default=15.0, ge=1.0, le=300.0)
+    durable_event_receipt_max_rows: int = Field(default=10_000_000, ge=1)
+    durable_backfill_ledger_max_rows: int = Field(default=10_000_000, ge=1)
+    durable_watch_receipt_max_rows: int = Field(default=100_000, ge=1)
     backfill_proof_max_expected_records: int = Field(
         default=5000,
         ge=1,
@@ -534,10 +541,16 @@ class Settings(BaseSettings):
         description="Base backoff between retries (multiplied by attempt number)",
     )
     gold_poller_pipeline_timeout_seconds: int = Field(
-        default=1800,
+        default=900,
         ge=60,
-        le=7200,
+        le=900,
         description="Hard wall-clock cap per pipeline; the isolated subprocess is killed past this",
+    )
+    gold_poller_run_budget_seconds: int = Field(
+        default=5400,
+        ge=300,
+        le=5400,
+        description="Hard wall-clock cap for one scheduled Gold refresh run",
     )
     gold_poller_project: str = Field(
         default="watch",
@@ -743,6 +756,11 @@ class Settings(BaseSettings):
         default="http://localhost:9091/metrics",
         description="Metrics endpoint for heber-watch dataflow health checks",
     )
+    health_backfill_consumer_metrics_url: str = Field(
+        default="http://localhost:9095/metrics",
+        description="Metrics endpoint for heber-backfill-consumer dataflow health checks",
+    )
+    health_backfill_ingest_transport: Literal["redis", "jetstream"] = Field(default="redis")
     health_catalog_url: str = Field(
         default="http://localhost:8085/health",
         description="Catalog /health URL for dataflow health checks (DB-exercising)",
@@ -835,7 +853,7 @@ class Settings(BaseSettings):
                     self.backfill_proof_max_expected_records,
                 )
 
-        if self.ingest_transport != "jetstream":
+        if self.ingest_transport != "jetstream" and self.watch_ingest_transport != "jetstream":
             return self
 
         credentials_present = (
