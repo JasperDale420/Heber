@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Gold completion now records the requested market session even when the work finishes after midnight.
 - Gold source discovery, subprocess launch, and feature children now run under the same nightly deadline; if a child cannot be reaped at that deadline, Gold records a terminal failure and fences later runs until a non-blocking check confirms it has exited.
 - Excursion analytics is excluded from the scheduled Gold refresh while its source requirements are repaired.
+- Discord alert delivery now goes through the repo's shared HTTP client factory (`heber/ops/notifier.py`), so webhook requests get the same debug logging hooks and standard defaults as every other outbound HTTP call.
 
 - **Documentation refreshed to the Empire standard set**: `docs/system-architecture.md`, `docs/api-reference.md`, and `docs/data_contract.md` are renamed to `docs/ARCHITECTURE.md`, `docs/API_REFERENCE.md`, and `docs/DATA_CONTRACTS.md` (content unchanged, cross-links updated repo-wide). Added `docs/RUNBOOK.md` as the canonical operations entry point. Corrected the README and `docs/operations/{runbook,monitoring}.md` — they still described `heber-redis`, `heber-clickhouse`, `heber-minio`, `heber-lakefs`, `heber-apicurio`, and `heber-openmetadata` as running containers and an unwired Prometheus exporter; none of that has been true for this `docker-compose.yml` since a June 2026 cleanup (no service/behavior change, docs only).
 

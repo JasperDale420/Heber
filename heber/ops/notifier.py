@@ -24,6 +24,7 @@ import structlog
 from prometheus_client import Counter
 
 from heber.config import Settings
+from heber.core.http_client import create_http_client
 from heber.health_monitor.models import CheckResult, Severity, Status
 from heber.ops.metrics import _get_or_create
 
@@ -143,7 +144,7 @@ class DiscordNotifier:
         return True
 
     def _post(self, content: str, check_name: str) -> bool:
-        client = self._client or httpx.Client(timeout=10.0)
+        client = self._client or create_http_client(timeout=10.0)
         try:
             resp = client.post(self._webhook, json={"content": content})
             resp.raise_for_status()

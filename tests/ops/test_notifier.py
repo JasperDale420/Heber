@@ -185,6 +185,19 @@ def test_service_specific_state_files_do_not_share_cooldown(tmp_path: Path) -> N
 
 
 @pytest.mark.unit
+def test_post_without_injected_client_uses_shared_http_factory(tmp_path: Path) -> None:
+    # When no client is injected, the notifier must build one via the repo's
+    # shared http_client factory (logging hooks, standard defaults) and close it.
+    client = _client()
+    with patch("heber.ops.notifier.create_http_client", return_value=client) as factory:
+        n = DiscordNotifier(_settings(tmp_path))
+        n.dispatch([_fail()], now=T0)
+    factory.assert_called_once_with(timeout=10.0)
+    assert client.post.call_count == 1
+    client.close.assert_called_once()
+
+
+@pytest.mark.unit
 def test_debounce_suppresses_single_cycle_flap(tmp_path: Path) -> None:
     # One failing cycle then recovery (debounce=2) must be completely silent —
     # this is the transient read-error / inter-batch-gap blip that caused the spam.
