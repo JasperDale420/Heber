@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`FEED_ALIAS_MAP` backwards-compatibility alias removed** (`heber/writer/ingest_contracts.py`): the canonical name is `FEED_ALIASES`; the alias existed only for old import sites, and its last consumer (a test) now asserts the same mappings against the canonical symbol.
+
 - **Excursion analytics no longer scans dead trading systems** (`heber/features/pipelines/excursion_analytics.py`): the ledger scan list included `whalehunter` and `trading-bot`, systems that no longer exist anywhere in the monorepo, so every run probed two ledger paths that can never exist. The pipeline now reads only the five live systems (3Roses, Kairos, Cerberus, Orion, options-bot).
 
 - **`ftd_days_outstanding` is gone from the FTD feature set** (`heber/features/pipelines/market_intel_features.py`, `features/feature_views/market_intel.py`): the column was structurally always `1` and had been reaching ML training as a constant. Data-Gateway maps the upstream `date` field to both the event timestamp and Silver's `ftd_date`, so the feature was counting distinct values of a field against a group keyed on that same field. It is removed rather than repaired because the underlying data cannot support it: SEC fails-to-deliver records are aggregate outstanding balances, so how long a fail has been open is not recoverable from them. Gold files written before this change still carry the column; new ones will not.
