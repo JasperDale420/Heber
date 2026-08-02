@@ -101,7 +101,7 @@ Data-Gateway → Redis Stream (heber:events)
 | `heber/gold/labels.py` | Triple-barrier label generation with availability tracking |
 | `heber/watch/consumer.py` | Alert watch consumer (flow_alerts → watch → poll → enrich) |
 | `heber/watch/poller.py` | `SnapshotPoller` — option quote polling for active watches |
-| `heber/features/` | Feast feature views for Gold layer |
+| `heber/features/` | Gold feature pipelines (Feast feature views live in top-level `features/`) |
 
 ## Zero-Leakage Contract
 
