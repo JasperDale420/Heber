@@ -212,6 +212,51 @@ def _cmd_alert_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_catalog_token(args: argparse.Namespace) -> int:
+    """Handle the 'catalog-token' subcommand (bootstrap/list catalog API tokens)."""
+    from heber.catalog.auth import create_token_record, list_token_records, unreachable_by_container
+    from heber.config import get_settings
+
+    tokens_file = Path(args.tokens_file) if args.tokens_file else get_settings().catalog_auth_tokens_path
+
+    if args.token_action == "create":
+        if not args.project or not args.name:
+            print("error: --project and --name are required for 'create'", file=sys.stderr)
+            return 2
+        scopes = [s.strip() for s in args.scopes.split(",") if s.strip()]
+        try:
+            raw, token = create_token_record(
+                tokens_file,
+                project_id=args.project,
+                name=args.name,
+                scopes=scopes,
+                expires_in_days=args.expires_days,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"token_id: {token.token_id}")
+        print(f"project:  {token.project_id} (audit label only — not an isolation boundary)")
+        print(f"scopes:   {','.join(token.scopes)}")
+        print(f"file:     {tokens_file}")
+        warning = unreachable_by_container(tokens_file)
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
+        print("Raw token (shown once — store it securely, only its hash is persisted):")
+        print(raw)
+        return 0
+
+    # list
+    try:
+        records = list_token_records(tokens_file)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for record in records:
+        print(json.dumps(record))
+    return 0
+
+
 def _parse_iso_date(value: str) -> date:
     return date.fromisoformat(value)
 
@@ -256,6 +301,7 @@ _SUBCOMMAND_HANDLERS = {
     "alert-test": _cmd_alert_test,
     "alert-check": _cmd_alert_check,
     "massive-daily": _cmd_massive_daily,
+    "catalog-token": _cmd_catalog_token,
 }
 
 
@@ -349,6 +395,27 @@ def main() -> int:
         "--skip-corporate-actions",
         action="store_true",
         help="Only sync flat files; skip splits/dividends/ticker snapshot",
+    )
+
+    # Catalog API token bootstrap/management
+    catalog_token_parser = subparsers.add_parser(
+        "catalog-token",
+        help="Manage catalog API bearer tokens (HEBER_CATALOG_AUTH_ENABLED)",
+    )
+    catalog_token_parser.add_argument("token_action", choices=["create", "list"], help="Action to perform")
+    catalog_token_parser.add_argument("--project", help="Project id the token belongs to (create)")
+    catalog_token_parser.add_argument("--name", help="Human-readable token name (create)")
+    catalog_token_parser.add_argument(
+        "--scopes",
+        default="read",
+        help="Comma-separated scopes: read, write, admin, or * (default: read). "
+        "write and admin also grant read; admin also grants write",
+    )
+    catalog_token_parser.add_argument("--expires-days", type=int, default=None, help="Token lifetime in days")
+    catalog_token_parser.add_argument(
+        "--tokens-file",
+        default=None,
+        help="Token records path (default: HEBER_CATALOG_AUTH_TOKENS_FILE or <data_root>/_catalog_auth/tokens.json)",
     )
 
     args = parser.parse_args()

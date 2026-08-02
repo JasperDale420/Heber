@@ -39,6 +39,13 @@ services:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      # Bearer-token auth opt-in (set in .env; token file defaults to
+      # /data/_catalog_auth/tokens.json on the bind mount — bootstrap with
+      # `uv run heber catalog-token create` on the host before enabling).
+      # HEBER_CATALOG_AUTH_TOKENS_FILE must be a path *inside* the container
+      # (i.e. under /data) — a host-only path resolves to nothing here.
+      - HEBER_CATALOG_AUTH_ENABLED=${HEBER_CATALOG_AUTH_ENABLED:-false}
+      - HEBER_CATALOG_AUTH_TOKENS_FILE=${HEBER_CATALOG_AUTH_TOKENS_FILE_CONTAINER:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

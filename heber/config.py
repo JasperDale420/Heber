@@ -421,6 +421,31 @@ class Settings(BaseSettings):
         description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
     )
 
+    # Catalog API auth (bearer tokens hashed via heber.catalog.access_control)
+    catalog_auth_enabled: bool = Field(
+        default=False,
+        description="Require bearer-token auth on catalog API routes (/health and docs stay open)",
+    )
+    catalog_auth_tokens_file: Path | None = Field(
+        default=None,
+        description="Path to the SDK token records JSON; defaults to <data_root>/_catalog_auth/tokens.json",
+    )
+
+    @property
+    def catalog_auth_tokens_path(self) -> Path:
+        """Resolved token-records path (explicit setting or data-root default).
+
+        The default lives under data_root so tokens survive container rebuilds
+        via the /Volumes/heber/data bind mount.
+
+        A blank HEBER_CATALOG_AUTH_TOKENS_FILE parses as Path("."); treat that
+        as "unset" so an empty .env line falls back to the default instead of
+        pointing auth at the working directory.
+        """
+        if self.catalog_auth_tokens_file is not None and str(self.catalog_auth_tokens_file) not in ("", "."):
+            return self.catalog_auth_tokens_file
+        return self.data_root / "_catalog_auth" / "tokens.json"
+
     # Gold layer paths (used by feature_views/_paths.py)
     gold_root: Path | None = Field(
         default=None,

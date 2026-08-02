@@ -17,6 +17,13 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from heber.catalog.auth import (
+    TokenStoreUnavailable,
+    auth_health,
+    log_auth_state,
+    require_read,
+    require_write,
+)
 from heber.catalog.db import Base
 from heber.catalog.seeds import (
     discover_datasets_from_disk,
@@ -82,6 +89,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Initialize logging first
     configure_logging(service_name="heber-catalog", log_level=settings.log_level, json_output=True)
+
+    # Auth state must be loud either way. An unusable token store is reported
+    # through /health and per-request 503s rather than by exiting, so a fixable
+    # file-permission mistake cannot crash-loop the container.
+    log_auth_state()
 
     if settings.metrics_port:
         try:
@@ -197,7 +209,7 @@ class FeedMappingResponse(BaseModel):
 # endpoint returned 200 for 46.8 hours while every data endpoint served 500s, so
 # docker kept the container "healthy" and nothing alerted.
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, Any]:
     try:
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
@@ -206,12 +218,35 @@ async def health() -> dict[str, str]:
             status_code=503,
             detail={"status": "unhealthy", "service": "heber-catalog", "error": str(exc)[:200]},
         ) from exc
-    return {"status": "healthy", "service": "heber-catalog"}
+    body: dict[str, Any] = {"status": "healthy", "service": "heber-catalog"}
+    # Auth lockout visibility: with auth enabled, expose the valid-token count so
+    # monitors can catch "healthy container, every request 401s" (e.g. the last
+    # token expired), and report unhealthy when the token store cannot be read
+    # at all — that state fails every protected route, so a green health check
+    # would be exactly the blind spot this endpoint exists to close.
+    # Shape is unchanged when auth is disabled.
+    try:
+        auth_state = auth_health()
+    except TokenStoreUnavailable as exc:
+        # /health is unauthenticated, so the file path and OS detail stay in the
+        # log; the response says only that the token store is the problem.
+        logger.error("catalog_auth_token_store_unavailable", route="/health", error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unhealthy",
+                "service": "heber-catalog",
+                "error": "auth token store unavailable (see catalog logs)",
+            },
+        ) from exc
+    if auth_state is not None:
+        body["auth"] = auth_state
+    return body
 
 
 # Dataset endpoints
-@app.get("/datasets", response_model=DatasetListResponse, include_in_schema=False)
-@app.get("/api/v1/datasets", response_model=DatasetListResponse)
+@app.get("/datasets", response_model=DatasetListResponse, include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/datasets", response_model=DatasetListResponse, dependencies=[Depends(require_read)])
 async def list_datasets(
     layer: str | None = Query(None, description="Filter by layer (bronze|silver|gold)"),
     service: CatalogService = Depends(get_service),
@@ -235,8 +270,13 @@ async def list_datasets(
     )
 
 
-@app.get("/datasets/{name}", response_model=DatasetDetailResponse, include_in_schema=False)
-@app.get("/api/v1/datasets/{name}", response_model=DatasetDetailResponse)
+@app.get(
+    "/datasets/{name}",
+    response_model=DatasetDetailResponse,
+    include_in_schema=False,
+    dependencies=[Depends(require_read)],
+)
+@app.get("/api/v1/datasets/{name}", response_model=DatasetDetailResponse, dependencies=[Depends(require_read)])
 async def get_dataset(name: str, service: CatalogService = Depends(get_service)) -> DatasetDetailResponse:
     dataset = await service.get_dataset(name)
     if not dataset:
@@ -256,8 +296,8 @@ async def get_dataset(name: str, service: CatalogService = Depends(get_service))
     )
 
 
-@app.get("/datasets/{name}/versions", include_in_schema=False)
-@app.get("/api/v1/datasets/{name}/versions")
+@app.get("/datasets/{name}/versions", include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/datasets/{name}/versions", dependencies=[Depends(require_read)])
 async def get_dataset_versions(name: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     versions = await service.get_dataset_versions(name)
     return {
@@ -274,8 +314,8 @@ async def get_dataset_versions(name: str, service: CatalogService = Depends(get_
     }
 
 
-@app.get("/datasets/{name}/coverage", include_in_schema=False)
-@app.get("/api/v1/datasets/{name}/coverage")
+@app.get("/datasets/{name}/coverage", include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/datasets/{name}/coverage", dependencies=[Depends(require_read)])
 async def get_dataset_coverage(name: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     coverage = await service.get_coverage(name)
     data = []
@@ -312,7 +352,7 @@ def _instrument_response(inst: Any) -> InstrumentResponse:
     )
 
 
-@app.get("/api/v1/instruments/search")
+@app.get("/api/v1/instruments/search", dependencies=[Depends(require_read)])
 async def search_instruments(
     instrument_type: str | None = Query(None),
     symbol_prefix: str | None = Query(None),
@@ -330,7 +370,7 @@ async def search_instruments(
     }
 
 
-@app.post("/api/v1/instruments/lookup")
+@app.post("/api/v1/instruments/lookup", dependencies=[Depends(require_read)])
 async def lookup_instruments(
     request: InstrumentLookupRequest,
     service: CatalogService = Depends(get_service),
@@ -342,7 +382,7 @@ async def lookup_instruments(
     }
 
 
-@app.get("/api/v1/instruments/{key}")
+@app.get("/api/v1/instruments/{key}", dependencies=[Depends(require_read)])
 async def get_instrument(key: str, service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     instrument = await service.get_instrument(key)
     if not instrument:
@@ -354,8 +394,8 @@ async def get_instrument(key: str, service: CatalogService = Depends(get_service
 
 
 # Feed mapping endpoints
-@app.get("/feeds", include_in_schema=False)
-@app.get("/api/v1/feeds")
+@app.get("/feeds", include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/feeds", dependencies=[Depends(require_read)])
 async def list_feeds(service: CatalogService = Depends(get_service)) -> dict[str, Any]:
     mappings = await service.list_feed_mappings()
     return {
@@ -371,8 +411,8 @@ async def list_feeds(service: CatalogService = Depends(get_service)) -> dict[str
     }
 
 
-@app.get("/feeds/resolve", include_in_schema=False)
-@app.get("/api/v1/feeds/resolve")
+@app.get("/feeds/resolve", include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/feeds/resolve", dependencies=[Depends(require_read)])
 async def resolve_feed(
     provider: str = Query(...),
     feed: str = Query(...),
@@ -391,8 +431,8 @@ async def resolve_feed(
 
 
 # Additional Dataset endpoints (PRD §11.7.3)
-@app.get("/datasets/{name}/versions/{version}", include_in_schema=False)
-@app.get("/api/v1/datasets/{name}/versions/{version}")
+@app.get("/datasets/{name}/versions/{version}", include_in_schema=False, dependencies=[Depends(require_read)])
+@app.get("/api/v1/datasets/{name}/versions/{version}", dependencies=[Depends(require_read)])
 async def get_dataset_version(
     name: str,
     version: str,
@@ -430,8 +470,8 @@ class DatasetCreateRequest(BaseModel):
     primary_keys: list[str] | None = None
 
 
-@app.post("/datasets", status_code=201, include_in_schema=False)
-@app.post("/api/v1/datasets", status_code=201)
+@app.post("/datasets", status_code=201, include_in_schema=False, dependencies=[Depends(require_write)])
+@app.post("/api/v1/datasets", status_code=201, dependencies=[Depends(require_write)])
 async def create_dataset(
     request: DatasetCreateRequest,
     service: CatalogService = Depends(get_service),
@@ -471,7 +511,7 @@ class InstrumentUpsertRequest(BaseModel):
     put_call: str | None = None
 
 
-@app.put("/api/v1/instruments/{key}")
+@app.put("/api/v1/instruments/{key}", dependencies=[Depends(require_write)])
 async def upsert_instrument(
     key: str,
     request: InstrumentUpsertRequest,
@@ -510,7 +550,7 @@ class BackfillRequest(BaseModel):
 _backfill_jobs: dict[str, dict[str, Any]] = {}
 
 
-@app.post("/api/v1/backfill", status_code=201)
+@app.post("/api/v1/backfill", status_code=201, dependencies=[Depends(require_write)])
 async def create_backfill(request: BackfillRequest) -> dict[str, Any]:
     """Create a new backfill job."""
     from uuid import uuid4
@@ -533,7 +573,7 @@ async def create_backfill(request: BackfillRequest) -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/backfill/{id}")
+@app.get("/api/v1/backfill/{id}", dependencies=[Depends(require_read)])
 async def get_backfill(id: str) -> dict[str, Any]:
     """Get backfill job status."""
     job = _backfill_jobs.get(id)
@@ -545,7 +585,7 @@ async def get_backfill(id: str) -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/backfill")
+@app.get("/api/v1/backfill", dependencies=[Depends(require_read)])
 async def list_backfills(
     status: str | None = Query(None),
     limit: int = Query(50, le=100),
@@ -606,7 +646,7 @@ def _compute_health_summary(days: int) -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/health/summary")
+@app.get("/api/v1/health/summary", dependencies=[Depends(require_read)])
 async def health_summary(days: int = Query(1, ge=1, le=30)) -> dict[str, Any]:
     """Return latest health check results and trend data."""
     return await asyncio.to_thread(_compute_health_summary, days)
@@ -639,4 +679,6 @@ async def http_exception_handler(request: Any, exc: HTTPException) -> Any:
             },
             "meta": {"ts": datetime.now(UTC).isoformat()},
         },
+        # Preserve auth headers (WWW-Authenticate on 401).
+        headers=exc.headers,
     )

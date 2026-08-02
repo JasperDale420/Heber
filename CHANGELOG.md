@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The catalog API can now require bearer-token authentication, gated by `HEBER_CATALOG_AUTH_ENABLED` (default off — nothing changes until you opt in). When enabled, every route needs a valid token; mutating routes (create dataset, upsert instrument, create backfill) additionally need write scope. Missing or invalid tokens return 401, valid tokens without the needed scope return 403, both in the standard error envelope. A `write` token can also read, and an `admin` token can do both.
+- New `heber catalog-token create` / `heber catalog-token list` CLI to bootstrap and inspect catalog API tokens. Raw tokens are printed exactly once; only SHA-256 hashes are persisted (default file: `<data_root>/_catalog_auth/tokens.json`, which survives container rebuilds via the bind mount). Revoking or adding a token in that file takes effect on the next request — no catalog restart needed.
+- The catalog logs its auth state loudly at startup. If auth is on but the token file is missing, unreadable, or corrupt, the service stays up and says so instead of exiting: `/health` reports unhealthy and every protected route returns 503, with the file path and the bootstrap command in the log rather than the response. That keeps a fixable file-permission mistake from turning into a container crash loop, and keeps a broken token store from hiding behind a green health check.
+- `heber catalog-token create` warns when it has just written a token file the catalog container will not be able to read (a locked-down directory, for instance), naming the permission that needs changing — instead of succeeding on the host and leaving the catalog stuck on 503 with no explanation.
+- **Before turning auth on:** Kairos, Orion, Orbit, and the EmpireUI backend all call the catalog on port 8085 without an `Authorization` header today and will start getting 401s. Give each of them a token first. `HEBER_CATALOG_AUTH_ENABLED` and `HEBER_CATALOG_AUTH_TOKENS_FILE` are documented in `.env.example`.
+- **Known limits of this first cut:** tokens are global to the catalog — scopes gate read versus write, but `--project` is an audit label, not an isolation boundary, so any write token can mutate any dataset. `/health`, `/docs`, and `/openapi.json` stay reachable without a token, so the route list and request schemas are readable by anyone who can reach the port (it is bound to `127.0.0.1` in Compose). The token file stores SHA-256 hashes only and is written world-readable so the container (uid 10000) can read what the host CLI wrote.
+
 ### Changed
 
 - Heber can consume flow-alert watches from JetStream with explicit acknowledgement after the existing idempotent watch/DLQ handler settles the message.
