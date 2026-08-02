@@ -470,7 +470,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "empire-schemas"
-version = "1.0.0"
+version = "2.0.0"
 source = { editable = "../empire-schemas" }
 dependencies = [
     { name = "pydantic" },
