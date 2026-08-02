@@ -33,8 +33,6 @@ SYSTEM_LEDGER_PATHS = {
     "Kairos": "Kairos/.kairos_data/ledger.db",
     "Cerberus": "Cerberus/ledger.db",
     "Orion": "Orion/ledger.db",
-    "whalehunter": "whalehunter/ledger.db",
-    "trading-bot": "trading-bot/ledger.db",
     "options-bot": "options-bot/ledger.db",
 }
 
