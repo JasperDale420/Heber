@@ -77,7 +77,7 @@ class EventEnvelope(BaseModel):
     """
 
     # === Fields from Data-Gateway (required) ===
-    event_id: str = Field(..., description="SHA256 idempotency hash (32 chars)")
+    event_id: str = Field(..., description="BLAKE2b-128 idempotency hash (32 hex chars)")
     provider: str = Field(..., description="Data provider: alpaca, unusual_whales, etc")
     feed: str = Field(..., description="Feed type: bars, quotes, trades, flow, etc")
     source: str = Field(..., description="Delivery method: websocket, rest")
