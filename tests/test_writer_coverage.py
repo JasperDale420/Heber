@@ -571,12 +571,17 @@ class TestEventConsumerFlushLayers:
         consumer.silver_writer.flush_if_needed = MagicMock(side_effect=RuntimeError("err2"))
         assert consumer._flush_layers() is False
 
-    def test_final_flush_calls_flush_on_both(self):
-        """_final_flush calls flush() on both writers."""
+    @pytest.mark.asyncio
+    async def test_final_flush_calls_flush_on_both(self):
+        """_final_flush calls flush() on both writers.
+
+        It is async because it must acknowledge anything the accumulator was
+        still holding — and therefore close Redis itself, after that last ACK.
+        """
         consumer = EventConsumer()
         consumer.bronze_writer.flush = MagicMock()
         consumer.silver_writer.flush = MagicMock()
-        consumer._final_flush()
+        await consumer._final_flush()
         consumer.bronze_writer.flush.assert_called_once()
         consumer.silver_writer.flush.assert_called_once()
 

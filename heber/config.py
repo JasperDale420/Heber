@@ -334,6 +334,37 @@ class Settings(BaseSettings):
             "serial behavior."
         ),
     )
+    writer_max_buffered_events: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Buffer this many events across read batches before forcing a flush + acknowledgement "
+            "barrier. Every file written to the bind mount costs ~4 metadata round-trips at ~2.4s "
+            "each regardless of how many rows it holds, so amortizing one flush over many batches "
+            "is the main throughput lever for backfill. 0 DISABLES the accumulator entirely: each "
+            "batch flushes with force=True and ACKs immediately, byte-for-byte the historical "
+            "behavior. The live consumer and the backfill consumer share this binary, so 0 must "
+            "stay the default — deferring ACKs on the live path would widen the window in which "
+            "Redis reclaims and redelivers, producing duplicate Bronze rows."
+        ),
+    )
+    writer_flush_barrier_seconds: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Max seconds a buffered event may wait before the accumulator forces a flush + ACK. "
+            "Must stay below redis_recover_interval_seconds so a recovery sweep cannot fire mid-"
+            "window and flush a half-filled buffer. Ignored when writer_max_buffered_events=0."
+        ),
+    )
+    writer_max_pending_ack: int = Field(
+        default=50_000,
+        ge=1000,
+        description=(
+            "Force a barrier once this many message IDs await acknowledgement, bounding the "
+            "pending-entries list even if the event-count trigger is set high."
+        ),
+    )
 
     # Silver file sizing targets (PRD §7.5)
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
@@ -767,6 +798,27 @@ class Settings(BaseSettings):
                 f"Refusing to start in environment='{self.environment}' with the default "
                 f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "
                 f"HEBER_POSTGRES_URL) to real credentials for non-dev environments."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_barrier_at_or_above_recover_interval(self) -> "Settings":
+        """Keep the acknowledgement barrier ahead of the pending-message recovery sweep.
+
+        The accumulator holds messages unacknowledged until a barrier. If a recovery
+        sweep can fire first it force-flushes a half-filled buffer, writing exactly the
+        tiny files the accumulator exists to avoid — and, at the extreme, reclaims this
+        consumer's own in-flight messages and reprocesses them into Bronze, which has no
+        dedupe. Only meaningful when the accumulator is enabled.
+        """
+        if self.writer_max_buffered_events > 0 and (
+            self.writer_flush_barrier_seconds >= self.redis_recover_interval_seconds
+        ):
+            raise ValueError(
+                f"writer_flush_barrier_seconds ({self.writer_flush_barrier_seconds}) must be less "
+                f"than redis_recover_interval_seconds ({self.redis_recover_interval_seconds}) when "
+                f"writer_max_buffered_events is enabled, or a recovery sweep will flush and "
+                f"redeliver mid-window."
             )
         return self
 

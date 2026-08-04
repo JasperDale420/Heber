@@ -97,6 +97,14 @@ consumer_loop_heartbeat_unixtime = _get_or_create(
     "stays fresh while the event loop spins even when no data is flowing — unlike last-write)",
 )
 
+consumer_acked_total = _get_or_create(
+    Counter,
+    "heber_consumer_acked_total",
+    "Messages acknowledged to Redis. The heartbeat proves the event loop is alive but not that "
+    "it is making progress — a flush stuck retrying keeps ticking. Rate of this counter is the "
+    "progress signal that distinguishes 'flushing slowly' from 'wedged'.",
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)

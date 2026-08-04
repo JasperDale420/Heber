@@ -383,3 +383,65 @@ def test_flow_alert_schema_allows_id_without_warning(monkeypatch: pytest.MonkeyP
     consumer._validate_payload_schema(envelope)
 
     warning_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_flush_does_not_ack(monkeypatch) -> None:
+    """A flush that leaves events buffered must not acknowledge them.
+
+    ``flush_if_needed`` legitimately flushes nothing when no partition is due, so
+    "no exception raised" never meant "durable". With the accumulator enabled,
+    ACKing there would drop whatever stayed in memory on the next restart.
+    """
+    monkeypatch.setattr(consumer_module.settings, "writer_max_buffered_events", 150_000)
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+
+    # Flush succeeds (no raise) but leaves a partition behind.
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
+    consumer.bronze_writer.buffers = {"provider=uw/feed=oi_change/dt=2026-08-03/hour=00": [{"a": 1}]}
+    consumer.silver_writer.buffers = {}
+
+    consumer._pending_ack_ids = ["1-0", "2-0"]
+    assert consumer._flush_layers() is False
+    assert redis.acked == [], "acknowledged messages that were still only in memory"
+
+
+@pytest.mark.asyncio
+async def test_accumulator_disabled_acks_every_batch(monkeypatch) -> None:
+    """With the accumulator off the live consumer keeps its per-batch ACK timing.
+
+    Both consumers share this binary, so the default must be indistinguishable
+    from the historical behavior — deferring ACKs on the live path would widen the
+    window in which Redis reclaims and redelivers, duplicating Bronze rows.
+    """
+    monkeypatch.setattr(consumer_module.settings, "writer_max_buffered_events", 0)
+    consumer = EventConsumer()
+    consumer.redis = _StubRedis()
+
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
+    # Residual buffers must NOT block the ACK when the accumulator is disabled.
+    consumer.bronze_writer.buffers = {"provider=uw/feed=oi_change/dt=2026-08-03/hour=00": [{"a": 1}]}
+    consumer.silver_writer.buffers = {}
+
+    assert consumer._should_force_flush() is True
+    assert consumer._flush_layers(force=True) is True
+    consumer.bronze_writer.flush_if_needed.assert_called_once_with(force=True)
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_chunks_large_barrier() -> None:
+    """XACK takes ids positionally, so a big barrier must be chunked."""
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+    consumer._pending_ack_ids = [f"{i}-0" for i in range(2500)]
+
+    await consumer._ack_pending()
+
+    assert consumer._pending_ack_ids == []
+    assert len(redis.acked) == 3  # 1000 + 1000 + 500
+    assert sum(len(a) - 2 for a in redis.acked) == 2500

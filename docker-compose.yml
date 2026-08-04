@@ -135,18 +135,27 @@ services:
         condition: service_healthy
     healthcheck:
       # Same run-loop heartbeat liveness as heber-consumer (gauge on :9090, fresh even on idle
-      # no-data cycles). Fails if the loop has not ticked in 180s.
-      test: [ "CMD-SHELL", "python -c \"import urllib.request,time,re,sys; b=urllib.request.urlopen('http://localhost:9090/',timeout=5).read().decode(); m=re.search(r'^heber_consumer_loop_heartbeat_unixtime (\\S+)',b,re.M); sys.exit(0 if m and time.time()-float(m.group(1))<180 else 1)\"" ]
+      # no-data cycles). Backfill flushes hundreds of date partitions across the slow bind mount
+      # and can occupy the flush thread for many minutes; the heartbeat is now ticked from the
+      # awaiting coroutine so it stays honest during that window, but the threshold is widened
+      # here (and only here — the live consumer keeps 180s) so a legitimately long flush is not
+      # reported as a failure. Progress, as distinct from liveness, is heber_consumer_acked_total.
+      test: [ "CMD-SHELL", "python -c \"import urllib.request,time,re,sys; b=urllib.request.urlopen('http://localhost:9090/',timeout=5).read().decode(); m=re.search(r'^heber_consumer_loop_heartbeat_unixtime (\\S+)',b,re.M); sys.exit(0 if m and time.time()-float(m.group(1))<600 else 1)\"" ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 300s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # The writer buffers each event twice (Bronze dict ~3KB measured, plus a Silver row) and
+    # materializes transient Arrow tables during a flush. Without a limit an over-large buffer
+    # is killed at the VM level with no container-visible OOM event, which is unattributable.
+    # 3g covers a 150k-event accumulation window (~2.0-2.25GB peak) with headroom.
+    mem_limit: 3g
 
   heber-compactor:
     build:

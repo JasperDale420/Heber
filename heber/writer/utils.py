@@ -190,7 +190,11 @@ def write_silver_parquet(
         )
         tmp_path.rename(file_path)
         elapsed = (datetime.now(UTC) - started_at).total_seconds()
-        bytes_written = file_path.stat().st_size if file_path.exists() else 0
+        # One stat, not exists()+stat() — see the note in bronze._flush_partition.
+        try:
+            bytes_written = file_path.stat().st_size
+        except OSError:
+            bytes_written = 0
         record_write(
             layer="silver",
             dataset=dataset,
@@ -233,7 +237,11 @@ def write_silver_parquet(
             pq.write_table(table, salvage_tmp, compression="snappy", row_group_size=100_000, use_dictionary=False)
             salvage_tmp.rename(file_path)
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
-            bytes_written = file_path.stat().st_size if file_path.exists() else 0
+            # One stat, not exists()+stat() — see the note in bronze._flush_partition.
+            try:
+                bytes_written = file_path.stat().st_size
+            except OSError:
+                bytes_written = 0
             record_write(
                 layer="silver",
                 dataset=dataset,

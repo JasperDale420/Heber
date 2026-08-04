@@ -24,6 +24,7 @@ from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
+    consumer_acked_total,
     consumer_loop_heartbeat_unixtime,
     record_batch_processed,
     record_dedupe_drop,
@@ -73,6 +74,14 @@ logger = structlog.get_logger(__name__)
 # pending; raise only if a real backlog can exceed this many batches.
 _MAX_RECOVERY_BATCHES = 100
 
+# ponytail: XACK takes the ids as positional args, so a 150k-event barrier would
+# build one enormous command. Chunking keeps each round-trip bounded.
+_ACK_CHUNK_SIZE = 1000
+
+# How often the liveness gauge is refreshed while a flush occupies its thread.
+# Well under the healthcheck's staleness window so a slow flush never trips it.
+_HEARTBEAT_TICK_SECONDS = 5
+
 
 class EventConsumer:
     """Consumes events from Redis Streams and writes to Lake layers."""
@@ -94,6 +103,10 @@ class EventConsumer:
         self._payload_allowed = PAYLOAD_ALLOWED_FIELDS
         self._silver_validation_warning_counts: dict[tuple[str, str, str, str], int] = {}
         self._last_recovery_monotonic = 0.0
+        # Message IDs held back until the next flush barrier. Empty at all times
+        # when writer_max_buffered_events is 0 (every batch acknowledges inline).
+        self._pending_ack_ids: list[str] = []
+        self._last_barrier_monotonic = time.monotonic()
 
     @staticmethod
     def _build_dedupe_store() -> RedisDedupeStore | None:
@@ -671,7 +684,11 @@ class EventConsumer:
         # (like _consume_iteration) so a large recovery drain — up to
         # _MAX_RECOVERY_BATCHES iterations — does not block the event loop and
         # stall the liveness heartbeat.
-        flush_ok = await asyncio.to_thread(self._flush_layers)
+        # Recovery is rare and reclaims messages another consumer already gave up
+        # on, so it forces a full barrier rather than participating in the
+        # accumulation window — that keeps recovered messages from lingering
+        # unacknowledged behind a partially-filled buffer.
+        flush_ok = await self._flush_layers_with_heartbeat(force=True)
 
         if ack_ids and flush_ok:
             await self.redis.xack(
@@ -888,29 +905,96 @@ class EventConsumer:
                     )
                 await asyncio.sleep(delay)
 
-        self._final_flush()
+        await self._final_flush()
 
-    def _flush_layers(self) -> bool:
+    def _flush_layers(self, force: bool = False) -> bool:
         """Flush Bronze and Silver independently.
 
-        Returns True if both flushes succeed. On failure the data remains
-        buffered and the caller must NOT acknowledge the messages so that
-        Redis can redeliver them on the next iteration.
+        Returns True only when nothing remains buffered, i.e. every event handed
+        to the writers is on disk. Returning True merely because no exception was
+        raised is not enough: ``flush_if_needed`` legitimately flushes nothing when
+        no partition is due, and the caller ACKs on True. That was survivable only
+        because the time trigger fired on every cycle; once a batch can be held
+        back deliberately, ACKing an unflushed buffer loses data on restart.
+
+        On failure the data stays buffered and the caller must NOT acknowledge, so
+        Redis redelivers.
         """
         ok = True
         try:
-            self.bronze_writer.flush_if_needed()
+            self.bronze_writer.flush_if_needed(force=force)
         except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Bronze flush failed", error=str(e), exc_info=True)
             ok = False
 
         try:
-            self.silver_writer.flush_if_needed()
+            self.silver_writer.flush_if_needed(force=force)
         except Exception as e:  # noqa: BLE001 — flush must not crash consumer
             logger.error("Silver flush failed", error=str(e), exc_info=True)
             ok = False
 
+        # Only gate on residual buffers when the accumulator is active. With it
+        # disabled the caller always forces a flush, and the live consumer keeps
+        # its historical ACK-per-batch timing exactly.
+        if (
+            ok
+            and settings.writer_max_buffered_events > 0
+            and (self.bronze_writer.has_buffered() or self.silver_writer.has_buffered())
+        ):
+            ok = False
+
         return ok
+
+    async def _flush_layers_with_heartbeat(self, force: bool = False) -> bool:
+        """Run the flush off-loop while keeping the liveness gauge fresh.
+
+        A flush of several hundred date partitions takes minutes on the bind
+        mount, and neither the loop-top nor the per-message heartbeat fires
+        during it — so the container was marked unhealthy on every batch while
+        working correctly. Ticking from the awaiting coroutine keeps the gauge
+        honest: a genuinely wedged event loop still stops ticking, because this
+        coroutine would stop running too.
+        """
+        task = asyncio.create_task(asyncio.to_thread(self._flush_layers, force))
+        while not task.done():
+            consumer_loop_heartbeat_unixtime.set(time.time())
+            await asyncio.wait({task}, timeout=_HEARTBEAT_TICK_SECONDS)
+        return task.result()
+
+    def _buffered_event_count(self) -> int:
+        """Events currently held across both writers (in-memory only)."""
+        return sum(len(v) for v in self.bronze_writer.buffers.values()) + sum(
+            len(v) for v in self.silver_writer.buffers.values()
+        )
+
+    def _should_force_flush(self) -> bool:
+        """Whether this iteration must flush everything and acknowledge.
+
+        Always True when the accumulator is disabled, which preserves the
+        historical flush-and-ACK-every-batch behavior for the live consumer.
+        """
+        cap = settings.writer_max_buffered_events
+        if cap <= 0:
+            return True
+        if self._buffered_event_count() >= cap:
+            return True
+        if len(self._pending_ack_ids) >= settings.writer_max_pending_ack:
+            return True
+        return (time.monotonic() - self._last_barrier_monotonic) >= settings.writer_flush_barrier_seconds
+
+    async def _ack_pending(self) -> None:
+        """Acknowledge every deferred message ID, chunked to bound command size."""
+        ids = self._pending_ack_ids
+        for start in range(0, len(ids), _ACK_CHUNK_SIZE):
+            await self.redis.xack(
+                settings.redis_stream_name,
+                settings.redis_consumer_group,
+                *ids[start : start + _ACK_CHUNK_SIZE],
+            )
+        if ids:
+            consumer_acked_total.inc(len(ids))
+        self._pending_ack_ids = []
+        self._last_barrier_monotonic = time.monotonic()
 
     async def _consume_iteration(self) -> None:
         """Execute a single iteration of the consumer loop.
@@ -933,7 +1017,14 @@ class EventConsumer:
             # event loop (keeps the Prometheus metrics endpoint and Redis
             # heartbeats responsive). Safe: flush never runs concurrently with
             # buffer appends or another flush within the single consume loop.
-            await asyncio.to_thread(self._flush_layers)
+            #
+            # The barrier is evaluated here too: if the stream goes quiet
+            # part-way through an accumulation window, the buffered events must
+            # still reach disk and be acknowledged on the barrier timer rather
+            # than waiting for traffic that may not arrive.
+            idle_force = self._should_force_flush()
+            if await self._flush_layers_with_heartbeat(idle_force) and self._pending_ack_ids:
+                await self._ack_pending()
             return
 
         t0 = time.monotonic()
@@ -959,21 +1050,27 @@ class EventConsumer:
         # Flush to disk BEFORE acknowledging. Offloaded to a thread so the
         # blocking gzip/parquet write does not stall the event loop (and the
         # consumer's metrics endpoint) on large batches.
-        flush_ok = await asyncio.to_thread(self._flush_layers)
+        #
+        # Every file written to the bind mount costs a fixed ~4 metadata
+        # round-trips regardless of row count, so when the accumulator is enabled
+        # we hold events across batches and flush once at a barrier. Until that
+        # barrier the batch's IDs stay unacknowledged, so a crash simply means
+        # Redis redelivers.
+        self._pending_ack_ids.extend(processed_ids)
+        force = self._should_force_flush()
+        flush_ok = await self._flush_layers_with_heartbeat(force)
         flush_seconds = time.monotonic() - t0 - process_seconds
 
         # Only ACK after successful flush — on failure, messages stay
         # pending and will be redelivered on the next iteration.
-        if processed_ids and flush_ok:
-            await self.redis.xack(
-                settings.redis_stream_name,
-                settings.redis_consumer_group,
-                *processed_ids,
-            )
-        elif processed_ids and not flush_ok:
+        if self._pending_ack_ids and flush_ok:
+            await self._ack_pending()
+        elif self._pending_ack_ids and not flush_ok:
             logger.warning(
-                "Skipping ACK due to flush failure — messages will be redelivered",
-                pending_ack_count=len(processed_ids),
+                "Skipping ACK — buffered events are not yet durable; messages will be redelivered",
+                pending_ack_count=len(self._pending_ack_ids),
+                buffered_events=self._buffered_event_count(),
+                forced=force,
             )
 
         elapsed = time.monotonic() - t0
@@ -997,17 +1094,36 @@ class EventConsumer:
                 failed_ids=failed_ids[:10],
             )
 
-    def _final_flush(self) -> None:
-        """Perform final flush when consumer stops."""
+    async def _final_flush(self) -> None:
+        """Flush everything still buffered, then acknowledge it, before shutdown.
+
+        Ordering matters. Redis must still be open here: anything the accumulator
+        is holding has been written to disk but not acknowledged, and dropping the
+        connection first would leave those messages pending for redelivery on the
+        next start — reprocessing them into Bronze, which has no dedupe.
+        """
         self.bronze_writer.flush()
         self.silver_writer.flush()
+        if self._pending_ack_ids:
+            if self.bronze_writer.has_buffered() or self.silver_writer.has_buffered():
+                logger.warning(
+                    "Final flush left events buffered — not acknowledging; they will be redelivered",
+                    pending_ack_count=len(self._pending_ack_ids),
+                    buffered_events=self._buffered_event_count(),
+                )
+            elif self.redis:
+                await self._ack_pending()
+        if self.redis:
+            await self.redis.close()
         logger.info("Consumer stopped")
 
     async def stop(self):
-        """Stop the consumer."""
+        """Signal the run loop to exit.
+
+        The Redis connection is closed by ``_final_flush`` after the last ACK, not
+        here — see that method for why the order cannot be reversed.
+        """
         self.running = False
-        if self.redis:
-            await self.redis.close()
 
 
 async def main():
