@@ -684,11 +684,12 @@ class EventConsumer:
         # (like _consume_iteration) so a large recovery drain — up to
         # _MAX_RECOVERY_BATCHES iterations — does not block the event loop and
         # stall the liveness heartbeat.
-        # Recovery is rare and reclaims messages another consumer already gave up
-        # on, so it forces a full barrier rather than participating in the
-        # accumulation window — that keeps recovered messages from lingering
-        # unacknowledged behind a partially-filled buffer.
-        flush_ok = await self._flush_layers_with_heartbeat(force=True)
+        # Recovered messages must not linger unacknowledged behind a partially
+        # filled buffer, so with the accumulator enabled this forces a barrier.
+        # With it disabled we must NOT force: recovery drains in claim-sized
+        # batches, and forcing each one would make every partition due and write
+        # a file per row.
+        flush_ok = await self._flush_layers_with_heartbeat(force=settings.writer_max_buffered_events > 0)
 
         if ack_ids and flush_ok:
             await self.redis.xack(
@@ -968,14 +969,19 @@ class EventConsumer:
         )
 
     def _should_force_flush(self) -> bool:
-        """Whether this iteration must flush everything and acknowledge.
+        """Whether this iteration must flush every partition and acknowledge.
 
-        Always True when the accumulator is disabled, which preserves the
-        historical flush-and-ACK-every-batch behavior for the live consumer.
+        False when the accumulator is disabled: the writers then apply their own
+        size/age thresholds exactly as before, which is what lets a partition
+        collect rows across several read batches. Forcing here instead would make
+        every partition due on every batch and write one file per row — strictly
+        worse than the behavior being preserved. With the accumulator off,
+        ``_flush_layers`` does not gate on residual buffers either, so the batch
+        still acknowledges inline just as it always did.
         """
         cap = settings.writer_max_buffered_events
         if cap <= 0:
-            return True
+            return False
         if self._buffered_event_count() >= cap:
             return True
         if len(self._pending_ack_ids) >= settings.writer_max_pending_ack:

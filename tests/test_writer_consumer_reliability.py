@@ -427,9 +427,11 @@ async def test_accumulator_disabled_acks_every_batch(monkeypatch) -> None:
     consumer.bronze_writer.buffers = {"provider=uw/feed=oi_change/dt=2026-08-03/hour=00": [{"a": 1}]}
     consumer.silver_writer.buffers = {}
 
-    assert consumer._should_force_flush() is True
-    assert consumer._flush_layers(force=True) is True
-    consumer.bronze_writer.flush_if_needed.assert_called_once_with(force=True)
+    # Disabled must mean "let the writers' own size/age thresholds decide", NOT
+    # "force every partition every batch" — forcing writes one file per row.
+    assert consumer._should_force_flush() is False
+    assert consumer._flush_layers(force=False) is True
+    consumer.bronze_writer.flush_if_needed.assert_called_once_with(force=False)
 
 
 @pytest.mark.asyncio
