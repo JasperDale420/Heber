@@ -122,6 +122,26 @@ services:
       - HEBER_REDIS_STREAM_NAME=heber:events:backfill
       - HEBER_REDIS_CONSUMER_GROUP=heber-backfill-writers
       - HEBER_REDIS_READ_BATCH_SIZE=5000
+      # Accumulate across read batches before flushing. Cost on this bind mount is
+      # per-file (~4 metadata round-trips at ~2.4s each), not per-row, and a backfill
+      # batch scatters across ~250 date partitions — so flushing per batch wrote
+      # ~20-row files. Buffering ~150k events first turns those into far fewer, far
+      # larger files. Enabled ONLY here: the live consumer runs the same binary and
+      # must keep acknowledging inline (default 0 = off).
+      - HEBER_WRITER_MAX_BUFFERED_EVENTS=${HEBER_WRITER_MAX_BUFFERED_EVENTS:-150000}
+      - HEBER_WRITER_FLUSH_BARRIER_SECONDS=600
+      # The four thresholds below must be far enough out that the barrier above is
+      # the sole flush trigger; otherwise they fire first and the buffer never fills.
+      - HEBER_BRONZE_FLUSH_INTERVAL_SECONDS=86400
+      - HEBER_BRONZE_MAX_BATCH_SIZE=1000000
+      - HEBER_SILVER_MAX_FLUSH_TIME_SECONDS=86400
+      - HEBER_SILVER_MIN_ROWS_PER_FLUSH=10000
+      # A buffered message stays unacknowledged until its barrier, so the reclaim
+      # window must comfortably exceed barrier + worst-case flush or this consumer
+      # reclaims its own in-flight messages and reprocesses them into Bronze, which
+      # has no dedupe. Recovery must also stay above the barrier (config validator).
+      - HEBER_REDIS_CLAIM_IDLE_MS=3600000
+      - HEBER_REDIS_RECOVER_INTERVAL_SECONDS=1800
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
