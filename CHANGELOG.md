@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The nightly Gold cron was overwriting `darkpool_features` with the wrong schema** (host crontab, `scripts/run_gold_pipelines.sh`): the 02:00 job invoked `market_intel_features` with no `--datasets`, which defaults to `ALL_DATASETS = ("darkpool", "greek_exposure", "options_sentiment", "ftd")`. It therefore rewrote `darkpool_features` every night using market_intel's market-wide schema — precisely the collision the container registry was configured to avoid by scoping that pipeline. Verified from the job's own log (`darkpool_features: success (17675 rows)`). The crontab entry is removed; the container gold-poller is now the single scheduler.
+- **Gold pipelines ran before the self-heal reconcile that feeds them** (`docker-compose.yml`): the poller triggered at 16:35 ET while its own EOD reconcile runs at 17:45 ET, so every run read Silver the reconcile had not yet repaired. The poller now triggers at 18:15 ET.
+- **A missed or interrupted Gold run left a permanent hole** (`docker-compose.yml`): `gold_poller_lookback_days` defaulted to 1, so a run that never happened was never recomputed. Three trading days (2026-07-24, 07-30, 08-04) have no run at all. The lookback is now 7 days, so a gap self-heals on the next successful run.
+
 ### Added
 
 - **The writer can amortize one flush across many read batches** (`heber/config.py`, `heber/writer/{consumer,bronze,silver}.py`): every file written to the macOS Docker bind mount costs a fixed ~4 metadata round-trips at ~2.4s each regardless of how many rows it holds, so a backfill batch scattered across ~250 date partitions spent all its time creating 20-row files. `HEBER_WRITER_MAX_BUFFERED_EVENTS` now holds events across batches and flushes once at a barrier (`HEBER_WRITER_FLUSH_BARRIER_SECONDS`, or `HEBER_WRITER_MAX_PENDING_ACK` message IDs, whichever comes first), turning many tiny files into few large ones. **Default 0 disables it entirely** — each batch flushes and acknowledges inline, byte-for-byte the previous behavior — because the live and backfill consumers share this binary and deferring acknowledgements on the live path would widen the window in which Redis reclaims and redelivers, duplicating Bronze rows. A config validator refuses a barrier at or above `redis_recover_interval_seconds`, which would let a recovery sweep flush a half-filled buffer.

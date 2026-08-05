@@ -249,8 +249,15 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_GOLD_POLLER_ENABLED=true
-      - HEBER_GOLD_POLLER_EOD_HOUR=16
-      - HEBER_GOLD_POLLER_EOD_MINUTE=35
+      # 18:15 ET, not 16:35. The poller used to trigger BEFORE its own EOD self-heal
+      # reconcile (17:45 ET, gold_poller_eod_reconcile_*), so every run read Silver the
+      # reconcile had not yet repaired. Pipelines now run after it.
+      - HEBER_GOLD_POLLER_EOD_HOUR=18
+      - HEBER_GOLD_POLLER_EOD_MINUTE=15
+      # 7 days, not the default 1. A run recomputes this many trailing days, so a missed
+      # or restarted run self-heals instead of leaving a permanent hole — three trading
+      # days (07-24, 07-30, 08-04) were silently lost with no run at all. Range is 1-30.
+      - HEBER_GOLD_POLLER_LOOKBACK_DAYS=7
       # EOD reconcile re-pulls missing daily feeds through the Data-Gateway, which
       # runs on a separate compose network — reach it over the host bridge and send
       # the same gateway key heber-watch uses (from .env, never committed). Without
