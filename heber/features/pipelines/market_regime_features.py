@@ -16,7 +16,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+import gc
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -352,28 +353,44 @@ class MarketRegimePipeline:
         """Load Silver bars and compute dispersion."""
         bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
         logger.info("Loading Silver bars for dispersion", start=bar_start.isoformat(), end=end_date.isoformat())
-        bars = self.reader.read_silver(
-            "bars",
-            instrument_type="equity",
-            time_range=(bar_start, end_date),
-            columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
-            batch_size=500_000,
-        )
-        logger.info("Loaded bars for dispersion", rows=len(bars))
 
-        if bars.empty:
+        # Read one day at a time and reduce to daily closes before moving on.
+        # The whole window is every equity ticker over ~127 days — ~6.4M rows, of
+        # which ~160k survive the reduction — and materialising it at once
+        # OOM-killed this pipeline on all three attempts every night.
+        #
+        # _to_daily_close groups strictly by (instrument_key, date) and has no
+        # cross-day dependency, so reducing per day and concatenating is exactly
+        # equivalent to reducing the whole window at once. That equivalence is
+        # what lets this stay a memory fix rather than a change of results: the
+        # intraday gap-fill for ticker-dates without a 1Day bar is preserved,
+        # where a blanket timeframe=="1Day" filter would have dropped them.
+        daily_parts: list[pd.DataFrame] = []
+        day = bar_start.date()
+        end_day = end_date.date()
+        while day <= end_day:
+            day_start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+            day_end = day_start + timedelta(hours=23, minutes=59, seconds=59)
+            day += timedelta(days=1)
+
+            chunk = self.reader.read_silver(
+                "bars",
+                instrument_type="equity",
+                time_range=(day_start, day_end),
+                columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
+                prune_by_dt=True,
+            )
+            if chunk.empty:
+                continue
+            daily_parts.append(self._to_daily_close(chunk))
+            del chunk
+            gc.collect()
+
+        if not daily_parts:
             return pd.DataFrame()
 
-        # Drop intraday rows early — _to_daily_close only needs close prices
-        # and prefers 1Day bars.  Loading millions of intraday rows causes OOM.
-        if "timeframe" in bars.columns and len(bars) > 1_000_000:
-            daily_only = bars[bars["timeframe"] == "1Day"]
-            if not daily_only.empty:
-                logger.info("Dropped intraday bars", before=len(bars), after=len(daily_only))
-                bars = daily_only
-
-        # Resample to daily if needed — take last close per (instrument_key, date)
-        bars = self._to_daily_close(bars)
+        bars = pd.concat(daily_parts, ignore_index=True)
+        logger.info("Loaded bars for dispersion", daily_rows=len(bars), days_with_data=len(daily_parts))
         return compute_dispersion(bars)
 
     def _compute_vol_of_vol(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
