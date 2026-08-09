@@ -12,23 +12,39 @@ import pandas as pd
 import pytest
 
 from heber.features.pipelines.darkpool_features import DarkpoolPipeline
-from heber.features.pipelines.market_regime_features import MarketRegimePipeline
+from heber.features.pipelines.market_regime_features import (
+    LOOKBACK_DAYS,
+    MarketRegimePipeline,
+    compute_dispersion,
+)
+
+FIXTURE_START = datetime(2026, 4, 4, tzinfo=UTC)
+GAP_DAY_OFFSET = 2  # AAPL has intraday-only bars on this day
+WINDOW_START = datetime(2026, 8, 2, tzinfo=UTC)  # bar_start lands on FIXTURE_START
+WINDOW_END = datetime(2026, 8, 9, tzinfo=UTC)
 
 
-def _bars(days: int = 5, tickers: tuple[str, ...] = ("AAPL", "MSFT")) -> pd.DataFrame:
+def _bars(days: int = 130, tickers: tuple[str, ...] = ("AAPL", "MSFT")) -> pd.DataFrame:
     """Daily bars plus intraday, including one ticker-date with intraday ONLY.
 
     The intraday-only case is the gap-fill path in `_to_daily_close`: intraday
     rows supply a close for (ticker, date) pairs that have no 1Day bar. Any
     rescoping must preserve it.
+
+    The span deliberately covers several calendar months. An earlier version of
+    this fixture ran 5 days against a 120-day lookback, so four of the five
+    chunks were empty and the equivalence test compared one whole-window
+    reduction against itself — it could not have failed on a chunk-splitting bug.
     """
-    start = datetime(2026, 3, 2, tzinfo=UTC)
+    # Aligned with the lookback window under test: _compute_dispersion(2026-08-02)
+    # reads from 2026-04-04, so the fixture starts there and every row counts.
+    start = FIXTURE_START
     rows: list[dict] = []
     for d in range(days):
         day = start + timedelta(days=d)
         for i, t in enumerate(tickers):
-            # AAPL on the third day gets intraday only — no 1Day bar.
-            gap = t == "AAPL" and d == 2
+            # AAPL on this day gets intraday only — no 1Day bar.
+            gap = t == "AAPL" and d == GAP_DAY_OFFSET
             if not gap:
                 rows.append(
                     {
@@ -82,7 +98,7 @@ class TestMarketRegimeDispersionScoping:
 
         pipeline = MarketRegimePipeline(reader=mock_reader)
         # A realistic window: LOOKBACK_DAYS(120) back from the start date.
-        pipeline._compute_dispersion(datetime(2026, 8, 2, tzinfo=UTC), datetime(2026, 8, 9, tzinfo=UTC))
+        pipeline._compute_dispersion(WINDOW_START, WINDOW_END)
 
         calls = mock_reader.read_silver.call_args_list
         assert len(calls) > 1, "one bulk read — this is the OOM shape"
@@ -92,46 +108,84 @@ class TestMarketRegimeDispersionScoping:
             assert tr is not None, "every read must be time-bounded"
             span = pd.to_datetime(tr[1], utc=True) - pd.to_datetime(tr[0], utc=True)
             assert span <= pd.Timedelta(days=31), f"read spans {span}, expected <= 1 month"
+            assert call.kwargs.get("instrument_type") == "equity", (
+                "unscoped read opens every instrument_type branch of the feed"
+            )
+            assert call.kwargs.get("prune_by_dt") is True, "dt pruning keeps the scan cheap"
 
-    def test_chunked_dispersion_matches_whole_window(self) -> None:
-        """Day-chunking must be exactly equivalent, not merely close.
+    def test_dispersion_chunks_cover_the_window_without_gaps(self) -> None:
+        """Chunk edges must tile the window exactly.
 
-        `_to_daily_close` groups by (instrument_key, date) with no cross-day
-        dependency, so processing per day and concatenating is identical to
-        processing the whole frame at once — including the intraday gap-fill.
+        `chunk_end = next_month - 1s` against an inclusive `ts_event <=` left a
+        one-second hole at every month boundary; ts_event is microsecond
+        precision, so rows in that hole belong to no chunk and vanish silently.
+        """
+        mock_reader = MagicMock()
+        mock_reader.read_silver.side_effect = _per_day_reader(_bars())
+        MarketRegimePipeline(reader=mock_reader)._compute_dispersion(WINDOW_START, WINDOW_END)
+
+        ranges = [c.kwargs["time_range"] for c in mock_reader.read_silver.call_args_list]
+        for (_, prev_end), (next_start, _) in zip(ranges, ranges[1:], strict=False):
+            gap = pd.to_datetime(next_start, utc=True) - pd.to_datetime(prev_end, utc=True)
+            assert gap == pd.Timedelta(microseconds=1), f"{gap} hole between chunks"
+
+    @pytest.mark.parametrize(
+        "start",
+        [
+            pytest.param(WINDOW_START, id="utc-midnight"),
+            pytest.param(WINDOW_START.replace(hour=18), id="mid-day"),
+            pytest.param(WINDOW_START.replace(hour=9, minute=30), id="market-open-ish"),
+        ],
+    )
+    def test_chunked_dispersion_matches_whole_window(self, start: datetime) -> None:
+        """Chunking must be exactly equivalent for any caller-supplied start time.
+
+        `_to_daily_close` buckets on `ts_event.dt.date` in UTC. If a chunk edge is
+        not UTC midnight, one UTC day is split across two chunks and reduced
+        twice, emitting two rows for the same (instrument_key, date) — which
+        `compute_dispersion` reads as an intra-date return. A mid-day start
+        produced a 200x error on the boundary date, which the 90-day rolling
+        median then smeared across most of the output.
         """
         frame = _bars()
-        start, end = datetime(2026, 3, 2, tzinfo=UTC), datetime(2026, 3, 6, 23, 59, tzinfo=UTC)
+        end = WINDOW_END
 
         chunked_reader = MagicMock()
         chunked_reader.read_silver.side_effect = _per_day_reader(frame)
         chunked = MarketRegimePipeline(reader=chunked_reader)._compute_dispersion(start, end)
 
-        # Reference: the whole window in one read, through the same code path.
-        bulk_reader = MagicMock()
-        bulk_reader.read_silver.return_value = frame.copy()
-        reference = MarketRegimePipeline(reader=bulk_reader)._to_daily_close(frame.copy())
-
-        from heber.features.pipelines.market_regime_features import compute_dispersion
-
+        # Reference: the same reduction applied once over the same window the
+        # chunked path covers — bar_start normalised to UTC midnight, as the
+        # implementation does, so all three start times must agree.
+        bar_start = (start - timedelta(days=LOOKBACK_DAYS)).replace(hour=0, minute=0, second=0, microsecond=0)
+        ts = pd.to_datetime(frame["ts_event"], utc=True)
+        window = frame[(ts >= pd.to_datetime(bar_start, utc=True)) & (ts <= pd.to_datetime(end, utc=True))]
+        reference = MarketRegimePipeline(reader=MagicMock())._to_daily_close(window.copy())
         expected = compute_dispersion(reference)
 
+        assert not chunked.empty, "fixture must actually span multiple chunks"
         pd.testing.assert_frame_equal(
             chunked.sort_values("ts_event").reset_index(drop=True),
             expected.sort_values("ts_event").reset_index(drop=True),
             check_dtype=False,
         )
 
-    def test_intraday_gap_fill_survives_rescoping(self) -> None:
-        """AAPL has no 1Day bar on day 3; its intraday close must still appear."""
+    def test_intraday_gap_fill_survives_chunking(self) -> None:
+        """AAPL has no 1Day bar on one date; its intraday close must still appear.
+
+        Goes through `_compute_dispersion` so the chunked path is exercised — an
+        earlier version called `_to_daily_close` directly and so tested code the
+        rescoping never touched.
+        """
         frame = _bars()
         mock_reader = MagicMock()
         mock_reader.read_silver.side_effect = _per_day_reader(frame)
 
-        daily = MarketRegimePipeline(reader=mock_reader)._to_daily_close(frame.copy())
-        gap_day = pd.Timestamp("2026-03-04", tz="UTC")
-        rows = daily[(daily["instrument_key"] == "equity:AAPL") & (daily["ts_event"] == gap_day)]
-        assert len(rows) == 1, "intraday gap-fill lost — that ticker-date would vanish"
+        pipeline = MarketRegimePipeline(reader=mock_reader)
+        dispersion = pipeline._compute_dispersion(WINDOW_START, WINDOW_END)
+
+        gap_day = pd.Timestamp(FIXTURE_START + timedelta(days=GAP_DAY_OFFSET))
+        assert gap_day in set(dispersion["ts_event"]), "the intraday-only ticker-date dropped out of the chunked path"
 
 
 class TestDarkpoolScoping:

@@ -238,7 +238,7 @@ class DarkpoolPipeline:
         )
         logger.info("Loaded darkpool", rows=len(darkpool))
         if not darkpool.empty:
-            _require_columns(darkpool, ["notional"], "darkpool")
+            _require_columns(darkpool, ["underlying", "notional"], "darkpool")
 
         logger.info(
             "Loading Silver flow_alerts for premium data",

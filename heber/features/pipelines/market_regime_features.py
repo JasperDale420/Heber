@@ -359,35 +359,42 @@ class MarketRegimePipeline:
         # which ~160k survive the reduction — and materialising it at once
         # OOM-killed this pipeline on all three attempts every night.
         #
-        # Chunk size is a balance, and both ends of it are load-bearing. Reading
-        # per day was measured at ~90s per call regardless of rows returned:
-        # _open_dataset_safe walks every fragment and, because bars fragments
-        # disagree on string vs large_string, falls back to reading each one's
-        # schema individually. That fixed per-open cost times 127 days is ~3.2h,
-        # well past the 1800s pipeline timeout. A month keeps the opens down to
-        # ~5 while holding roughly 1.4M rows per chunk instead of 6.4M.
+        # Chunk size is a balance, and both ends of it are load-bearing. Every
+        # read pays a fixed open cost that does not depend on rows returned:
+        # _open_dataset_safe walks the whole fragment list and, because bars
+        # fragments disagree on string vs large_string, falls back to reading
+        # each fragment's schema individually. prune_by_dt only adds a scan
+        # predicate — it never shrinks that walk. Measured ~90s per open on a
+        # cold page cache and ~5s warm, so per-day chunking costs 127 opens
+        # (~3.2h cold, still 8-17 min warm) against an 1800s timeout, while a
+        # month costs ~5 and holds ~1.4M rows per chunk instead of 6.4M.
         #
-        # _to_daily_close groups strictly by (instrument_key, date) and has no
-        # cross-chunk dependency, so reducing per chunk and concatenating is
-        # exactly equivalent to reducing the whole window at once. That
-        # equivalence is what keeps this a memory fix rather than a change of
-        # results: the intraday gap-fill for ticker-dates without a 1Day bar is
-        # preserved, where a blanket timeframe=="1Day" filter would drop them.
+        # PRECONDITION: chunk edges must be UTC midnight. _to_daily_close buckets
+        # on ts_event.dt.date in UTC, so an edge at any other time splits one UTC
+        # day across two chunks and emits two rows for the same
+        # (instrument_key, date) — which compute_dispersion then reads as an
+        # intra-date return. Normalising here keeps the per-chunk reduction
+        # exactly equivalent to reducing the whole window at once, which is what
+        # makes chunk size a cost decision rather than a correctness one.
         daily_parts: list[pd.DataFrame] = []
-        chunk_start = bar_start
+        chunk_start = bar_start.replace(hour=0, minute=0, second=0, microsecond=0)
         while chunk_start <= end_date:
             next_month = (
                 chunk_start.replace(year=chunk_start.year + 1, month=1, day=1)
                 if chunk_start.month == 12
                 else chunk_start.replace(month=chunk_start.month + 1, day=1)
             )
-            chunk_end = min(next_month - timedelta(seconds=1), end_date)
+            # microseconds, not seconds: ts_event is timestamp("us") and the
+            # predicate is inclusive, so a 1s step drops rows in the final second
+            # of each month into no chunk at all.
+            chunk_end = min(next_month - timedelta(microseconds=1), end_date)
 
             chunk = self.reader.read_silver(
                 "bars",
                 instrument_type="equity",
                 time_range=(chunk_start, chunk_end),
-                columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
+                columns=["instrument_key", "ts_event", "timeframe", "close"],
+                batch_size=500_000,
                 prune_by_dt=True,
             )
             chunk_start = next_month
@@ -408,20 +415,43 @@ class MarketRegimePipeline:
         """Load Silver quotes for UVXY and compute vol_of_vol."""
         vix_start = start_date - timedelta(days=60)  # Extra lookback for 20d rolling
         logger.info("Loading Silver quotes for UVXY", start=vix_start.isoformat(), end=end_date.isoformat())
+        # instrument_type is load-bearing, not tidiness. instrument_keys is only a
+        # scan predicate, applied after _open_dataset_safe has already walked and
+        # schema-unified every fragment under the feed root. Unscoped, this read
+        # opens feed=quotes entire: 3,799 equity fragments plus 826,797 option
+        # fragments. The unification loop retains ~70 KiB per fragment, so it
+        # exhausts the 3 GiB container about 5% of the way through — this single
+        # line is why market_regime both timed out and OOM-killed, and dispersion
+        # being fixed does not save it.
         quotes = self.reader.read_silver(
             "quotes",
+            instrument_type="equity",
             instrument_keys=["equity:UVXY"],
             time_range=(vix_start, end_date),
+            columns=["ts_event", "ask_px", "bid_px"],
+            batch_size=200_000,
+            prune_by_dt=True,
         )
         logger.info("Loaded UVXY quotes", rows=len(quotes))
 
         if quotes.empty:
-            # Fallback: try bars for UVXY
+            # This is the branch that actually runs: UVXY has never been in the
+            # quotes subscription (0 rows across all 337 equity dt partitions),
+            # so vol_of_vol is computed from bars every night.
+            #
+            # "close" must stay in the projection. bars genuinely has it, and the
+            # derivation below falls through to ask/bid names that bars does not
+            # have — dropping it would silently return empty and make vol_of_vol
+            # all-NaN rather than fail.
             logger.info("No quotes for UVXY, trying bars")
             quotes = self.reader.read_silver(
                 "bars",
+                instrument_type="equity",
                 instrument_keys=["equity:UVXY"],
                 time_range=(vix_start, end_date),
+                columns=["ts_event", "close"],
+                batch_size=200_000,
+                prune_by_dt=True,
             )
             logger.info("Loaded UVXY bars", rows=len(quotes))
 
