@@ -263,6 +263,12 @@ services:
       # or restarted run self-heals instead of leaving a permanent hole — three trading
       # days (07-24, 07-30, 08-04) were silently lost with no run at all. Range is 1-30.
       - HEBER_GOLD_POLLER_LOOKBACK_DAYS=7
+      # Held out of the scheduled run until their Gold data is rebuilt. Both were
+      # OOM-killed nightly and are now bounded, but the 7-day lookback would append
+      # rows to the very partitions the darkpool/market_regime regeneration has to
+      # replace — and Gold writes append without dedup on read. Clear this once the
+      # rebuild lands.
+      - HEBER_GOLD_POLLER_DISABLED_PIPELINES=darkpool,market_regime
       # EOD reconcile re-pulls missing daily feeds through the Data-Gateway, which
       # runs on a separate compose network — reach it over the host bridge and send
       # the same gateway key heber-watch uses (from .env, never committed). Without
