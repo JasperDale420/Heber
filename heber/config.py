@@ -192,6 +192,10 @@ class Settings(BaseSettings):
         default="heber:events",
         description="Redis stream name for incoming events",
     )
+    redis_backfill_stream_name: str = Field(
+        default="heber:events:backfill",
+        description="Stream carrying historical backfill; old ts_event is expected here",
+    )
     redis_consumer_group: str = Field(
         default="heber-writers",
         description="Redis consumer group name",

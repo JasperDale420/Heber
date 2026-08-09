@@ -447,3 +447,63 @@ async def test_ack_pending_chunks_large_barrier() -> None:
     assert consumer._pending_ack_ids == []
     assert len(redis.acked) == 3  # 1000 + 1000 + 500
     assert sum(len(a) - 2 for a in redis.acked) == 2500
+
+
+def _stale_backfill_envelope() -> dict:
+    """A legitimately old backfill record — UW history carries year-old ts_event."""
+    old = datetime(2025, 6, 1, 12, 0, tzinfo=UTC)
+    return {
+        "event_id": "evt-stale-backfill",
+        "provider": "unusual_whales",
+        "feed": "short_data",
+        # The backfill driver hardcodes source="rest"; "source" is the delivery
+        # method, never the literal "backfill".
+        "source": "rest",
+        "instrument_type": "equity",
+        "instrument_key": "equity:AAPL",
+        "symbol": "AAPL",
+        "ts_event": old.isoformat(),
+        "ts_ingest": datetime.now(UTC).isoformat(),
+        "payload": {"short_date": "2025-06-01", "short_interest": 1000},
+    }
+
+
+def test_stale_ts_warning_suppressed_on_backfill_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A consumer reading the backfill stream must not warn about old ts_event.
+
+    Regression for the 493k-warning storm: the check gated on envelope.source,
+    which is the delivery method ("rest"/"websocket"), so it never suppressed.
+    Stream identity is the correct signal.
+    """
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    monkeypatch.setattr(consumer_module.settings, "redis_stream_name", "heber:events:backfill")
+    monkeypatch.setattr(consumer_module.settings, "redis_backfill_stream_name", "heber:events:backfill")
+
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+
+    consumer._process_event_once({"data": json.dumps(_stale_backfill_envelope())})
+
+    emitted = [c.args[0] for c in warning_mock.call_args_list if c.args]
+    assert "stale_ts_event_live_source" not in emitted
+
+
+def test_stale_ts_warning_still_fires_on_live_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live stream must still surface ancient timestamps — that's the poisoned-record signal."""
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    monkeypatch.setattr(consumer_module.settings, "redis_stream_name", "heber:events")
+    monkeypatch.setattr(consumer_module.settings, "redis_backfill_stream_name", "heber:events:backfill")
+
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+
+    consumer._process_event_once({"data": json.dumps(_stale_backfill_envelope())})
+
+    emitted = [c.args[0] for c in warning_mock.call_args_list if c.args]
+    assert "stale_ts_event_live_source" in emitted

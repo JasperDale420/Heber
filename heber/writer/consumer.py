@@ -383,6 +383,12 @@ class EventConsumer:
             # old timestamps — but a *live* source emitting an ancient ts is the
             # poisoned-record signature (the recurring dt=2023-06-23 crypto bar),
             # so log it for tracing without dead-lettering.
+            #
+            # Stream identity, not envelope.source, decides whether a record is
+            # backfill: `source` is the delivery method ("websocket"/"rest") and
+            # the backfill driver emits "rest", so keying off it never suppressed
+            # anything and buried the log under one warning per backfilled record.
+            on_backfill_stream = settings.redis_stream_name == settings.redis_backfill_stream_name
             now_utc = datetime.now(UTC)
             if envelope.ts_event > now_utc + timedelta(hours=1):
                 logger.warning(
@@ -393,7 +399,7 @@ class EventConsumer:
                     ts_event=envelope.ts_event.isoformat(),
                 )
                 raise TimestampOutOfRangeError(DLQ_REASON_TS_OUT_OF_RANGE)
-            if envelope.source != "backfill" and envelope.ts_event < now_utc - timedelta(days=30):
+            if not on_backfill_stream and envelope.ts_event < now_utc - timedelta(days=30):
                 logger.warning(
                     "stale_ts_event_live_source",
                     event_id=envelope.event_id,
