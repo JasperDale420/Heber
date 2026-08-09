@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import gc
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -354,32 +354,43 @@ class MarketRegimePipeline:
         bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
         logger.info("Loading Silver bars for dispersion", start=bar_start.isoformat(), end=end_date.isoformat())
 
-        # Read one day at a time and reduce to daily closes before moving on.
+        # Read a month at a time and reduce to daily closes before moving on.
         # The whole window is every equity ticker over ~127 days — ~6.4M rows, of
         # which ~160k survive the reduction — and materialising it at once
         # OOM-killed this pipeline on all three attempts every night.
         #
+        # Chunk size is a balance, and both ends of it are load-bearing. Reading
+        # per day was measured at ~90s per call regardless of rows returned:
+        # _open_dataset_safe walks every fragment and, because bars fragments
+        # disagree on string vs large_string, falls back to reading each one's
+        # schema individually. That fixed per-open cost times 127 days is ~3.2h,
+        # well past the 1800s pipeline timeout. A month keeps the opens down to
+        # ~5 while holding roughly 1.4M rows per chunk instead of 6.4M.
+        #
         # _to_daily_close groups strictly by (instrument_key, date) and has no
-        # cross-day dependency, so reducing per day and concatenating is exactly
-        # equivalent to reducing the whole window at once. That equivalence is
-        # what lets this stay a memory fix rather than a change of results: the
-        # intraday gap-fill for ticker-dates without a 1Day bar is preserved,
-        # where a blanket timeframe=="1Day" filter would have dropped them.
+        # cross-chunk dependency, so reducing per chunk and concatenating is
+        # exactly equivalent to reducing the whole window at once. That
+        # equivalence is what keeps this a memory fix rather than a change of
+        # results: the intraday gap-fill for ticker-dates without a 1Day bar is
+        # preserved, where a blanket timeframe=="1Day" filter would drop them.
         daily_parts: list[pd.DataFrame] = []
-        day = bar_start.date()
-        end_day = end_date.date()
-        while day <= end_day:
-            day_start = datetime(day.year, day.month, day.day, tzinfo=UTC)
-            day_end = day_start + timedelta(hours=23, minutes=59, seconds=59)
-            day += timedelta(days=1)
+        chunk_start = bar_start
+        while chunk_start <= end_date:
+            next_month = (
+                chunk_start.replace(year=chunk_start.year + 1, month=1, day=1)
+                if chunk_start.month == 12
+                else chunk_start.replace(month=chunk_start.month + 1, day=1)
+            )
+            chunk_end = min(next_month - timedelta(seconds=1), end_date)
 
             chunk = self.reader.read_silver(
                 "bars",
                 instrument_type="equity",
-                time_range=(day_start, day_end),
+                time_range=(chunk_start, chunk_end),
                 columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
                 prune_by_dt=True,
             )
+            chunk_start = next_month
             if chunk.empty:
                 continue
             daily_parts.append(self._to_daily_close(chunk))
@@ -390,7 +401,7 @@ class MarketRegimePipeline:
             return pd.DataFrame()
 
         bars = pd.concat(daily_parts, ignore_index=True)
-        logger.info("Loaded bars for dispersion", daily_rows=len(bars), days_with_data=len(daily_parts))
+        logger.info("Loaded bars for dispersion", daily_rows=len(bars), chunks_with_data=len(daily_parts))
         return compute_dispersion(bars)
 
     def _compute_vol_of_vol(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:

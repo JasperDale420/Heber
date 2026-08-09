@@ -66,25 +66,32 @@ def _per_day_reader(frame: pd.DataFrame):
 
 
 class TestMarketRegimeDispersionScoping:
-    def test_dispersion_reads_one_day_at_a_time(self) -> None:
-        """The 127-day full-universe read is what OOM-killed the poller.
+    def test_dispersion_reads_in_bounded_chunks(self) -> None:
+        """Guards both ways this read has failed.
 
-        Regression: `_compute_dispersion` loaded ~6.4M rows in one call, then
-        discarded all but ~160k. Reads must be bounded per day instead.
+        Too big: one call over the ~127-day window loaded ~6.4M rows to keep
+        ~160k, and OOM-killed the 3 GB poller nightly.
+
+        Too many: a per-day loop was measured at ~90s per call regardless of
+        rows returned — `_open_dataset_safe` re-reads every fragment's schema
+        because bars mix string and large_string — so 127 days ran ~3.2h against
+        an 1800s timeout. Month-sized chunks sit between the two.
         """
         mock_reader = MagicMock()
         mock_reader.read_silver.side_effect = _per_day_reader(_bars())
 
         pipeline = MarketRegimePipeline(reader=mock_reader)
-        pipeline._compute_dispersion(datetime(2026, 3, 4, tzinfo=UTC), datetime(2026, 3, 6, tzinfo=UTC))
+        # A realistic window: LOOKBACK_DAYS(120) back from the start date.
+        pipeline._compute_dispersion(datetime(2026, 8, 2, tzinfo=UTC), datetime(2026, 8, 9, tzinfo=UTC))
 
-        assert mock_reader.read_silver.call_count > 30, "expected a per-day read, not one bulk read"
-        for call in mock_reader.read_silver.call_args_list:
+        calls = mock_reader.read_silver.call_args_list
+        assert len(calls) > 1, "one bulk read — this is the OOM shape"
+        assert len(calls) <= 12, f"{len(calls)} reads; per-open cost makes this the timeout shape"
+        for call in calls:
             tr = call.kwargs.get("time_range")
             assert tr is not None, "every read must be time-bounded"
             span = pd.to_datetime(tr[1], utc=True) - pd.to_datetime(tr[0], utc=True)
-            assert span <= pd.Timedelta(days=1, seconds=1), f"read spans {span}, expected <= 1 day"
-            assert call.kwargs.get("prune_by_dt") is True, "must prune to the day's dt partition"
+            assert span <= pd.Timedelta(days=31), f"read spans {span}, expected <= 1 month"
 
     def test_chunked_dispersion_matches_whole_window(self) -> None:
         """Day-chunking must be exactly equivalent, not merely close.
