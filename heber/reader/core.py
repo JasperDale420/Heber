@@ -28,6 +28,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -171,6 +172,43 @@ def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
     return dt
 
 
+# Unified schemas from the fallback below, one entry per dataset path.
+#
+# The fallback reads every fragment's physical schema, a fixed cost per read
+# that does not scale with rows returned — 1-5 minutes on the 2,599-fragment
+# feed=bars/instrument_type=equity with a cold page cache. Pipelines read the
+# same path several times per run, so without this they pay it every time.
+#
+# Keyed on the exact file set, not the path, because Silver gains fragments all
+# day and a path-only key would serve a schema predating a new fragment's
+# columns. Parquet files here are immutable by convention — writers create new
+# names and the compactor replaces sources with a differently-named output — so
+# a change of content always shows up as a change of file set.
+#
+# Bounded to one entry per path: the value carries its fingerprint and is
+# replaced when the file set moves on, so a long-lived poller cannot leak an
+# entry per write.
+_UNIFIED_SCHEMA_CACHE: dict[str, tuple[str, pa.Schema]] = {}
+
+
+def _file_set_fingerprint(file_list: list[str]) -> str:
+    digest = hashlib.blake2b(digest_size=16)
+    for name in sorted(file_list):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def clear_unified_schema_cache() -> None:
+    """Drop all cached unified schemas. Intended for tests."""
+    _UNIFIED_SCHEMA_CACHE.clear()
+
+
+def unified_schema_cache_size() -> int:
+    """Number of cached paths. Intended for tests."""
+    return len(_UNIFIED_SCHEMA_CACHE)
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
@@ -193,10 +231,24 @@ def _open_dataset_safe(
     if not file_list:
         return None
 
+    # With a cached schema this call is the whole open: it skips both the
+    # inference attempt that is doomed to fail on a conflicted feed and the
+    # per-fragment walk that follows it. schema=None is the default, so the
+    # miss path behaves exactly as before.
+    fingerprint = _file_set_fingerprint(file_list)
+    cached = _UNIFIED_SCHEMA_CACHE.get(path)
+    cached_schema = cached[1] if cached is not None and cached[0] == fingerprint else None
+
     try:
-        return ds.dataset(file_list, format="parquet", partitioning=partitioning)
+        return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=cached_schema)
     except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError, pa.lib.ArrowTypeError):
-        logger.info("heber_reader_schema_conflict_detected", path=path)
+        if cached_schema is not None:
+            # A cached schema must never become a permanent read failure; drop
+            # it and fall through to rebuild from the fragments.
+            logger.warning("heber_reader_cached_schema_rejected", path=path)
+            _UNIFIED_SCHEMA_CACHE.pop(path, None)
+        else:
+            logger.info("heber_reader_schema_conflict_detected", path=path)
 
     # Manual schema unification from individual fragment metadata.
     try:
@@ -273,7 +325,11 @@ def _open_dataset_safe(
         unified_fields.extend(pa.field(n, pa.string()) for n in partition_columns)
         unified = pa.schema(unified_fields)
 
-        return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
+        dataset = ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
+        # Cache only after the schema has been accepted, so a schema that cannot
+        # open the dataset is never handed to the next reader.
+        _UNIFIED_SCHEMA_CACHE[path] = (fingerprint, unified)
+        return dataset
     except Exception:
         logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
         return None
