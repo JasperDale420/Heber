@@ -167,3 +167,53 @@ def test_cache_is_bounded_to_one_entry_per_path(conflicted: Path, monkeypatch: p
         reader.read_silver("tags", instrument_type="equity")
 
     assert reader_core.unified_schema_cache_size() == 1, "one entry per path, replaced on change"
+
+
+def test_cache_invalidates_when_a_file_is_replaced_in_place(conflicted: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same-name replacement must invalidate — filenames alone are not enough.
+
+    `scripts/force_dedupe.py` writes a temp file and `Path.replace()`s it over
+    the original name, and the Massive bars backfill promotes to a fixed
+    `part-00000.parquet` the same way. A fingerprint over names only would keep
+    serving the pre-replacement schema, silently dropping any column the new
+    file added.
+    """
+    seen = _conflict_count(monkeypatch)
+    reader = HeberReader(conflicted)
+    assert len(reader.read_silver("tags", instrument_type="equity")) == 2
+    assert len(seen) == 1
+
+    part = conflicted / "silver" / "feed=tags" / "instrument_type=equity" / "dt=2026-03-02"
+    widened = pa.schema(list(_LARGE) + [pa.field("extra_metric", pa.float64())])
+    rows = [{**_row(0), "extra_metric": 1.5}]
+    table = pa.Table.from_pandas(pd.DataFrame(rows), schema=widened)
+    tmp = part / "plain.parquet.tmp"
+    pq.write_table(table, str(tmp))
+    tmp.replace(part / "plain.parquet")  # same name, different schema
+
+    df = reader.read_silver("tags", instrument_type="equity")
+    assert "extra_metric" in df.columns, "stale cached schema hid a column added in place"
+    assert len(seen) == 2, "in-place replacement did not invalidate the cache"
+
+
+def test_read_recovers_after_a_cached_schema_stops_working(conflicted: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cached schema that no longer opens must not wedge the path.
+
+    read_silver turns a failed scan into an empty DataFrame, so a bad entry that
+    is never evicted would make the feed look permanently empty rather than
+    broken.
+    """
+    reader = HeberReader(conflicted)
+    assert len(reader.read_silver("tags", instrument_type="equity")) == 2
+
+    # Poison the entry: keep its fingerprint, swap in a schema that cannot open.
+    path = str(conflicted / "silver" / "feed=tags" / "instrument_type=equity")
+    fingerprint, _ = reader_core._UNIFIED_SCHEMA_CACHE[path]
+    reader_core._UNIFIED_SCHEMA_CACHE[path] = (
+        fingerprint,
+        pa.schema([("definitely_not_a_column", pa.int64())]),
+    )
+
+    assert len(reader.read_silver("tags", instrument_type="equity")) == 2, (
+        "a poisoned cache entry made the feed read empty instead of recovering"
+    )

@@ -192,9 +192,27 @@ _UNIFIED_SCHEMA_CACHE: dict[str, tuple[str, pa.Schema]] = {}
 
 
 def _file_set_fingerprint(file_list: list[str]) -> str:
+    """Fingerprint the file set by name, size and mtime.
+
+    Names alone are not enough: Silver files are not all write-once.
+    ``scripts/force_dedupe.py`` writes a temp file and ``replace()``s it over
+    the original name, and the Massive bars backfill promotes to a fixed
+    ``part-00000.parquet`` the same way. A name-only key would keep serving the
+    pre-replacement schema and silently drop any column the new file added.
+
+    Size and mtime are not a content hash — hashing every fragment would cost
+    more than the schema read this cache exists to avoid — but a schema change
+    that leaves both identical is not a realistic case here. An unstattable
+    file contributes a fixed marker so the walk still produces a stable key.
+    """
     digest = hashlib.blake2b(digest_size=16)
     for name in sorted(file_list):
         digest.update(name.encode("utf-8"))
+        try:
+            stat_result = os.stat(name)
+            digest.update(f"|{stat_result.st_size}|{stat_result.st_mtime_ns}".encode())
+        except OSError:
+            digest.update(b"|unstattable")
         digest.update(b"\0")
     return digest.hexdigest()
 
