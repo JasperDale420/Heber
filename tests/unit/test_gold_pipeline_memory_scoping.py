@@ -220,3 +220,70 @@ class TestDarkpoolScoping:
 
         with pytest.raises(ValueError, match="notional"):
             DarkpoolPipeline(reader=mock_reader).run(start_date="2026-08-03", end_date="2026-08-04", dry_run=True)
+
+
+class TestTimeframePushdown:
+    """Dispersion reads only daily bars, and says so to the scanner.
+
+    Reading every timeframe and reducing afterwards materialised ~62x the rows
+    needed — 1,986,898 vs 32,214 for a single month, measured — which is what
+    pushed the cold-cache run past the 1800s pipeline timeout.
+    """
+
+    def test_dispersion_pushes_timeframe_into_the_scan(self) -> None:
+        mock_reader = MagicMock()
+        mock_reader.read_silver.side_effect = _per_day_reader(_bars())
+
+        MarketRegimePipeline(reader=mock_reader)._compute_dispersion(WINDOW_START, WINDOW_END)
+
+        for call in mock_reader.read_silver.call_args_list:
+            assert call.kwargs.get("timeframe") == "1Day", "reduced client-side instead of filtering at the scan"
+
+    def test_only_daily_rows_reach_the_reduction(self) -> None:
+        """With the filter honoured, no intraday row may reach _to_daily_close.
+
+        The deliberate consequence is that a ticker-date with intraday bars but
+        no 1Day bar contributes no close. That restores the behaviour every Gold
+        row written before 2026-06-09 was computed with — the old
+        `len(bars) > 1_000_000` branch always fired in production and filtered to
+        1Day — so the series stays comparable with its own history.
+        """
+        frame = _bars()
+        mock_reader = MagicMock()
+        mock_reader.read_silver.side_effect = _daily_only_reader(frame)
+
+        seen: list[pd.DataFrame] = []
+        original = MarketRegimePipeline._to_daily_close
+
+        def _spy(chunk: pd.DataFrame) -> pd.DataFrame:
+            seen.append(chunk)
+            return original(chunk)
+
+        pipeline = MarketRegimePipeline(reader=mock_reader)
+        pipeline._to_daily_close = _spy  # type: ignore[method-assign]
+        pipeline._compute_dispersion(WINDOW_START, WINDOW_END)
+
+        assert seen, "no chunk reached the reduction"
+        for chunk in seen:
+            assert set(chunk["timeframe"]) == {"1Day"}, "intraday rows leaked past the scan filter"
+
+        gap_day = (FIXTURE_START + timedelta(days=GAP_DAY_OFFSET)).date()
+        gap_rows = pd.concat(seen)
+        gap_rows = gap_rows[pd.to_datetime(gap_rows["ts_event"], utc=True).dt.date == gap_day]
+        assert set(gap_rows["instrument_key"]) == {"equity:MSFT"}, (
+            "AAPL has no 1Day bar that day and must not be gap-filled from intraday"
+        )
+
+
+def _daily_only_reader(frame: pd.DataFrame):
+    """A reader that honours the timeframe filter, as the real scan does."""
+    base = _per_day_reader(frame)
+
+    def _read(dataset: str, **kwargs) -> pd.DataFrame:
+        out = base(dataset, **kwargs)
+        tf = kwargs.get("timeframe")
+        if tf is not None and "timeframe" in out.columns:
+            out = out[out["timeframe"] == tf]
+        return out
+
+    return _read

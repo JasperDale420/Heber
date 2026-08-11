@@ -1011,3 +1011,43 @@ class TestGoldReadErrorBranches:
         reader = HeberReader(tmp_path)
         df = reader.read_gold("feat", project="kairos", version="v1")
         assert df.empty
+
+
+class TestTimeframeFilter:
+    """`timeframe` is pushed into the scan, and fails closed when unsupported."""
+
+    def _row(self, hours: int, tf: str) -> dict:
+        return {
+            "ts_event": _ts(hours),
+            "ts_available": _ts(hours + 1),
+            "instrument_key": "equity:AAPL",
+            "timeframe": tf,
+            "close": 100.0 + hours,
+        }
+
+    def test_filters_to_the_requested_interval(self, tmp_path: Path) -> None:
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row(0, "1Day"), self._row(1, "1Min"), self._row(2, "5Min")],
+        )
+        reader = HeberReader(tmp_path)
+
+        assert len(reader.read_silver("bars", instrument_type="equity")) == 3
+        daily = reader.read_silver("bars", instrument_type="equity", timeframe="1Day")
+        assert len(daily) == 1
+        assert set(daily["timeframe"]) == {"1Day"}
+
+    def test_raises_when_the_feed_has_no_timeframe_column(self, tmp_path: Path) -> None:
+        """Failing open would return every interval to a caller asking for one."""
+        _write_partition(
+            tmp_path,
+            "tags",
+            "equity",
+            [{"ts_event": _ts(0), "ts_available": _ts(1), "instrument_key": "equity:AAPL"}],
+        )
+        reader = HeberReader(tmp_path)
+
+        with pytest.raises(ValueError, match="timeframe"):
+            reader.read_silver("tags", instrument_type="equity", timeframe="1Day")

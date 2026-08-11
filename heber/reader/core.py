@@ -430,6 +430,7 @@ class HeberReader:
         columns: list[str] | None = None,
         batch_size: int | None = None,
         prune_by_dt: bool = False,
+        timeframe: str | None = None,
     ) -> pd.DataFrame:
         """Read Silver layer data with optional point-in-time correctness.
 
@@ -465,6 +466,16 @@ class HeberReader:
             so the partition date always equals the event date; the ``ts_event``
             predicate still trims precisely within boundary partitions.  Off by
             default to preserve existing behaviour for callers that don't opt in.
+        timeframe:
+            Restrict to one bar interval (e.g. ``"1Day"``), pushed into the scan.
+            Only meaningful for feeds carrying a ``timeframe`` column.  Reading
+            every interval and reducing afterwards materialises ~62x the rows a
+            daily computation needs, so this is the difference between a scan
+            that fits the pipeline timeout and one that does not.
+
+            Raises ``ValueError`` when the feed has no ``timeframe`` column: a
+            filter that silently fails open would return every interval and be
+            read as daily data.
 
         Returns
         -------
@@ -518,6 +529,14 @@ class HeberReader:
 
         if instrument_keys and "instrument_key" in schema_names:
             exprs.append(ds.field("instrument_key").isin(instrument_keys))
+
+        if timeframe is not None:
+            if "timeframe" not in schema_names:
+                # Fail closed. Silently skipping the predicate would return every
+                # interval to a caller that asked for one, and intraday rows read
+                # as daily bars are wrong rather than merely extra.
+                raise ValueError(f"Silver feed {dataset!r} has no 'timeframe' column to filter on")
+            exprs.append(ds.field("timeframe") == timeframe)
 
         scan_filter = _build_scan_filter(exprs)
 

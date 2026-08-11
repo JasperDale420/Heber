@@ -369,6 +369,20 @@ class MarketRegimePipeline:
         # (~3.2h cold, still 8-17 min warm) against an 1800s timeout, while a
         # month costs ~5 and holds ~1.4M rows per chunk instead of 6.4M.
         #
+        # Daily bars only, filtered at the scan rather than after materialising.
+        # A month of every interval is 1,986,898 rows against 32,214 daily ones
+        # — 62x — and reading the difference only to discard it is what pushed
+        # the cold-cache run past the 1800s timeout.
+        #
+        # The cost is ticker-dates that have intraday bars but no 1Day bar: they
+        # no longer contribute a close. That restores what every Gold row written
+        # before 2026-06-09 was computed with — the old len(bars) > 1_000_000
+        # branch always fired on the production window and filtered to 1Day — so
+        # the series stays comparable with its own history. A gap-filled close is
+        # the last intraday print of the UTC day, not an official close, and
+        # mixing the two into a cross-sectional return SD adds asynchronous
+        # pricing noise for exactly the thinnest-data tickers.
+        #
         # PRECONDITION: chunk edges must be UTC midnight. _to_daily_close buckets
         # on ts_event.dt.date in UTC, so an edge at any other time splits one UTC
         # day across two chunks and emits two rows for the same
@@ -396,6 +410,7 @@ class MarketRegimePipeline:
                 columns=["instrument_key", "ts_event", "timeframe", "close"],
                 batch_size=500_000,
                 prune_by_dt=True,
+                timeframe="1Day",
             )
             chunk_start = next_month
             if chunk.empty:
