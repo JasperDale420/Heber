@@ -493,6 +493,7 @@ class MarketRegimePipeline:
             "momentum_features",
             project=self.project,
             time_range=(start_date, end_date),
+            prune_by_dt=True,
         )
         logger.info("Loaded momentum_features", rows=len(momentum))
 

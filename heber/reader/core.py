@@ -750,6 +750,7 @@ class HeberReader:
         time_range: tuple[str | datetime, str | datetime] | None = None,
         instrument_keys: list[str] | None = None,
         asof_time: str | datetime | None = None,
+        prune_by_dt: bool = False,
     ) -> pd.DataFrame:
         """Read Gold layer features/labels.
 
@@ -773,6 +774,14 @@ class HeberReader:
             Pushed as an ``instrument_key`` scan filter.
         asof_time:
             When set, adds ``ts_available <= asof_time`` to the scan.
+        prune_by_dt:
+            When ``True`` and ``time_range`` is set, restrict both the file walk
+            and the scan to the ``dt=`` partitions overlapping the range.
+            ``write_gold`` partitions on ``date(ts_event)``, so this is only
+            sound for datasets whose time column is ``ts_event``; reading a
+            ``ts_label``-timed dataset this way raises rather than silently
+            under-reading, because the label range is a different axis from the
+            partition date.  Off by default so existing callers are unaffected.
         """
         gold_path = self._gold_root / f"dataset={dataset}"
         if project:
@@ -787,10 +796,18 @@ class HeberReader:
             return pd.DataFrame()
         scan_path, resolved_version = scan_result
 
+        walk_dt_range: tuple[str, str] | None = None
+        if prune_by_dt and time_range:
+            walk_dt_range = (
+                _to_utc(time_range[0]).as_py().date().isoformat(),
+                _to_utc(time_range[1]).as_py().date().isoformat(),
+            )
+
         try:
             dataset_obj = _open_dataset_safe(
                 str(scan_path),
                 partitioning=ds.partitioning(flavor="hive"),
+                dt_range=walk_dt_range,
             )
         except OSError:
             logger.warning("heber_reader_gold_open_failed", path=str(scan_path), exc_info=True)
@@ -804,7 +821,18 @@ class HeberReader:
 
         time_col = _detect_time_col(schema_names)
 
+        if walk_dt_range is not None and time_col != "ts_event":
+            # The walk already dropped partitions on the assumption that dt is
+            # date(ts_event). Filtering on any other column means those
+            # partitions may have held matching rows, so the result would be
+            # quietly short rather than wrong-but-complete.
+            raise ValueError(f"prune_by_dt requires a ts_event-timed dataset; {dataset!r} is timed by {time_col!r}")
+
         exprs: list[ds.Expression] = []
+
+        if walk_dt_range and "dt" in schema_names:
+            exprs.append(ds.field("dt") >= walk_dt_range[0])
+            exprs.append(ds.field("dt") <= walk_dt_range[1])
 
         if time_range and time_col:
             exprs.append(ds.field(time_col) >= _to_utc(time_range[0]))
