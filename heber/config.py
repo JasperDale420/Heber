@@ -390,6 +390,14 @@ class Settings(BaseSettings):
         default=True,
         description="Scan Silver directory on startup and auto-register unknown datasets",
     )
+    catalog_coverage_max_age_seconds: int = Field(
+        default=21600,
+        description=(
+            "Age past which /health/coverage reports stale. Generous against the "
+            "300s scan interval so a couple of failed cycles do not flap; the "
+            "condition it exists to catch ran 24 days."
+        ),
+    )
     catalog_discover_interval_seconds: int = Field(
         default=300,
         description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",

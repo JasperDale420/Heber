@@ -4,8 +4,33 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from heber.config import Settings
 from heber.ops import dataflow_health as dataflow_health_module
+
+
+@pytest.fixture(autouse=True)
+def _stub_catalog_coverage(monkeypatch):
+    """Neutralise the catalog coverage probe for these report-shape tests.
+
+    It makes a real HTTP call, so without this the assertions depend on whether
+    the local catalog happens to be running and how stale its coverage is —
+    which is precisely the condition the probe exists to report. Tests that care
+    about the probe itself live in test_catalog_coverage_freshness.py.
+    """
+    monkeypatch.setattr(
+        dataflow_health_module,
+        "_catalog_coverage_check",
+        lambda _s: {
+            "id": "catalog_coverage",
+            "status": "ok",
+            "severity": "critical",
+            "observed": {},
+            "threshold": {},
+            "message": "stubbed",
+        },
+    )
 
 
 def _signals(now: datetime) -> dict:

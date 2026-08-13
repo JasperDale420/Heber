@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -207,6 +208,58 @@ async def health() -> dict[str, str]:
             detail={"status": "unhealthy", "service": "heber-catalog", "error": str(exc)[:200]},
         ) from exc
     return {"status": "healthy", "service": "heber-catalog"}
+
+
+@app.get("/health/coverage")
+async def health_coverage() -> JSONResponse:
+    """Report how stale the coverage table is.
+
+    Deliberately separate from ``/health``. That route is the container
+    healthcheck and gates ``heber-consumer`` and ``heber-backfill-consumer``
+    through ``depends_on: service_healthy``, and the host watchdog restarts
+    anything unhealthy — so failing it on stale data would turn a
+    data-freshness problem into a restart loop and could block ingest from
+    starting. Liveness and freshness are different questions and get different
+    routes.
+
+    Coverage rows carry ``last_updated_ts``, rewritten on every successful
+    scan, so their maximum already is the completed-scan watermark; no separate
+    bookkeeping is needed to know when the scan last got all the way through.
+    """
+    # JSONResponse rather than HTTPException: the app's error handler stringifies
+    # a dict detail into a message field, which a monitor cannot parse.
+    try:
+        async with async_session() as session:
+            result = await session.execute(text("SELECT max(last_updated_ts), count(*) FROM data_coverage"))
+            row = result.first()
+    except Exception as exc:
+        logger.warning("catalog_coverage_probe_failed", error=str(exc)[:200])
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "service": "heber-catalog", "error": str(exc)[:200]},
+        )
+
+    last_updated, rows = (row[0], row[1]) if row else (None, 0)
+    age = None
+    if last_updated is not None:
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - last_updated).total_seconds()
+
+    payload: dict[str, object] = {
+        "service": "heber-catalog",
+        "coverage_age_seconds": age,
+        "last_updated_ts": last_updated.isoformat() if last_updated else None,
+        "rows": rows,
+        "max_age_seconds": settings.catalog_coverage_max_age_seconds,
+    }
+
+    if age is None or age > settings.catalog_coverage_max_age_seconds:
+        payload["status"] = "stale"
+        return JSONResponse(status_code=503, content=payload)
+
+    payload["status"] = "ok"
+    return JSONResponse(status_code=200, content=payload)
 
 
 # Dataset endpoints
