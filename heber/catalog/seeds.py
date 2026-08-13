@@ -471,9 +471,17 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
         logger.warning("coverage_scan_skipped", reason="silver_path_not_found", path=str(silver_root))
         return 0
 
-    upserted = 0
-    # Directory listing is blocking
+    # Phase 1 — walk everything first, touching no session.
+    #
+    # This used to alternate: scan a feed, upsert its rows, scan the next. The
+    # transaction opened by the first upsert then sat idle for the length of
+    # every later scan, and Postgres here runs
+    # idle_in_transaction_session_timeout = 5min. 232 of 235 discovery passes
+    # failed in one container lifetime, always at an upsert, leaving
+    # data_coverage frozen since 2026-07-20. Collecting first means no
+    # transaction is open while the slow work happens.
     entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
+    manifest: list[tuple[str, list[tuple[str, int]]]] = []
 
     for entry in entries:
         # String checks first to avoid stat() on macOS AppleDouble resource fork files
@@ -486,27 +494,27 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
             logger.debug("coverage_scan_skip_stat", path=str(entry), exc_info=True)
             continue
 
-        feed_name = entry.name.split("=", 1)[1]
-
-        # Run blocking rglob scan in thread — returns per-date row counts
         scan_results = await asyncio.to_thread(_scan_partition_dates, entry)
-
         if scan_results is None:
             continue
+        manifest.append((entry.name.split("=", 1)[1], scan_results))
 
-        # Upsert aggregate record (dt_min → dt_max, total rows)
+    logger.info("coverage_scan_complete", feeds=len(manifest))
+
+    # Phase 2 — write. Commit per feed so the transaction is short-lived and a
+    # late failure keeps the feeds already recorded instead of discarding the
+    # whole pass.
+    upserted = 0
+    for feed_name, scan_results in manifest:
         all_dates = [d for d, _ in scan_results]
-        total_rows = sum(r for _, r in scan_results)
         upserted += await _upsert_coverage(
             session,
             feed_name,
             instrument_key="__all__",
             dt_min_str=min(all_dates),
             dt_max_str=max(all_dates),
-            row_count=total_rows,
+            row_count=sum(r for _, r in scan_results),
         )
-
-        # Upsert per-date records so coverage API returns individual dates
         for date_str, row_count in scan_results:
             upserted += await _upsert_coverage(
                 session,
@@ -516,8 +524,6 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
                 dt_max_str=date_str,
                 row_count=row_count,
             )
-
-    if upserted:
         await session.commit()
 
     logger.info("coverage_seeded_from_disk", upserted=upserted)

@@ -69,10 +69,15 @@ async def _periodic_discovery_loop() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
+            # Separate sessions on purpose. Sharing one meant discovery's
+            # statements opened a transaction that then sat idle through the
+            # whole coverage walk — the condition that failed 232 of 235 passes
+            # in a single container lifetime.
             async with async_session() as session:
                 discovered = await discover_datasets_from_disk(session)
-                if discovered:
-                    logger.info("catalog_periodic_discovery", new_datasets=discovered)
+            if discovered:
+                logger.info("catalog_periodic_discovery", new_datasets=discovered)
+            async with async_session() as session:
                 await seed_coverage_from_disk(session)
         except Exception:
             logger.exception("catalog_periodic_scan_error")
