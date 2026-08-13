@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +48,17 @@ from heber.utils.versioning import version_sort_key as _version_sort_key
 logger = structlog.get_logger(__name__)
 
 _VERSION_PREFIX = "version="
+
+
+class HeberReadError(RuntimeError):
+    """A read failed against files that exist but could not be parsed.
+
+    Distinct from an empty result: an unwritten partition legitimately has no
+    rows, whereas an unreadable one means the answer is unknown. These used to
+    be indistinguishable — every unreadable file returned an empty frame with
+    only a warning — so a corrupt file in one partition silently emptied an
+    entire feed and every consumer read that as "no data".
+    """
 
 
 def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
@@ -99,10 +111,20 @@ def _parquet_files_in(base: Path) -> list[str]:
         if any(part.startswith("._") for part in f.parts):
             continue
         try:
-            if not f.is_file():
-                continue
+            stat_result = f.stat()
         except OSError:
             # Defensive: any other unstattable path (rare) is also skipped.
+            continue
+        if not stat.S_ISREG(stat_result.st_mode):
+            continue
+        # Zero-byte parquet is a writer killed mid-write. pyarrow raises
+        # "Parquet file size is 0 bytes" on it, read_silver catches that and
+        # returns an empty frame, so one truncated file makes an entire feed
+        # look like it produced nothing — observed live on feed=darkpool, whose
+        # months of healthy partitions all became invisible. The compactor has
+        # skipped these since it was written; the reader had not.
+        if stat_result.st_size == 0:
+            logger.warning("heber_reader_skip_empty_file", path=str(f))
             continue
         files.append(str(f))
     return files
@@ -604,9 +626,11 @@ class HeberReader:
                 table = dataset_obj.to_table(filter=scan_filter, columns=projection)
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_read_failed", path=str(base_path), exc_info=True)
-            return pd.DataFrame()
+        except (pa.lib.ArrowInvalid, OSError) as exc:
+            logger.error("heber_reader_read_failed", path=str(base_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(
+                f"Read of {dataset!r} failed at {base_path} — files are present but unreadable: {exc}"
+            ) from exc
 
         logger.info(
             "heber_reader_silver_read",
@@ -853,9 +877,11 @@ class HeberReader:
             table = dataset_obj.to_table(filter=scan_filter)
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_gold_read_failed", path=str(scan_path), exc_info=True)
-            return pd.DataFrame()
+        except (pa.lib.ArrowInvalid, OSError) as exc:
+            logger.error("heber_reader_gold_read_failed", path=str(scan_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(
+                f"Read of {dataset!r} failed at {scan_path} — files are present but unreadable: {exc}"
+            ) from exc
 
         logger.info(
             "heber_reader_gold_read",
@@ -1035,9 +1061,9 @@ class HeberReader:
             table = dataset_obj.to_table(filter=scan_filter, columns=columns)
             table = _coerce_dict_columns_to_string(table)
             return table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
-            return pd.DataFrame()
+        except (pa.lib.ArrowInvalid, OSError) as exc:
+            logger.error("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
+            raise HeberReadError(f"Read of failed at {path} — files are present but unreadable: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Gold version discovery
