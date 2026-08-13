@@ -23,7 +23,7 @@ logger = structlog.get_logger(__name__)
 TARGET_FILE_SIZE = settings.silver_target_file_size_mb * 1024 * 1024
 
 # Maximum files to compact in a single pass to prevent OOM on large partitions.
-MAX_FILES_PER_BATCH = 50
+MAX_FILES_PER_BATCH = 1000
 
 # Maximum total compressed bytes to read in a single compaction batch.
 # Feeds with large embedded JSON (e.g. option_chain_snapshot with chain_json) can
@@ -290,14 +290,37 @@ class Compactor:
         if len(sized_files) <= 1:
             return None
 
+        size_cache = {path: size for path, size in sized_files}
         small_files = [path for path, size in sized_files if 0 < size < TARGET_FILE_SIZE]
         skipped_empty = [path for path, size in sized_files if size == 0]
         for empty_path in skipped_empty:
             logger.warning("compactor_skip_empty_file", path=str(empty_path))
+
+        # A file larger than the whole batch budget can never share a batch, and
+        # the budget loop below always admits its first candidate — so one of
+        # these used to fill the batch alone, get discarded by the `<= 1` gate,
+        # and leave the partition unchanged. The next scan then repeated it
+        # forever: 297 massive_taq_* partitions were capped this way every day
+        # for a week without a single merge. Excluding them up front lets the
+        # compactable remainder through.
+        oversized = [p for p in small_files if size_cache[p] > MAX_BATCH_COMPRESSED_BYTES]
+        if oversized:
+            logger.info(
+                "compactor_skip_oversized_files",
+                partition=str(partition_path),
+                skipped_files=len(oversized),
+                budget_bytes=MAX_BATCH_COMPRESSED_BYTES,
+            )
+            small_files = [p for p in small_files if p not in set(oversized)]
+
         if len(small_files) <= 1:
             return None
 
-        # Cap batch size to prevent OOM on partitions with many small files.
+        # Guard against pathological fan-out, but let the byte budget below be
+        # the real memory bound. Capping by count alone throttled the common
+        # case badly: a trading day lands ~274 files averaging 12 KB — 3.3 MB
+        # total, two orders of magnitude inside the budget — and draining 50 per
+        # hourly cycle left five-day-old partitions still holding 273 parts.
         if len(small_files) > MAX_FILES_PER_BATCH:
             logger.info(
                 "compactor_batch_capped",
@@ -306,9 +329,6 @@ class Compactor:
                 batch_size=MAX_FILES_PER_BATCH,
             )
             small_files = small_files[:MAX_FILES_PER_BATCH]
-
-        # Build size cache from already-computed sizes to avoid repeated stat() calls.
-        size_cache = {path: size for path, size in sized_files}
 
         # Cap total compressed bytes to prevent OOM on feeds with large embedded data
         # (e.g. option_chain_snapshot chain_json expands ~6x from compressed size).
