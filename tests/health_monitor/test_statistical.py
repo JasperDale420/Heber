@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from heber.health_monitor.checks.statistical import run_statistical_checks
 from heber.health_monitor.models import Severity, Status
+from heber.reader import HeberReader
 from tests.health_monitor.conftest import (
     MARKET_OPEN_DT,
     TRADING_DAY,
     WEEKEND_DAY,
     make_check_context,
+    make_store_mock,
 )
 
 
@@ -24,7 +28,7 @@ def _make_ctx(
     tmp_path: Path,
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
-    reader: MagicMock | None = None,
+    reader: MagicMock | HeberReader | None = None,
 ):
     return make_check_context(tmp_path, calendar=calendar, store=store, reader=reader)
 
@@ -45,6 +49,28 @@ def _silver_df(n: int = 100, null_pct: float = 0.0, mean: float = 50.0, std: flo
         df.loc[null_indices, "price"] = np.nan
 
     return df
+
+
+def _write_bars_day(root: Path, day: date, *, rows: int, include_end_of_day: bool = False) -> None:
+    """Write one Silver ``bars`` day partition of per-minute equity rows.
+
+    ``include_end_of_day`` appends a row on the last representable microsecond
+    of the day, so an exclusive upper bound in the read window would drop it.
+    """
+    ts = list(pd.date_range(f"{day.isoformat()}T13:30:00Z", periods=rows, freq="1min"))
+    if include_end_of_day:
+        ts.append(pd.Timestamp(f"{day.isoformat()}T23:59:59.999999Z"))
+    frame = pd.DataFrame(
+        {
+            "ts_event": ts,
+            "ts_available": ts,
+            "instrument_key": ["equity:AAPL"] * len(ts),
+            "close": [150.0 + i * 0.01 for i in range(len(ts))],
+        }
+    )
+    part = root / "silver" / "feed=bars" / "instrument_type=equity" / f"dt={day.isoformat()}"
+    part.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pandas(frame), str(part / "data.parquet"))
 
 
 def _baseline_df(feed: str, col: str, mean: float, stddev: float, null_pct: float = 0.01) -> pd.DataFrame:
@@ -234,3 +260,37 @@ async def test_read_failure_does_not_abort_other_feeds(
 
     assert any(r.status == Status.ERROR and r.feed == "bars" for r in results)
     assert any(r.status == Status.PASS and r.feed == "flow_alerts" for r in results)
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.statistical._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.statistical._silver_feeds", return_value=["bars"])
+async def test_intraday_rows_produce_results_through_real_reader(
+    mock_feeds: MagicMock, mock_now: MagicMock, tmp_path: Path
+) -> None:
+    """The audit must see a normal intraday trading day, and only that day.
+
+    Bars carry a ``ts_event`` per minute, so a day window that collapses to a
+    single instant matches nothing and the feed is skipped as "no data" — the
+    audit then reports nothing at all for the primary equity feed.
+
+    A neighbouring day is written too: it must be pruned away, so the profiled
+    row count proves the window neither under- nor over-selects. The final row
+    sits on the last representable microsecond of the day, pinning the upper
+    bound as inclusive.
+    """
+    _write_bars_day(tmp_path, TRADING_DAY, rows=59, include_end_of_day=True)
+    _write_bars_day(tmp_path, date(2026, 3, 26), rows=10)
+
+    store = make_store_mock()
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path), store=store)
+    results = await run_statistical_checks(ctx, check_date=TRADING_DAY)
+
+    assert [r for r in results if r.feed == "bars"], "audit produced no result for bars"
+    assert any(r.check_name == "statistical_null_rate" and r.feed == "bars" for r in results)
+
+    # The profiled row count proves the window neither under- nor over-selects:
+    # 59 intraday rows plus the end-of-day boundary row, and nothing from the
+    # neighbouring day.
+    profiled = store.write_baseline.call_args[0][0]
+    assert set(profiled.loc[profiled["feed"] == "bars", "count"]) == {60}

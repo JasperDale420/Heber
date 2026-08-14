@@ -70,6 +70,10 @@ async def run_statistical_checks(ctx: CheckContext, check_date: date | None = No
 
     results: list[CheckResult] = []
     today_str = today.isoformat()
+    # Span the whole day. Both ends of a bare (date, date) range resolve to
+    # midnight, which only matches rows landing exactly on that instant —
+    # every intraday feed reads as empty and gets skipped as "no data".
+    day_window = (f"{today_str}T00:00:00+00:00", f"{today_str}T23:59:59.999999+00:00")
     null_threshold = ctx.settings.health_null_rate_threshold
 
     # Load trailing baselines
@@ -91,7 +95,7 @@ async def run_statistical_checks(ctx: CheckContext, check_date: date | None = No
 
     for feed in _silver_feeds():
         try:
-            df = ctx.reader.read_silver(feed, time_range=(today_str, today_str))
+            df = ctx.reader.read_silver(feed, time_range=day_window, prune_by_dt=True)
         except Exception as exc:
             # A read failure is reported as an ERROR result rather than skipped:
             # a feed that contributes no results at all is indistinguishable
