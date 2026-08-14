@@ -144,8 +144,9 @@ def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = N
     base = Path(root)
     if not base.exists():
         return False
-    search = _scoped_dt_dirs(base, dt_range) if dt_range else [base]
-    for scope in search or [base]:
+    scoped = _scoped_dt_dirs(base, dt_range) if dt_range else None
+    search = [base] if scoped is None else scoped
+    for scope in search:
         for f in scope.rglob("*.parquet"):
             if f.name.startswith("._") or f.name.endswith(".tmp"):
                 continue
@@ -159,8 +160,19 @@ def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = N
     return False
 
 
-def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path]:
-    """Partition directories overlapping ``dt_range``, or [] if none are found.
+def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path] | None:
+    """Partition directories overlapping ``dt_range``.
+
+    Returns the matching directories, an empty list when the dataset *is*
+    ``dt=``-partitioned but none of its partitions fall in range, and ``None``
+    when it has no ``dt=`` partitioning at all.
+
+    That three-way answer matters: the caller falls back to walking everything
+    when this finds nothing, which is right for an unpartitioned layout and
+    badly wrong for a partitioned one — asking production ``feed=bars`` for a
+    month before its data begins collected all 5,967 files in the feed, in
+    165.7s, rather than none. The scan predicate then dropped every row, so the
+    result was correct and merely cost a full-feed walk per empty chunk.
 
     ``dt=`` sits directly under the dataset root when a caller scopes by
     ``instrument_type``, and one level lower when it does not, so both depths
@@ -169,17 +181,22 @@ def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path]:
     property the existing ``prune_by_dt`` scan predicate relies on.
     """
     lo, hi = dt_range
-    matched: list[Path] = []
+    seen_any = False
     for pattern in ("dt=*", "*/dt=*"):
+        matched: list[Path] = []
         for candidate in base.glob(pattern):
             if candidate.name.startswith("._") or not candidate.is_dir():
                 continue
+            seen_any = True
             value = candidate.name.removeprefix("dt=")
             if lo <= value <= hi:
                 matched.append(candidate)
+        # Keep probing the deeper pattern when the shallow one held `dt=`
+        # directories but none in range — returning early there would hide data
+        # in a layout carrying partitions at both depths.
         if matched:
-            break
-    return matched
+            return matched
+    return [] if seen_any else None
 
 
 def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = None) -> list[str]:
@@ -231,7 +248,16 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
 
     if dt_range is not None:
         scoped = _scoped_dt_dirs(base, dt_range)
-        if scoped:
+        # Loose `*.parquet` sitting directly under the feed root alongside
+        # `dt=` directories are not collected on this path. Heber's writers
+        # always partition (`writer/utils.get_partition_key`), so such files do
+        # not occur; an unpartitioned dataset takes the None branch below.
+        #
+        # None means the dataset has no `dt=` partitioning, so fall through to
+        # the full walk. An empty list means it does and nothing matched, which
+        # is an answer — walking the whole feed to then filter every row out is
+        # what made each empty chunk of a historical read cost a full-feed scan.
+        if scoped is not None:
             files: list[str] = []
             for partition in scoped:
                 files.extend(_parquet_files_in(partition))
