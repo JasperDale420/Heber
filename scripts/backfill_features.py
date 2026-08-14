@@ -318,15 +318,45 @@ async def backfill_date(
     return processed, skipped, errors
 
 
-def fill_nulls_from_silver(write: bool = False) -> None:
+def read_canonical_feature_partitions(dates: list[str] | None = None) -> pd.DataFrame:
+    """Read canonical Gold feature partitions, one explicit file per date.
+
+    Reads each partition's ``data.parquet`` directly rather than handing the
+    tree to a dataset scanner. Every partition carries a zero-byte
+    ``data.parquet.lock`` beside its data file, and ``HeberReader`` does not
+    filter ``*.lock`` — it collects the file list with ``rglob`` and then
+    returns an empty frame when the scan fails, so a whole-tree read silently
+    yielded nothing. Naming the files also keeps the ``_quarantine/`` subtree
+    out of the read regardless of which scanner is used.
+    """
+    if dates is None:
+        dates = sorted(d.name.replace("dt=", "") for d in GOLD_FEATURES.iterdir() if d.name.startswith("dt="))
+
+    frames: list[pd.DataFrame] = []
+    for dt_str in dates:
+        out_file = GOLD_FEATURES / f"dt={dt_str}" / "data.parquet"
+        if not out_file.exists():
+            logger.warning("No Gold feature partition for date", date=dt_str)
+            continue
+        try:
+            frames.append(pd.read_parquet(out_file))
+        except Exception as exc:
+            logger.warning("Failed to read Gold feature partition", date=dt_str, error=str(exc))
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def fill_nulls_from_silver(write: bool = False, dates: list[str] | None = None) -> None:
     """Fill null GEX/VEX/market_tide fields in existing Gold features from Silver data.
 
-    Reads all Gold meta_label_features partitions, identifies rows with null
-    GEX/VEX/market_tide fields, and fills them using asof-joins against
-    Silver greek_exposure and market_tide feeds.
-    """
-    from heber.reader import HeberReader
+    Identifies rows with null GEX/VEX/market_tide fields and fills them using
+    asof-joins against the Silver greek_exposure and market_tide feeds, which
+    are captured intraday and so remain point-in-time correct for a past date.
 
+    Args:
+        write: Persist the filled rows instead of reporting a dry run.
+        dates: Restrict to these partitions. Defaults to every canonical partition.
+    """
     print("\n" + "=" * 70)
     print("FILL NULLS FROM SILVER")
     print("=" * 70)
@@ -335,13 +365,7 @@ def fill_nulls_from_silver(write: bool = False) -> None:
         print("No Gold meta_label_features found.")
         return
 
-    # Read via HeberReader: a raw ds.dataset() walk picks up the zero-byte
-    # data.parquet.lock files each partition carries and fails the open.
-    try:
-        gold_df = HeberReader().read_parquet_dataset(path=GOLD_FEATURES)
-    except Exception as e:
-        print(f"Failed to read Gold features: {e}")
-        return
+    gold_df = read_canonical_feature_partitions(dates)
 
     if gold_df.empty:
         print("Gold features dataset is empty.")
@@ -426,7 +450,7 @@ async def main() -> None:
 
     # Handle --fill-nulls mode separately
     if args.fill_nulls:
-        fill_nulls_from_silver(write=args.write)
+        fill_nulls_from_silver(write=args.write, dates=args.dates or None)
         return
 
     print("=" * 70)

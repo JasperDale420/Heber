@@ -126,6 +126,14 @@ class EnrichmentAuthFailure(RuntimeError):  # noqa: N818
 QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE = "enrichment_skipped_stale"
 QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE = "greeks_no_point_in_time_source"
 
+# Enrichment recovered after the fact from a Silver feed rather than captured
+# live. The values are point-in-time correct — the asof joins honour
+# ts_available — but they are derived from the stored feed rather than the
+# provider response the live path reads, so a training run may want to treat
+# them separately.
+QUALITY_FLAG_MARKET_TIDE_FROM_SILVER = "market_tide_recovered_from_silver"
+QUALITY_FLAG_GEX_FROM_SILVER = "gex_recovered_from_silver"
+
 
 class _Unset:
     """Sentinel distinguishing "argument omitted" from an explicit ``None``."""
@@ -1308,13 +1316,45 @@ def backfill_uw_fields(
     df = gold_df.copy()
 
     # Ensure alert_time is datetime for asof join
-    if "alert_time" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["alert_time"]):
-        df["alert_time"] = pd.to_datetime(df["alert_time"], utc=True)
+    if "alert_time" in df.columns:
+        df["alert_time"] = _as_utc_nanoseconds(df["alert_time"])
 
     df = _backfill_gex_vex(df, reader, gex_tolerance)
     df = _backfill_market_tide(df, reader, tide_tolerance)
 
     return df
+
+
+def _append_quality_flag(df: pd.DataFrame, idx: object, flag: str) -> None:
+    """Append a provenance flag to one row's ``quality_flags`` list, in place.
+
+    Reading a Parquet list column back yields ``numpy.ndarray`` cells, not
+    lists, so the existing flags must be recognised through that type too —
+    otherwise appending one flag silently discards every flag already on the
+    row, and rows lose the ``greeks_no_point_in_time_source`` marker that keeps
+    them out of the all-Greeks-null quarantine.
+    """
+    import numpy as np
+
+    if "quality_flags" not in df.columns:
+        df["quality_flags"] = [[] for _ in range(len(df))]
+    current = df.at[idx, "quality_flags"]
+    flags = list(current) if isinstance(current, list | tuple | np.ndarray) else []
+    if flag not in flags:
+        flags.append(flag)
+    df.at[idx, "quality_flags"] = flags
+
+
+def _as_utc_nanoseconds(series: pd.Series) -> pd.Series:
+    """Coerce a timestamp column to tz-aware UTC at nanosecond resolution.
+
+    ``merge_asof`` rejects join keys whose resolutions differ, and the two sides
+    arrive from different readers: Parquet keeps microseconds while several
+    Silver paths yield nanoseconds. Normalizing both sides keeps the asof join
+    working regardless of which reader produced the frame.
+    """
+    converted = pd.to_datetime(series, utc=True)
+    return converted.astype("datetime64[ns, UTC]")
 
 
 def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str) -> pd.DataFrame:
@@ -1352,10 +1392,10 @@ def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str)
         else:
             gex_silver["_safe_time"] = gex_silver["ts_event"]
 
-        # Ensure tz-aware timestamps
+        # Ensure tz-aware timestamps at a resolution merge_asof will accept
         for col in ["_safe_time", "ts_event"]:
-            if col in gex_silver.columns and gex_silver[col].dt.tz is None:
-                gex_silver[col] = gex_silver[col].dt.tz_localize("UTC")
+            if col in gex_silver.columns:
+                gex_silver[col] = _as_utc_nanoseconds(gex_silver[col])
 
         gex_silver = gex_silver.sort_values("_safe_time")
         df_sorted = df.sort_values("alert_time")
@@ -1377,13 +1417,18 @@ def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str)
             orig_idx = idx_row.index
             if orig_idx not in df.index:
                 continue
+            recovered = False
             if pd.isna(df.at[orig_idx, "gex"]) and pd.notna(idx_row.call_gamma):
                 df.at[orig_idx, "gex"] = float(idx_row.call_gamma)
+                recovered = True
             if pd.isna(df.at[orig_idx, "vex"]):
                 cv = idx_row.call_vanna if pd.notna(idx_row.call_vanna) else 0.0
                 pv = idx_row.put_vanna if pd.notna(idx_row.put_vanna) else 0.0
                 if pd.notna(idx_row.call_vanna) or pd.notna(idx_row.put_vanna):
                     df.at[orig_idx, "vex"] = float(cv) + float(pv)
+                    recovered = True
+            if recovered:
+                _append_quality_flag(df, orig_idx, QUALITY_FLAG_GEX_FROM_SILVER)
 
         df = df.drop(columns=["_ik"], errors="ignore")
 
@@ -1407,11 +1452,25 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
     t_min = null_rows["alert_time"].min()
     t_max = null_rows["alert_time"].max()
 
+    # The provider's net_call_premium / net_put_premium are stored in Silver
+    # under their mapped names (see FIELD_MAPPINGS in ingest_contracts) — the
+    # values are the net figures despite the "total_" prefix, which is why the
+    # put column is negative.
     tide_silver = reader.read_silver(
         dataset="market_tide",
         time_range=(t_min, t_max),
-        columns=["ts_event", "ts_available", "net_call_premium", "net_put_premium", "sentiment"],
-    )
+        columns=["ts_event", "ts_available", "total_call_premium", "total_put_premium", "sentiment"],
+    ).rename(columns={"total_call_premium": "net_call_premium", "total_put_premium": "net_put_premium"})
+
+    missing_columns = [c for c in ("net_call_premium", "net_put_premium") if c not in tide_silver.columns]
+    if missing_columns:
+        logger.warning(
+            "Skipping market_tide backfill — Silver lacks the expected columns",
+            missing_columns=missing_columns,
+            available_columns=sorted(tide_silver.columns),
+            rows_left_null=int(tide_null_mask.sum()),
+        )
+        return df
 
     if not tide_silver.empty:
         tide_silver = tide_silver.sort_values("ts_event")
@@ -1421,8 +1480,8 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
             tide_silver["_safe_time"] = tide_silver["ts_event"]
 
         for col in ["_safe_time", "ts_event"]:
-            if col in tide_silver.columns and tide_silver[col].dt.tz is None:
-                tide_silver[col] = tide_silver[col].dt.tz_localize("UTC")
+            if col in tide_silver.columns:
+                tide_silver[col] = _as_utc_nanoseconds(tide_silver[col])
 
         tide_silver = tide_silver.sort_values("_safe_time")
         df_sorted = df.sort_values("alert_time")
@@ -1440,13 +1499,32 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
             orig_idx = idx_row.index
             if orig_idx not in df.index:
                 continue
+            recovered = False
             if pd.isna(df.at[orig_idx, "market_tide_net_premium"]):
                 ncp = idx_row.net_call_premium if pd.notna(idx_row.net_call_premium) else 0.0
                 npp = idx_row.net_put_premium if pd.notna(idx_row.net_put_premium) else 0.0
                 if pd.notna(idx_row.net_call_premium) or pd.notna(idx_row.net_put_premium):
-                    df.at[orig_idx, "market_tide_net_premium"] = float(ncp) - float(npp)
-            if pd.isna(df.at[orig_idx, "market_tide_direction"]) and pd.notna(idx_row.sentiment):
-                df.at[orig_idx, "market_tide_direction"] = str(idx_row.sentiment)
+                    # Both legs are already signed net flows, so the market-wide
+                    # net premium is their sum. Subtracting the put leg would add
+                    # its magnitude instead of cancelling it, producing a value
+                    # that is never negative and disagrees with the provider's own
+                    # sentiment on most bars.
+                    df.at[orig_idx, "market_tide_net_premium"] = float(ncp) + float(npp)
+                    recovered = True
+            if pd.isna(df.at[orig_idx, "market_tide_direction"]) and pd.notna(
+                df.at[orig_idx, "market_tide_net_premium"]
+            ):
+                # Derive direction from the premium, as the live path does, rather
+                # than copying the provider's sentiment label. The two disagree on
+                # the occasional degenerate bar — the 2026-08-07 13:30 open print
+                # has both legs sign-inverted — and a row whose premium is positive
+                # while its direction reads "bearish" is contradictory training data.
+                df.at[orig_idx, "market_tide_direction"] = _classify_direction(
+                    float(df.at[orig_idx, "market_tide_net_premium"])
+                )
+                recovered = True
+            if recovered:
+                _append_quality_flag(df, orig_idx, QUALITY_FLAG_MARKET_TIDE_FROM_SILVER)
 
     logger.info(
         "backfill_uw_market_tide",

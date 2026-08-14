@@ -312,6 +312,67 @@ def test_dataset_builder_drops_rows_without_point_in_time_greeks() -> None:
     assert opted_in._apply_filters(df)["alert_id"].tolist() == ["good", "flagged"]
 
 
+def test_appending_a_flag_preserves_flags_read_back_from_parquet(tmp_path) -> None:  # noqa: ANN001
+    """Parquet list columns read back as ndarray, not list.
+
+    If the append helper only recognises lists, adding a provenance flag wipes
+    the row's existing flags — including the one that keeps an all-Greeks-null
+    row out of quarantine.
+    """
+    from heber.watch.features import _append_quality_flag
+
+    path = tmp_path / "part.parquet"
+    pd.DataFrame(
+        {"quality_flags": [[QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE, QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE]]}
+    ).to_parquet(path, index=False)
+
+    df = pd.read_parquet(path)
+    _append_quality_flag(df, df.index[0], "market_tide_recovered_from_silver")
+
+    assert sorted(df.at[df.index[0], "quality_flags"]) == sorted(
+        [
+            QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE,
+            QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE,
+            "market_tide_recovered_from_silver",
+        ]
+    )
+
+
+def test_recovered_tide_direction_is_derived_from_premium_not_provider_label() -> None:
+    """Direction must agree with the premium sign, as it does on the live path.
+
+    The provider's own sentiment label contradicts its legs on the occasional
+    degenerate bar (the 2026-08-07 13:30 open print has both legs sign-inverted),
+    and backward-asof maps the whole open burst onto that one bar — so copying
+    the label would stamp "bearish" onto ~1,500 rows carrying a positive premium.
+    """
+    from heber.watch.features import _classify_direction
+
+    net_call, net_put, provider_sentiment = -931_323.0, 16_438_200.0, "bearish"
+    net_premium = net_call + net_put
+
+    assert net_premium > 0
+    assert _classify_direction(net_premium) == "bullish"
+    assert _classify_direction(net_premium) != provider_sentiment
+
+
+def test_recovered_market_tide_net_premium_matches_provider_sentiment() -> None:
+    """Both tide legs are signed net flows, so the market net premium is their sum.
+
+    Subtracting the put leg adds its magnitude instead of cancelling it, giving
+    a value that is never negative and disagrees with the provider's own
+    sentiment on bearish bars.
+    """
+    # Real shape from Silver market_tide dt=2026-08-06: a bearish bar where the
+    # put leg outweighs the call leg.
+    net_call, net_put, sentiment = 78_065_704.0, -98_024_268.0, "bearish"
+
+    net_premium = net_call + net_put
+
+    assert net_premium < 0
+    assert sentiment == ("bullish" if net_premium > 0 else "bearish")
+
+
 def test_mixed_legacy_and_flagged_partitions_round_trip(tmp_path) -> None:  # noqa: ANN001
     """94 existing partitions have no quality_flags column; new ones do.
 

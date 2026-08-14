@@ -137,6 +137,8 @@ with those fields null, flagged in `quality_flags`:
 |------|---------|
 | `enrichment_skipped_stale` | The alert was older than the bound, so **every** live-only step was skipped: Greeks, `iv_rank`, `gex`/`vex`, `max_pain_*`, `market_tide_*`. Filter on this flag when the model consumes any of those beyond Greeks. |
 | `greeks_no_point_in_time_source` | Greeks specifically are null because no as-of source exists for this alert's timestamp. `MetaLabelDatasetBuilder` **drops these rows by default** (`DatasetConfig.include_unrecoverable_greeks=False`). |
+| `market_tide_recovered_from_silver` | `market_tide_*` was asof-joined from the Silver `market_tide` feed rather than captured live. Point-in-time correct, but derived from the stored feed rather than the provider response the live path reads. |
+| `gex_recovered_from_silver` | `gex`/`vex` was asof-joined from Silver `greek_exposure`. That feed is a daily snapshot, so a recovered value has coarser grain than a live per-alert fetch. |
 
 `heber_watch_enrichment_skipped_stale_total` counts every alert the gate fires
 on, so the live path degrading into flagged rows is visible rather than silent.
