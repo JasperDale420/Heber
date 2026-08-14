@@ -26,7 +26,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from heber.reader.core import HeberReader, _collect_parquet_files
+from heber.reader.core import HeberReader, HeberReadError, _collect_parquet_files
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -980,15 +980,20 @@ class TestReadParquetDatasetEdges:
 class TestSilverReadErrorBranches:
     """read_silver's defensive empty-return branches."""
 
-    def test_corrupt_silver_file_returns_empty(self, tmp_path: Path) -> None:
-        """A corrupt parquet under a Silver feed makes read_silver swallow the
-        ArrowInvalid at read time and return an empty frame."""
+    def test_corrupt_silver_file_raises(self, tmp_path: Path) -> None:
+        """A corrupt parquet under a Silver feed must fail the read, not empty it.
+
+        This asserted the opposite until a zero-byte fragment under
+        `feed=darkpool` silently emptied that entire feed and a Gold
+        regeneration reported `no_data` and exited 0. An unreadable partition
+        and an unwritten one are different answers.
+        """
         d = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-01-15"
         d.mkdir(parents=True, exist_ok=True)
         (d / "corrupt.parquet").write_bytes(b"definitely not parquet")
         reader = HeberReader(tmp_path)
-        df = reader.read_silver("bars")
-        assert df.empty
+        with pytest.raises(HeberReadError):
+            reader.read_silver("bars")
 
     def test_feed_dir_with_only_sidecars_returns_empty(self, tmp_path: Path) -> None:
         """When every candidate file is filtered out, _open_dataset_safe returns
@@ -1002,15 +1007,19 @@ class TestSilverReadErrorBranches:
 
 
 class TestGoldReadErrorBranches:
-    def test_corrupt_gold_file_returns_empty(self, tmp_path: Path) -> None:
-        """A corrupt parquet under a Gold version makes read_gold swallow the
-        read error and return an empty frame."""
+    def test_corrupt_gold_file_raises(self, tmp_path: Path) -> None:
+        """Gold gets the same contract as Silver: unreadable is not empty.
+
+        A dataset whose files cannot be opened must not answer "no data" —
+        that made a corrupt fragment indistinguishable from a version nobody
+        had written, which is how a whole feed went missing unnoticed.
+        """
         part = tmp_path / "gold" / "dataset=feat" / "project=kairos" / "version=v1" / "dt=2026-01-15"
         part.mkdir(parents=True, exist_ok=True)
         (part / "corrupt.parquet").write_bytes(b"not parquet")
         reader = HeberReader(tmp_path)
-        df = reader.read_gold("feat", project="kairos", version="v1")
-        assert df.empty
+        with pytest.raises(HeberReadError):
+            reader.read_gold("feat", project="kairos", version="v1")
 
 
 class TestTimeframeFilter:
