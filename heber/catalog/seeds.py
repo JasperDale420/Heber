@@ -9,11 +9,15 @@ Extracted from scripts/seed_catalog.py so the catalog lifespan can import cleanl
 from __future__ import annotations
 
 import asyncio
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from datetime import date as date_type
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -394,62 +398,134 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
     return count
 
 
-def _count_parquet_rows(dt_dir: Path) -> int:
-    """Sum row counts from Parquet file metadata in a date partition.
+def _list_one_directory(
+    directory: Path, date_str: str | None
+) -> tuple[list[tuple[Path, str | None]], list[tuple[str, Path]], int]:
+    """List a single directory for the partition walk.
 
-    Reads only footer metadata — never loads actual data.
+    ``date_str`` is the ``dt=`` partition this directory sits under, carried
+    down so files inside ``hour=`` sub-partitions are attributed to their date.
+
+    Returns (subdirectories to visit, (date, parquet file) pairs, empty files
+    skipped). Zero-byte Parquet files are skipped by size rather than opened:
+    pyarrow raises ``ArrowInvalid: Parquet file size is 0 bytes`` on them, and
+    the compactor and ``HeberReader`` already filter them the same way.
     """
-
-    def _visible_parquet_files() -> list[Path]:
-        # rglob so hour=* sub-partitions are counted; skip macOS ._ sidecar
-        # files and anything nested inside a ._ sidecar directory.
-        return [
-            pf
-            for pf in dt_dir.rglob("*.parquet")
-            if not any(part.startswith(".") for part in pf.relative_to(dt_dir).parts)
-        ]
+    subdirs: list[tuple[Path, str | None]] = []
+    files: list[tuple[str, Path]] = []
+    skipped_empty = 0
 
     try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        # Fallback: count files if pyarrow not available
-        return len(_visible_parquet_files())
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                # Skips macOS AppleDouble sidecars, both the ._ files and the
+                # ._ directories whose contents must not be counted.
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    match = _DATE_PARTITION_RE.match(entry.name)
+                    subdirs.append((Path(entry.path), match.group(1) if match else date_str))
+                elif date_str is not None and entry.name.endswith(".parquet"):
+                    try:
+                        if entry.stat().st_size == 0:
+                            skipped_empty += 1
+                            continue
+                    except OSError:
+                        # Size unknown is not the same as empty — keep the file
+                        # so the footer read reports why it could not be used.
+                        pass
+                    files.append((date_str, Path(entry.path)))
+    except OSError as exc:
+        logger.warning("catalog_partition_scan_oserror", path=str(directory), error=str(exc)[:200])
 
-    total = 0
-    for pf in _visible_parquet_files():
-        try:
-            meta = pq.read_metadata(pf)
-            total += meta.num_rows
-        except Exception:
-            logger.warning("catalog_parquet_metadata_unreadable", path=str(pf), exc_info=True)
-            continue
-    return total
+    return subdirs, files, skipped_empty
+
+
+def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> tuple[dict[str, list[Path]], int, int]:
+    """Walk a feed directory, mapping each dt= date to the Parquet files under it.
+
+    Returns (files by date, directories listed, empty files skipped). Each level
+    of the tree is listed concurrently, because the cost here is per-open
+    latency on the lakehouse mount rather than CPU.
+    """
+    files_by_date: dict[str, list[Path]] = {}
+    dirs_scanned = 0
+    skipped_empty = 0
+
+    level: list[tuple[Path, str | None]] = [(feed_dir, None)]
+    while level:
+        dirs_scanned += len(level)
+        next_level: list[tuple[Path, str | None]] = []
+        for subdirs, files, empties in pool.map(lambda item: _list_one_directory(*item), level):
+            next_level.extend(subdirs)
+            skipped_empty += empties
+            for date_str, path in files:
+                files_by_date.setdefault(date_str, []).append(path)
+        level = next_level
+
+    return files_by_date, dirs_scanned, skipped_empty
+
+
+def _read_row_count(path: Path) -> int | None:
+    """Row count from a Parquet footer, or None if the footer cannot be read.
+
+    None rather than 0 so an unreadable file is distinguishable from an empty
+    one: both contribute no rows, but only one of them means coverage is now
+    undercounting.
+    """
+    try:
+        return int(pq.read_metadata(path).num_rows)
+    except Exception as exc:
+        # No traceback: a corrupt file is expected debris, and rendering a
+        # stack into every JSON log line cost more than reading the footer.
+        logger.warning("catalog_parquet_metadata_unreadable", path=str(path), error=str(exc)[:200])
+        return None
 
 
 def _scan_partition_dates(feed_dir: Path) -> list[tuple[str, int]] | None:
     """Scan a feed directory for dt= partitions and return per-date row counts.
 
-    Returns a list of (date_str, row_count) tuples — one per date partition found.
-    Row counts are read from Parquet file metadata (footer only, no data loaded).
-    """
-    results: list[tuple[str, int]] = []
-    # rglob is blocking and can be slow on large trees
-    try:
-        for sub in feed_dir.rglob("dt=*"):
-            if not sub.is_dir():
-                continue
-            match = _DATE_PARTITION_RE.match(sub.name)
-            if match:
-                date_str = match.group(1)
-                row_count = _count_parquet_rows(sub)
-                if row_count > 0:
-                    results.append((date_str, row_count))
-    except OSError:
-        logger.warning("catalog_partition_scan_oserror", path=str(feed_dir), exc_info=True)
+    Returns a list of (date_str, row_count) tuples — one per date found, summed
+    across every ``instrument_type=`` and ``hour=`` partition holding that date.
+    Row counts come from Parquet footers; no data is loaded.
 
-    if not results:
-        return None
-    return results
+    The lakehouse sits on an exFAT bind mount where each directory open costs
+    ~28ms and each footer read ~106ms, so this walk — not the database write —
+    is the whole cost of a coverage pass. Both are latency, not bandwidth, so
+    directories are listed a level at a time in parallel and footers are read
+    in parallel. Measured on feed=bars: 4,146 footers in 16.7s rather than the
+    440s a sequential read takes.
+    """
+    started = time.monotonic()
+
+    workers = settings.catalog_coverage_scan_workers
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="coverage-scan") as pool:
+        files_by_date, dirs_scanned, skipped_empty = _walk_partition_files(feed_dir, pool)
+        flat = [(date_str, path) for date_str, paths in files_by_date.items() for path in paths]
+        counts = list(pool.map(_read_row_count, [path for _, path in flat]))
+
+    totals: dict[str, int] = {}
+    unreadable = 0
+    for (date_str, _), rows in zip(flat, counts, strict=True):
+        if rows is None:
+            unreadable += 1
+            continue
+        totals[date_str] = totals.get(date_str, 0) + rows
+
+    results = [(date_str, rows) for date_str, rows in sorted(totals.items()) if rows > 0]
+
+    logger.info(
+        "coverage_feed_scanned",
+        feed=feed_dir.name.removeprefix("feed="),
+        dates=len(results),
+        files=len(flat),
+        dirs=dirs_scanned,
+        skipped_empty=skipped_empty,
+        unreadable=unreadable,
+        elapsed_seconds=round(time.monotonic() - started, 2),
+    )
+
+    return results or None
 
 
 async def seed_coverage_from_disk(session: AsyncSession) -> int:
@@ -482,6 +558,7 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
     # transaction is open while the slow work happens.
     entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
     manifest: list[tuple[str, list[tuple[str, int]]]] = []
+    failed_feeds = 0
 
     for entry in entries:
         # String checks first to avoid stat() on macOS AppleDouble resource fork files
@@ -494,12 +571,21 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
             logger.debug("coverage_scan_skip_stat", path=str(entry), exc_info=True)
             continue
 
-        scan_results = await asyncio.to_thread(_scan_partition_dates, entry)
+        # Per feed, for the same reason Phase 2 commits per feed: one feed that
+        # cannot be walked must not discard every feed behind it and leave
+        # coverage frozen until the staleness alarm fires.
+        try:
+            scan_results = await asyncio.to_thread(_scan_partition_dates, entry)
+        except Exception as exc:
+            failed_feeds += 1
+            logger.warning("coverage_feed_scan_failed", feed=entry.name, error=str(exc)[:200], exc_info=True)
+            continue
+
         if scan_results is None:
             continue
         manifest.append((entry.name.split("=", 1)[1], scan_results))
 
-    logger.info("coverage_scan_complete", feeds=len(manifest))
+    logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds)
 
     # Phase 2 — write. Commit per feed so the transaction is short-lived and a
     # late failure keeps the feeds already recorded instead of discarding the

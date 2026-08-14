@@ -402,6 +402,17 @@ class Settings(BaseSettings):
         default=300,
         description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
     )
+    catalog_coverage_scan_workers: int = Field(
+        default=16,
+        ge=1,
+        le=64,
+        description=(
+            "Threads used to list directories and read Parquet footers during a "
+            "coverage scan. The scan is bound by per-open latency on the lakehouse "
+            "mount, not by CPU or bandwidth, so this is the main tuning knob for "
+            "how long a pass takes; the right value depends on the mount."
+        ),
+    )
 
     # Gold layer paths (used by feature_views/_paths.py)
     gold_root: Path | None = Field(

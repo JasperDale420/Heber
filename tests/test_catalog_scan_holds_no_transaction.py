@@ -108,7 +108,30 @@ async def test_scan_failure_does_not_leave_a_transaction_open(silver: Path, monk
     monkeypatch.setattr(seeds, "_scan_partition_dates", _boom)
     session = _recording_session(order)
 
-    with pytest.raises(OSError):
-        await seeds.seed_coverage_from_disk(session)
+    upserted = await seeds.seed_coverage_from_disk(session)
 
+    assert upserted == 0
     assert "sql" not in order, f"a statement ran despite the scan failing: {order}"
+
+
+async def test_one_feed_failing_does_not_discard_the_others(silver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A feed whose walk raises is logged and skipped; the rest still land.
+
+    Phase 2 already commits per feed so a late failure keeps what was written.
+    Phase 1 needs the same property: without it one exotic error in the first
+    feed throws away every feed behind it, and coverage stays frozen until the
+    staleness alarm fires — the exact outcome this scan exists to avoid.
+    """
+    real_scan = seeds._scan_partition_dates
+
+    def _boom_on_alpha(entry: Path):
+        if entry.name == "feed=alpha":
+            raise RuntimeError("something exotic")
+        return real_scan(entry)
+
+    monkeypatch.setattr(seeds, "_scan_partition_dates", _boom_on_alpha)
+
+    upserted = await seeds.seed_coverage_from_disk(_recording_session([]))
+
+    # beta and gamma survive: 2 feeds x (1 aggregate + 2 per-date rows)
+    assert upserted == 6

@@ -39,6 +39,11 @@ services:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
       - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      # Coverage scan tuning. Both are bound by per-open latency on the
+      # lakehouse mount, so these are the knobs that matter if a pass slows
+      # down; without them listed here the env var never reaches the container.
+      - HEBER_CATALOG_COVERAGE_SCAN_WORKERS=${HEBER_CATALOG_COVERAGE_SCAN_WORKERS:-16}
+      - HEBER_CATALOG_COVERAGE_MAX_AGE_SECONDS=${HEBER_CATALOG_COVERAGE_MAX_AGE_SECONDS:-21600}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

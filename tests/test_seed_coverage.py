@@ -1,7 +1,8 @@
-"""Tests for coverage scanning: _count_parquet_rows, _scan_partition_dates, seed_coverage_from_disk."""
+"""Tests for coverage scanning: _scan_partition_dates, seed_coverage_from_disk."""
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from heber.catalog.seeds import _count_parquet_rows, _scan_partition_dates
+from heber.catalog.seeds import _read_row_count, _scan_partition_dates, _walk_partition_files
 
 
 def _write_parquet(path: Path, num_rows: int) -> None:
@@ -19,44 +20,151 @@ def _write_parquet(path: Path, num_rows: int) -> None:
     pq.write_table(table, path)
 
 
-# ── _count_parquet_rows ──────────────────────────────────────────────────────
+def _partition(base: Path, dt: str = "2024-01-15", itype: str = "equity") -> Path:
+    """Create and return a dt= partition directory under a feed dir."""
+    part = base / f"instrument_type={itype}" / f"dt={dt}"
+    part.mkdir(parents=True, exist_ok=True)
+    return part
 
 
-class TestCountParquetRows:
+def _rows_for(feed_dir: Path, dt: str = "2024-01-15") -> int:
+    """Row count the scan attributes to one date, or 0 if the date is absent."""
+    result = _scan_partition_dates(feed_dir)
+    return dict(result or {}).get(dt, 0)
+
+
+# ── row counting within a partition ──────────────────────────────────────────
+
+
+class TestPartitionRowCounts:
     def test_counts_rows_from_single_file(self, tmp_path: Path) -> None:
-        _write_parquet(tmp_path / "part-00000.parquet", 500)
-        assert _count_parquet_rows(tmp_path) == 500
+        _write_parquet(_partition(tmp_path) / "part-00000.parquet", 500)
+        assert _rows_for(tmp_path) == 500
 
     def test_sums_across_multiple_files(self, tmp_path: Path) -> None:
-        _write_parquet(tmp_path / "part-00000.parquet", 200)
-        _write_parquet(tmp_path / "part-00001.parquet", 300)
-        assert _count_parquet_rows(tmp_path) == 500
-
-    def test_returns_zero_for_empty_dir(self, tmp_path: Path) -> None:
-        assert _count_parquet_rows(tmp_path) == 0
+        part = _partition(tmp_path)
+        _write_parquet(part / "part-00000.parquet", 200)
+        _write_parquet(part / "part-00001.parquet", 300)
+        assert _rows_for(tmp_path) == 500
 
     def test_ignores_non_parquet_files(self, tmp_path: Path) -> None:
-        _write_parquet(tmp_path / "part-00000.parquet", 100)
-        (tmp_path / "metadata.json").write_text("{}")
-        (tmp_path / "_SUCCESS").touch()
-        assert _count_parquet_rows(tmp_path) == 100
+        part = _partition(tmp_path)
+        _write_parquet(part / "part-00000.parquet", 100)
+        (part / "metadata.json").write_text("{}")
+        (part / "_SUCCESS").touch()
+        assert _rows_for(tmp_path) == 100
 
     def test_counts_rows_in_hourly_subpartitions(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path)
         for hour, rows in (("hour=13", 100), ("hour=14", 250)):
-            (tmp_path / hour).mkdir()
-            _write_parquet(tmp_path / hour / "part-00000.parquet", rows)
-        assert _count_parquet_rows(tmp_path) == 350
+            (part / hour).mkdir()
+            _write_parquet(part / hour / "part-00000.parquet", rows)
+        assert _rows_for(tmp_path) == 350
 
     def test_skips_files_inside_sidecar_directories(self, tmp_path: Path) -> None:
-        _write_parquet(tmp_path / "part-00000.parquet", 100)
-        (tmp_path / "._hour=13").mkdir()
-        _write_parquet(tmp_path / "._hour=13" / "part-00000.parquet", 999)
-        assert _count_parquet_rows(tmp_path) == 100
+        part = _partition(tmp_path)
+        _write_parquet(part / "part-00000.parquet", 100)
+        (part / "._hour=13").mkdir()
+        _write_parquet(part / "._hour=13" / "part-00000.parquet", 999)
+        assert _rows_for(tmp_path) == 100
+
+    def test_skips_sidecar_files_beside_real_ones(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path)
+        _write_parquet(part / "part-00000.parquet", 100)
+        _write_parquet(part / "._part-00000.parquet", 999)
+        assert _rows_for(tmp_path) == 100
 
     def test_skips_corrupt_parquet(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path)
+        _write_parquet(part / "good.parquet", 50)
+        (part / "bad.parquet").write_bytes(b"not parquet data")
+        assert _rows_for(tmp_path) == 50
+
+    def test_zero_byte_parquet_is_counted_as_absent(self, tmp_path: Path) -> None:
+        """A zero-byte part file must not change the row count."""
+        part = _partition(tmp_path)
+        _write_parquet(part / "good.parquet", 50)
+        (part / "part-empty.parquet").touch()
+
+        assert _rows_for(tmp_path) == 50
+
+
+class TestWalkPartitionFiles:
+    """The walk decides what is handed to pyarrow, so assert on it directly.
+
+    175 zero-byte part files exist in the lake, 173 of them under feed=quotes.
+    Each cost an open, a raised ArrowInvalid and a full traceback rendered into
+    a JSON log line on every pass. The compactor and HeberReader already skip
+    empty files by size; this scan now does too.
+    """
+
+    def _walk(self, feed_dir: Path) -> tuple[dict[str, list[Path]], int, int]:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            return _walk_partition_files(feed_dir, pool)
+
+    def test_zero_byte_files_are_never_handed_to_pyarrow(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path)
+        _write_parquet(part / "good.parquet", 50)
+        (part / "part-empty.parquet").touch()
+
+        files_by_date, _, skipped_empty = self._walk(tmp_path)
+
+        collected = [p.name for paths in files_by_date.values() for p in paths]
+        assert collected == ["good.parquet"]
+        assert skipped_empty == 1
+
+    def test_reports_counts_for_per_feed_instrumentation(self, tmp_path: Path) -> None:
+        """dirs/files/skipped counts are what the per-feed log line reports."""
+        part = _partition(tmp_path)
+        _write_parquet(part / "a.parquet", 10)
+        _write_parquet(part / "b.parquet", 20)
+
+        files_by_date, dirs_scanned, skipped_empty = self._walk(tmp_path)
+
+        assert list(files_by_date) == ["2024-01-15"]
+        assert len(files_by_date["2024-01-15"]) == 2
+        # feed dir + instrument_type= + dt=
+        assert dirs_scanned == 3
+        assert skipped_empty == 0
+
+    def test_attributes_hourly_files_to_their_date(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path)
+        (part / "hour=13").mkdir()
+        _write_parquet(part / "hour=13" / "part.parquet", 10)
+
+        files_by_date, _, _ = self._walk(tmp_path)
+
+        assert list(files_by_date) == ["2024-01-15"]
+
+    def test_ignores_files_with_no_date_partition_above_them(self, tmp_path: Path) -> None:
+        _write_parquet(tmp_path / "loose.parquet", 10)
+
+        files_by_date, _, skipped_empty = self._walk(tmp_path)
+
+        assert files_by_date == {}
+        assert skipped_empty == 0
+
+
+class TestReadRowCount:
+    """An unreadable footer is distinguishable from a genuinely empty one.
+
+    A file that cannot be read silently contributes zero rows. If a degraded
+    mount made a fraction of footers unreadable, per-date counts would shrink
+    and the only signal would be one warning per file — so the scan reports
+    how many it could not read, not just how many it skipped.
+    """
+
+    def test_returns_row_count_for_a_readable_file(self, tmp_path: Path) -> None:
         _write_parquet(tmp_path / "good.parquet", 50)
+        assert _read_row_count(tmp_path / "good.parquet") == 50
+
+    def test_returns_none_for_an_unreadable_file(self, tmp_path: Path) -> None:
         (tmp_path / "bad.parquet").write_bytes(b"not parquet data")
-        assert _count_parquet_rows(tmp_path) == 50
+        assert _read_row_count(tmp_path / "bad.parquet") is None
+
+    def test_zero_row_file_is_not_reported_as_unreadable(self, tmp_path: Path) -> None:
+        _write_parquet(tmp_path / "empty-but-valid.parquet", 0)
+        assert _read_row_count(tmp_path / "empty-but-valid.parquet") == 0
 
 
 # ── _scan_partition_dates ────────────────────────────────────────────────────
@@ -84,8 +192,14 @@ class TestScanPartitionDates:
         assert result_dict["2024-01-15"] == 100
         assert result_dict["2024-06-30"] == 200
 
-    def test_spans_multiple_instrument_types(self, tmp_path: Path) -> None:
-        """dt= partitions under different instrument_type= dirs are all found."""
+    def test_sums_a_date_across_instrument_types(self, tmp_path: Path) -> None:
+        """One date spanning two instrument_type= dirs is one row, summed.
+
+        Emitting the date twice made `_upsert_coverage` write it twice under
+        the same (dataset_name, instrument_key); the unique constraint means
+        the second write updates the first, so the stored count was whichever
+        instrument type happened to be walked last, not the day's total.
+        """
         feed_dir = tmp_path / "feed=bars"
         feed_dir.mkdir()
 
@@ -96,9 +210,7 @@ class TestScanPartitionDates:
 
         result = _scan_partition_dates(feed_dir)
         assert result is not None
-        # Same date under two instrument types → two entries for "2024-03-01"
-        dates = [d for d, _ in result]
-        assert dates.count("2024-03-01") == 2
+        assert result == [("2024-03-01", 100)]
 
     def test_returns_none_when_no_partitions(self, tmp_path: Path) -> None:
         feed_dir = tmp_path / "feed=empty"
@@ -177,6 +289,7 @@ class TestSeedCoverageFromDisk:
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
             mock_settings.silver_path = tmp_path
+            mock_settings.catalog_coverage_scan_workers = 4
 
             from heber.catalog.seeds import seed_coverage_from_disk
 
@@ -211,6 +324,7 @@ class TestSeedCoverageFromDisk:
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
             mock_settings.silver_path = tmp_path
+            mock_settings.catalog_coverage_scan_workers = 4
 
             from heber.catalog.seeds import seed_coverage_from_disk
 
@@ -233,6 +347,7 @@ class TestSeedCoverageFromDisk:
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
             mock_settings.silver_path = tmp_path
+            mock_settings.catalog_coverage_scan_workers = 4
 
             from heber.catalog.seeds import seed_coverage_from_disk
 
@@ -260,6 +375,7 @@ class TestSeedCoverageFromDisk:
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
             mock_settings.silver_path = tmp_path
+            mock_settings.catalog_coverage_scan_workers = 4
 
             from heber.catalog.seeds import seed_coverage_from_disk
 
