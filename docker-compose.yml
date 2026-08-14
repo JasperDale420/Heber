@@ -268,7 +268,15 @@ services:
       # rows to the very partitions the darkpool/market_regime regeneration has to
       # replace — and Gold writes append without dedup on read. Clear this once the
       # rebuild lands.
-      - HEBER_GOLD_POLLER_DISABLED_PIPELINES=darkpool,market_regime
+      # market_regime stays disabled: its full-history rebuild is parked at
+      # version=staging-v2 pending a max-gap rule for returns spanning the
+      # 2024-2025 daily-bars gap, and a diagnosis of the UVXY quotes read
+      # returning zero rows. Its v1 is untouched and still what reads resolve.
+      - HEBER_GOLD_POLLER_DISABLED_PIPELINES=market_regime
+      # darkpool_features was regenerated into v2, which is what read_gold now
+      # resolves — so the nightly run has to write there too, or the dataset
+      # freezes silently. Every other pipeline keeps HEBER_GOLD_POLLER_VERSION.
+      - HEBER_GOLD_POLLER_PIPELINE_VERSIONS=darkpool=v2
       # EOD reconcile re-pulls missing daily feeds through the Data-Gateway, which
       # runs on a separate compose network — reach it over the host bridge and send
       # the same gateway key heber-watch uses (from .env, never committed). Without
