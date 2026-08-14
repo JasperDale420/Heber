@@ -58,10 +58,16 @@ async def _periodic_discovery_loop() -> None:
     """Background loop that periodically re-scans Silver for new datasets and coverage."""
     interval = settings.catalog_discover_interval_seconds
 
-    # Run an initial scan immediately (non-blocking to startup)
+    # Run an initial scan immediately (non-blocking to startup).
+    #
+    # The first pass of a process counts every partition rather than reusing
+    # recorded counts. Later passes skip partitions nothing has touched since
+    # they were counted, which is what keeps a pass to minutes — but that trust
+    # only holds for rows this scheme wrote, and it means one full
+    # re-verification per container lifetime bounds any mistake in it.
     try:
         async with async_session() as session:
-            await seed_coverage_from_disk(session)
+            await seed_coverage_from_disk(session, reuse_recorded=False)
             logger.info("catalog_initial_coverage_scan_done")
     except Exception:
         logger.exception("catalog_initial_coverage_scan_error")

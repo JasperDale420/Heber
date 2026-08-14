@@ -98,7 +98,7 @@ class TestWalkPartitionFiles:
     empty files by size; this scan now does too.
     """
 
-    def _walk(self, feed_dir: Path) -> tuple[dict[str, list[Path]], int, int]:
+    def _walk(self, feed_dir: Path):
         with ThreadPoolExecutor(max_workers=2) as pool:
             return _walk_partition_files(feed_dir, pool)
 
@@ -107,7 +107,8 @@ class TestWalkPartitionFiles:
         _write_parquet(part / "good.parquet", 50)
         (part / "part-empty.parquet").touch()
 
-        files_by_date, _, skipped_empty = self._walk(tmp_path)
+        walk = self._walk(tmp_path)
+        files_by_date, skipped_empty = walk.files_by_date, walk.skipped_empty
 
         collected = [p.name for paths in files_by_date.values() for p in paths]
         assert collected == ["good.parquet"]
@@ -119,7 +120,8 @@ class TestWalkPartitionFiles:
         _write_parquet(part / "a.parquet", 10)
         _write_parquet(part / "b.parquet", 20)
 
-        files_by_date, dirs_scanned, skipped_empty = self._walk(tmp_path)
+        walk = self._walk(tmp_path)
+        files_by_date, dirs_scanned, skipped_empty = walk.files_by_date, walk.dirs_scanned, walk.skipped_empty
 
         assert list(files_by_date) == ["2024-01-15"]
         assert len(files_by_date["2024-01-15"]) == 2
@@ -132,14 +134,15 @@ class TestWalkPartitionFiles:
         (part / "hour=13").mkdir()
         _write_parquet(part / "hour=13" / "part.parquet", 10)
 
-        files_by_date, _, _ = self._walk(tmp_path)
+        files_by_date = self._walk(tmp_path).files_by_date
 
         assert list(files_by_date) == ["2024-01-15"]
 
     def test_ignores_files_with_no_date_partition_above_them(self, tmp_path: Path) -> None:
         _write_parquet(tmp_path / "loose.parquet", 10)
 
-        files_by_date, _, skipped_empty = self._walk(tmp_path)
+        walk = self._walk(tmp_path)
+        files_by_date, skipped_empty = walk.files_by_date, walk.skipped_empty
 
         assert files_by_date == {}
         assert skipped_empty == 0
@@ -285,6 +288,7 @@ class TestSeedCoverageFromDisk:
         # _upsert_coverage does a select → returns None (new record)
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
+        mock_result.all.return_value = []
         mock_session.execute.return_value = mock_result
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
@@ -321,6 +325,10 @@ class TestSeedCoverageFromDisk:
         # No dt= subdirs
 
         mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_result.all.return_value = []
+        mock_session.execute.return_value = mock_result
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
             mock_settings.silver_path = tmp_path
@@ -343,6 +351,7 @@ class TestSeedCoverageFromDisk:
         mock_session.add = MagicMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
+        mock_result.all.return_value = []
         mock_session.execute.return_value = mock_result
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
@@ -371,6 +380,7 @@ class TestSeedCoverageFromDisk:
         mock_session.add = MagicMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
+        mock_result.all.return_value = []
         mock_session.execute.return_value = mock_result
 
         with patch("heber.catalog.seeds.settings") as mock_settings:
