@@ -682,9 +682,7 @@ class EquityFeaturePipeline:
                 daily_mask = bars["timeframe"] == "1Day"
                 if daily_mask.any():
                     dates = pd.to_datetime(bars["ts_event"], utc=True).dt.date
-                    daily_keys = set(
-                        zip(bars.loc[daily_mask, "instrument_key"], dates[daily_mask], strict=False)
-                    )
+                    daily_keys = set(zip(bars.loc[daily_mask, "instrument_key"], dates[daily_mask], strict=False))
                     covered = pd.Series(
                         list(zip(bars["instrument_key"], dates, strict=False)),
                         index=bars.index,

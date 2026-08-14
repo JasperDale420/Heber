@@ -51,40 +51,51 @@ def _recording_session(order: list[str]) -> MagicMock:
         order.append("sql")
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
+        result.all.return_value = []
         return result
 
     async def _commit():
         order.append("commit")
 
+    async def _rollback():
+        order.append("rollback")
+
     session.execute = AsyncMock(side_effect=_execute)
     session.commit = AsyncMock(side_effect=_commit)
+    session.rollback = AsyncMock(side_effect=_rollback)
     session.add = MagicMock()
     return session
 
 
-async def test_all_scanning_precedes_any_sql(silver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No statement may run until every feed has been walked.
+async def test_no_transaction_is_held_open_across_the_walk(silver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The walk must run with no transaction open.
 
-    While SQL is interleaved with scanning, the transaction opened by the first
-    upsert stays idle across every later scan.
+    The scan reads recorded coverage before walking, so a statement does run
+    first — but it is closed before the walk starts, and nothing else runs
+    until every feed has been walked. Any statement issued *between* the first
+    and last scan would sit idle for the length of the remaining walk, which is
+    what the Postgres idle-in-transaction timeout kills.
     """
     order: list[str] = []
     real_scan = seeds._scan_partition_dates
 
-    def _spy(entry):
+    def _spy(entry, recorded=None):
         order.append("scan")
-        return real_scan(entry)
+        return real_scan(entry, recorded)
 
     monkeypatch.setattr(seeds, "_scan_partition_dates", _spy)
 
     await seeds.seed_coverage_from_disk(_recording_session(order))
 
     assert "scan" in order and "sql" in order, f"nothing happened: {order}"
+    first_scan = min(i for i, step in enumerate(order) if step == "scan")
     last_scan = max(i for i, step in enumerate(order) if step == "scan")
-    first_sql = min(i for i, step in enumerate(order) if step == "sql")
-    assert last_scan < first_sql, (
-        f"SQL ran before scanning finished, so the transaction idles during later scans: {order[: first_sql + 3]}"
-    )
+
+    during_walk = [i for i, step in enumerate(order) if step == "sql" and first_scan < i < last_scan]
+    assert not during_walk, f"SQL ran mid-walk, so a transaction idles across later scans: {order}"
+
+    closed_before_walk = [i for i, step in enumerate(order) if step in ("rollback", "commit") and i < first_scan]
+    assert closed_before_walk, f"the pre-walk read left its transaction open across the walk: {order}"
 
 
 async def test_every_feed_is_still_recorded(silver: Path) -> None:
@@ -101,7 +112,7 @@ async def test_scan_failure_does_not_leave_a_transaction_open(silver: Path, monk
     """A walk that raises must not have started a transaction it cannot finish."""
     order: list[str] = []
 
-    def _boom(_entry):
+    def _boom(_entry, _recorded=None):
         order.append("scan")
         raise OSError("volume vanished mid-scan")
 
@@ -111,7 +122,11 @@ async def test_scan_failure_does_not_leave_a_transaction_open(silver: Path, monk
     upserted = await seeds.seed_coverage_from_disk(session)
 
     assert upserted == 0
-    assert "sql" not in order, f"a statement ran despite the scan failing: {order}"
+    # The pre-walk read is the only statement, and it was closed before the
+    # walk began — nothing is left open for the failure to strand.
+    assert order.count("sql") == 1, f"more than the recorded-coverage read ran: {order}"
+    assert order.index("rollback") < order.index("scan"), f"read not closed before the walk: {order}"
+    assert "commit" not in order, f"a write committed despite the scan failing: {order}"
 
 
 async def test_one_feed_failing_does_not_discard_the_others(silver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,10 +139,10 @@ async def test_one_feed_failing_does_not_discard_the_others(silver: Path, monkey
     """
     real_scan = seeds._scan_partition_dates
 
-    def _boom_on_alpha(entry: Path):
+    def _boom_on_alpha(entry: Path, recorded=None):
         if entry.name == "feed=alpha":
             raise RuntimeError("something exotic")
-        return real_scan(entry)
+        return real_scan(entry, recorded)
 
     monkeypatch.setattr(seeds, "_scan_partition_dates", _boom_on_alpha)
 
