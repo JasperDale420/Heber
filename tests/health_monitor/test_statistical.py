@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from heber.health_monitor.checks.statistical import run_statistical_checks
@@ -183,3 +184,53 @@ async def test_non_trading_day_empty(mock_feeds: MagicMock, mock_now: MagicMock,
     ctx = _make_ctx(tmp_path, calendar=calendar)
     results = await run_statistical_checks(ctx, check_date=WEEKEND_DAY)
     assert results == []
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.statistical._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.statistical._silver_feeds", return_value=["bars"])
+async def test_read_failure_reports_error_result(mock_feeds: MagicMock, mock_now: MagicMock, tmp_path: Path) -> None:
+    """A feed whose read raises must surface as an ERROR result, not vanish.
+
+    Silently skipping the feed leaves the audit reporting nothing at all for
+    it, which is indistinguishable from "the feed is healthy" to anyone
+    reading the health output.
+
+    ``ArrowNotImplementedError`` is the class the real incident raised — an
+    unrecoverable schema conflict that ``read_silver`` deliberately lets
+    propagate rather than flattening into an empty DataFrame.
+    """
+    reader = MagicMock()
+    reader.read_silver = MagicMock(side_effect=pa.lib.ArrowNotImplementedError("Unsupported cast from string to null"))
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_statistical_checks(ctx, check_date=TRADING_DAY)
+
+    errors = [r for r in results if r.status == Status.ERROR]
+    assert len(errors) == 1
+    assert errors[0].feed == "bars"
+    assert errors[0].check_name == "statistical_read"
+    assert "Unsupported cast from string to null" in errors[0].details["error"]
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.statistical._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.statistical._silver_feeds", return_value=["bars", "flow_alerts"])
+async def test_read_failure_does_not_abort_other_feeds(
+    mock_feeds: MagicMock, mock_now: MagicMock, tmp_path: Path
+) -> None:
+    """One unreadable feed must not stop the remaining feeds being audited."""
+
+    def _read(feed: str, **_kwargs: object) -> pd.DataFrame:
+        if feed == "bars":
+            raise OSError("volume unavailable")
+        return _silver_df(n=100, null_pct=0.01)
+
+    reader = MagicMock()
+    reader.read_silver = MagicMock(side_effect=_read)
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_statistical_checks(ctx, check_date=TRADING_DAY)
+
+    assert any(r.status == Status.ERROR and r.feed == "bars" for r in results)
+    assert any(r.status == Status.PASS and r.feed == "flow_alerts" for r in results)

@@ -171,6 +171,35 @@ def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
     return dt
 
 
+# Arrow raises a different exception class per flavour of schema conflict:
+# ``ArrowInvalid`` for dictionary-vs-string and int-vs-float, ``ArrowTypeError``
+# for ``large_string`` vs ``string``, ``ArrowNotImplementedError`` for casts
+# that have no kernel at all (``Unsupported cast from string to null``). All
+# three mean the same thing to us — fragments disagree on a column's type — so
+# they share one recovery path.
+_SCHEMA_CONFLICT_ERRORS = (
+    pa.lib.ArrowInvalid,
+    pa.lib.ArrowNotImplementedError,
+    pa.lib.ArrowTypeError,
+)
+
+
+def _is_null_like(dt: pa.DataType) -> bool:
+    """Return True for a type that carries no values of its own.
+
+    A column that held nothing but nulls when its fragment was written is
+    serialized as Arrow ``null``; an empty list column is serialized as
+    ``list<element: null>``. Both appear in Silver — ``timeframe`` and
+    ``quality_flags`` respectively — and both must lose to whatever concrete
+    type another fragment supplies, because nothing can be cast *into* null.
+    """
+    if pa.types.is_null(dt):
+        return True
+    if pa.types.is_list(dt) or pa.types.is_large_list(dt):
+        return _is_null_like(dt.value_type)
+    return False
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
@@ -183,11 +212,15 @@ def _open_dataset_safe(
     ``EPERM`` or ``ArrowInvalid: Parquet file size is X bytes``.
 
     On the first attempt we let ``pyarrow.dataset`` infer the unified schema.
-    If that fails because fragments disagree on string-family encodings —
-    ``ArrowInvalid`` for dictionary-vs-string, ``ArrowTypeError`` for
-    ``large_string`` vs ``string`` — we manually read the schemas of
-    individual files, fold all string-family types down to plain
-    ``pa.string()``, and re-open the dataset with the explicit schema.
+    If that fails because fragments disagree on their column types we fall back
+    to :func:`_unified_dataset`.
+
+    Note that the open frequently does *not* raise on a conflicted dataset:
+    pyarrow infers the schema from a subset of fragments (one by default), so a
+    disagreement between fragments only surfaces later, when the scan tries to
+    cast a fragment into the inferred type. Callers must therefore route their
+    scan through :func:`_scan_to_table`, which applies the same recovery at
+    scan time.
     """
     file_list = _collect_parquet_files(path)
     if not file_list:
@@ -195,10 +228,26 @@ def _open_dataset_safe(
 
     try:
         return ds.dataset(file_list, format="parquet", partitioning=partitioning)
-    except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError, pa.lib.ArrowTypeError):
+    except _SCHEMA_CONFLICT_ERRORS:
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
-    # Manual schema unification from individual fragment metadata.
+    return _unified_dataset(file_list, partitioning)
+
+
+def _unified_dataset(
+    file_list: list[str],
+    partitioning: ds.Partitioning | None = None,
+) -> ds.Dataset | None:
+    """Re-open ``file_list`` under a schema unified from every fragment.
+
+    Reads each file's physical schema, folds string-family types down to plain
+    ``pa.string()``, widens numeric disagreements, resolves ``null``-typed
+    columns to whichever concrete type another fragment supplies, and re-opens
+    the dataset with that explicit schema so the scanner has a single cast
+    target for every fragment.
+    """
+    if not file_list:
+        return None
     try:
         # Open without partitioning first — purely to enumerate fragments
         # and read their physical schemas. Partition columns are not part
@@ -210,7 +259,7 @@ def _open_dataset_safe(
             try:
                 schemas.append(fragment.physical_schema)
             except Exception:
-                logger.debug("fragment_schema_read_failed", path=str(path), exc_info=True)
+                logger.debug("fragment_schema_read_failed", path=fragment.path, exc_info=True)
                 continue
         if not schemas:
             return None
@@ -238,7 +287,15 @@ def _open_dataset_safe(
                     existing = field_map[field.name]
                     if existing.equals(incoming):
                         continue
-                    if pa.types.is_string(existing) or pa.types.is_string(incoming):
+                    if _is_null_like(existing) and not _is_null_like(incoming):
+                        # ``null`` / ``list<null>`` carry no values, so any
+                        # concrete type from another fragment wins outright —
+                        # null is the one type nothing can be cast *into*.
+                        # Order-independent: whichever side is null-like loses.
+                        field_map[field.name] = incoming
+                    elif _is_null_like(incoming):
+                        continue
+                    elif pa.types.is_string(existing) or pa.types.is_string(incoming):
                         field_map[field.name] = pa.string()
                     elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
                         # int64 vs float64 → widen to float64
@@ -275,7 +332,12 @@ def _open_dataset_safe(
 
         return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
     except Exception:
-        logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
+        logger.warning(
+            "heber_reader_manual_schema_unification_failed",
+            path=os.path.commonpath(file_list),
+            files=len(file_list),
+            exc_info=True,
+        )
         return None
 
 
@@ -379,6 +441,52 @@ def _scan_batched(
         return pa.table(empty_arrays)
 
     return pa.Table.from_batches(batches, schema=batches[0].schema)
+
+
+def _scan_to_table(
+    dataset_obj: ds.Dataset,
+    path: str,
+    partitioning: ds.Partitioning | None = None,
+    *,
+    scan_filter: ds.Expression | None = None,
+    projection: list[str] | None = None,
+    batch_size: int | None = None,
+) -> pa.Table:
+    """Materialize a scan, retrying once under a manually unified schema.
+
+    ``ds.dataset()`` infers its schema from a subset of fragments, so a dataset
+    whose fragments disagree on a column type opens perfectly happily and only
+    fails here, when the scanner tries to cast each fragment into the inferred
+    type. Which fragment "wins" that inference depends on filesystem
+    enumeration order, so the same feed can read fine on one host and fail on
+    another.
+
+    The recovery is the same schema unification :func:`_open_dataset_safe`
+    applies when the *open* fails — reached from the scan side, where these
+    conflicts actually surface.
+    """
+
+    def _scan(target: ds.Dataset) -> pa.Table:
+        if batch_size is not None:
+            return _scan_batched(target, scan_filter, projection, batch_size)
+        return target.to_table(filter=scan_filter, columns=projection)
+
+    try:
+        return _scan(dataset_obj)
+    except _SCHEMA_CONFLICT_ERRORS as exc:
+        logger.info("heber_reader_scan_schema_conflict", path=path)
+        conflict = exc
+
+    # Unify over the fragments this dataset was actually built from, not a
+    # fresh directory walk: re-walking would both repeat the I/O and risk
+    # unifying a different set of files than the scan that just failed, if a
+    # writer landed or removed a file in between.
+    unified = _unified_dataset(list(dataset_obj.files), partitioning)
+    if unified is None:
+        # Unification could not produce a readable dataset. Surface the
+        # original conflict rather than masking it as an empty result.
+        raise conflict
+    return _scan(unified)
 
 
 class HeberReader:
@@ -522,10 +630,14 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            if batch_size is not None:
-                table = _scan_batched(dataset_obj, scan_filter, projection, batch_size)
-            else:
-                table = dataset_obj.to_table(filter=scan_filter, columns=projection)
+            table = _scan_to_table(
+                dataset_obj,
+                str(base_path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+                projection=projection,
+                batch_size=batch_size,
+            )
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
@@ -746,7 +858,12 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter)
+            table = _scan_to_table(
+                dataset_obj,
+                str(scan_path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+            )
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
@@ -928,7 +1045,13 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter, columns=columns)
+            table = _scan_to_table(
+                dataset_obj,
+                str(path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+                projection=columns,
+            )
             table = _coerce_dict_columns_to_string(table)
             return table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
