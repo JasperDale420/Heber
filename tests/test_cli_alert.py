@@ -119,3 +119,56 @@ def _stack_result():
         details={},
         ts_checked=datetime.now(UTC),
     )
+
+
+# --- dead-man heartbeat ------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_a_completed_run_pings_the_heartbeat() -> None:
+    """No ping means the external service alerts — so a healthy run must ping."""
+    with (
+        patch("heber.health_monitor.checks.liveness.run_liveness_checks", new=AsyncMock(return_value=[])),
+        patch("heber.ops.stack_check.run_stack_checks", return_value=[]),
+        patch("heber.cli.DiscordNotifier", return_value=MagicMock(**{"dispatch.return_value": True})),
+        patch("heber.ops.heartbeat.ping") as ping,
+    ):
+        assert _cmd_alert_check(SimpleNamespace()) == 0
+
+    assert ping.call_args.kwargs["ok"] is True
+
+
+@pytest.mark.unit
+def test_a_crashed_run_reports_failure_instead_of_pinging_healthy() -> None:
+    """The alarm dying is exactly what the dead-man exists to catch."""
+    with (
+        patch("heber.ops.stack_check.run_stack_checks", side_effect=RuntimeError("docker exploded")),
+        patch("heber.cli.DiscordNotifier", return_value=MagicMock()),
+        patch("heber.ops.heartbeat.ping") as ping,
+    ):
+        assert _cmd_alert_check(SimpleNamespace()) == 1
+
+    assert ping.call_args.kwargs["ok"] is False
+
+
+@pytest.mark.unit
+def test_a_failed_discord_send_reports_failure() -> None:
+    """A revoked webhook makes every alert vanish silently; the heartbeat is the backstop."""
+    with (
+        patch("heber.health_monitor.checks.liveness.run_liveness_checks", new=AsyncMock(return_value=[])),
+        patch("heber.ops.stack_check.run_stack_checks", return_value=[_stack_result()]),
+        patch("heber.cli.DiscordNotifier", return_value=MagicMock(**{"dispatch.return_value": False})),
+        patch("heber.ops.heartbeat.ping") as ping,
+    ):
+        assert _cmd_alert_check(SimpleNamespace()) == 0
+
+    assert ping.call_args.kwargs["ok"] is False
+
+
+@pytest.mark.unit
+def test_the_alert_heartbeat_is_a_separate_check_from_dataflow_healths() -> None:
+    """One check for both jobs would let a live dataflow-health mask a dead alert-check."""
+    from heber.config import Settings
+
+    s = Settings(_env_file=None, data_root="/tmp", heartbeat_url="https://hc/dataflow")
+    assert s.alert_heartbeat_url != s.heartbeat_url

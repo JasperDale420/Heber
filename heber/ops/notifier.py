@@ -79,6 +79,7 @@ class DiscordNotifier:
         self._client = client
         self.state_path = state_path or default_state_path()
         self._state: dict[str, dict[str, Any]] = self._load_state()
+        self._send_failed = False
 
     # ----- state -----
     def _load_state(self) -> dict[str, dict[str, Any]]:
@@ -95,11 +96,19 @@ class DiscordNotifier:
             logger.warning("alert_state_save_failed", path=str(self.state_path), exc_info=True)
 
     # ----- dispatch -----
-    def dispatch(self, results: list[CheckResult], now: datetime | None = None) -> None:
+    def dispatch(self, results: list[CheckResult], now: datetime | None = None) -> bool:
+        """Send what needs sending. Returns False if any send failed.
+
+        Send failures are swallowed by design so a broken webhook cannot crash
+        the monitor, which also means a revoked or rotated webhook would make
+        every alert vanish silently. Reporting it lets the caller escalate on a
+        channel that does not depend on the same webhook.
+        """
         if not self._enabled or not self._webhook:
-            return
+            return True
         now = now or datetime.now(UTC)
         changed = False
+        self._send_failed = False
         for r in results:
             key = f"{r.check_name}|{r.feed or ''}"
             if r.status in (Status.FAIL, Status.ERROR) and _severity_meets(r.severity, self._min_severity):
@@ -108,6 +117,7 @@ class DiscordNotifier:
                 changed |= self._handle_pass(key, r)
         if changed:
             self._save_state()
+        return not self._send_failed
 
     def _handle_fail(self, key: str, r: CheckResult, now: datetime) -> bool:
         """Accrue a failure; alert once the debounce streak clears. Returns True if state changed."""
@@ -153,6 +163,7 @@ class DiscordNotifier:
         except (httpx.HTTPError, OSError, TypeError, ValueError):
             alerts_sent_total.labels(check_name=check_name, outcome="error").inc()
             logger.error("alert_send_failed", check_name=check_name, exc_info=True)
+            self._send_failed = True
             return False
         finally:
             if self._client is None:
