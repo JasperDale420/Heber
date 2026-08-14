@@ -30,6 +30,7 @@ import structlog
 
 from heber.config import Settings
 from heber.health_monitor.models import CheckResult, Severity, Status
+from heber.ops.dataflow_health import _MOUNT_SENTINEL_NAME, _PROM_METRIC_RE
 
 logger = structlog.get_logger(__name__)
 
@@ -52,6 +53,31 @@ EXPECTED_CONTAINERS: tuple[str, ...] = (
     "data-gateway-redis",
 )
 
+# Containers that bind-mount the lakehouse volume and therefore cannot start
+# while it is absent. When the volume goes, all of these fail as a direct
+# consequence — reporting each one turns one incident into a fan-out, so their
+# stopped/missing noise is folded into the single stack_volume alert.
+#
+# heber-postgres is listed explicitly: it mounts ${HEBER_VOLUME_ROOT}/postgres/data,
+# so a name-prefix rule that reasoned about "the heber app services" would miss
+# the one whose failure cascades furthest via depends_on: service_healthy.
+#
+# Membership is opt-in, so a container nobody classified is still reported. A
+# forgotten alert is recoverable; a silently suppressed one is not.
+VOLUME_DEPENDENT_CONTAINERS: frozenset[str] = frozenset(
+    {
+        "heber-postgres",
+        "heber-catalog",
+        "heber-consumer",
+        "heber-backfill-consumer",
+        "heber-compactor",
+        "heber-watch",
+        "heber-gold-poller",
+        "heber-dataflow-health",
+        "heber-health-monitor",
+    }
+)
+
 # A container that has restarted this many times AND started very recently is
 # looping rather than recovering. `restarting` status is the direct signal; this
 # catches the window between two restarts, when status reads `running`.
@@ -64,6 +90,18 @@ FLAP_RECENT_START = timedelta(minutes=10)
 # the alarm permanently rather than for one cycle.
 DOCKER_TIMEOUT_SECONDS = 15.0
 COVERAGE_TIMEOUT_SECONDS = 10.0
+INGEST_TIMEOUT_SECONDS = 10.0
+
+# The consumer's Prometheus port, published to loopback in docker-compose.yml.
+CONSUMER_METRICS_URL = "http://127.0.0.1:9090/"
+_INGEST_PROGRESS_METRIC = "heber_consumer_last_xread_success_unixtime"
+
+# How long the consumer may go without a successful XREADGROUP round-trip before
+# this is an outage rather than a blip. data-gateway-redis takes ~77s to reload
+# its AOF, and the consumer now waits that out instead of crash-looping — so the
+# bound has to clear a routine restart comfortably while still catching a stall
+# well inside one 5-minute alert-check cycle.
+INGEST_STALE_SECONDS = 300.0
 
 # Every line heber_docker_watchdog.sh emits when it actually repairs something.
 # Its "docker daemon unavailable — skipping" line is timestamped too but is not
@@ -93,6 +131,14 @@ class CoverageProbe:
     """Result of GET /health/coverage. ``status`` is None when unreachable."""
 
     status: str | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class IngestProbe:
+    """Last successful XREADGROUP round-trip. ``last_success`` is None when unreadable."""
+
+    last_success: datetime | None
     detail: str
 
 
@@ -184,6 +230,7 @@ def evaluate(
     watchdog_actions: Sequence[str],
     volume_mounted: bool,
     now: datetime,
+    ingest: IngestProbe | None = None,
 ) -> list[CheckResult]:
     """Turn collected stack facts into check results. Pure."""
     results: list[CheckResult] = [
@@ -191,7 +238,12 @@ def evaluate(
             "stack_volume",
             "volume",
             ok=volume_mounted,
-            message="Lakehouse volume is mounted" if volume_mounted else "Lakehouse volume is NOT mounted",
+            message=(
+                "Lakehouse volume is mounted"
+                if volume_mounted
+                else "Ingest unavailable: lakehouse volume is NOT mounted — every heber service "
+                "bind-mounts it, so their failures below are suppressed as consequences of this"
+            ),
             now=now,
         )
     ]
@@ -209,10 +261,14 @@ def evaluate(
     # One dead daemon would otherwise fan out into a per-container alert for
     # every expected name, plus a coverage alert. Report the root cause only.
     if daemon_up:
-        results.extend(_container_results(expected, containers, now=now))
+        results.extend(_container_results(expected, containers, now=now, volume_mounted=volume_mounted))
         # A missing volume already explains a failing catalog; don't page twice.
         if coverage is not None and volume_mounted:
             results.append(_coverage_result(coverage, now=now))
+        # Same reasoning: with the volume gone the consumer cannot write, so a
+        # stalled ingest is that outage, not a second one.
+        if ingest is not None and volume_mounted:
+            results.append(_ingest_result(ingest, now=now))
 
     results.append(
         _result(
@@ -233,7 +289,11 @@ def evaluate(
 
 
 def _container_results(
-    expected: Sequence[str], containers: Sequence[ContainerState], *, now: datetime
+    expected: Sequence[str],
+    containers: Sequence[ContainerState],
+    *,
+    now: datetime,
+    volume_mounted: bool = True,
 ) -> list[CheckResult]:
     by_name = {c.name: c for c in containers}
     results: list[CheckResult] = []
@@ -241,7 +301,15 @@ def _container_results(
         state = by_name.get(name)
         status = state.status if state else "missing"
         running = status == "running"
-        if status == "paused":
+        paused = status == "paused"
+
+        # With the volume gone, a volume-dependent container being down is the
+        # volume alert restated. A PAUSE is not — nothing about an absent mount
+        # pauses a container, so that stays visible as its own incident.
+        if not volume_mounted and name in VOLUME_DEPENDENT_CONTAINERS and not paused:
+            continue
+
+        if paused:
             message = f"Container {name} is PAUSED (reports 'Up' but processes nothing)"
         elif running:
             message = f"Container {name} is running"
@@ -259,6 +327,40 @@ def _container_results(
         )
         results.append(_flapping_result(name, state, now=now))
     return results
+
+
+def _ingest_result(ingest: IngestProbe, *, now: datetime) -> CheckResult:
+    """Page when the consumer stops making Redis round-trips.
+
+    The container healthcheck reads the run-loop heartbeat, which the loop
+    refreshes on every iteration including ones that caught a Redis error and
+    slept — so a consumer spinning against a dead upstream reports healthy
+    indefinitely. Now that startup retries instead of crash-looping, this gauge
+    is the only thing that distinguishes waiting-for-Redis from consuming.
+    """
+    if ingest.last_success is None:
+        return _result(
+            "stack_ingest",
+            "ingest",
+            ok=False,
+            message=f"Consumer ingest progress unreadable: {ingest.detail}",
+            now=now,
+        )
+    age = (now - ingest.last_success).total_seconds()
+    ok = age <= INGEST_STALE_SECONDS
+    return _result(
+        "stack_ingest",
+        "ingest",
+        ok=ok,
+        message=(
+            f"Consumer is reading the stream (last success {age:.0f}s ago)"
+            if ok
+            else f"Consumer has not read the stream in {age:.0f}s "
+            f"(limit {INGEST_STALE_SECONDS:.0f}s) — it may be alive but stalled on Redis"
+        ),
+        now=now,
+        age_seconds=round(age, 1),
+    )
 
 
 def _flapping_result(name: str, state: ContainerState | None, *, now: datetime) -> CheckResult:
@@ -338,6 +440,45 @@ def probe_docker(names: Sequence[str]) -> tuple[bool, list[ContainerState]]:
     return bool(states), states
 
 
+def probe_ingest(metrics_url: str = CONSUMER_METRICS_URL) -> IngestProbe:
+    """Scrape the consumer's last successful XREADGROUP timestamp.
+
+    Read from the host rather than inside the stack, for the same reason the rest
+    of this module is: a check that runs in the container it watches goes down
+    with it. The port is published to loopback in docker-compose.yml.
+    """
+    try:
+        resp = httpx.get(metrics_url, timeout=INGEST_TIMEOUT_SECONDS)
+    except (httpx.HTTPError, OSError) as exc:
+        return IngestProbe(last_success=None, detail=f"{type(exc).__name__}: {exc}"[:200])
+    if resp.status_code != 200:
+        return IngestProbe(last_success=None, detail=f"HTTP {resp.status_code}")
+
+    for line in resp.text.splitlines():
+        if not line.startswith(_INGEST_PROGRESS_METRIC):
+            continue
+        match = _PROM_METRIC_RE.match(line.strip())
+        if match is None or match.group("name") != _INGEST_PROGRESS_METRIC:
+            continue
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        # 0 is the gauge's untouched default: the process is up but has not
+        # completed a read yet. Reporting that as 1970 would be a false outage.
+        if value <= 0:
+            return IngestProbe(last_success=None, detail="no successful read yet")
+        return IngestProbe(last_success=datetime.fromtimestamp(value, tz=UTC), detail="")
+
+    # Also the shape of a stale deploy: the gauge only exists in images built
+    # after it was added, so say so rather than let it read as a dead consumer.
+    return IngestProbe(
+        last_success=None,
+        detail=f"{_INGEST_PROGRESS_METRIC} absent from metrics output "
+        "(consumer image predates this metric? rebuild heber-consumer)",
+    )
+
+
 def probe_coverage(catalog_url: str) -> CoverageProbe:
     """GET /health/coverage, derived from the catalog origin.
 
@@ -369,18 +510,35 @@ def read_watchdog_actions(log_path: Path, *, now: datetime, lookback: timedelta)
     return parse_watchdog_actions(text, now=now, lookback=lookback)
 
 
+def _volume_is_mounted(settings: Settings) -> bool:
+    """Test the sentinel file, not the directory.
+
+    A broken mount can leave the mount POINT behind as an empty placeholder
+    directory, so ``is_dir()`` answers yes for a volume that is gone — which is
+    the failure this check exists to catch. The sentinel lives on the real
+    volume and disappears with it. ``stat`` itself raises EPERM on a zombie
+    mount, so that is treated as absent rather than allowed to propagate.
+    """
+    try:
+        return (Path(settings.data_root) / _MOUNT_SENTINEL_NAME).exists()
+    except OSError:
+        return False
+
+
 def run_stack_checks(settings: Settings, *, now: datetime | None = None) -> list[CheckResult]:
     """Collect stack facts and evaluate them. Never raises."""
     now = now or datetime.now(UTC)
     daemon_up, containers = probe_docker(EXPECTED_CONTAINERS)
-    volume_mounted = Path(settings.data_root).is_dir()
+    volume_mounted = _volume_is_mounted(settings)
     coverage = probe_coverage(settings.health_catalog_url) if daemon_up and volume_mounted else None
+    ingest = probe_ingest() if daemon_up and volume_mounted else None
     watchdog_log = Path(__file__).resolve().parents[2] / "logs" / "native" / "docker-watchdog.out.log"
     return evaluate(
         daemon_up=daemon_up,
         expected=EXPECTED_CONTAINERS,
         containers=containers,
         coverage=coverage,
+        ingest=ingest,
         watchdog_actions=read_watchdog_actions(
             watchdog_log,
             now=now,
