@@ -17,7 +17,6 @@ built in ``tmp_path`` with hive partitions ``feed=X/instrument_type=Y/dt=Z``.
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -26,6 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import heber.reader.core as core_module
 from heber.reader.core import HeberReader, HeberReadError, _collect_parquet_files
 
 # ---------------------------------------------------------------------------
@@ -638,26 +638,9 @@ class TestStringEncodingUnification:
 # ---------------------------------------------------------------------------
 
 
-_NUMERIC_UNIFICATION_BUG = (
-    "REAL READER BUG (W2 finding): when two fragments in the SAME dt partition "
-    "disagree on a numeric column (int64 vs float64), _open_dataset_safe's manual "
-    "schema-unification fallback never runs. pyarrow's ds.dataset() construction "
-    "does NOT raise — it lazily infers int64 from the first fragment — so the "
-    "try/except around ds.dataset(...) in _open_dataset_safe is never tripped. The "
-    "conflict only surfaces later at dataset_obj.to_table() inside read_silver, "
-    "which catches ArrowInvalid and returns an EMPTY DataFrame, silently dropping "
-    "all rows for the feed. The fallback at core.py lines ~191-272 was written to "
-    "widen int64<->float64 to float64 (see its own 'Float value X was truncated' "
-    "comment) but is dead for this case. Fix would require materializing/validating "
-    "the merged schema inside _open_dataset_safe (e.g. a probe scan or eager "
-    "unify_schemas) rather than relying on lazy ds.dataset() construction to raise."
-)
-
-
 class TestManualSchemaUnification:
-    """When two fragments disagree on a column's type badly enough that
-    pyarrow's auto-merge raises (e.g. int64 vs float64), ``_open_dataset_safe``
-    is *intended* to fall back to reading each fragment's physical schema and
+    """When two fragments disagree on a column's type (e.g. int64 vs float64),
+    the reader falls back to reading each fragment's physical schema and
     widening to a common type. These tests force that conflict and assert the
     merged read.
     """
@@ -670,11 +653,6 @@ class TestManualSchemaUnification:
             "n": n,
         }
 
-    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
-    # but not on Linux (CI and the production Docker image), where pyarrow widens
-    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
-    # CI; the reason still documents the macOS manifestation.
-    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_int64_and_float64_fragments_widen_to_float(self, tmp_path: Path) -> None:
         int_schema = pa.schema(
             [
@@ -712,11 +690,6 @@ class TestManualSchemaUnification:
         # Both values readable; int fragment widened to float losslessly.
         assert set(df["n"]) == {5.0, 2.5}
 
-    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
-    # but not on Linux (CI and the production Docker image), where pyarrow widens
-    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
-    # CI; the reason still documents the macOS manifestation.
-    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_filter_pushdown_survives_numeric_unification(self, tmp_path: Path) -> None:
         """instrument_key pruning still works through the manual-unification
         fallback (the unified schema must retain the partition column)."""
@@ -804,6 +777,179 @@ class TestManualSchemaUnification:
         assert "dt" in df.columns
         assert set(df["dt"]) == {"2026-01-15", "2026-01-16"}
         assert len(df) == 3
+
+
+def _pin_file_order(monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+    """Force ``_collect_parquet_files`` to enumerate ``first`` ahead of the rest.
+
+    pyarrow infers a dataset's schema from a *subset* of fragments (one, by
+    default), so which physical file lands first in the list decides the
+    inferred type of a conflicting column. On a real volume that order comes
+    from ``rglob`` — i.e. from filesystem enumeration order, which is arbitrary
+    and differs between machines. Pinning it here makes both orderings
+    reproducible instead of leaving the assertion at the mercy of the FS.
+    """
+    real = core_module._collect_parquet_files
+
+    def ordered(*args: object, **kwargs: object) -> list[str]:
+        files = real(*args, **kwargs)
+        return sorted(files, key=lambda f: (Path(f).name != first, Path(f).name))
+
+    monkeypatch.setattr(core_module, "_collect_parquet_files", ordered)
+
+
+class TestNullTypedColumnUnification:
+    """A column that was entirely null when one fragment was written lands on
+    disk as Arrow ``null`` type, while another fragment types it ``string``.
+
+    pyarrow infers the dataset schema lazily from a subset of fragments, so the
+    conflict does not surface at ``ds.dataset()`` — it surfaces at scan time as
+    ``ArrowNotImplementedError: Unsupported cast from string to null``. That is
+    not an ``ArrowInvalid``, so it escapes the read-path handler entirely and
+    propagates to the caller, taking the whole feed's read down with it.
+
+    Each case runs with the null fragment enumerated first (the broken
+    direction — inferred type is ``null``, so the concrete fragment cannot be
+    cast into it) and last (the benign direction), because production hits
+    whichever order the filesystem happens to yield.
+    """
+
+    def _row(self, key: str, hours: int, value: object, column: str) -> dict:
+        return {
+            "ts_event": _ts(hours),
+            "ts_available": _ts(hours + 1),
+            "instrument_key": key,
+            column: value,
+        }
+
+    def _schemas(self, column: str, concrete: pa.DataType, null_type: pa.DataType) -> tuple[pa.Schema, pa.Schema]:
+        base = [
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("instrument_key", pa.string()),
+        ]
+        return pa.schema([*base, (column, null_type)]), pa.schema([*base, (column, concrete)])
+
+    def _build(
+        self,
+        tmp_path: Path,
+        column: str,
+        concrete: pa.DataType,
+        value: object,
+        key: str = "equity:AAPL",
+        null_type: pa.DataType | None = None,
+        null_value: object = None,
+    ) -> None:
+        null_schema, concrete_schema = self._schemas(column, concrete, null_type or pa.null())
+        # Both fragments share one dt partition so pyarrow must reconcile them.
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row("equity:AAPL", 0, null_value, column)],
+            file_name="a_null.parquet",
+            schema=null_schema,
+        )
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row(key, 1, value, column)],
+            file_name="b_concrete.parquet",
+            schema=concrete_schema,
+        )
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_null_and_string_fragments_unify(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        assert set(df["note"].dropna()) == {"hello"}
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_null_and_float_fragments_unify(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+        """null vs a non-string concrete type must widen to that type too."""
+        self._build(tmp_path, "vwap", pa.float64(), 12.5)
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        assert df["vwap"].dropna().tolist() == [pytest.approx(12.5)]
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_filter_pushdown_survives_null_unification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        self._build(tmp_path, "note", pa.string(), "hello", key="equity:TSLA")
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars", instrument_keys=["equity:TSLA"])
+        assert len(df) == 1
+        assert df["instrument_key"].iloc[0] == "equity:TSLA"
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_list_of_null_and_list_of_string_fragments_unify(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        """An empty list column serializes as ``list<element: null>``.
+
+        Silver's ``quality_flags`` is a ``list<string>``; a fragment where every
+        row had an empty list lands on disk as ``list<element: null>``. That is
+        not a null *type* at the top level, so it needs the same resolution one
+        level down — it raises the identical "Unsupported cast from string to
+        null" as the scalar case.
+        """
+        self._build(
+            tmp_path,
+            "quality_flags",
+            pa.list_(pa.string()),
+            ["ok"],
+            null_type=pa.list_(pa.null()),
+            null_value=[],
+        )
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        flags = [list(v) for v in df["quality_flags"] if v is not None and len(v) > 0]
+        assert flags == [["ok"]]
+
+    def test_unresolvable_conflict_surfaces_instead_of_reading_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When unification cannot rescue the read, the failure must surface as
+        a ``HeberReadError`` — not be flattened into an empty DataFrame.
+
+        An empty result is indistinguishable from "this feed had no data
+        today", which is exactly how the bars audit stayed silently broken.
+        """
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, "a_null.parquet")
+        monkeypatch.setattr(core_module, "_unified_dataset", lambda *_a, **_k: None)
+
+        with pytest.raises(HeberReadError, match="unreadable"):
+            HeberReader(tmp_path).read_silver("bars")
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_asof_leakage_gate_survives_null_unification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        """The ``ts_available`` anti-leakage predicate must still be enforced
+        when the read is served from the unified-schema retry.
+
+        Recovering from a schema conflict must never widen what a
+        point-in-time read can see: the concrete fragment here is available at
+        ``_ts(2)``, so an asof of ``_ts(1)`` must exclude it.
+        """
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, first)
+        reader = HeberReader(tmp_path)
+
+        # Fragment ts_available values are _ts(1) (null frag) and _ts(2).
+        visible = reader.read_silver("bars", asof_time=_ts(1))
+        assert len(visible) == 1
+        assert visible["note"].isna().all(), "future-available row leaked into an asof read"
+
+        # Past the later fragment's availability, both rows are visible.
+        assert len(reader.read_silver("bars", asof_time=_ts(2))) == 2
 
 
 # ---------------------------------------------------------------------------
