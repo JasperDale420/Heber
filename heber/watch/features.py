@@ -13,7 +13,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ from heber.ml.datasets import persist_features_to_gold as persist_features_frame
 from heber.ops.metrics import (
     record_watch_gateway_request,
     record_watch_gateway_success,
+    watch_enrichment_skipped_stale_total,
 )
 from heber.watch.gateway import (
     coerce_optional_float,
@@ -115,6 +116,25 @@ class EnrichmentAuthFailure(RuntimeError):  # noqa: N818
     """Raised when repeated upstream authentication failures require fail-fast behavior."""
 
 
+# Provenance flags written to Gold meta_label_features.quality_flags.
+#
+# The gateway routes behind Greeks, IV rank, GEX, max pain and market tide all
+# answer "as of now" and accept no as-of timestamp, so they cannot reconstruct
+# a past observation. Rather than stamping present-day values onto an old alert
+# (look-ahead) or dropping the row entirely, the row is written with those
+# fields null and flagged, so a training run can exclude or down-weight it.
+QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE = "enrichment_skipped_stale"
+QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE = "greeks_no_point_in_time_source"
+
+
+class _Unset:
+    """Sentinel distinguishing "argument omitted" from an explicit ``None``."""
+
+
+# Omitted => take the bound from settings. Explicit None => no bound at all.
+_UNSET = _Unset()
+
+
 @dataclass
 class AlertFeatures:
     """Features captured at alert arrival time for meta-model training.
@@ -198,6 +218,11 @@ class AlertFeatures:
     # skipped for a known reason like a missing gateway URL). Lets callers
     # distinguish a fully-enriched row from a partially-enriched one.
     enrichment_failures: list[str] = field(default_factory=list)
+
+    # Provenance written to Gold. Records why a field is absent when the reason
+    # is structural rather than a transient failure — see the
+    # QUALITY_FLAG_* constants.
+    quality_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
@@ -326,6 +351,7 @@ class AlertFeatureExtractor:
         auth_failure_window_seconds: float = 120.0,
         request_timeout_seconds: float = 10.0,
         request_timeout_option_chain_seconds: float = 30.0,
+        live_enrichment_max_age: timedelta | None | _Unset = _UNSET,
     ):
         """Initialize extractor.
 
@@ -344,6 +370,9 @@ class AlertFeatureExtractor:
             request_timeout_seconds: Default HTTP timeout for enrichment requests.
             request_timeout_option_chain_seconds: HTTP timeout for option chain requests
                 (higher because large chains like QQQ/SPY can take 6-7s to respond).
+            live_enrichment_max_age: Maximum alert age for which live-only enrichment
+                steps may run. Omit to take the bound from settings; pass ``None`` to
+                disable the bound entirely (deliberate backlog replay only).
         """
         self.redis = redis
         self.gateway_url = gateway_url
@@ -361,6 +390,10 @@ class AlertFeatureExtractor:
         self.auth_failure_window_seconds = max(1.0, float(auth_failure_window_seconds))
         self.request_timeout_seconds = max(1.0, float(request_timeout_seconds))
         self.request_timeout_option_chain_seconds = max(1.0, float(request_timeout_option_chain_seconds))
+        if isinstance(live_enrichment_max_age, _Unset):
+            configured_minutes = settings.watch_live_enrichment_max_age_minutes
+            live_enrichment_max_age = timedelta(minutes=configured_minutes) if configured_minutes > 0 else None
+        self.live_enrichment_max_age = live_enrichment_max_age
         self._request_semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         self._response_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
         self._auth_failure_timestamps: deque[float] = deque()
@@ -464,20 +497,58 @@ class AlertFeatureExtractor:
         # Run each enrichment step in order. Steps share the same signature and
         # mutate/return the features object, so a named table keeps the chain
         # readable and makes the execution order explicit.
-        for _name, enrich_step in self._enrichment_steps():
+        #
+        # Live-only steps are skipped for an alert older than the configured
+        # bound: their gateway routes answer "as of now", so running them would
+        # write present-day market state onto a past observation.
+        skipped_live_steps: list[str] = []
+        alert_age = self._alert_age(alert_time)
+        stale = self.live_enrichment_max_age is not None and alert_age > self.live_enrichment_max_age
+        for name, live_only, enrich_step in self._enrichment_steps():
+            if stale and live_only:
+                skipped_live_steps.append(name)
+                continue
             features = await enrich_step(features)
+
+        if skipped_live_steps:
+            features.quality_flags.append(QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE)
+            if "greeks" in skipped_live_steps:
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE)
+            watch_enrichment_skipped_stale_total.inc()
+            logger.warning(
+                "Skipped live-only enrichment for stale alert",
+                alert_id=features.alert_id,
+                age_seconds=int(alert_age.total_seconds()),
+                max_age_seconds=int(self.live_enrichment_max_age.total_seconds())
+                if self.live_enrichment_max_age
+                else None,
+                skipped_steps=skipped_live_steps,
+            )
 
         return features
 
-    def _enrichment_steps(self) -> tuple[tuple[str, EnrichmentStep], ...]:
-        """Ordered table of enrichment steps applied during ``extract()``."""
+    @staticmethod
+    def _alert_age(alert_time: datetime) -> timedelta:
+        """Wall-clock age of an alert. Naive timestamps are treated as UTC."""
+        if alert_time.tzinfo is None:
+            alert_time = alert_time.replace(tzinfo=UTC)
+        return datetime.now(UTC) - alert_time
+
+    def _enrichment_steps(self) -> tuple[tuple[str, bool, EnrichmentStep], ...]:
+        """Ordered table of enrichment steps applied during ``extract()``.
+
+        The middle element marks a step as live-only: its gateway route takes no
+        as-of parameter and therefore always reports the present. ``market_context``
+        is not live-only because it queries dated stock bars derived from
+        ``alert_time``.
+        """
         return (
-            ("market_context", self._enrich_market_context),
-            ("greeks", self._enrich_greeks),
-            ("iv_rank", self._enrich_iv_rank),
-            ("gex", self._enrich_gex),
-            ("max_pain", self._enrich_max_pain),
-            ("market_tide", self._enrich_market_tide),
+            ("market_context", False, self._enrich_market_context),
+            ("greeks", True, self._enrich_greeks),
+            ("iv_rank", True, self._enrich_iv_rank),
+            ("gex", True, self._enrich_gex),
+            ("max_pain", True, self._enrich_max_pain),
+            ("market_tide", True, self._enrich_market_tide),
         )
 
     def _to_market_time(self, dt: datetime) -> datetime:
@@ -1156,8 +1227,12 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
     return AlertFeatures.from_dict(json.loads(data))
 
 
-def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
-    """Persist one feature row into Gold meta-label feature partitions."""
+def feature_row_for_gold(features: AlertFeatures) -> dict:
+    """Convert extracted features into a Gold meta_label_features row.
+
+    Every writer of this dataset must go through here, or partitions end up with
+    divergent column sets that null each other out when concatenated.
+    """
     row = dict(features.__dict__)
 
     # enrichment_failures is in-memory observability only — it is not part of
@@ -1166,7 +1241,7 @@ def persist_features_to_gold(features: AlertFeatures, output_path: Path | None =
 
     # Add Gold contract required fields: instrument_key, ts_event, ts_available.
     # instrument_key: derive from occ_symbol (option) or underlying (equity).
-    if "instrument_key" not in row or row.get("instrument_key") is None:
+    if row.get("instrument_key") is None:
         occ = row.get("occ_symbol")
         if occ:
             row["instrument_key"] = f"option:{occ}"
@@ -1174,14 +1249,19 @@ def persist_features_to_gold(features: AlertFeatures, output_path: Path | None =
             row["instrument_key"] = f"equity:{row.get('underlying', row.get('symbol', 'UNKNOWN'))}"
 
     # ts_event: use alert_time (point when the feature was observed).
-    if "ts_event" not in row or row.get("ts_event") is None:
+    if row.get("ts_event") is None:
         row["ts_event"] = row.get("alert_time")
 
     # ts_available: current wall-clock time when the feature row is written.
-    if "ts_available" not in row or row.get("ts_available") is None:
+    if row.get("ts_available") is None:
         row["ts_available"] = datetime.now(UTC)
 
-    features_df = pd.DataFrame([row])
+    return row
+
+
+def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
+    """Persist one feature row into Gold meta-label feature partitions."""
+    features_df = pd.DataFrame([feature_row_for_gold(features)])
     persist_features_frame_to_gold(
         features_df=features_df,
         output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,

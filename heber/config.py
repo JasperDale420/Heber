@@ -103,6 +103,7 @@ class WatchConfig(NamedTuple):
     gateway_legacy_fallback_enabled: bool
     enrichment_timeout_seconds: float
     enrichment_option_chain_timeout_seconds: float
+    live_enrichment_max_age_minutes: int
     enrichment_backfill_enabled: bool
     enrichment_backfill_interval: int
     enrichment_backfill_lookback_days: int
@@ -430,6 +431,15 @@ class Settings(BaseSettings):
         le=120.0,
         description="HTTP timeout for option chain enrichment requests (seconds); "
         "higher than the default because large chains (QQQ, SPY) can take 6-7s",
+    )
+    watch_live_enrichment_max_age_minutes: int = Field(
+        default=60,
+        ge=0,
+        description="Maximum age of an alert, in minutes, for which live-only enrichment "
+        "(option chain Greeks, IV rank, GEX, max pain, market tide) may still be applied. "
+        "Those gateway routes answer 'as of now' and accept no as-of timestamp, so beyond "
+        "this bound they are skipped and the row is flagged instead of being stamped with "
+        "present-day values. 0 disables the gate (deliberate backlog replay only).",
     )
 
     # Enrichment backfill scanner
@@ -883,6 +893,7 @@ class Settings(BaseSettings):
             gateway_legacy_fallback_enabled=self.watch_gateway_legacy_fallback_enabled,
             enrichment_timeout_seconds=self.watch_enrichment_timeout_seconds,
             enrichment_option_chain_timeout_seconds=self.watch_enrichment_option_chain_timeout_seconds,
+            live_enrichment_max_age_minutes=self.watch_live_enrichment_max_age_minutes,
             enrichment_backfill_enabled=self.enrichment_backfill_enabled,
             enrichment_backfill_interval=self.enrichment_backfill_interval,
             enrichment_backfill_lookback_days=self.enrichment_backfill_lookback_days,

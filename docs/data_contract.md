@@ -102,13 +102,57 @@ consumers treat them as source-data limitations, not pipeline bugs.
 | `iv_rank` | `dt=2026-07-20`, `dt=2026-07-21` | The 07-20/07-21 EOD publishes were evicted from the live stream (overload). The `/api/stock/{sym}/iv-rank` endpoint returns HTTP 422 for a historical `date` param, so the client falls back to the **current** snapshot (`gateway/providers/uw/options.py:383`). A re-pull can only ever produce today's value — verified: a 2026-07-22 backfill re-landed iv_rank only under `dt=2026-07-22`, never 07-20/07-21. | **No** — permanent |
 | `iv_term_structure` | `dt=2026-07-20`, `dt=2026-07-21` | Same eviction event. The provider method takes **no date param** — snapshot-only, returns the current term structure regardless of the requested range (`gateway/core/backfill.py:248`). The lost dates cannot be re-fetched. | **No** — permanent |
 
-Only 07-20 and 07-21 are lost; both feeds resume from the next daily snapshot.
+| `option_chain_snapshot` | `dt=2026-08-06`, `dt=2026-08-07` | Two-day hole between `dt=2026-08-05` and `dt=2026-08-10`; Silver `quotes` has the same hole while every other feed kept ingesting. | **No** — permanent |
+
+Only 07-20 and 07-21 are lost for the IV feeds; both resume from the next daily snapshot.
 Other feeds hit by the same overload (`oi_change`, `darkpool`,
 `greek_exposure`, `historic_option_volume`, `short_data`, `ftd`) **are**
 recoverable — their endpoints accept a `date_str` param (or are trailing-series
 pulls), so per-date backfill restores them. See
 `docs/operations/postmortem-2026-07-19-power-outage.md` and the
 2026-07-21 CHANGELOG entries for the overload remediation.
+
+### Gold `meta_label_features`: Greeks are not reconstructable for past dates
+
+Option Greeks (`delta`, `gamma`, `theta`, `vega`, `iv`) and the `iv_rank`, `gex`,
+`vex`, `max_pain_*` and `market_tide_*` enrichments are captured live at alert
+arrival. **No historical source exists for any of them:**
+
+- The gateway's `/alpaca/options/chain/{underlying}` route accepts only
+  expiration and strike filters — no as-of parameter — and is backed by Alpaca's
+  live-only `/v1beta1/options/snapshots/{underlying}`.
+- The genuinely historical option routes (`/options/{contract}/bars`,
+  `/options/{contract}/quotes/historical`, `/options/trades`) carry NBBO and
+  OHLC only, with no Greeks and no IV.
+- Heber's own `option_chain_snapshot` feed does carry per-contract Greeks inside
+  `chain_json`, but it covers only SPY/QQQ/IWM (≈3.6% of alerted underlyings on
+  a representative day) and has no data at all for 2026-08-06 / 2026-08-07.
+
+Consequently a backfill of a past date **cannot** produce point-in-time Greeks.
+`AlertFeatureExtractor` refuses to run those enrichments beyond
+`HEBER_WATCH_LIVE_ENRICHMENT_MAX_AGE_MINUTES` (default 60) and writes the row
+with those fields null, flagged in `quality_flags`:
+
+| Flag | Meaning |
+|------|---------|
+| `enrichment_skipped_stale` | The alert was older than the bound, so **every** live-only step was skipped: Greeks, `iv_rank`, `gex`/`vex`, `max_pain_*`, `market_tide_*`. Filter on this flag when the model consumes any of those beyond Greeks. |
+| `greeks_no_point_in_time_source` | Greeks specifically are null because no as-of source exists for this alert's timestamp. `MetaLabelDatasetBuilder` **drops these rows by default** (`DatasetConfig.include_unrecoverable_greeks=False`). |
+
+`heber_watch_enrichment_skipped_stale_total` counts every alert the gate fires
+on, so the live path degrading into flagged rows is visible rather than silent.
+
+`gex`/`vex`/`market_tide_*` remain recoverable point-in-time from Silver
+`greek_exposure` and `market_tide` via `backfill_uw_fields()`
+(`scripts/backfill_features.py --fill-nulls`). `iv_rank` is not: Silver
+`iv_rank` is a once-daily snapshot stamped at midnight UTC of the trade date, so
+applying it to an intraday alert would itself be an intraday look-ahead.
+
+**Rows predating this contract carry no flag.** Their write lag
+(`ts_available - ts_event`) exposes the same problem: a lag of hours or days
+means the Greeks on that row were fetched long after the alert. Eleven of the 94
+partitions have a median lag above 12 hours (largest: `dt=2026-03-11`, 2,963
+rows at ~18h; `dt=2026-03-20`, `dt=2026-03-27`, `dt=2026-07-17` at ~65h), and
+partitions written before `ts_available` existed cannot be assessed at all.
 
 ## Silver Schemas (Parquet Writer)
 

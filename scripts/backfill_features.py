@@ -3,18 +3,28 @@
 Reads Silver flow_alerts, reconstructs FlowAlertRecord objects, runs them through
 AlertFeatureExtractor.extract(), and persists results to Gold.
 
+Point-in-time correctness: the gateway routes behind Greeks, IV rank, GEX, max
+pain and market tide answer "as of now" and take no as-of timestamp, so for a
+past date they cannot be reconstructed. AlertFeatureExtractor refuses to run
+them for an alert older than the configured freshness bound and flags the row
+via ``quality_flags`` instead of stamping it with present-day values. Dated
+stock bars (returns, realized vol) still enrich correctly, and GEX/VEX/tide can
+be recovered afterwards from Silver with ``--fill-nulls``.
+
 Usage:
     # Dry run (report only):
     uv run python scripts/backfill_features.py
 
-    # With Data Gateway enrichment (full features):
+    # With Data Gateway enrichment (dated market context; live-only steps
+    # skipped and flagged for anything past the freshness bound):
     HEBER_WATCH_GATEWAY_URL=http://localhost:8080 uv run python scripts/backfill_features.py --write
-
-    # Without enrichment (base features only, NaN for Greeks/vol/returns):
-    uv run python scripts/backfill_features.py --write
 
     # Specific dates:
     uv run python scripts/backfill_features.py --write --dates 2026-01-28 2026-01-29
+
+    # Re-extract alerts that already have feature rows (e.g. to replace rows
+    # whose Greeks were fetched long after the alert):
+    uv run python scripts/backfill_features.py --write --dates 2026-08-07 --overwrite
 """
 
 from __future__ import annotations
@@ -23,7 +33,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +51,7 @@ from heber.watch.features import (
     AlertFeatureExtractor,
     AlertFeatures,
     backfill_uw_fields,
+    feature_row_for_gold,
 )
 
 logger = structlog.get_logger(__name__)
@@ -227,8 +238,18 @@ async def backfill_date(
     dt_str: str,
     extractor: AlertFeatureExtractor,
     write: bool = False,
+    overwrite: bool = False,
 ) -> tuple[int, int, int]:
     """Backfill features for a single date.
+
+    Args:
+        dt_str: Partition date (YYYY-MM-DD).
+        extractor: Feature extractor to run each alert through.
+        write: Persist to Gold instead of reporting a dry run.
+        overwrite: Also re-extract alerts that already have a feature row. The
+            Gold write dedups on alert_id keeping the last row, so this replaces
+            them — needed to repair rows whose enrichment ran long after the
+            alert.
 
     Returns:
         (processed, skipped, errors) counts.
@@ -249,7 +270,7 @@ async def backfill_date(
         return 0, 0, 0
 
     # Filter to alerts that have outcomes but no features
-    needed_ids = outcome_ids - existing_ids
+    needed_ids = outcome_ids if overwrite else outcome_ids - existing_ids
     to_process = [r for r in silver_rows if r.get("event_id") in needed_ids]
 
     logger.info(
@@ -260,6 +281,7 @@ async def backfill_date(
         needed=len(needed_ids),
         silver_available=len(silver_rows),
         to_process=len(to_process),
+        overwrite=overwrite,
     )
 
     processed = 0
@@ -271,7 +293,7 @@ async def backfill_date(
         try:
             alert = silver_row_to_flow_alert(row)
             features: AlertFeatures = await extractor.extract(alert)
-            batch_features.append(dict(features.__dict__))
+            batch_features.append(feature_row_for_gold(features))
             processed += 1
         except Exception as exc:
             errors += 1
@@ -303,7 +325,7 @@ def fill_nulls_from_silver(write: bool = False) -> None:
     GEX/VEX/market_tide fields, and fills them using asof-joins against
     Silver greek_exposure and market_tide feeds.
     """
-    import pyarrow.dataset as ds
+    from heber.reader import HeberReader
 
     print("\n" + "=" * 70)
     print("FILL NULLS FROM SILVER")
@@ -313,10 +335,10 @@ def fill_nulls_from_silver(write: bool = False) -> None:
         print("No Gold meta_label_features found.")
         return
 
-    # Read all Gold features
+    # Read via HeberReader: a raw ds.dataset() walk picks up the zero-byte
+    # data.parquet.lock files each partition carries and fails the open.
     try:
-        gold_ds = ds.dataset(str(GOLD_FEATURES), format="parquet", partitioning=ds.partitioning(flavor="hive"))
-        gold_df = gold_ds.to_table().to_pandas()
+        gold_df = HeberReader().read_parquet_dataset(path=GOLD_FEATURES)
     except Exception as e:
         print(f"Failed to read Gold features: {e}")
         return
@@ -386,6 +408,20 @@ async def main() -> None:
     parser.add_argument("--include-partial", action="store_true", help="Also backfill dates with partial features")
     parser.add_argument("--gateway-url", default=None, help="Data Gateway URL for enrichment")
     parser.add_argument("--fill-nulls", action="store_true", help="Fill null GEX/VEX/tide fields from Silver data")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-extract alerts that already have feature rows (replaces them via dedup-keep-last)",
+    )
+    parser.add_argument(
+        "--max-enrichment-age-hours",
+        type=float,
+        default=None,
+        help="Refuse live-only enrichment (Greeks, IV rank, GEX, max pain, tide) for alerts older "
+        "than this many hours; those fields stay null and the row is flagged. Defaults to "
+        "HEBER_WATCH_LIVE_ENRICHMENT_MAX_AGE_MINUTES. Pass 0 to disable the bound — that "
+        "stamps present-day market state onto past alerts and corrupts training data.",
+    )
     args = parser.parse_args()
 
     # Handle --fill-nulls mode separately
@@ -428,14 +464,32 @@ async def main() -> None:
     gateway_api_key = os.environ.get("HEBER_WATCH_GATEWAY_API_KEY")
 
     if gateway_url:
-        print(f"\nData Gateway: {gateway_url} (full enrichment)")
+        print(f"\nData Gateway: {gateway_url}")
     else:
         print("\nNo Data Gateway — base features only (Greeks/vol/returns will be NaN)")
+
+    extractor_kwargs: dict = {}
+    if args.max_enrichment_age_hours is not None:
+        hours = args.max_enrichment_age_hours
+        extractor_kwargs["live_enrichment_max_age"] = timedelta(hours=hours) if hours > 0 else None
 
     extractor = AlertFeatureExtractor(
         gateway_url=gateway_url,
         gateway_api_key=gateway_api_key,
+        **extractor_kwargs,
     )
+
+    max_age = extractor.live_enrichment_max_age
+    if max_age is None:
+        print(
+            "\n*** WARNING: live-only enrichment bound DISABLED — Greeks/IV rank/GEX/max pain/tide\n"
+            "    will be fetched as of NOW and stamped onto whatever date you backfill. ***"
+        )
+    else:
+        print(
+            f"Live-only enrichment bound: {max_age} "
+            "(older alerts get null Greeks/IV rank/GEX/max pain/tide, flagged in quality_flags)"
+        )
 
     if not args.write:
         print("\n*** DRY RUN — pass --write to persist ***")
@@ -446,7 +500,7 @@ async def main() -> None:
     total_errors = 0
 
     for dt_str in sorted(dates_to_process):
-        processed, skipped, errors = await backfill_date(dt_str, extractor, write=args.write)
+        processed, skipped, errors = await backfill_date(dt_str, extractor, write=args.write, overwrite=args.overwrite)
         total_processed += processed
         total_skipped += skipped
         total_errors += errors
