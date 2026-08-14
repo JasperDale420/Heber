@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No lake file is published before its data is on disk** (`heber/writer/utils.py`, `heber/writer/bronze.py`, `heber/writer/compactor.py`): every writer staged its file under a `.tmp` name and renamed it into place, but none flushed the bytes first. The rename makes the final name visible immediately while the data can still be sitting in the page cache, so an unclean shutdown — a killed Docker VM, a disconnected volume, and this lakehouse lives on a non-journaling exFAT external drive — leaves a **zero-byte file at the published name**. That artifact is not harmless: pyarrow refuses to open it, and one zero-byte `part-*.parquet` under `silver/feed=darkpool/.../dt=2026-08-07/` was enough to make the *entire* darkpool feed read as an empty DataFrame, which silently turned a Gold regeneration into a `no_data` no-op that still exited 0. Writers now flush the staged file to disk, verify a staged Parquet file reopens with the row count that was written, and only then rename it into place; a failed write deletes its staging file instead of leaving an orphan `.tmp` on the volume.
+
+  This covers three publish paths that all had the defect, with one zero-byte artifact already on the volume from each of the first two:
+  - the Silver writer (normal and row-by-row salvage paths) — 174 zero-byte `part-*.parquet` files across `darkpool` and `quotes`;
+  - the compactor, which deletes its source files once the merged file is in place, so publishing a broken merge destroyed the only good copies with it — one zero-byte `compacted-*.parquet` under `feed=trades`, whose entire partition is now empty;
+  - the Bronze writer, where an empty file is unrecoverable because Bronze is what everything else replays from.
+
+  The compactor additionally flushes the partition **directory** before deleting the files it merged. Nothing orders the rename against the deletions on this filesystem, so a crash between them could keep the deletions and lose the merged file — leaving that batch of events in no Silver file at all, which nothing downstream would flag because it just looks like a smaller partition.
+
+  A staged file that reads back with the wrong row count is kept aside as `.corrupt-*` rather than deleted — that failure has never been observed, and the file would be the only evidence of it.
+
+  Tests in `tests/test_silver_atomic_write.py`. **This reduces but cannot eliminate the artifact**: inside a container `fsync` reaches the host's virtiofs layer, and whether the USB enclosure has the data by then is a property of that stack, not something POSIX promises. It also does not repair the 175 zero-byte files already on the volume — those need a separate quarantine-and-replay pass (all ~10,650 affected records are still in Bronze).
+
 - **The consumer liveness heartbeat now ticks per processed message, not per batch** (`heber/writer/consumer.py`): a 2000-message batch fanned out across hundreds of historical partitions could outlast the 180s healthcheck window, so a consumer actively draining backlog read as "stalled" and got restarted mid-drain by the watchdog. Heartbeat staleness now genuinely means no forward progress.
 
 - **The docker watchdog now restarts running-but-wedged services** (`scripts/heber_docker_watchdog.sh`): it previously only reconciled containers that were stopped or missing, so a consumer whose process wedged (container "running", healthcheck unhealthy) sat dead indefinitely — that is how the 2026-07-20 16:30 ET EOD publish was lost to stream eviction. Services with an unhealthy healthcheck are now `docker restart`ed on the next 2-minute tick; services without a healthcheck are left alone.
