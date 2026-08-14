@@ -233,6 +233,7 @@ class DarkpoolPipeline:
         darkpool = self.reader.read_silver(
             "darkpool",
             time_range=(read_start, end_date),
+            prune_by_dt=True,
             columns=DARKPOOL_COLUMNS,
             batch_size=READ_BATCH_SIZE,
         )
@@ -248,6 +249,7 @@ class DarkpoolPipeline:
         flow_alerts = self.reader.read_silver(
             "flow_alerts",
             time_range=(read_start, end_date),
+            prune_by_dt=True,
             columns=FLOW_ALERT_COLUMNS,
             batch_size=READ_BATCH_SIZE,
         )

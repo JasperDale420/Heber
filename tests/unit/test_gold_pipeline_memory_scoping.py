@@ -202,6 +202,26 @@ class TestDarkpoolScoping:
             assert cols, f"read of {call.args[0]!r} has no column projection"
             assert call.kwargs.get("batch_size"), f"read of {call.args[0]!r} is unbatched"
 
+    def test_darkpool_reads_prune_the_walk_by_date(self) -> None:
+        """Without this the read opens every file in the feed, not the window's.
+
+        Measured on the v2 regeneration: one 46-day slice took 56m38s to return
+        12,179 rows, because `_collect_parquet_files` walks and reads the footer
+        of all 1,486 darkpool files whenever the caller does not scope it. The
+        slice's own window holds 8 of them. `dt` is derived from `ts_event`
+        (`writer/utils.py`), so pruning it over the same range the scan filter
+        already declares cannot drop a qualifying row.
+        """
+        mock_reader = MagicMock()
+        mock_reader.read_silver.return_value = pd.DataFrame()
+
+        DarkpoolPipeline(reader=mock_reader).run(start_date="2026-08-03", end_date="2026-08-04", dry_run=True)
+
+        assert mock_reader.read_silver.call_count >= 1
+        for call in mock_reader.read_silver.call_args_list:
+            assert call.kwargs.get("prune_by_dt") is True, f"read of {call.args[0]!r} walks the whole feed"
+            assert call.kwargs.get("time_range"), f"read of {call.args[0]!r} prunes by dt with no range to prune to"
+
     def test_missing_required_column_fails_loud(self) -> None:
         """HeberReader silently drops projected columns absent from the schema.
 
