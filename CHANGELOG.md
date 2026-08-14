@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Alert throttling state moved off the lakehouse volume** to `~/Library/Application Support/heber/alerts-state.json`. An unmounted volume is one of the things now worth alerting about, so cooldown state kept under it was unreadable in exactly the case it was needed. Existing throttling state is not migrated, so a condition that was already alerting may send one extra message on the first run.
 - **Discord messages are labelled by their own severity** rather than always as `🚨 CRITICAL`, so routine notices (the watchdog having intervened) no longer read as emergencies.
 
+### Added
+
+- **The Gold poller can write a different version per pipeline** (`heber/config.py`, `heber/gold_poller/service.py`): `HEBER_GOLD_POLLER_PIPELINE_VERSIONS` takes comma-separated `pipeline=version` pairs (e.g. `darkpool=v2`); anything unlisted keeps using `HEBER_GOLD_POLLER_VERSION`. Without it, a dataset regenerated into a new version silently stops updating — reads resolve the newest version on disk while the nightly run keeps writing the old one, and nothing reports the mismatch. Moving the global setting instead would start a fresh, nearly-empty version for all 24 datasets, which would shadow the full history of the 22 that only have one. A name that matches no pipeline is rejected when the poller starts.
+
 ### Fixed
 
 - **The alarm no longer dies with the volume it watches** (`scripts/run_native_heber_service.sh`): the launchd runner exited before Python started whenever `/Volumes/heber/data` was absent, and its error log shows this firing repeatedly. That made an unmounted volume — a total ingest outage — completely silent. `alert-check` now runs anyway and reports the missing volume; every other service still exits, since none of them can work without the lakehouse.

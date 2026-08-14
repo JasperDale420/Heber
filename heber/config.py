@@ -554,6 +554,44 @@ class Settings(BaseSettings):
             return set()
         return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
 
+    gold_poller_pipeline_versions: str = Field(
+        default="",
+        description=(
+            "Per-pipeline Gold version overrides, comma-separated 'pipeline=version' "
+            "(e.g. 'darkpool=v2'). Pipelines not listed use gold_poller_version."
+        ),
+    )
+
+    @property
+    def gold_poller_pipeline_version_map(self) -> dict[str, str]:
+        """Parse the per-pipeline version overrides.
+
+        Only the *shape* is checked here. Validating the pipeline names would
+        mean importing the poller's registry, and the poller imports this
+        module — every service that reads config (consumer, catalog, watch,
+        and the reader itself) would then fail to import the moment this
+        setting was set. The name check lives in the poller, which is both
+        where the registry already is and the only service the setting affects.
+        """
+        raw = self.gold_poller_pipeline_versions.strip()
+        if not raw:
+            return {}
+
+        overrides: dict[str, str] = {}
+        for item in raw.split(","):
+            if not item.strip():
+                continue
+            name, sep, version = item.partition("=")
+            name, version = name.strip(), version.strip()
+            if not sep or not name or not version:
+                raise ValueError(f"gold_poller_pipeline_versions entry {item.strip()!r} is not 'pipeline=version'")
+            overrides[name] = version
+        return overrides
+
+    def gold_poller_version_for(self, pipeline_name: str) -> str:
+        """Gold version this pipeline writes to."""
+        return self.gold_poller_pipeline_version_map.get(pipeline_name, self.gold_poller_version)
+
     # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
     # (e.g. evicted from the capped stream while the consumer was down) via the
     # Data-Gateway backfill API. On by default (set HEBER_EOD_RECONCILE_ENABLED=false to opt out).
@@ -796,6 +834,16 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("HEBER_OPENMETADATA_API_KEY", "OPENMETADATA_API_KEY"),
     )
+
+    @model_validator(mode="after")
+    def _validate_gold_poller_pipeline_versions(self) -> "Settings":
+        """Reject unusable per-pipeline version overrides at startup.
+
+        Shape only — see `gold_poller_pipeline_version_map`. The pipeline
+        names are checked by the poller at its own startup.
+        """
+        _ = self.gold_poller_pipeline_version_map
+        return self
 
     @model_validator(mode="after")
     def _reject_default_postgres_password_outside_dev(self) -> "Settings":
