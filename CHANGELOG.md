@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI's formatting gate no longer blocks on an unrelated file** (`heber/features/pipelines/equity_features.py`): `pre-commit run --all-files` runs `ruff-format` over the whole repo regardless of what a given PR touches, and this file had drifted out of format on `master` before this branch existed. Reformatted so the `test` check's pre-commit step (and therefore the `pytest` run that follows it) can actually execute.
+
 ### Added
 
 - **The alert job can now report its own death** (`heber/ops/heartbeat.py`, `heber/cli.py`, `HEBER_ALERT_HEARTBEAT_URL`): every check the alarm runs lives on the machine it watches, so it could say nothing about being unloaded, wedged, killed by a broken `uv.lock`, or the host simply dying — the one failure that silences everything at once. `alert-check` now pings an external check on every cycle, and the *absence* of pings is what raises the alarm. `/fail` is appended when the run crashed or a Discord send failed, so a live-but-broken job alerts immediately instead of waiting out the grace period. A revoked or rotated webhook is the case that matters most: alert sends are swallowed by design so a broken webhook cannot crash the monitor, which until now meant every alert could vanish with nothing to show for it.
