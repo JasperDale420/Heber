@@ -559,7 +559,11 @@ class GoldFeaturePoller:
                 f"any traceback is on the child's stderr"
             )
         if not payload.get("ok"):
-            raise RuntimeError(f"pipeline '{entry['name']}' failed: {payload.get('error')}")
+            # The child's traceback rides back on the queue; without it the only
+            # copy is the child's stderr, which is a different stream to whoever
+            # reads this error.
+            detail = payload.get("traceback") or payload.get("error")
+            raise RuntimeError(f"pipeline '{entry['name']}' failed: {detail}")
         return payload["stats"]
 
     # ----- Telemetry -----

@@ -38,7 +38,7 @@ Defined in `pyproject.toml`. `asyncio_mode = "auto"` — you do **not** need `@p
 | `unit` | Fast, isolated, no I/O or network | Default for pure functions, normalization, contract logic |
 | `integration` | Real DB / file I/O / component interactions | Catalog Postgres, Bronze/Silver writes to tmp dirs |
 | `e2e` | Full system flow | Consumer → Bronze → Silver → reader round-trip |
-| `slow` | Tests >1s (excluded by default in CI fast-path) | Backfills, large Parquet round-trips |
+| `slow` | Tests >1s; runs by default, deselect with `-m "not slow"` | Backfills, large Parquet round-trips |
 
 ## Layout
 

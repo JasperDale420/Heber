@@ -220,7 +220,7 @@ Defined in `pyproject.toml`:
 - `unit` — fast, isolated, no I/O or network
 - `integration` — real DB, file I/O, or component interactions
 - `e2e` — full system flow
-- `slow` — tests >1s, excluded by default
+- `slow` — tests >1s; runs by default, deselect with `-m "not slow"`
 
 `asyncio_mode = "auto"` — async tests auto-detected, no `@pytest.mark.asyncio` needed.
 
