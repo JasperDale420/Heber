@@ -17,6 +17,8 @@ import pandas as pd
 import structlog
 from prometheus_client import Counter, Histogram
 
+from heber.ml.datasets import normalize_expiry
+
 if TYPE_CHECKING:
     from heber.calendar.market import MarketCalendar
     from heber.watch.features import AlertFeatureExtractor
@@ -66,33 +68,11 @@ def _coerce_expiry_to_date(val: object) -> date | None:
     path must match, or a gold dataset spanning both writers' ``dt=`` partitions
     raises ``ArrowNotImplementedError: Unsupported cast from int64 to date32`` on
     read (2026-06-30 incident).
-
-    Handles:
-      - date / datetime objects
-      - ISO date strings  ("2026-04-18")
-      - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
-      - None / NaN        → None
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    # datetime is a subclass of date — check it first.
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, int | float):
-        cleaned = str(int(val))
-    elif isinstance(val, str):
-        cleaned = val.strip().replace("-", "")
-    else:
-        return None
-    if not cleaned:
-        return None
-    try:
-        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
-    except ValueError:
+    coerced = normalize_expiry(val)
+    if coerced is None and val is not None:
         logger.warning("Cannot coerce expiry to date", raw_value=val)
-        return None
+    return coerced
 
 
 def _is_polars_panic_exception(exc: BaseException) -> bool:

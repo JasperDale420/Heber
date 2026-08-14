@@ -14,6 +14,8 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
@@ -64,11 +66,118 @@ def _read_existing_partition_or_quarantine(out_file: Path) -> pd.DataFrame | Non
         return None
 
 
-def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
-    """Write parquet via temp file then atomic rename to avoid partial reads."""
+def normalize_expiry(val: object) -> date | None:
+    """Coerce an option ``expiry`` value to a ``datetime.date`` (Arrow ``date32``).
+
+    Accepts ``date``/``datetime``/``datetime64``, ISO ``YYYY-MM-DD``, compact
+    ``YYYYMMDD`` as ``str`` or ``int``, and ISO datetime strings. Everything
+    else — trailing garbage, non-integral floats, partial dates — returns
+    ``None`` rather than being guessed at.
+
+    Strictness matters because pyarrow reads a bare integer in a ``date32``
+    column as a raw day count: ``20260819`` becomes year 57442, which makes the
+    entire partition unreadable by pandas rather than just that one row.
+    """
+    if val is None or val is pd.NaT:
+        return None
+    if isinstance(val, float):
+        if pd.isna(val) or not val.is_integer():
+            return None
+        val = int(val)
+    # datetime is a subclass of date — check it first.
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, np.datetime64):
+        if pd.isna(val):
+            return None
+        timestamp = pd.Timestamp(val)
+        return date(timestamp.year, timestamp.month, timestamp.day)
+    if isinstance(val, np.integer):
+        val = int(val)
+    if isinstance(val, int) and not isinstance(val, bool):
+        # Only a full YYYYMMDD is unambiguous; 202609 or 2026 are not.
+        val = str(val) if len(str(val)) == 8 else None
+    if not isinstance(val, str):
+        return None
+    text = val.strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
+def _coerce_expiry_column(df: pd.DataFrame, context: dict[str, str]) -> pd.DataFrame:
+    """Normalize ``expiry`` to ``datetime.date`` before write, logging in aggregate.
+
+    Runs on the merged frame (new rows plus whatever was read back off disk) so
+    legacy string/int partitions are repaired on their next append instead of
+    compounding the type drift.
+    """
+    if "expiry" not in df.columns:
+        return df
+
+    original = df["expiry"]
+    coerced = original.map(normalize_expiry)
+
+    # Non-null values that failed to parse — real data loss, not an empty field.
+    rejected = original.notna() & coerced.isna()
+    if rejected.any():
+        logger.error(
+            "meta_label_features expiry values rejected — could not parse to a date",
+            rows=int(rejected.sum()),
+            sample_values=[str(v) for v in original[rejected].head(5)],
+            **context,
+        )
+
+    changed = original.notna() & coerced.notna() & (original != coerced)
+    if changed.any():
+        logger.warning(
+            "meta_label_features expiry values coerced to date32",
+            rows=int(changed.sum()),
+            sample_values=[str(v) for v in original[changed].head(5)],
+            **context,
+        )
+
+    df = df.copy()
+    df["expiry"] = coerced
+    return df
+
+
+def _atomic_write_parquet(
+    df: pd.DataFrame,
+    out_file: Path,
+    schema_overrides: dict[str, pa.DataType] | None = None,
+) -> None:
+    """Write parquet via temp file then atomic rename to avoid partial reads.
+
+    ``schema_overrides`` pins a column's Arrow type instead of leaving it to
+    pandas inference, which silently drifts between partitions (an all-null
+    column infers as ``null``, a mixed column picks whichever type it sees
+    first) and produces datasets that cannot be read as a whole.
+    """
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
-        df.to_parquet(temp_path, index=False)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        for column, arrow_type in (schema_overrides or {}).items():
+            if column not in table.column_names:
+                continue
+            index = table.schema.get_field_index(column)
+            if table.schema.field(index).type == arrow_type:
+                continue
+            table = table.set_column(
+                index,
+                pa.field(column, arrow_type),
+                table.column(column).cast(arrow_type),
+            )
+        pq.write_table(table, temp_path, compression="snappy")  # type: ignore[no-untyped-call]
         os.replace(temp_path, out_file)
     finally:
         temp_path.unlink(missing_ok=True)
@@ -593,7 +702,15 @@ def persist_features_to_gold(
                             drop=True
                         )
 
-                _atomic_write_parquet(partition_df, out_file)
+                partition_df = _coerce_expiry_column(
+                    partition_df,
+                    context={"date": dt_str, "path": str(out_file)},
+                )
+                _atomic_write_parquet(
+                    partition_df,
+                    out_file,
+                    schema_overrides={"expiry": pa.date32()},
+                )
         except Timeout:
             logger.warning(
                 "Could not acquire partition lock, skipping write",
