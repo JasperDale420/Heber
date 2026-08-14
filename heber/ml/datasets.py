@@ -425,10 +425,15 @@ class MetaLabelDatasetBuilder:
             "symbol",
             "underlying",
             "occ_symbol",
-            # Timestamps
+            "instrument_key",
+            # Timestamps. ts_available is when the row was written, not
+            # something knowable at alert time — as a model input it leaks the
+            # very write-lag that distinguishes a live capture from a late one.
             "alert_time",
             "outcome_time",
             "expiry",
+            "ts_event",
+            "ts_available",
             # Targets/outcomes
             "outcome",
             "outcome_return",

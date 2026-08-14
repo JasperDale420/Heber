@@ -261,14 +261,32 @@ def test_scanner_handles_partitions_without_quality_flags_column() -> None:
     assert incomplete["alert_id"].tolist() == ["legacy"]
 
 
-def test_quality_flags_excluded_from_model_feature_matrix() -> None:
-    """``quality_flags`` is provenance metadata, never a model input."""
+def test_provenance_columns_excluded_from_model_feature_matrix() -> None:
+    """Provenance and write-time bookkeeping are never model inputs.
+
+    ``ts_available`` is when the row was written; feeding it to a model leaks
+    the write lag that separates a live capture from a late backfill.
+    """
     from heber.ml.datasets import MetaLabelDatasetBuilder
 
     builder = MetaLabelDatasetBuilder()
-    df = pd.DataFrame([{"alert_id": "a", "premium": 1.0, "quality_flags": [], "meta_label": 1}])
+    df = pd.DataFrame(
+        [
+            {
+                "alert_id": "a",
+                "premium": 1.0,
+                "quality_flags": [],
+                "instrument_key": "option:AAPL260220C00100000",
+                "ts_event": datetime(2026, 8, 6, 15, 0, tzinfo=UTC),
+                "ts_available": datetime(2026, 8, 14, 8, 0, tzinfo=UTC),
+                "meta_label": 1,
+            }
+        ]
+    )
 
-    assert "quality_flags" not in builder.get_feature_columns(df)
+    feature_cols = builder.get_feature_columns(df)
+
+    assert feature_cols == ["premium"]
 
 
 def test_dataset_builder_drops_rows_without_point_in_time_greeks() -> None:
