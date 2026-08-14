@@ -109,6 +109,13 @@ services:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # Same writer code and the same double-buffering as heber-backfill-consumer
+    # below, so the same ceiling and the same reasoning apply: 3g covers a 150k-event
+    # accumulation window (~2.0-2.25GB peak) with headroom. Without a limit an
+    # over-large buffer is killed at the VM level with no OOMKilled flag and no exit
+    # code, which is unattributable — the week of Jul 6 lost 32 health-monitor and 6
+    # compactor deaths that way.
+    mem_limit: 3g
 
   # Dedicated consumer for the backfill stream, isolated from the live heber-consumer so a
   # multi-year UW backfill flood (Data-Gateway uw_backfill_driver.py publishes here by default)
@@ -245,6 +252,14 @@ services:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # Observed steady state ~150MB, peak ~960MB while the enrichment backfill
+    # scanner and snapshot poller run together. 3g is deliberately well clear of
+    # that: the point of this ceiling is attribution, not enforcement — an
+    # unbounded container killed at the VM level leaves no OOMKilled flag and no
+    # exit code, so its death is invisible. Sized not to cause kills it would
+    # otherwise avoid; if OOMKilled ever shows true here, raise it rather than
+    # assume the service leaked.
+    mem_limit: 3g
 
   # Gold Feature Poller - Refreshes Gold feature datasets after market close
   heber-gold-poller:
