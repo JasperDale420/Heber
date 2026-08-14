@@ -25,6 +25,7 @@ from heber.models.envelope import EventEnvelope
 from heber.ops.logging import configure_logging
 from heber.ops.metrics import (
     consumer_acked_total,
+    consumer_last_xread_success_unixtime,
     consumer_loop_heartbeat_unixtime,
     record_batch_processed,
     record_dedupe_drop,
@@ -131,13 +132,63 @@ class EventConsumer:
         return None
 
     async def connect(self):
-        """Connect to Redis."""
-        self.redis = redis.from_url(settings.redis_url)
+        """Connect to Redis, retrying while the upstream is transiently unavailable.
+
+        The run loop already retries Redis forever, but it only starts after this
+        method returns — so an upstream that is down or still loading its AOF used
+        to kill the process here, in xgroup_create, and `restart: always` turned
+        that into a crash-loop the watchdog then restarted every 120s against the
+        same dead Redis. data-gateway-redis takes ~77s to load its AOF, so every
+        restart of it guaranteed this.
+
+        Only transient errors are retried; a genuine misconfiguration still fails
+        fast and loud. A retrying consumer is NOT a healthy one — it reports
+        liveness the whole time — which is why the run loop advances
+        ``consumer_last_xread_success_unixtime`` and the stack alarm pages on that
+        gauge going stale.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            self.redis = redis.from_url(settings.redis_url)
+            try:
+                await self._create_consumer_group()
+                break
+            except Exception as exc:
+                is_transient, error_kind = classify_runtime_error(exc)
+                if not is_transient:
+                    raise
+                delay = calculate_retry_delay(
+                    attempt=attempt,
+                    base_seconds=settings.redis_retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                logger.warning(
+                    "Redis unavailable during startup — retrying",
+                    error=str(exc),
+                    error_kind=error_kind,
+                    attempt=attempt,
+                    retry_delay_seconds=round(delay, 3),
+                    url=settings.redis_url,
+                )
+                await asyncio.sleep(delay)
+
         logger.info("Connected to Redis", url=settings.redis_url)
 
         log_fallback_backlog(settings.dlq_fallback_path, service="heber-consumer")
 
-        # Create consumer group if it doesn't exist
+        recovered = await self._recover_pending_messages()
+        if recovered > 0:
+            logger.info(
+                "Recovered pending messages",
+                recovered=recovered,
+                stream=settings.redis_stream_name,
+                group=settings.redis_consumer_group,
+            )
+
+    async def _create_consumer_group(self) -> None:
+        """Create the consumer group, tolerating one that already exists."""
         try:
             await self.redis.xgroup_create(
                 name=settings.redis_stream_name,
@@ -155,15 +206,6 @@ class EventConsumer:
                 logger.debug("Consumer group already exists")
             else:
                 raise
-
-        recovered = await self._recover_pending_messages()
-        if recovered > 0:
-            logger.info(
-                "Recovered pending messages",
-                recovered=recovered,
-                stream=settings.redis_stream_name,
-                group=settings.redis_consumer_group,
-            )
 
     @staticmethod
     def _decode_string(value: Any) -> str:
@@ -1022,6 +1064,13 @@ class EventConsumer:
             count=settings.redis_read_batch_size,
             block=settings.redis_read_block_ms,
         )
+
+        # Upstream-reachability signal, deliberately set only after the read
+        # returns. An empty read still counts — Redis answered. The loop
+        # heartbeat cannot serve this purpose: it is set at the top of every
+        # iteration including ones that caught a Redis error and slept, so a
+        # consumer spinning against a dead Redis reads as healthy forever.
+        consumer_last_xread_success_unixtime.set(time.time())
 
         if not messages:
             # Flush on idle iterations to respect time-based flush thresholds.

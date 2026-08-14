@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.heber.pause-events</string>
+    <!-- Records who/what pauses a container, and every cgroup OOM kill.
+         On 2026-08-12 heber-watch sat paused for 2h while the watchdog
+         retried `compose up` every 2 min against a paused container; nothing
+         on the host recorded what paused it, and the watchdog now unpauses
+         within 120s, erasing the state before it can be inspected. Nothing in
+         the Empire tree issues `docker pause`, so the actor is external.
+
+         `oom` is included because a container with no cgroup limit is killed
+         at the VM level with no OOMKilled flag and no exit code — the daemon
+         event is the only durable record.
+
+         This is attribution EVIDENCE, not attribution: the event names the
+         container, not the caller. Pair a hit with the Docker backend log at
+         the same timestamp (~/Library/Containers/com.docker.docker/Data/log/host). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/docker</string>
+        <string>events</string>
+        <string>--filter</string>
+        <string>event=pause</string>
+        <string>--filter</string>
+        <string>event=unpause</string>
+        <string>--filter</string>
+        <string>event=oom</string>
+        <string>--format</string>
+        <string>{{json .}}</string>
+    </array>
+    <!-- Long-lived stream, not an interval job: it must already be running when
+         the next pause happens. KeepAlive reconnects it after a Docker Desktop
+         restart, which makes `docker events` exit. ThrottleInterval keeps that
+         reconnect from becoming a tight loop while the daemon is down. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Heber</string>
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/docker-pause-events.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Heber/logs/native/docker-pause-events.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

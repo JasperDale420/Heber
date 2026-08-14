@@ -713,3 +713,55 @@ async def test_extract_and_store_features_preserves_flow_payload_fields(
     assert record.side == "ask"
     assert record.aggressor == "BULLISH"
     assert record.tags == ["bullish", "unusual"]
+
+
+@pytest.mark.asyncio
+async def test_run_retries_consumer_group_setup_when_redis_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup must ride out an upstream Redis restart instead of exiting.
+
+    `run()` calls `_setup_consumer_group_async()` before entering the loop that
+    handles transient errors, so on 2026-08-08 the watch service died here —
+    `ConnectionError: Error 101 ... Network is unreachable` inside xgroup_create —
+    and crash-looped for 1h38m while the watchdog restarted it every 120s against
+    the same dead Redis. data-gateway-redis takes ~77s to load its AOF.
+    """
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.01)
+
+    attempts = 0
+
+    async def _flaky_setup() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ConnectionError("Error 101 connecting to host.docker.internal:6379. Network is unreachable.")
+
+    consumer._setup_consumer_group_async = _flaky_setup  # type: ignore[method-assign]
+    consumer._read_messages = AsyncMock(side_effect=[asyncio.CancelledError()])  # type: ignore[method-assign]
+
+    async def _instant_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert attempts == 3, "startup consumer-group setup must retry transient Redis errors"
+
+
+@pytest.mark.asyncio
+async def test_run_still_raises_non_transient_setup_errors() -> None:
+    """A real misconfiguration stays loud — only transient errors are retried."""
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.01)
+
+    async def _fatal() -> None:
+        raise ValueError("invalid stream name")
+
+    consumer._setup_consumer_group_async = _fatal  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="invalid stream name"):
+        await consumer.run()

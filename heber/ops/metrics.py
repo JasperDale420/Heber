@@ -105,6 +105,16 @@ consumer_acked_total = _get_or_create(
     "progress signal that distinguishes 'flushing slowly' from 'wedged'.",
 )
 
+consumer_last_xread_success_unixtime = _get_or_create(
+    Gauge,
+    "heber_consumer_last_xread_success_unixtime",
+    "Unix timestamp of the last successful XREADGROUP round-trip (upstream-reachability signal). "
+    "An empty read still advances it — it proves Redis answered. Complements acked_total, which "
+    "cannot separate 'idle, nothing to read' from 'Redis is gone': both hold the counter flat. "
+    "Also distinct from the loop heartbeat, which the run loop refreshes even on iterations that "
+    "caught a Redis error and slept, so only this gauge detects a consumer spinning on a dead Redis",
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)
