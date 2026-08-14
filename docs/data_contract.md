@@ -139,6 +139,8 @@ with those fields null, flagged in `quality_flags`:
 | `greeks_no_point_in_time_source` | Greeks specifically are null because no as-of source exists for this alert's timestamp. `MetaLabelDatasetBuilder` **drops these rows by default** (`DatasetConfig.include_unrecoverable_greeks=False`). |
 | `market_tide_recovered_from_silver` | `market_tide_*` was asof-joined from the Silver `market_tide` feed rather than captured live. Point-in-time correct, but derived from the stored feed rather than the provider response the live path reads. |
 | `gex_recovered_from_silver` | `gex`/`vex` was asof-joined from Silver `greek_exposure`. That feed is a daily snapshot, so a recovered value has coarser grain than a live per-alert fetch. |
+| `enrichment_captured_late` | The row's live-fetched enrichment (Greeks, iv_rank, max pain) was captured later than the freshness bound — `ts_available - alert_time` exceeded it. Values are real but not point-in-time. The measure spans enrichment *and* the write that followed, so this set is a **superset** of true contamination; recompute `ts_available - alert_time` to apply a stricter threshold. |
+| `enrichment_provenance_unknown` | No usable `ts_available`, so capture lag cannot be measured. Applies to partitions written before Heber recorded feature write time (through 2026-03-10). |
 
 `heber_watch_enrichment_skipped_stale_total` counts every alert the gate fires
 on, so the live path degrading into flagged rows is visible rather than silent.
