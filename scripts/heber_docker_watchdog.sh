@@ -28,6 +28,14 @@ SERVICES="heber-consumer heber-backfill-consumer heber-watch heber-catalog heber
 # (restart: always) came back and then crash-looped against the dead Redis for
 # 1h40m. Nothing else on the host watches them.
 UPSTREAM="data-gateway-redis data-gateway"
+
+# Presence of the lakehouse volume, tested by sentinel rather than by directory
+# existence: when the mount goes away the mount POINT can remain as an empty
+# placeholder directory, so `-d` answers yes for a volume that is gone. The
+# sentinel file lives on the real volume and disappears with it. Same check
+# heber/writer/compactor.py and heber/ops/dataflow_health.py already use.
+VOLUME_SENTINEL="${HEBER_VOLUME_ROOT:-/Volumes/heber}/data/.heber-sentinel"
+
 now() { date -u +%FT%TZ; }
 
 # Docker daemon not up yet (e.g. just after boot) -> nothing to do this tick.
@@ -84,6 +92,26 @@ if [[ -n "$upstream_down" ]]; then
   echo "$(now) starting upstream service(s): $upstream_down"
   # shellcheck disable=SC2086
   "$DOCKER" start $upstream_down
+fi
+
+# Every heber-* service bind-mounts the lakehouse volume, so while it is absent
+# `compose up` cannot start any of them — Docker fails the mount itself with
+# `mkdir /host_mnt/...: permission denied`, postgres never becomes healthy, and
+# `depends_on: service_healthy` fails the rest. Retrying that every 120s repairs
+# nothing: after the 2026-08-12 boot the exFAT volume was under repair until
+# 10:14:17Z and this loop burned 35 ticks and 89 mount errors against it.
+#
+# Deliberately placed AFTER the unpause and upstream blocks. data-gateway and
+# data-gateway-redis do not touch this volume, and Redis is what buffers live
+# events while Heber is down — heber:events is capped at 500K and evicts unread
+# entries, so skipping upstream recovery here would turn one outage into two.
+#
+# The wording avoids the four action strings heber/ops/stack_check.py greps for,
+# so this does not read as a repair and page Discord every cycle; the alarm's
+# stack_volume check already reports the real cause once.
+if [[ ! -e "$VOLUME_SENTINEL" ]]; then
+  echo "$(now) lakehouse volume not mounted ($VOLUME_SENTINEL absent) — leaving heber services alone"
+  exit 0
 fi
 
 [[ -z "$down" && -z "$unhealthy" ]] && exit 0
