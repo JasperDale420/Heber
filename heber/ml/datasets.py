@@ -86,6 +86,11 @@ class DatasetConfig:
     # Filtering
     min_outcomes_per_symbol: int = 5
     exclude_expired: bool = False  # Whether to exclude EXPIRED outcomes
+    # Rows flagged greeks_no_point_in_time_source have null Greeks because no
+    # as-of source exists for their timestamp. They are written to canonical
+    # Gold (their other features are point-in-time correct) but are excluded
+    # from training by default — opt in only if the model handles the gap.
+    include_unrecoverable_greeks: bool = False
 
     # Train/validation split
     train_ratio: float = 0.8
@@ -315,6 +320,24 @@ class MetaLabelDatasetBuilder:
         if df.empty:
             return df
 
+        # Drop rows whose Greeks could not be reconstructed point-in-time. They
+        # live in canonical Gold so their other (correct) features stay
+        # available, but their Greek columns are null and must not silently
+        # enter training as a distribution shift.
+        if not self.config.include_unrecoverable_greeks:
+            from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
+
+            unrecoverable = quality_flag_series(df).apply(
+                lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
+            )
+            if unrecoverable.any():
+                logger.info(
+                    "Excluded rows without point-in-time Greeks from dataset",
+                    rows=int(unrecoverable.sum()),
+                    total=len(df),
+                )
+                df = df[~unrecoverable].reset_index(drop=True)
+
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
             df = df[df["outcome"].astype(str).str.lower() != "expired"].reset_index(drop=True)
@@ -402,10 +425,15 @@ class MetaLabelDatasetBuilder:
             "symbol",
             "underlying",
             "occ_symbol",
-            # Timestamps
+            "instrument_key",
+            # Timestamps. ts_available is when the row was written, not
+            # something knowable at alert time — as a model input it leaks the
+            # very write-lag that distinguishes a live capture from a late one.
             "alert_time",
             "outcome_time",
             "expiry",
+            "ts_event",
+            "ts_available",
             # Targets/outcomes
             "outcome",
             "outcome_return",
@@ -420,6 +448,8 @@ class MetaLabelDatasetBuilder:
             "side",
             "aggressor",
             "put_call",
+            # Provenance metadata, not a model input
+            "quality_flags",
         }
 
         return [c for c in df.columns if c not in exclude]
@@ -456,6 +486,17 @@ class MetaLabelDatasetBuilder:
 _REQUIRED_GREEK_COLUMNS: tuple[str, ...] = ("delta", "gamma", "theta", "vega", "iv")
 
 
+def quality_flag_series(df: pd.DataFrame) -> pd.Series:
+    """Return ``quality_flags`` as a Series of lists, tolerating legacy rows.
+
+    Partitions written before the column existed have no ``quality_flags`` at
+    all, and concatenating them with newer rows leaves NaN in its place.
+    """
+    if "quality_flags" not in df.columns:
+        return pd.Series([[] for _ in range(len(df))], index=df.index, dtype=object)
+    return df["quality_flags"].apply(lambda v: list(v) if isinstance(v, list | tuple | np.ndarray) else [])
+
+
 def _split_greek_corrupted_rows(
     partition_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -464,14 +505,27 @@ def _split_greek_corrupted_rows(
     A row is considered corrupted only when every Greek column listed in
     ``_REQUIRED_GREEK_COLUMNS`` is null/NA. Rows missing one or two values are
     kept (some upstream feeds legitimately omit single Greeks).
+
+    Rows flagged ``greeks_no_point_in_time_source`` are exempt: their Greeks are
+    null by design because no as-of source exists for that alert's timestamp, so
+    they are honest missing data rather than the silent enrichment failure this
+    guard was built to catch. Their remaining features (premium, moneyness,
+    timing, dated returns) are still point-in-time correct, and the flag lets a
+    training run exclude or down-weight them.
     """
+    from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
+
     present_cols = [c for c in _REQUIRED_GREEK_COLUMNS if c in partition_df.columns]
     if not present_cols:
         # No Greek columns at all — nothing to validate. Pass through.
         return partition_df, partition_df.iloc[0:0]
     all_null_mask = partition_df[present_cols].isna().all(axis=1)
-    clean = partition_df.loc[~all_null_mask].reset_index(drop=True)
-    corrupted = partition_df.loc[all_null_mask].reset_index(drop=True)
+    deliberately_absent = quality_flag_series(partition_df).apply(
+        lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
+    )
+    corrupted_mask = all_null_mask & ~deliberately_absent
+    clean = partition_df.loc[~corrupted_mask].reset_index(drop=True)
+    corrupted = partition_df.loc[corrupted_mask].reset_index(drop=True)
     return clean, corrupted
 
 
@@ -592,6 +646,11 @@ def persist_features_to_gold(
                         partition_df = partition_df.drop_duplicates(subset=["alert_id"], keep="last").reset_index(
                             drop=True
                         )
+                    # Rows from a partition written before quality_flags existed
+                    # carry NaN there; parquet cannot write NaN into a list
+                    # column, so normalize the whole column back to lists.
+                    if "quality_flags" in partition_df.columns:
+                        partition_df["quality_flags"] = quality_flag_series(partition_df)
 
                 _atomic_write_parquet(partition_df, out_file)
         except Timeout:

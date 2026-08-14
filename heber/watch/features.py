@@ -13,7 +13,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ from heber.ml.datasets import persist_features_to_gold as persist_features_frame
 from heber.ops.metrics import (
     record_watch_gateway_request,
     record_watch_gateway_success,
+    watch_enrichment_skipped_stale_total,
 )
 from heber.watch.gateway import (
     coerce_optional_float,
@@ -115,6 +116,33 @@ class EnrichmentAuthFailure(RuntimeError):  # noqa: N818
     """Raised when repeated upstream authentication failures require fail-fast behavior."""
 
 
+# Provenance flags written to Gold meta_label_features.quality_flags.
+#
+# The gateway routes behind Greeks, IV rank, GEX, max pain and market tide all
+# answer "as of now" and accept no as-of timestamp, so they cannot reconstruct
+# a past observation. Rather than stamping present-day values onto an old alert
+# (look-ahead) or dropping the row entirely, the row is written with those
+# fields null and flagged, so a training run can exclude or down-weight it.
+QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE = "enrichment_skipped_stale"
+QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE = "greeks_no_point_in_time_source"
+
+# Enrichment recovered after the fact from a Silver feed rather than captured
+# live. The values are point-in-time correct — the asof joins honour
+# ts_available — but they are derived from the stored feed rather than the
+# provider response the live path reads, so a training run may want to treat
+# them separately.
+QUALITY_FLAG_MARKET_TIDE_FROM_SILVER = "market_tide_recovered_from_silver"
+QUALITY_FLAG_GEX_FROM_SILVER = "gex_recovered_from_silver"
+
+
+class _Unset:
+    """Sentinel distinguishing "argument omitted" from an explicit ``None``."""
+
+
+# Omitted => take the bound from settings. Explicit None => no bound at all.
+_UNSET = _Unset()
+
+
 @dataclass
 class AlertFeatures:
     """Features captured at alert arrival time for meta-model training.
@@ -198,6 +226,11 @@ class AlertFeatures:
     # skipped for a known reason like a missing gateway URL). Lets callers
     # distinguish a fully-enriched row from a partially-enriched one.
     enrichment_failures: list[str] = field(default_factory=list)
+
+    # Provenance written to Gold. Records why a field is absent when the reason
+    # is structural rather than a transient failure — see the
+    # QUALITY_FLAG_* constants.
+    quality_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""
@@ -326,6 +359,7 @@ class AlertFeatureExtractor:
         auth_failure_window_seconds: float = 120.0,
         request_timeout_seconds: float = 10.0,
         request_timeout_option_chain_seconds: float = 30.0,
+        live_enrichment_max_age: timedelta | None | _Unset = _UNSET,
     ):
         """Initialize extractor.
 
@@ -344,6 +378,9 @@ class AlertFeatureExtractor:
             request_timeout_seconds: Default HTTP timeout for enrichment requests.
             request_timeout_option_chain_seconds: HTTP timeout for option chain requests
                 (higher because large chains like QQQ/SPY can take 6-7s to respond).
+            live_enrichment_max_age: Maximum alert age for which live-only enrichment
+                steps may run. Omit to take the bound from settings; pass ``None`` to
+                disable the bound entirely (deliberate backlog replay only).
         """
         self.redis = redis
         self.gateway_url = gateway_url
@@ -361,6 +398,10 @@ class AlertFeatureExtractor:
         self.auth_failure_window_seconds = max(1.0, float(auth_failure_window_seconds))
         self.request_timeout_seconds = max(1.0, float(request_timeout_seconds))
         self.request_timeout_option_chain_seconds = max(1.0, float(request_timeout_option_chain_seconds))
+        if isinstance(live_enrichment_max_age, _Unset):
+            configured_minutes = settings.watch_live_enrichment_max_age_minutes
+            live_enrichment_max_age = timedelta(minutes=configured_minutes) if configured_minutes > 0 else None
+        self.live_enrichment_max_age = live_enrichment_max_age
         self._request_semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         self._response_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
         self._auth_failure_timestamps: deque[float] = deque()
@@ -464,20 +505,58 @@ class AlertFeatureExtractor:
         # Run each enrichment step in order. Steps share the same signature and
         # mutate/return the features object, so a named table keeps the chain
         # readable and makes the execution order explicit.
-        for _name, enrich_step in self._enrichment_steps():
+        #
+        # Live-only steps are skipped for an alert older than the configured
+        # bound: their gateway routes answer "as of now", so running them would
+        # write present-day market state onto a past observation.
+        skipped_live_steps: list[str] = []
+        alert_age = self._alert_age(alert_time)
+        stale = self.live_enrichment_max_age is not None and alert_age > self.live_enrichment_max_age
+        for name, live_only, enrich_step in self._enrichment_steps():
+            if stale and live_only:
+                skipped_live_steps.append(name)
+                continue
             features = await enrich_step(features)
+
+        if skipped_live_steps:
+            features.quality_flags.append(QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE)
+            if "greeks" in skipped_live_steps:
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE)
+            watch_enrichment_skipped_stale_total.inc()
+            logger.warning(
+                "Skipped live-only enrichment for stale alert",
+                alert_id=features.alert_id,
+                age_seconds=int(alert_age.total_seconds()),
+                max_age_seconds=int(self.live_enrichment_max_age.total_seconds())
+                if self.live_enrichment_max_age
+                else None,
+                skipped_steps=skipped_live_steps,
+            )
 
         return features
 
-    def _enrichment_steps(self) -> tuple[tuple[str, EnrichmentStep], ...]:
-        """Ordered table of enrichment steps applied during ``extract()``."""
+    @staticmethod
+    def _alert_age(alert_time: datetime) -> timedelta:
+        """Wall-clock age of an alert. Naive timestamps are treated as UTC."""
+        if alert_time.tzinfo is None:
+            alert_time = alert_time.replace(tzinfo=UTC)
+        return datetime.now(UTC) - alert_time
+
+    def _enrichment_steps(self) -> tuple[tuple[str, bool, EnrichmentStep], ...]:
+        """Ordered table of enrichment steps applied during ``extract()``.
+
+        The middle element marks a step as live-only: its gateway route takes no
+        as-of parameter and therefore always reports the present. ``market_context``
+        is not live-only because it queries dated stock bars derived from
+        ``alert_time``.
+        """
         return (
-            ("market_context", self._enrich_market_context),
-            ("greeks", self._enrich_greeks),
-            ("iv_rank", self._enrich_iv_rank),
-            ("gex", self._enrich_gex),
-            ("max_pain", self._enrich_max_pain),
-            ("market_tide", self._enrich_market_tide),
+            ("market_context", False, self._enrich_market_context),
+            ("greeks", True, self._enrich_greeks),
+            ("iv_rank", True, self._enrich_iv_rank),
+            ("gex", True, self._enrich_gex),
+            ("max_pain", True, self._enrich_max_pain),
+            ("market_tide", True, self._enrich_market_tide),
         )
 
     def _to_market_time(self, dt: datetime) -> datetime:
@@ -1156,8 +1235,12 @@ async def get_features(redis: Redis, alert_id: str) -> AlertFeatures | None:
     return AlertFeatures.from_dict(json.loads(data))
 
 
-def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
-    """Persist one feature row into Gold meta-label feature partitions."""
+def feature_row_for_gold(features: AlertFeatures) -> dict:
+    """Convert extracted features into a Gold meta_label_features row.
+
+    Every writer of this dataset must go through here, or partitions end up with
+    divergent column sets that null each other out when concatenated.
+    """
     row = dict(features.__dict__)
 
     # enrichment_failures is in-memory observability only — it is not part of
@@ -1166,7 +1249,7 @@ def persist_features_to_gold(features: AlertFeatures, output_path: Path | None =
 
     # Add Gold contract required fields: instrument_key, ts_event, ts_available.
     # instrument_key: derive from occ_symbol (option) or underlying (equity).
-    if "instrument_key" not in row or row.get("instrument_key") is None:
+    if row.get("instrument_key") is None:
         occ = row.get("occ_symbol")
         if occ:
             row["instrument_key"] = f"option:{occ}"
@@ -1174,14 +1257,19 @@ def persist_features_to_gold(features: AlertFeatures, output_path: Path | None =
             row["instrument_key"] = f"equity:{row.get('underlying', row.get('symbol', 'UNKNOWN'))}"
 
     # ts_event: use alert_time (point when the feature was observed).
-    if "ts_event" not in row or row.get("ts_event") is None:
+    if row.get("ts_event") is None:
         row["ts_event"] = row.get("alert_time")
 
     # ts_available: current wall-clock time when the feature row is written.
-    if "ts_available" not in row or row.get("ts_available") is None:
+    if row.get("ts_available") is None:
         row["ts_available"] = datetime.now(UTC)
 
-    features_df = pd.DataFrame([row])
+    return row
+
+
+def persist_features_to_gold(features: AlertFeatures, output_path: Path | None = None) -> None:
+    """Persist one feature row into Gold meta-label feature partitions."""
+    features_df = pd.DataFrame([feature_row_for_gold(features)])
     persist_features_frame_to_gold(
         features_df=features_df,
         output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,
@@ -1228,13 +1316,45 @@ def backfill_uw_fields(
     df = gold_df.copy()
 
     # Ensure alert_time is datetime for asof join
-    if "alert_time" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["alert_time"]):
-        df["alert_time"] = pd.to_datetime(df["alert_time"], utc=True)
+    if "alert_time" in df.columns:
+        df["alert_time"] = _as_utc_nanoseconds(df["alert_time"])
 
     df = _backfill_gex_vex(df, reader, gex_tolerance)
     df = _backfill_market_tide(df, reader, tide_tolerance)
 
     return df
+
+
+def _append_quality_flag(df: pd.DataFrame, idx: object, flag: str) -> None:
+    """Append a provenance flag to one row's ``quality_flags`` list, in place.
+
+    Reading a Parquet list column back yields ``numpy.ndarray`` cells, not
+    lists, so the existing flags must be recognised through that type too —
+    otherwise appending one flag silently discards every flag already on the
+    row, and rows lose the ``greeks_no_point_in_time_source`` marker that keeps
+    them out of the all-Greeks-null quarantine.
+    """
+    import numpy as np
+
+    if "quality_flags" not in df.columns:
+        df["quality_flags"] = [[] for _ in range(len(df))]
+    current = df.at[idx, "quality_flags"]
+    flags = list(current) if isinstance(current, list | tuple | np.ndarray) else []
+    if flag not in flags:
+        flags.append(flag)
+    df.at[idx, "quality_flags"] = flags
+
+
+def _as_utc_nanoseconds(series: pd.Series) -> pd.Series:
+    """Coerce a timestamp column to tz-aware UTC at nanosecond resolution.
+
+    ``merge_asof`` rejects join keys whose resolutions differ, and the two sides
+    arrive from different readers: Parquet keeps microseconds while several
+    Silver paths yield nanoseconds. Normalizing both sides keeps the asof join
+    working regardless of which reader produced the frame.
+    """
+    converted = pd.to_datetime(series, utc=True)
+    return converted.astype("datetime64[ns, UTC]")
 
 
 def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str) -> pd.DataFrame:
@@ -1272,10 +1392,10 @@ def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str)
         else:
             gex_silver["_safe_time"] = gex_silver["ts_event"]
 
-        # Ensure tz-aware timestamps
+        # Ensure tz-aware timestamps at a resolution merge_asof will accept
         for col in ["_safe_time", "ts_event"]:
-            if col in gex_silver.columns and gex_silver[col].dt.tz is None:
-                gex_silver[col] = gex_silver[col].dt.tz_localize("UTC")
+            if col in gex_silver.columns:
+                gex_silver[col] = _as_utc_nanoseconds(gex_silver[col])
 
         gex_silver = gex_silver.sort_values("_safe_time")
         df_sorted = df.sort_values("alert_time")
@@ -1297,13 +1417,18 @@ def _backfill_gex_vex(df: pd.DataFrame, reader: HeberReader, gex_tolerance: str)
             orig_idx = idx_row.index
             if orig_idx not in df.index:
                 continue
+            recovered = False
             if pd.isna(df.at[orig_idx, "gex"]) and pd.notna(idx_row.call_gamma):
                 df.at[orig_idx, "gex"] = float(idx_row.call_gamma)
+                recovered = True
             if pd.isna(df.at[orig_idx, "vex"]):
                 cv = idx_row.call_vanna if pd.notna(idx_row.call_vanna) else 0.0
                 pv = idx_row.put_vanna if pd.notna(idx_row.put_vanna) else 0.0
                 if pd.notna(idx_row.call_vanna) or pd.notna(idx_row.put_vanna):
                     df.at[orig_idx, "vex"] = float(cv) + float(pv)
+                    recovered = True
+            if recovered:
+                _append_quality_flag(df, orig_idx, QUALITY_FLAG_GEX_FROM_SILVER)
 
         df = df.drop(columns=["_ik"], errors="ignore")
 
@@ -1327,11 +1452,25 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
     t_min = null_rows["alert_time"].min()
     t_max = null_rows["alert_time"].max()
 
+    # The provider's net_call_premium / net_put_premium are stored in Silver
+    # under their mapped names (see FIELD_MAPPINGS in ingest_contracts) — the
+    # values are the net figures despite the "total_" prefix, which is why the
+    # put column is negative.
     tide_silver = reader.read_silver(
         dataset="market_tide",
         time_range=(t_min, t_max),
-        columns=["ts_event", "ts_available", "net_call_premium", "net_put_premium", "sentiment"],
-    )
+        columns=["ts_event", "ts_available", "total_call_premium", "total_put_premium", "sentiment"],
+    ).rename(columns={"total_call_premium": "net_call_premium", "total_put_premium": "net_put_premium"})
+
+    missing_columns = [c for c in ("net_call_premium", "net_put_premium") if c not in tide_silver.columns]
+    if missing_columns:
+        logger.warning(
+            "Skipping market_tide backfill — Silver lacks the expected columns",
+            missing_columns=missing_columns,
+            available_columns=sorted(tide_silver.columns),
+            rows_left_null=int(tide_null_mask.sum()),
+        )
+        return df
 
     if not tide_silver.empty:
         tide_silver = tide_silver.sort_values("ts_event")
@@ -1341,8 +1480,8 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
             tide_silver["_safe_time"] = tide_silver["ts_event"]
 
         for col in ["_safe_time", "ts_event"]:
-            if col in tide_silver.columns and tide_silver[col].dt.tz is None:
-                tide_silver[col] = tide_silver[col].dt.tz_localize("UTC")
+            if col in tide_silver.columns:
+                tide_silver[col] = _as_utc_nanoseconds(tide_silver[col])
 
         tide_silver = tide_silver.sort_values("_safe_time")
         df_sorted = df.sort_values("alert_time")
@@ -1360,13 +1499,32 @@ def _backfill_market_tide(df: pd.DataFrame, reader: HeberReader, tide_tolerance:
             orig_idx = idx_row.index
             if orig_idx not in df.index:
                 continue
+            recovered = False
             if pd.isna(df.at[orig_idx, "market_tide_net_premium"]):
                 ncp = idx_row.net_call_premium if pd.notna(idx_row.net_call_premium) else 0.0
                 npp = idx_row.net_put_premium if pd.notna(idx_row.net_put_premium) else 0.0
                 if pd.notna(idx_row.net_call_premium) or pd.notna(idx_row.net_put_premium):
-                    df.at[orig_idx, "market_tide_net_premium"] = float(ncp) - float(npp)
-            if pd.isna(df.at[orig_idx, "market_tide_direction"]) and pd.notna(idx_row.sentiment):
-                df.at[orig_idx, "market_tide_direction"] = str(idx_row.sentiment)
+                    # Both legs are already signed net flows, so the market-wide
+                    # net premium is their sum. Subtracting the put leg would add
+                    # its magnitude instead of cancelling it, producing a value
+                    # that is never negative and disagrees with the provider's own
+                    # sentiment on most bars.
+                    df.at[orig_idx, "market_tide_net_premium"] = float(ncp) + float(npp)
+                    recovered = True
+            if pd.isna(df.at[orig_idx, "market_tide_direction"]) and pd.notna(
+                df.at[orig_idx, "market_tide_net_premium"]
+            ):
+                # Derive direction from the premium, as the live path does, rather
+                # than copying the provider's sentiment label. The two disagree on
+                # the occasional degenerate bar — the 2026-08-07 13:30 open print
+                # has both legs sign-inverted — and a row whose premium is positive
+                # while its direction reads "bearish" is contradictory training data.
+                df.at[orig_idx, "market_tide_direction"] = _classify_direction(
+                    float(df.at[orig_idx, "market_tide_net_premium"])
+                )
+                recovered = True
+            if recovered:
+                _append_quality_flag(df, orig_idx, QUALITY_FLAG_MARKET_TIDE_FROM_SILVER)
 
     logger.info(
         "backfill_uw_market_tide",

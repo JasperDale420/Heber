@@ -192,6 +192,12 @@ watch_last_watch_created_unixtime = _get_or_create(
     "Unix timestamp of most recent watch creation",
 )
 
+watch_enrichment_skipped_stale_total = _get_or_create(
+    Counter,
+    "heber_watch_enrichment_skipped_stale_total",
+    "Alerts whose live-only enrichment was skipped because the alert was older than the point-in-time freshness bound",
+)
+
 watch_poll_cycles_total = _get_or_create(
     Counter,
     "heber_watch_poll_cycles_total",

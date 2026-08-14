@@ -255,13 +255,25 @@ class EnrichmentBackfillScanner:
 
     @staticmethod
     def _find_incomplete_rows(df: pd.DataFrame) -> pd.DataFrame:
-        """Return rows where at least one enrichable field is null."""
+        """Return rows where at least one enrichable field is null.
+
+        Rows flagged ``greeks_no_point_in_time_source`` are excluded: no as-of
+        source exists for them, so re-enriching would either fail again or stamp
+        present-day values onto a past alert. Without this they would be
+        re-selected on every scan cycle forever.
+        """
+        from heber.ml.datasets import quality_flag_series
+        from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
+
         available_fields = [f for f in ENRICHABLE_FIELDS if f in df.columns]
         if not available_fields:
             return df.iloc[0:0]
 
         mask = df[available_fields].isna().any(axis=1)
-        return df[mask].reset_index(drop=True)
+        unrecoverable = quality_flag_series(df).apply(
+            lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
+        )
+        return df[mask & ~unrecoverable].reset_index(drop=True)
 
     async def _re_enrich_row(self, row: dict) -> dict | None:
         """Reconstruct a FlowAlertRecord and re-run enrichment.
@@ -270,6 +282,7 @@ class EnrichmentBackfillScanner:
             Updated feature dict, or None on failure.
         """
         from heber.models.silver import FlowAlertRecord
+        from heber.watch.features import feature_row_for_gold
 
         alert_time = row.get("alert_time")
         if isinstance(alert_time, str):
@@ -313,7 +326,7 @@ class EnrichmentBackfillScanner:
             )
 
             features = await self.feature_extractor.extract(record)
-            return features.to_dict()
+            return feature_row_for_gold(features)
         except Exception:
             logger.warning(
                 "Failed to re-enrich row",
@@ -324,23 +337,12 @@ class EnrichmentBackfillScanner:
             return None
 
     def _patch_partition(self, updated_row: dict) -> None:
-        """Write updated feature row back to parquet using dedup-on-alert_id."""
+        """Write updated feature row back to parquet using dedup-on-alert_id.
+
+        Rows arrive from ``_re_enrich_row`` already normalized by
+        ``feature_row_for_gold``, so the Gold contract fields are present.
+        """
         from heber.ml.datasets import persist_features_to_gold
-
-        # Add Gold contract fields if missing.
-        if "instrument_key" not in updated_row or updated_row.get("instrument_key") is None:
-            occ = updated_row.get("occ_symbol")
-            if occ:
-                updated_row["instrument_key"] = f"option:{occ}"
-            else:
-                underlying = updated_row.get("underlying", updated_row.get("symbol", "UNKNOWN"))
-                updated_row["instrument_key"] = f"equity:{underlying}"
-
-        if "ts_event" not in updated_row or updated_row.get("ts_event") is None:
-            updated_row["ts_event"] = updated_row.get("alert_time")
-
-        if "ts_available" not in updated_row or updated_row.get("ts_available") is None:
-            updated_row["ts_available"] = datetime.now(UTC)
 
         features_df = pd.DataFrame([updated_row])
 
