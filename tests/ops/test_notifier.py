@@ -10,9 +10,16 @@ import pytest
 
 from heber.config import Settings
 from heber.health_monitor.models import CheckResult, Severity, Status
-from heber.ops.notifier import DiscordNotifier
+from heber.ops import notifier as notifier_module
+from heber.ops.notifier import DiscordNotifier, default_state_path
 
 T0 = datetime(2026, 3, 25, 15, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path, monkeypatch):
+    """Keep throttling state per-test — the default path is now a real shared file."""
+    monkeypatch.setattr(notifier_module, "default_state_path", lambda: tmp_path / "alerts-state.json")
 
 
 def _settings(tmp_path: Path, **overrides) -> Settings:
@@ -182,3 +189,61 @@ def test_debounce_recovery_note_only_after_real_alert(tmp_path: Path) -> None:
     n.dispatch([_passing("darkpool")], now=T0 + timedelta(minutes=10))  # RECOVERED
     assert client.post.call_count == 2
     assert "recover" in client.post.call_args.kwargs["json"]["content"].lower()
+
+
+# --- severity-aware message prefix -------------------------------------------
+
+
+def _warning(feed: str = "watchdog") -> CheckResult:
+    return CheckResult(
+        check_name="stack_watchdog",
+        feed=feed,
+        severity=Severity.P1_WARNING,
+        status=Status.FAIL,
+        message="Docker watchdog intervened: unpausing service(s): heber-watch",
+        details={},
+        ts_checked=T0,
+    )
+
+
+def test_warning_severity_is_not_labelled_critical(tmp_path):
+    """A routine self-heal must not cry wolf as a 🚨 CRITICAL."""
+    client = MagicMock()
+    notifier = DiscordNotifier(
+        _settings(tmp_path, alert_min_severity="warning"), client=client, state_path=tmp_path / "s.json"
+    )
+
+    notifier.dispatch([_warning()], now=T0)
+
+    content = client.post.call_args.kwargs["json"]["content"]
+    assert "CRITICAL" not in content
+    assert "WARNING" in content
+
+
+def test_critical_severity_still_labelled_critical(tmp_path):
+    client = MagicMock()
+    notifier = DiscordNotifier(
+        _settings(tmp_path, alert_min_severity="warning"), client=client, state_path=tmp_path / "s.json"
+    )
+
+    notifier.dispatch([_fail()], now=T0)
+
+    assert "CRITICAL" in client.post.call_args.kwargs["json"]["content"]
+
+
+def test_warning_is_gated_out_when_min_severity_is_critical(tmp_path):
+    client = MagicMock()
+    notifier = DiscordNotifier(
+        _settings(tmp_path, alert_min_severity="critical"), client=client, state_path=tmp_path / "s.json"
+    )
+
+    notifier.dispatch([_warning()], now=T0)
+
+    client.post.assert_not_called()
+
+
+def test_default_state_path_is_off_the_lakehouse_volume():
+    """Cooldown state on the data volume dies exactly when the volume does."""
+    path = default_state_path()
+    assert path.is_absolute()
+    assert not str(path).startswith("/Volumes/")

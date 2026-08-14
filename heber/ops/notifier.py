@@ -5,8 +5,8 @@ alert) so single-cycle flaps — transient bind-mount read errors, deadline-edge
 blips — never reach Discord, plus a per-(check, feed) cooldown for repeat
 reminders on a sustained outage and a recovery note when a previously-alerting
 feed returns to healthy. Network and IO errors are swallowed (logged) so a
-broken webhook never crashes the monitor. State persists to
-``${data_root}/ops/alerts/state.json``.
+broken webhook never crashes the monitor. State persists to the boot disk (see
+``default_state_path``) so throttling survives an unmounted lakehouse volume.
 """
 
 from __future__ import annotations
@@ -40,6 +40,28 @@ def _severity_meets(sev: Severity, minimum: Severity) -> bool:
     return sev == minimum or sev.is_more_severe_than(minimum)
 
 
+_SEVERITY_PREFIX = {
+    Severity.P0_CRITICAL: "🚨 CRITICAL",
+    Severity.P1_WARNING: "⚠️ WARNING",
+    Severity.P2_INFO: "ℹ️ INFO",
+}
+
+
+def _format(r: CheckResult) -> str:
+    """Label the message by its own severity, so routine notices don't read as emergencies."""
+    return f"{_SEVERITY_PREFIX[r.severity]} — {r.message}"
+
+
+def default_state_path() -> Path:
+    """Throttling state lives on the boot disk, not the lakehouse volume.
+
+    An unmounted volume is one of the conditions worth alerting about, so state
+    kept under it would be unreadable and unwritable in exactly that case —
+    every cycle would re-alert with no cooldown.
+    """
+    return Path.home() / "Library" / "Application Support" / "heber" / "alerts-state.json"
+
+
 class DiscordNotifier:
     def __init__(
         self,
@@ -55,22 +77,22 @@ class DiscordNotifier:
         self._send_recovery = settings.alert_send_recovery
         self._debounce_cycles = settings.alert_debounce_cycles
         self._client = client
-        self._state_path = state_path or (Path(settings.data_root) / "ops" / "alerts" / "state.json")
+        self.state_path = state_path or default_state_path()
         self._state: dict[str, dict[str, Any]] = self._load_state()
 
     # ----- state -----
     def _load_state(self) -> dict[str, dict[str, Any]]:
         try:
-            return json.loads(self._state_path.read_text())
+            return json.loads(self.state_path.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
     def _save_state(self) -> None:
         try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps(self._state, default=str))
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(self._state, default=str))
         except OSError:
-            logger.warning("alert_state_save_failed", path=str(self._state_path), exc_info=True)
+            logger.warning("alert_state_save_failed", path=str(self.state_path), exc_info=True)
 
     # ----- dispatch -----
     def dispatch(self, results: list[CheckResult], now: datetime | None = None) -> None:
@@ -98,13 +120,13 @@ class DiscordNotifier:
                 last = None
             if last is not None and (now - last).total_seconds() < self._cooldown:
                 return False
-            if self._post(f"🚨 CRITICAL — {r.message}", r.check_name):
+            if self._post(_format(r), r.check_name):
                 self._state[key] = {"last_sent_ts": now.isoformat(), "last_status": "fail"}
                 return True
             return False
         # Not yet alerting -> count consecutive failing cycles before the first alert.
         streak = int((prev or {}).get("fail_streak", 0)) + 1
-        if streak >= self._debounce_cycles and self._post(f"🚨 CRITICAL — {r.message}", r.check_name):
+        if streak >= self._debounce_cycles and self._post(_format(r), r.check_name):
             self._state[key] = {"last_sent_ts": now.isoformat(), "last_status": "fail"}
         else:
             self._state[key] = {"fail_streak": streak, "last_status": "pending"}

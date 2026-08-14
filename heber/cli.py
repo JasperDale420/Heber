@@ -1,13 +1,24 @@
 """Heber CLI - Command line interface for Heber Data Lakehouse."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import structlog
 
 from heber import __version__
 from heber.ops.notifier import DiscordNotifier
+
+if TYPE_CHECKING:
+    from heber.config import Settings
+    from heber.health_monitor.models import CheckResult
+
+logger = structlog.get_logger(__name__)
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
@@ -176,40 +187,62 @@ def _cmd_alert_test(args: argparse.Namespace) -> int:
 
 
 def _cmd_alert_check(args: argparse.Namespace) -> int:
-    """Run one liveness cycle and dispatch any criticals to Discord, then exit.
+    """Run one stack + liveness cycle and dispatch to Discord, then exit.
 
     Built to be scheduled (launchd StartInterval) so the alarm runs as a fast,
     isolated process rather than a loop sharing the multi-tier monitor's event
     loop. Cooldown/recovery state lives on disk, so throttling works across runs.
-    """
-    import asyncio
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
 
+    The stack checks run first and independently: they are the alarm for a
+    stack-wide outage, so nothing about reading the lakehouse — mounting the
+    volume, constructing HeberReader, a pyarrow error — may be able to stop them
+    from reaching Discord.
+    """
     from heber.config import get_settings
-    from heber.health_monitor.calendar import HealthCalendar
-    from heber.health_monitor.checks.liveness import run_liveness_checks
-    from heber.health_monitor.models import CheckContext
-    from heber.reader import HeberReader
+    from heber.ops.stack_check import run_stack_checks
 
     settings = get_settings()
-    ctx = CheckContext(
-        settings=settings,
-        reader=HeberReader(),
-        redis=None,
-        calendar=HealthCalendar(),
-        store=None,
-    )
-    now = datetime.now(ZoneInfo("America/New_York"))
-    results = asyncio.run(run_liveness_checks(ctx, now=now))
+    results = run_stack_checks(settings)
 
-    DiscordNotifier(settings).dispatch(results)
+    results.extend(_liveness_results(settings))
+
+    # Stack notices (the watchdog having intervened) are warnings, and the
+    # configured floor is normally `critical`. Every liveness failure is
+    # P0_CRITICAL, so lowering the floor here adds the stack warnings without
+    # widening what the liveness checks report.
+    notifier_settings = settings.model_copy(update={"alert_min_severity": "warning"})
+    DiscordNotifier(notifier_settings).dispatch(results)
 
     criticals = [r for r in results if r.status.value in ("fail", "error")]
     print(f"alert-check: {len(results)} checks, {len(criticals)} critical")
     for r in results:
         print(f"  {r.status.value.upper():4} {r.feed}: {r.message}")
     return 0
+
+
+def _liveness_results(settings: Settings) -> list[CheckResult]:
+    """Per-feed liveness, isolated so a lakehouse failure cannot mute the stack alarm."""
+    import asyncio
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from heber.health_monitor.calendar import HealthCalendar
+    from heber.health_monitor.checks.liveness import run_liveness_checks
+    from heber.health_monitor.models import CheckContext
+    from heber.reader import HeberReader
+
+    try:
+        ctx = CheckContext(
+            settings=settings,
+            reader=HeberReader(),
+            redis=None,
+            calendar=HealthCalendar(),
+            store=None,
+        )
+        return list(asyncio.run(run_liveness_checks(ctx, now=datetime.now(ZoneInfo("America/New_York")))))
+    except Exception:
+        logger.error("alert_check_liveness_failed", exc_info=True)
+        return []
 
 
 def _parse_iso_date(value: str) -> date:
