@@ -20,7 +20,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from heber.gold_poller.service import PIPELINE_REGISTRY, _instantiate_pipeline
+from heber.gold_poller.child import _instantiate_pipeline
+from heber.gold_poller.service import PIPELINE_REGISTRY
 
 _START = datetime(2026, 1, 5)
 _END = datetime(2026, 1, 10)
