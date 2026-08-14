@@ -18,7 +18,7 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
-from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key
+from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key, publish_file_atomically
 
 logger = structlog.get_logger(__name__)
 
@@ -109,12 +109,18 @@ class BronzeWriter:
         dataset = self._dataset_from_partition(partition_key)
 
         try:
-            # Write as gzipped JSONL (atomic: write to tmp, then rename)
+            # Write as gzipped JSONL, then publish once the bytes are on disk.
+            # Bronze is the replay source of truth, so an empty or half-written
+            # file here is loss with nothing left to recover it from.
             tmp_path = file_path.with_suffix(".tmp")
-            with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
-                for event in events:
-                    f.write(json.dumps(event, default=str) + "\n")
-            tmp_path.rename(file_path)
+            try:
+                with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
+                    for event in events:
+                        f.write(json.dumps(event, default=str) + "\n")
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
+            publish_file_atomically(tmp_path, file_path)
 
             duration_seconds = max(0.0, time.perf_counter() - started)
             # One stat, not exists()+stat(). Each path lookup on the bind mount is

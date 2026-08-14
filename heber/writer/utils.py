@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -82,6 +83,113 @@ def flush_partitions_concurrent(
     if errors:
         raise errors[0]
     return attempted
+
+
+def _discard_staging(tmp_path: Path) -> None:
+    """Remove a staging file, never masking the error that prompted the cleanup."""
+    try:
+        tmp_path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove staging file", file=str(tmp_path), exc_info=True)
+
+
+def _keep_staging_for_autopsy(tmp_path: Path) -> None:
+    """Set a staging file aside instead of deleting it.
+
+    Used for failures we cannot explain, where the file is the only evidence.
+    The dotted name keeps it out of every reader's and the compactor's walk.
+    """
+    try:
+        tmp_path.rename(tmp_path.with_name(f".corrupt-{os.getpid()}-{tmp_path.name}"))
+    except OSError:
+        logger.warning("Could not set aside staging file", file=str(tmp_path), exc_info=True)
+        _discard_staging(tmp_path)
+
+
+def fsync_directory(path: Path) -> None:
+    """Flush a directory's own entries, making renames and deletes inside it durable."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def publish_file_atomically(tmp_path: Path, file_path: Path) -> None:
+    """Expose the staging file ``tmp_path`` at ``file_path`` only once it is durable.
+
+    A published path is a promise to every reader that the file behind it is
+    complete. Renaming alone does not keep that promise: the rename makes the
+    name visible immediately while the data may still be sitting in the page
+    cache, so an unclean shutdown — a killed VM, a disconnected volume, and this
+    lakehouse lives on a non-journaling exFAT disk — can leave the name on disk
+    with nothing behind it. The bytes are flushed to disk first and only then
+    renamed into place; a failure deletes the staging file instead of publishing
+    it.
+
+    This narrows the window rather than closing it. Inside a container the fsync
+    reaches the host's virtiofs layer, and whether the USB enclosure has the data
+    by then is a property of that stack, not something POSIX promises.
+
+    Callers that go on to delete other files on the strength of this publish must
+    also ``fsync_directory`` the parent — see the compactor.
+
+    Raises:
+        OSError: If the staged file is empty, i.e. the write produced no bytes.
+    """
+    try:
+        with open(tmp_path, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size == 0:
+                raise OSError(f"write produced an empty file: {tmp_path}")
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        _discard_staging(tmp_path)
+        raise
+    # ponytail: the parent directory is not fsynced here, so a crash can still lose
+    # the rename. For the Silver and Bronze writers that leaves the partition short
+    # a file rather than holding a broken one — a row-count gap, replayable from
+    # Bronze — and a directory fsync costs ~5x the file fsync on this volume. It is
+    # only safe to skip because nothing is deleted on the strength of the rename.
+
+
+def publish_parquet_atomically(tmp_path: Path, file_path: Path, expected_rows: int) -> None:
+    """Publish a written Parquet staging file after checking its footer reads back.
+
+    Size alone does not prove a Parquet file is complete — a truncated one still
+    has a size — and any fragment pyarrow cannot open fails the entire dataset
+    scan rather than just itself. Parsing the footer back is cheap because the
+    file is still in the page cache, which is also the limit of what it proves:
+    it catches a short or unreadable write, not a torn data page, and it reads
+    the pre-crash view so it can say nothing about durability. The fsync in
+    ``publish_file_atomically`` is what makes the write survive.
+
+    Raises:
+        OSError: If the staged file cannot be reopened or is missing rows.
+    """
+    try:
+        with pq.ParquetFile(tmp_path) as staged:
+            actual_rows = staged.metadata.num_rows
+    except Exception as exc:  # noqa: BLE001 — anything unreadable must not be published
+        _discard_staging(tmp_path)
+        raise OSError(f"Parquet write produced an unreadable file: {tmp_path} ({exc})") from exc
+    if actual_rows != expected_rows:
+        # Unexplained: the writer returned cleanly but the file disagrees. Keep it.
+        _keep_staging_for_autopsy(tmp_path)
+        raise OSError(f"Parquet write lost rows: {tmp_path} holds {actual_rows}, expected {expected_rows}")
+
+    publish_file_atomically(tmp_path, file_path)
+
+
+def publish_table_atomically(table: pa.Table, file_path: Path, **write_options: Any) -> None:
+    """Write ``table`` to a staging file and publish it once it is complete and durable."""
+    tmp_path = file_path.with_suffix(".parquet.tmp")
+    try:
+        pq.write_table(table, tmp_path, **write_options)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    publish_parquet_atomically(tmp_path, file_path, expected_rows=table.num_rows)
 
 
 def get_bronze_partition_key(envelope: EventEnvelope) -> str:
@@ -180,15 +288,13 @@ def write_silver_parquet(
         # dictionary<string, int32>) causes pyarrow.dataset schema merge to
         # fail with "incompatible types" when reading a directory containing
         # files from both the real-time writer and the compactor.
-        tmp_path = file_path.with_suffix(".parquet.tmp")
-        pq.write_table(
+        publish_table_atomically(
             table,
-            tmp_path,
+            file_path,
             compression="snappy",
             row_group_size=100_000,
             use_dictionary=False,
         )
-        tmp_path.rename(file_path)
         elapsed = (datetime.now(UTC) - started_at).total_seconds()
         # One stat, not exists()+stat() — see the note in bronze._flush_partition.
         try:
@@ -233,9 +339,21 @@ def write_silver_parquet(
                 dataset=dataset,
                 context={"path": str(file_path), "salvage": "true"},
             )
-            salvage_tmp = file_path.with_suffix(".parquet.tmp")
-            pq.write_table(table, salvage_tmp, compression="snappy", row_group_size=100_000, use_dictionary=False)
-            salvage_tmp.rename(file_path)
+            # An OSError raised here is not caught by the sibling `except OSError`
+            # below, so the salvage path records its own write failure.
+            try:
+                publish_table_atomically(
+                    table, file_path, compression="snappy", row_group_size=100_000, use_dictionary=False
+                )
+            except OSError as publish_error:
+                record_write_error(layer="silver", error_type=type(publish_error).__name__)
+                logger.error(
+                    "Failed to publish salvaged Silver partition",
+                    partition=partition_key,
+                    error=str(publish_error),
+                    exc_info=True,
+                )
+                raise
             elapsed = (datetime.now(UTC) - started_at).total_seconds()
             # One stat, not exists()+stat() — see the note in bronze._flush_partition.
             try:

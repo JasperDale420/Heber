@@ -16,6 +16,7 @@ import structlog
 
 from heber.config import settings
 from heber.ops.metrics import record_compaction, start_metrics_server_from_env
+from heber.writer.utils import fsync_directory, publish_parquet_atomically
 
 logger = structlog.get_logger(__name__)
 
@@ -481,10 +482,20 @@ class Compactor:
                 )
                 return 0
 
-            temp_path.replace(merged_path)
+            # Sources are deleted below, so publishing a merge that did not land
+            # whole would destroy the only good copies along with it.
+            publish_parquet_atomically(temp_path, merged_path, expected_rows=merged_rows)
             merged_size = merged_path.stat().st_size if merged_path.exists() else 0
             source_bytes = sum(size_cache.get(f, 0) for f in small_files)
             reclaimed = max(source_bytes - merged_size, 0)
+
+            # Flush the merged file's *name* before removing what it replaced.
+            # Nothing orders the rename against the unlinks on this filesystem, so
+            # a crash between them could keep the deletions and lose the merged
+            # file, leaving the batch in no Silver file at all — a silent bulk loss
+            # that only ever looks like a smaller partition. Compaction is hourly,
+            # so the extra flush costs nothing that matters.
+            fsync_directory(partition_path)
 
             for f in small_files:
                 f.unlink()
