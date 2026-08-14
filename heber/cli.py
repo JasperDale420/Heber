@@ -197,21 +197,35 @@ def _cmd_alert_check(args: argparse.Namespace) -> int:
     stack-wide outage, so nothing about reading the lakehouse — mounting the
     volume, constructing HeberReader, a pyarrow error — may be able to stop them
     from reaching Discord.
+
+    Every check here still runs on the host being watched, so this job cannot
+    report its own death. A dead-man heartbeat closes that: an external check is
+    pinged on each cycle and alerts when the pings stop.
     """
     from heber.config import get_settings
+    from heber.ops import heartbeat
     from heber.ops.stack_check import run_stack_checks
 
     settings = get_settings()
-    results = run_stack_checks(settings)
+    results: list[CheckResult] = []
+    try:
+        results = run_stack_checks(settings)
+        results.extend(_liveness_results(settings))
 
-    results.extend(_liveness_results(settings))
+        # Stack notices (the watchdog having intervened) are warnings, and the
+        # configured floor is normally `critical`. Every liveness failure is
+        # P0_CRITICAL, so lowering the floor here adds the stack warnings without
+        # widening what the liveness checks report.
+        notifier_settings = settings.model_copy(update={"alert_min_severity": "warning"})
+        delivered = DiscordNotifier(notifier_settings).dispatch(results)
+    except Exception:
+        # Nothing below can be trusted, and the alarm going down is exactly what
+        # the dead-man is for — report it before propagating the exit code.
+        logger.error("alert_check_failed", exc_info=True)
+        heartbeat.ping(settings.alert_heartbeat_url, ok=False)
+        return 1
 
-    # Stack notices (the watchdog having intervened) are warnings, and the
-    # configured floor is normally `critical`. Every liveness failure is
-    # P0_CRITICAL, so lowering the floor here adds the stack warnings without
-    # widening what the liveness checks report.
-    notifier_settings = settings.model_copy(update={"alert_min_severity": "warning"})
-    DiscordNotifier(notifier_settings).dispatch(results)
+    heartbeat.ping(settings.alert_heartbeat_url, ok=delivered)
 
     criticals = [r for r in results if r.status.value in ("fail", "error")]
     print(f"alert-check: {len(results)} checks, {len(criticals)} critical")

@@ -744,6 +744,16 @@ class Settings(BaseSettings):
             "failure. Empty disables. The only monitoring that survives machine death."
         ),
     )
+    alert_heartbeat_url: str = Field(
+        default="",
+        description=(
+            "Off-machine dead-man heartbeat URL for the native alert-check job. "
+            "Pinged after each cycle; /fail appended when the run crashed or a "
+            "Discord send failed. Empty disables. Must be a DIFFERENT check from "
+            "heartbeat_url — sharing one would let a live dataflow-health mask a "
+            "dead alert-check, which is the job that reports stack outages."
+        ),
+    )
     backup_freshness_hours: int = Field(
         default=30,
         description="Max age (hours) of the lakehouse backup marker before backup_freshness fails",
