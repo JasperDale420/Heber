@@ -228,6 +228,15 @@ watch_alert_parse_total = _get_or_create(
     ["status"],
 )
 
+watch_last_xread_success_unixtime = _get_or_create(
+    Gauge,
+    "heber_watch_last_xread_success_unixtime",
+    "Unix timestamp of the watch consumer's last successful XREADGROUP round-trip. Same role as "
+    "the writer consumer's gauge: now that startup waits out an unavailable Redis instead of "
+    "crash-looping, nothing else distinguishes 'waiting for Redis' from 'consuming' — the run "
+    "loop is alive either way",
+)
+
 
 # =============================================================================
 # Compactor Metrics (PRD §12.5.2)

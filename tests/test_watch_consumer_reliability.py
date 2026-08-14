@@ -765,3 +765,41 @@ async def test_run_still_raises_non_transient_setup_errors() -> None:
 
     with pytest.raises(ValueError, match="invalid stream name"):
         await consumer.run()
+
+
+@pytest.mark.asyncio
+async def test_read_messages_advances_the_upstream_progress_gauge() -> None:
+    """Watch needs its own stall signal now that it waits Redis out instead of dying.
+
+    Its run loop keeps spinning (and the process keeps looking alive) through a
+    Redis outage, so without this the crash-loop it used to announce itself with
+    is simply replaced by silence. An empty read still counts — Redis answered.
+    """
+    import time
+
+    from heber.ops.metrics import watch_last_xread_success_unixtime
+
+    consumer = AlertWatchConsumer(_RedisWithDlq(), _NoopManager())
+    watch_last_xread_success_unixtime.set(1000.0)  # long-stale
+
+    await consumer._read_messages()
+
+    assert watch_last_xread_success_unixtime._value.get() > time.time() - 5
+
+
+@pytest.mark.asyncio
+async def test_failed_read_leaves_the_progress_gauge_stale() -> None:
+    """A failed read must not look like progress, or the gauge is worthless."""
+    from heber.ops.metrics import watch_last_xread_success_unixtime
+
+    class _DeadRedis(_RedisWithDlq):
+        def xreadgroup(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise ConnectionError("Error 101 ... Network is unreachable")
+
+    consumer = AlertWatchConsumer(_DeadRedis(), _NoopManager())
+    watch_last_xread_success_unixtime.set(1000.0)
+
+    with pytest.raises(ConnectionError):
+        await consumer._read_messages()
+
+    assert watch_last_xread_success_unixtime._value.get() == 1000.0

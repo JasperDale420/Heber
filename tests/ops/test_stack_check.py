@@ -14,6 +14,7 @@ import pytest
 import heber.ops.stack_check as stack_check_module
 from heber.health_monitor.models import Severity, Status
 from heber.ops.stack_check import (
+    INGEST_STALE_SECONDS,
     ContainerState,
     CoverageProbe,
     IngestProbe,
@@ -371,39 +372,62 @@ def test_unknown_containers_default_to_reported_not_suppressed():
 # --- ingest progress ---------------------------------------------------------
 
 
-def _ingest(age_seconds: float | None, detail: str = "") -> IngestProbe:
+def _ingest(
+    age_seconds: float | None,
+    detail: str = "",
+    *,
+    service: str = "heber-consumer",
+    degraded: bool = False,
+) -> list[IngestProbe]:
     last = None if age_seconds is None else NOW - timedelta(seconds=age_seconds)
-    return IngestProbe(last_success=last, detail=detail)
+    return [IngestProbe(service, last_success=last, detail=detail, degraded=degraded)]
 
 
 def test_recent_ingest_passes():
     results = _eval(ingest=_ingest(30))
-    assert _by_feed(results, "stack_ingest")["ingest"].status is Status.PASS
+    assert _by_feed(results, "stack_ingest")["heber-consumer"].status is Status.PASS
 
 
 def test_ingest_within_an_aof_reload_is_not_an_outage():
     """data-gateway-redis takes ~77s to reload; the consumer now waits that out."""
     results = _eval(ingest=_ingest(90))
-    assert _by_feed(results, "stack_ingest")["ingest"].status is Status.PASS
+    assert _by_feed(results, "stack_ingest")["heber-consumer"].status is Status.PASS
+
+
+def test_a_long_batch_drain_is_not_reported_as_a_stall():
+    """The gauge advances when a read RETURNS, so its gap spans processing too.
+
+    A large batch fanned across many partitions on the exFAT mount has outrun the
+    180s healthcheck window before. Alerting on that would fire during exactly the
+    post-outage catch-up this change exists to make possible.
+    """
+    results = _eval(ingest=_ingest(INGEST_STALE_SECONDS - 1))
+    assert _by_feed(results, "stack_ingest")["heber-consumer"].status is Status.PASS
 
 
 def test_stalled_ingest_is_critical():
     """The gap the container healthcheck cannot see: alive, looping, consuming nothing."""
-    results = _eval(ingest=_ingest(600))
-    res = _by_feed(results, "stack_ingest")["ingest"]
+    results = _eval(ingest=_ingest(INGEST_STALE_SECONDS + 60))
+    res = _by_feed(results, "stack_ingest")["heber-consumer"]
     assert res.status is Status.FAIL
     assert res.severity is Severity.P0_CRITICAL
 
 
 def test_unreadable_ingest_metric_is_critical_not_swallowed():
     results = _eval(ingest=_ingest(None, detail="ConnectError: connection refused"))
-    assert _by_feed(results, "stack_ingest")["ingest"].status is Status.FAIL
+    assert _by_feed(results, "stack_ingest")["heber-consumer"].status is Status.FAIL
 
 
 def test_missing_volume_suppresses_the_ingest_alert():
     """With the volume gone the consumer cannot write; that is the volume outage."""
     results = _eval(volume_mounted=False, ingest=_ingest(9999))
     assert not _by_feed(results, "stack_ingest")
+
+
+def _probe_consumer():
+    return stack_check_module.probe_ingest(
+        "heber-consumer", "http://127.0.0.1:9090/", "heber_consumer_last_xread_success_unixtime"
+    )
 
 
 def test_ingest_probe_parses_the_gauge(monkeypatch):
@@ -419,7 +443,7 @@ def test_ingest_probe_parses_the_gauge(monkeypatch):
         lambda *_a, **_kw: SimpleNamespace(status_code=200, text=body),
     )
 
-    probe = stack_check_module.probe_ingest()
+    probe = _probe_consumer()
 
     assert probe.last_success == datetime.fromtimestamp(1786738000.0, tz=UTC)
 
@@ -432,7 +456,7 @@ def test_ingest_probe_treats_an_untouched_gauge_as_no_read_yet(monkeypatch):
         lambda *_a, **_kw: SimpleNamespace(status_code=200, text="heber_consumer_last_xread_success_unixtime 0.0\n"),
     )
 
-    probe = stack_check_module.probe_ingest()
+    probe = _probe_consumer()
 
     assert probe.last_success is None
     assert "no successful read yet" in probe.detail
@@ -444,7 +468,52 @@ def test_ingest_probe_survives_an_unreachable_metrics_port(monkeypatch):
 
     monkeypatch.setattr(stack_check_module.httpx, "get", _boom)
 
-    probe = stack_check_module.probe_ingest()
+    probe = _probe_consumer()
 
     assert probe.last_success is None
     assert "ConnectError" in probe.detail
+
+
+def test_a_stale_image_warns_rather_than_paging():
+    """alert-check runs from the host checkout; the consumer runs a baked image.
+
+    Pulling this code before `deploy.sh` rebuilds heber-consumer leaves the gauge
+    absent. That is a deploy nuisance, not an ingest outage — paging P0 for it
+    would train exactly the alert fatigue this change exists to remove.
+    """
+    results = _eval(ingest=_ingest(None, detail="absent from metrics output", degraded=True))
+    res = _by_feed(results, "stack_ingest")["heber-consumer"]
+    assert res.status is Status.FAIL
+    assert res.severity is Severity.P1_WARNING
+
+
+def test_ingest_is_not_checked_for_a_container_that_is_already_down():
+    """stack_container already reports it; a stopped consumer not reading is the same fact."""
+    names = ["heber-consumer", "data-gateway-redis"]
+    containers = [ContainerState("heber-consumer", "exited", 0, None), _running("data-gateway-redis")]
+    results = _eval(names=names, containers=containers, ingest=_ingest(9999))
+    assert not _by_feed(results, "stack_ingest")
+
+
+def test_watch_stall_is_detected_too():
+    """heber-watch also stops crash-looping now, so it needs its own stall signal.
+
+    It was down alongside heber-consumer in both the 08-08 and 08-11 episodes.
+    """
+    names = ["heber-watch", "data-gateway-redis"]
+    results = _eval(
+        names=names,
+        containers=_all_healthy(names),
+        ingest=_ingest(INGEST_STALE_SECONDS + 60, service="heber-watch"),
+    )
+    res = _by_feed(results, "stack_ingest")["heber-watch"]
+    assert res.status is Status.FAIL
+    assert res.severity is Severity.P0_CRITICAL
+
+
+def test_every_ingest_source_names_a_real_container():
+    """A typo'd service name would silently never be checked (it must match a container)."""
+    from heber.ops.stack_check import EXPECTED_CONTAINERS, INGEST_SOURCES
+
+    for service, _url, _metric in INGEST_SOURCES:
+        assert service in EXPECTED_CONTAINERS

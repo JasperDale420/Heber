@@ -30,6 +30,7 @@ from heber.ops.metrics import (
     record_watch_alert_parse,
     record_watch_gateway_request,
     record_watch_watch_created,
+    watch_last_xread_success_unixtime,
 )
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
@@ -217,7 +218,7 @@ class AlertWatchConsumer:
         recreation.
         """
         try:
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -235,7 +236,7 @@ class AlertWatchConsumer:
                 error=str(e),
             )
             await self._setup_consumer_group_async()
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -243,6 +244,13 @@ class AlertWatchConsumer:
                 count=100,
                 block=5000,
             )
+
+        # Upstream-reachability signal. An empty read still counts — it proves
+        # Redis answered. Set only on the success paths: the run loop keeps
+        # spinning (and the process keeps looking alive) through a Redis outage,
+        # so without this there is nothing to tell waiting from working.
+        watch_last_xread_success_unixtime.set(time.time())
+        return messages
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""

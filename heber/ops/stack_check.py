@@ -92,16 +92,26 @@ DOCKER_TIMEOUT_SECONDS = 15.0
 COVERAGE_TIMEOUT_SECONDS = 10.0
 INGEST_TIMEOUT_SECONDS = 10.0
 
-# The consumer's Prometheus port, published to loopback in docker-compose.yml.
-CONSUMER_METRICS_URL = "http://127.0.0.1:9090/"
-_INGEST_PROGRESS_METRIC = "heber_consumer_last_xread_success_unixtime"
+# Every service that consumes the event stream, with the loopback port its
+# Prometheus endpoint is published on (docker-compose.yml) and the gauge holding
+# its last successful XREADGROUP. Both must be covered: they retry an
+# unavailable Redis rather than crash-looping now, so neither announces a stall
+# by dying any more, and both were down together in the 08-08 and 08-11 episodes.
+INGEST_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("heber-consumer", "http://127.0.0.1:9090/", "heber_consumer_last_xread_success_unixtime"),
+    ("heber-watch", "http://127.0.0.1:9091/", "heber_watch_last_xread_success_unixtime"),
+)
 
-# How long the consumer may go without a successful XREADGROUP round-trip before
-# this is an outage rather than a blip. data-gateway-redis takes ~77s to reload
-# its AOF, and the consumer now waits that out instead of crash-looping — so the
-# bound has to clear a routine restart comfortably while still catching a stall
-# well inside one 5-minute alert-check cycle.
-INGEST_STALE_SECONDS = 300.0
+# How long a consumer may go without a successful XREADGROUP round-trip before
+# this is an outage rather than a blip.
+#
+# Floor: data-gateway-redis takes ~77s to reload its AOF and consumers now wait
+# that out. Ceiling pressure: the gauge advances when a read RETURNS, so the gap
+# also spans processing of the batch it returned — and a large batch fanned
+# across many partitions on the exFAT mount has historically outrun the 180s
+# healthcheck window. 10 minutes clears a worst-case drain without alerting,
+# while still catching a real stall within two alert-check cycles.
+INGEST_STALE_SECONDS = 600.0
 
 # Every line heber_docker_watchdog.sh emits when it actually repairs something.
 # Its "docker daemon unavailable — skipping" line is timestamped too but is not
@@ -136,10 +146,18 @@ class CoverageProbe:
 
 @dataclass(frozen=True)
 class IngestProbe:
-    """Last successful XREADGROUP round-trip. ``last_success`` is None when unreadable."""
+    """One consumer's last successful XREADGROUP round-trip.
 
+    ``last_success`` is None when the value could not be read. ``degraded`` marks
+    the benign reasons for that — a container built before the gauge existed, or
+    one that has not completed its first read yet — which are a warning to act on
+    at leisure, not a page.
+    """
+
+    service: str
     last_success: datetime | None
     detail: str
+    degraded: bool = False
 
 
 def _result(
@@ -230,7 +248,7 @@ def evaluate(
     watchdog_actions: Sequence[str],
     volume_mounted: bool,
     now: datetime,
-    ingest: IngestProbe | None = None,
+    ingest: Sequence[IngestProbe] | None = None,
 ) -> list[CheckResult]:
     """Turn collected stack facts into check results. Pure."""
     results: list[CheckResult] = [
@@ -266,9 +284,12 @@ def evaluate(
         if coverage is not None and volume_mounted:
             results.append(_coverage_result(coverage, now=now))
         # Same reasoning: with the volume gone the consumer cannot write, so a
-        # stalled ingest is that outage, not a second one.
+        # stalled ingest is that outage, not a second one. A consumer that is not
+        # running is likewise already reported by stack_container — its ingest
+        # being stopped is the same fact stated twice.
         if ingest is not None and volume_mounted:
-            results.append(_ingest_result(ingest, now=now))
+            running = {c.name for c in containers if c.status == "running"}
+            results.extend(_ingest_result(probe, now=now) for probe in ingest if probe.service in running)
 
     results.append(
         _result(
@@ -330,7 +351,7 @@ def _container_results(
 
 
 def _ingest_result(ingest: IngestProbe, *, now: datetime) -> CheckResult:
-    """Page when the consumer stops making Redis round-trips.
+    """Page when a consumer stops making Redis round-trips.
 
     The container healthcheck reads the run-loop heartbeat, which the loop
     refreshes on every iteration including ones that caught a Redis error and
@@ -339,23 +360,27 @@ def _ingest_result(ingest: IngestProbe, *, now: datetime) -> CheckResult:
     is the only thing that distinguishes waiting-for-Redis from consuming.
     """
     if ingest.last_success is None:
+        # A stale image or a consumer still on its first read is a deploy
+        # nuisance, not an ingest outage. Paging P0 for it would train exactly
+        # the alert-fatigue this whole change exists to remove.
         return _result(
             "stack_ingest",
-            "ingest",
+            ingest.service,
             ok=False,
-            message=f"Consumer ingest progress unreadable: {ingest.detail}",
+            message=f"{ingest.service} ingest progress unreadable: {ingest.detail}",
+            severity=Severity.P1_WARNING if ingest.degraded else Severity.P0_CRITICAL,
             now=now,
         )
     age = (now - ingest.last_success).total_seconds()
     ok = age <= INGEST_STALE_SECONDS
     return _result(
         "stack_ingest",
-        "ingest",
+        ingest.service,
         ok=ok,
         message=(
-            f"Consumer is reading the stream (last success {age:.0f}s ago)"
+            f"{ingest.service} is reading the stream (last success {age:.0f}s ago)"
             if ok
-            else f"Consumer has not read the stream in {age:.0f}s "
+            else f"{ingest.service} has not read the stream in {age:.0f}s "
             f"(limit {INGEST_STALE_SECONDS:.0f}s) — it may be alive but stalled on Redis"
         ),
         now=now,
@@ -440,25 +465,25 @@ def probe_docker(names: Sequence[str]) -> tuple[bool, list[ContainerState]]:
     return bool(states), states
 
 
-def probe_ingest(metrics_url: str = CONSUMER_METRICS_URL) -> IngestProbe:
-    """Scrape the consumer's last successful XREADGROUP timestamp.
+def probe_ingest(service: str, metrics_url: str, metric_name: str) -> IngestProbe:
+    """Scrape one consumer's last successful XREADGROUP timestamp.
 
     Read from the host rather than inside the stack, for the same reason the rest
     of this module is: a check that runs in the container it watches goes down
-    with it. The port is published to loopback in docker-compose.yml.
+    with it. The ports are published to loopback in docker-compose.yml.
     """
     try:
         resp = httpx.get(metrics_url, timeout=INGEST_TIMEOUT_SECONDS)
     except (httpx.HTTPError, OSError) as exc:
-        return IngestProbe(last_success=None, detail=f"{type(exc).__name__}: {exc}"[:200])
+        return IngestProbe(service, last_success=None, detail=f"{type(exc).__name__}: {exc}"[:200])
     if resp.status_code != 200:
-        return IngestProbe(last_success=None, detail=f"HTTP {resp.status_code}")
+        return IngestProbe(service, last_success=None, detail=f"HTTP {resp.status_code}")
 
     for line in resp.text.splitlines():
-        if not line.startswith(_INGEST_PROGRESS_METRIC):
+        if not line.startswith(metric_name):
             continue
         match = _PROM_METRIC_RE.match(line.strip())
-        if match is None or match.group("name") != _INGEST_PROGRESS_METRIC:
+        if match is None or match.group("name") != metric_name:
             continue
         try:
             value = float(match.group("value"))
@@ -467,16 +492,22 @@ def probe_ingest(metrics_url: str = CONSUMER_METRICS_URL) -> IngestProbe:
         # 0 is the gauge's untouched default: the process is up but has not
         # completed a read yet. Reporting that as 1970 would be a false outage.
         if value <= 0:
-            return IngestProbe(last_success=None, detail="no successful read yet")
-        return IngestProbe(last_success=datetime.fromtimestamp(value, tz=UTC), detail="")
+            return IngestProbe(service, last_success=None, detail="no successful read yet", degraded=True)
+        return IngestProbe(service, last_success=datetime.fromtimestamp(value, tz=UTC), detail="")
 
     # Also the shape of a stale deploy: the gauge only exists in images built
     # after it was added, so say so rather than let it read as a dead consumer.
     return IngestProbe(
+        service,
         last_success=None,
-        detail=f"{_INGEST_PROGRESS_METRIC} absent from metrics output "
-        "(consumer image predates this metric? rebuild heber-consumer)",
+        detail=f"{metric_name} absent from metrics output (image predates this metric? rebuild {service})",
+        degraded=True,
     )
+
+
+def probe_all_ingest() -> list[IngestProbe]:
+    """Scrape every stream consumer listed in INGEST_SOURCES."""
+    return [probe_ingest(service, url, metric) for service, url, metric in INGEST_SOURCES]
 
 
 def probe_coverage(catalog_url: str) -> CoverageProbe:
@@ -531,7 +562,7 @@ def run_stack_checks(settings: Settings, *, now: datetime | None = None) -> list
     daemon_up, containers = probe_docker(EXPECTED_CONTAINERS)
     volume_mounted = _volume_is_mounted(settings)
     coverage = probe_coverage(settings.health_catalog_url) if daemon_up and volume_mounted else None
-    ingest = probe_ingest() if daemon_up and volume_mounted else None
+    ingest = probe_all_ingest() if daemon_up and volume_mounted else None
     watchdog_log = Path(__file__).resolve().parents[2] / "logs" / "native" / "docker-watchdog.out.log"
     return evaluate(
         daemon_up=daemon_up,
