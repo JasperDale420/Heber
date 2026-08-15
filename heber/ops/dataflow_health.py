@@ -633,9 +633,7 @@ def _mount_liveness_check(settings: Settings) -> dict[str, Any]:
         "observed": {"sentinel": str(sentinel), "present": present, "error": error},
         "threshold": {"required": True},
         "message": (
-            "Data volume sentinel present."
-            if present
-            else "Data volume missing or unmounted: sentinel not found."
+            "Data volume sentinel present." if present else "Data volume missing or unmounted: sentinel not found."
         ),
     }
 
@@ -842,11 +840,7 @@ def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -
             CheckResult(
                 check_name=f"dataflow:{check['id']}",
                 feed=None,
-                severity=(
-                    Severity.P0_CRITICAL
-                    if check.get("severity") == "critical"
-                    else Severity.P1_WARNING
-                ),
+                severity=(Severity.P0_CRITICAL if check.get("severity") == "critical" else Severity.P1_WARNING),
                 status=Status.FAIL if check["status"] == "fail" else Status.PASS,
                 message=f"dataflow {check['id']}: {check.get('message', '')}",
                 details=check.get("observed") or {},

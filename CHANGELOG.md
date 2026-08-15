@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI was red on every open PR, for reasons unrelated to any PR's own diff**: two stacked pre-existing bugs on `master` blocked the `test` job entirely. (1) `heber/features/pipelines/equity_features.py` and `heber/ops/dataflow_health.py` had drifted out of sync with the pre-commit `ruff-format` hook's pinned version (v0.9.4) — reformatted, no logic change. (2) The hand-written CI stub for `empire_core.logger` (`.github/scripts/create-ci-stubs.sh`) never defined `shutdown_logging`, so pytest collection failed with an `ImportError` and all ~2,378 tests never ran — added a no-op stub (the CI logger stub logs synchronously via a plain `StreamHandler`, so there's nothing to flush or stop).
+
 - **The consumer liveness heartbeat now ticks per processed message, not per batch** (`heber/writer/consumer.py`): a 2000-message batch fanned out across hundreds of historical partitions could outlast the 180s healthcheck window, so a consumer actively draining backlog read as "stalled" and got restarted mid-drain by the watchdog. Heartbeat staleness now genuinely means no forward progress.
 
 - **The docker watchdog now restarts running-but-wedged services** (`scripts/heber_docker_watchdog.sh`): it previously only reconciled containers that were stopped or missing, so a consumer whose process wedged (container "running", healthcheck unhealthy) sat dead indefinitely — that is how the 2026-07-20 16:30 ET EOD publish was lost to stream eviction. Services with an unhealthy healthcheck are now `docker restart`ed on the next 2-minute tick; services without a healthcheck are left alone.
