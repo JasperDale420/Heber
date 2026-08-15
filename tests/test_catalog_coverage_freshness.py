@@ -37,7 +37,7 @@ def _session_returning(last_updated: datetime | None, rows: int = 14303, stalest
     async def _stub():
         session = AsyncMock()
         result = MagicMock()
-        result.first.return_value = (last_updated, rows, stalest)
+        result.first.return_value = (last_updated, rows, stalest, last_updated)
         result.scalar_one_or_none.return_value = last_updated
         session.execute = AsyncMock(return_value=result)
         yield session
@@ -172,20 +172,21 @@ def test_the_stalest_feed_is_named(client: TestClient, monkeypatch: pytest.Monke
     assert body["stalest_feed"] == "quotes"
 
 
-def test_one_busy_feed_cannot_mask_a_neglected_one(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The old query took max() over all rows, so any single write read as fresh.
+def test_the_starved_feed_is_surfaced_even_while_status_is_ok(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh max() must not be the only thing reported.
 
-    That is how the walk stalling at feed=quotes stayed invisible: every feed
-    after it alphabetically went unscanned while earlier feeds kept the maximum
-    current. Reporting the oldest per-feed scan is what makes that visible.
+    feed=quotes has never finished a walk, so every feed after it
+    alphabetically goes unscanned while earlier feeds keep the maximum current.
+    Status still gates on the newest scan — gating on the oldest would report
+    stale permanently until that walk is pruned — but the oldest is reported
+    beside it so the starvation is visible rather than hidden.
     """
-    monkeypatch.setattr(
-        catalog_api,
-        "async_session",
-        _session_returning(datetime.now(UTC) - timedelta(days=3), stalest="trades"),
-    )
+    monkeypatch.setattr(catalog_api, "async_session", _session_returning(datetime.now(UTC), stalest="trades"))
 
-    resp = client.get("/health/coverage")
+    body = client.get("/health/coverage").json()
 
-    assert resp.status_code == 503
-    assert resp.json()["stalest_feed"] == "trades"
+    assert body["status"] == "ok"
+    assert body["stalest_feed"] == "trades"
+    assert body["stalest_feed_age_seconds"] is not None
