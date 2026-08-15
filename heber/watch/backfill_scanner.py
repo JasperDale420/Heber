@@ -59,42 +59,6 @@ backfill_duration_seconds = Histogram(
 )
 
 
-def _coerce_expiry_to_date(val: object) -> date | None:
-    """Convert an expiry value to a ``datetime.date`` (Arrow ``date32`` on write).
-
-    The live watch writer persists ``expiry`` as a ``date`` (date32); the backfill
-    path must match, or a gold dataset spanning both writers' ``dt=`` partitions
-    raises ``ArrowNotImplementedError: Unsupported cast from int64 to date32`` on
-    read (2026-06-30 incident).
-
-    Handles:
-      - date / datetime objects
-      - ISO date strings  ("2026-04-18")
-      - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
-      - None / NaN        → None
-    """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    # datetime is a subclass of date — check it first.
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, int | float):
-        cleaned = str(int(val))
-    elif isinstance(val, str):
-        cleaned = val.strip().replace("-", "")
-    else:
-        return None
-    if not cleaned:
-        return None
-    try:
-        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
-    except ValueError:
-        logger.warning("Cannot coerce expiry to date", raw_value=val)
-        return None
-
-
 def _is_polars_panic_exception(exc: BaseException) -> bool:
     """Return True when a BaseException is a polars/pyo3 panic wrapper."""
     return exc.__class__.__name__ == "PanicException" or exc.__class__.__module__ == "pyo3_runtime"
@@ -347,12 +311,6 @@ class EnrichmentBackfillScanner:
         # Coerce alert_time to datetime if needed
         if "alert_time" in features_df.columns:
             features_df["alert_time"] = pd.to_datetime(features_df["alert_time"], utc=True)
-
-        # Coerce expiry to a date (date32) — matches the live watch writer so a
-        # gold dataset spanning live + backfill partitions reads cleanly.
-        # Enrichment returns date strings like "2026-04-18" or "20260418".
-        if "expiry" in features_df.columns:
-            features_df["expiry"] = features_df["expiry"].apply(_coerce_expiry_to_date)
 
         # Coerce ts_event / ts_available to datetime if present as strings
         for ts_col in ("ts_event", "ts_available"):

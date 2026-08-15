@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from heber.watch.backfill_scanner import ENRICHABLE_FIELDS, EnrichmentBackfillScanner, _coerce_expiry_to_date
+from heber.ml.datasets import coerce_expiry_to_date
+from heber.watch.backfill_scanner import ENRICHABLE_FIELDS, EnrichmentBackfillScanner
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -385,35 +386,35 @@ class TestScanSkipsOutsideMarketHours:
 
 
 class TestCoerceExpiryToDate:
-    """`_coerce_expiry_to_date` must yield `date` objects (date32 on write) so
+    """`coerce_expiry_to_date` must yield `date` objects (date32 on write) so
     backfill partitions match the live writer's expiry typing — a mix of int64
     and date32 across `dt=` partitions broke gold reads on 2026-06-30."""
 
     def test_iso_string(self) -> None:
-        assert _coerce_expiry_to_date("2026-09-18") == date(2026, 9, 18)
+        assert coerce_expiry_to_date("2026-09-18") == date(2026, 9, 18)
 
     def test_compact_string(self) -> None:
-        assert _coerce_expiry_to_date("20260918") == date(2026, 9, 18)
+        assert coerce_expiry_to_date("20260918") == date(2026, 9, 18)
 
     def test_yyyymmdd_int(self) -> None:
         # The exact value that wrote the bad int64 partition.
-        assert _coerce_expiry_to_date(20260918) == date(2026, 9, 18)
+        assert coerce_expiry_to_date(20260918) == date(2026, 9, 18)
 
     def test_date_passthrough(self) -> None:
-        assert _coerce_expiry_to_date(date(2026, 9, 18)) == date(2026, 9, 18)
+        assert coerce_expiry_to_date(date(2026, 9, 18)) == date(2026, 9, 18)
 
     def test_datetime_to_date(self) -> None:
-        assert _coerce_expiry_to_date(datetime(2026, 9, 18, 14, 30)) == date(2026, 9, 18)
+        assert coerce_expiry_to_date(datetime(2026, 9, 18, 14, 30)) == date(2026, 9, 18)
 
     def test_none_and_nan(self) -> None:
-        assert _coerce_expiry_to_date(None) is None
-        assert _coerce_expiry_to_date(float("nan")) is None
+        assert coerce_expiry_to_date(None) is None
+        assert coerce_expiry_to_date(float("nan")) is None
 
     def test_invalid_returns_none(self) -> None:
-        assert _coerce_expiry_to_date("not-a-date") is None
+        assert coerce_expiry_to_date("not-a-date") is None
 
     def test_all_results_are_date_type(self) -> None:
         # Every non-None result must be a datetime.date so to_parquet infers
         # date32 uniformly across partitions.
         for v in ("2026-09-18", "20260918", 20260918, date(2026, 9, 18)):
-            assert isinstance(_coerce_expiry_to_date(v), date)
+            assert isinstance(coerce_expiry_to_date(v), date)
