@@ -38,6 +38,9 @@ class _AsyncOnlyManager:
     def create_watch(self, *args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("sync create_watch should not be called in async flow")
 
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
+
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         self.created += 1
         return SimpleNamespace(watch_id="watch-1", horizon=kwargs.get("horizon", WatchHorizon.SWING))

@@ -28,6 +28,7 @@ from heber.features.templates.alert_labels import (
 )
 from heber.ops.metrics import (
     record_watch_alert_parse,
+    record_watch_duplicate_alert_suppressed,
     record_watch_gateway_request,
     record_watch_watch_created,
 )
@@ -453,10 +454,13 @@ class AlertWatchConsumer:
         missing_occ: int,
         stale_window: int,
         exceptions: int,
+        duplicates: int = 0,
     ) -> tuple[bool, bool, str]:
         """Classify batch processing results into (success, retryable, reason)."""
         if created > 0:
             return True, False, "watch_created"
+        if duplicates > 0 and stale_window == 0 and missing_occ == 0 and exceptions == 0:
+            return True, False, "duplicate_alert"
         if stale_window > 0 and missing_occ == 0 and exceptions == 0:
             return True, False, "stale_alert_window"
         if missing_occ > 0 and exceptions == 0:
@@ -528,6 +532,7 @@ class AlertWatchConsumer:
         skipped_missing_occ = 0
         skipped_stale_window = 0
         processing_exceptions = 0
+        skipped_duplicates = 0
 
         for batch_index, alert in enumerate(alerts):
             result = await self._process_one_alert_safe(alert, msg_id, batch_index)
@@ -537,6 +542,8 @@ class AlertWatchConsumer:
                 skipped_missing_occ += 1
             elif result == "stale_alert_window":
                 skipped_stale_window += 1
+            elif result == "duplicate_alert":
+                skipped_duplicates += 1
             elif result == "processing_exception":
                 processing_exceptions += 1
 
@@ -545,6 +552,7 @@ class AlertWatchConsumer:
             skipped_missing_occ,
             skipped_stale_window,
             processing_exceptions,
+            duplicates=skipped_duplicates,
         )
 
     async def _process_parsed_alert(self, alert: dict[str, Any]) -> str:
@@ -575,6 +583,13 @@ class AlertWatchConsumer:
                     window_end=window_end.isoformat(),
                 )
                 return "stale_alert_window"
+
+        # Cheap pre-check so a re-delivery storm does not fire a live quote lookup per
+        # copy. Advisory only — the authoritative claim is the SET NX in create_watch.
+        if await self.manager.has_alert_claim_async(alert["id"]):
+            logger.debug("Skipping already-claimed alert", alert_id=alert["id"])
+            record_watch_duplicate_alert_suppressed()
+            return "duplicate_alert"
 
         entry_price, entry_price_source = await self._resolve_entry_price(alert)
         if entry_price is None or entry_price <= 0:
@@ -607,8 +622,14 @@ class AlertWatchConsumer:
             tp_threshold=self.config.tp_pct,
             sl_threshold=self.config.sl_pct,
         )
+        if watch is None:
+            return "duplicate_alert"
 
-        # Extract and store features for meta-labeling
+        # Extract and store features for meta-labeling. The watch and its claim are
+        # already durable: if extraction dies on a fatal auth failure the alert keeps
+        # its claim, so a redelivery is suppressed rather than watched twice. That
+        # costs one training row (a label with no feature row is dropped by the join)
+        # and never costs a duplicate one.
         await self._extract_and_store_features(alert, watch.watch_id)
 
         logger.info(

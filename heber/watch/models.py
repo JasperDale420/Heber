@@ -182,9 +182,16 @@ class WatchKeys:
     # List: snapshots:{watch_id} -> list of WatchSnapshot JSON
     SNAPSHOTS = "heber:snapshots:{watch_id}"
 
+    # String: watch:by_alert:{alert_id} -> watch_id (SET NX claim, one watch per alert)
+    BY_ALERT = "heber:watch:by_alert:{alert_id}"
+
     @classmethod
     def watch_key(cls, watch_id: str) -> str:
         return cls.WATCH.format(watch_id=watch_id)
+
+    @classmethod
+    def by_alert_key(cls, alert_id: str) -> str:
+        return cls.BY_ALERT.format(alert_id=alert_id)
 
     @classmethod
     def by_symbol_key(cls, occ_symbol: str) -> str:
@@ -193,6 +200,13 @@ class WatchKeys:
     @classmethod
     def snapshots_key(cls, watch_id: str) -> str:
         return cls.SNAPSHOTS.format(watch_id=watch_id)
+
+
+# Lifetime of the per-alert claim that keeps a re-delivered alert from minting a
+# second watch. The longest window (LEAP: 720 *trading* hours) is ~111 sessions,
+# spanning roughly 156 calendar days; 270 days clears that plus recovery margin
+# while still letting the keys expire instead of accumulating forever.
+ALERT_CLAIM_TTL_SECONDS = 270 * 24 * 3600
 
 
 # Polling configuration per horizon

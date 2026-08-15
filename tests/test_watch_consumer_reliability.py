@@ -43,6 +43,9 @@ class _RedisDlqFailure(_RedisWithDlq):
 
 
 class _NoopManager:
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
+
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         return None
 
@@ -51,6 +54,9 @@ class _CaptureManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.calendar = SimpleNamespace(add_trading_hours=lambda alert_time, hours: alert_time + timedelta(hours=hours))
+
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
 
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         self.calls.append(kwargs)
