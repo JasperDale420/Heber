@@ -13,9 +13,11 @@ from heber.calendar import MarketCalendar
 from heber.features.templates.alert_labels import SlippageModel
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
+    QUALITY_FLAG_LABEL_WINDOW_TRUNCATED,
     AlertWatch,
     WatchOutcome,
     WatchStatus,
+    window_is_truncated,
 )
 
 logger = structlog.get_logger(__name__)
@@ -356,4 +358,13 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "entry_price": outcome.entry_price,
         "spot_at_alert": outcome.spot_at_alert,
         "window_duration_hours": outcome.window_duration_hours,
+        # Stamped here rather than left to the reader. The meta-label builder
+        # recomputes this, but it is not the only consumer — the ticker base
+        # rates pipeline aggregates these rows straight off the lakehouse — so
+        # a label resolved against a short window has to say so itself.
+        "quality_flags": (
+            [QUALITY_FLAG_LABEL_WINDOW_TRUNCATED]
+            if window_is_truncated(outcome.horizon, outcome.window_duration_hours)
+            else []
+        ),
     }

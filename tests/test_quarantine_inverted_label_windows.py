@@ -108,14 +108,29 @@ def test_a_fragment_with_nothing_inverted_is_untouched(script, tmp_path: Path) -
     assert (partition / "part-a.parquet").read_bytes() == before
 
 
-def test_a_fragment_that_is_entirely_inverted_is_emptied_not_left_behind(script, tmp_path: Path) -> None:
+def test_a_fragment_that_is_entirely_inverted_is_removed_not_left_empty(script, tmp_path: Path) -> None:
+    """A zero-row parquet can carry Arrow `null` column types that break schema
+    unification when the reader merges it with real fragments."""
     partition = _write(tmp_path, "2026-03-11", {"part-a.parquet": _labels(-2.5, -1.5)})
 
     rows, moved, errors = script.quarantine_partition("2026-03-11", write=True)
 
     assert (rows, moved, errors) == (2, 2, [])
-    assert pd.read_parquet(partition / "part-a.parquet").empty
+    assert not (partition / "part-a.parquet").exists()
     assert len(pd.read_parquet(tmp_path / "_quarantine" / script.QUARANTINE_REASON / "dt=2026-03-11")) == 2
+
+
+def test_an_emptied_partition_still_reads_alongside_its_neighbours(script, tmp_path: Path) -> None:
+    """The reader must not trip over whatever the move leaves behind."""
+    from heber.reader.core import _collect_parquet_files
+
+    _write(tmp_path, "2026-03-11", {"all-bad.parquet": _labels(-2.5), "mixed.parquet": _labels(-1.5, 3.0)})
+
+    script.quarantine_partition("2026-03-11", write=True)
+
+    survivors = _collect_parquet_files(tmp_path)
+    assert [Path(f).name for f in survivors] == ["mixed.parquet"]
+    assert list(pd.read_parquet(survivors[0])["alert_id"]) == ["a1"]
 
 
 def test_rerun_is_a_noop_and_does_not_duplicate_quarantined_rows(script, tmp_path: Path) -> None:

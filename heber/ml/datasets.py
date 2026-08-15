@@ -643,12 +643,11 @@ def _carries_live_enrichment(df: pd.DataFrame, flags: pd.Series) -> pd.Series:
     return carries
 
 
-# The row's observation window closed before its horizon's nominal span had
-# elapsed, so its outcome describes a shorter horizon than the one it is filed
-# under. `expired` in particular means "no barrier touched in the truncated
-# window", not "no barrier touched in the nominal one"; a barrier that was
-# touched is a real touch, but the touch population is selected on happening
-# before the early close.
+# Defined by the watch domain, which stamps it on the rows it writes
+# (`heber.watch.models.QUALITY_FLAG_LABEL_WINDOW_TRUNCATED`). Repeated rather
+# than imported because `heber/watch/__init__.py` eagerly loads the whole watch
+# package, which imports this module — a module-level import here is a cycle.
+# `test_label_window_stamped_at_write` pins the two together.
 QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
 
 # Same name as a plain boolean column, for frames that carry the check as data

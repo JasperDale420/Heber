@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -86,14 +87,20 @@ def inverted_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def _fsync_path(path: Path) -> None:
-    """Force data to the platter.
+    """Push data to the device, not just to the drive's write cache.
 
     The lakehouse volume is exFAT and does not journal metadata, so a rename
-    whose data has not landed publishes a zero-byte file.
+    whose data has not landed publishes a zero-byte file. On macOS plain
+    ``fsync`` only reaches the drive's cache; ``F_FULLFSYNC`` is the documented
+    way to ask for the platter. It is unsupported on some filesystems, which
+    report ``ENOTSUP`` — fall back rather than fail the move.
     """
     fd = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(fd)
+        try:
+            fcntl.fcntl(fd, getattr(fcntl, "F_FULLFSYNC", 51))
+        except OSError:
+            os.fsync(fd)
     finally:
         os.close(fd)
 
@@ -166,7 +173,16 @@ def _scan_partition(dt_str: str, write: bool) -> tuple[int, int, list[str]]:
             reason_root = GOLD_LABELS / "_quarantine" / QUARANTINE_REASON
             _write_durably(df, reason_root / "_source_backup" / f"dt={dt_str}" / relative)
             _write_durably(df[inverted].reset_index(drop=True), reason_root / f"dt={dt_str}" / relative)
-            _write_durably(df[~inverted].reset_index(drop=True), fragment)
+
+            retained = df[~inverted].reset_index(drop=True)
+            if retained.empty:
+                # A zero-row parquet can carry Arrow `null` column types that
+                # refuse to merge with the real fragments beside it, so the
+                # fragment goes rather than staying behind empty. Every row of
+                # it is already in the quarantine tree and the backup.
+                fragment.unlink()
+            else:
+                _write_durably(retained, fragment)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{fragment.name}: move failed: {exc}")
 

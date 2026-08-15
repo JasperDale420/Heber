@@ -195,38 +195,68 @@ class WatchKeys:
         return cls.SNAPSHOTS.format(watch_id=watch_id)
 
 
+# The row's observation window closed before its horizon's nominal span had
+# elapsed, so its outcome describes a shorter horizon than the one it is filed
+# under. `expired` in particular means "no barrier touched in the truncated
+# window", not "no barrier touched in the nominal one"; a barrier that was
+# touched is a real touch, but the touch population is selected on happening
+# before the early close.
+QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
+
+# One regular XNYS session. `max_duration_hours` below is spent by
+# `MarketCalendar.add_trading_hours` at this rate.
+TRADING_HOURS_PER_SESSION = 6.5
+
 # Polling configuration per horizon.
 #
-# UNRESOLVED: `max_duration_hours` is stated in calendar hours — 120 is 5 x 24
-# and 720 is 30 x 24, matching the day counts in the comments below. But the
-# only consumer, watch window_end, passes it to `MarketCalendar.add_trading_hours`,
-# which spends it at 6.5 hours per session. A SWING window is therefore 18.5
-# sessions (~26 calendar days) and a LEAP window 110.8 sessions (~5 months), both
-# of which can outlive the contract being watched — SWING alerts are 3-21 DTE.
+# `max_duration_hours` is in *trading* hours, the unit add_trading_hours spends.
+# These were previously 120 and 720 — 5 x 24 and 30 x 24, i.e. calendar hours —
+# which the calendar then spent at 6.5 hours per session, making a SWING window
+# 18.5 sessions (~26 calendar days) and a LEAP window 110.8 sessions (~5 months).
+# Both routinely outlived the contract being watched, since SWING alerts are
+# 3-21 DTE and LEAP 22+. The day counts are now expressed in sessions.
 #
-# Either the values should be trading hours (32.5 and 195) or the call site
-# should advance calendar time and roll forward to the next session open. That
-# is a product decision about what a "5 day" watch means, and it is deliberately
-# not made here.
-#
-# Two things depend on the current values before changing them:
-#   - `heber.ml.datasets.label_window_truncated_mask` uses them as the wall-clock
-#     floor that identifies labels resolved against a truncated window. Lowering
-#     them to 32.5/195 unflags 514 genuinely truncated SWING rows whose bad
-#     window happened to span a weekend.
-#   - Any change alters window_end for live watches, and so the horizon that
-#     every future label answers.
+# Changing these changes the horizon every future label answers. Rows already
+# written carry `label_window_truncated` in `quality_flags`, so lowering the
+# nominal does not un-exclude them.
 POLL_CONFIG = {
     WatchHorizon.INTRADAY: {
         "interval_seconds": 300,  # 5 minutes
-        "max_duration_hours": 4,
+        "max_duration_hours": 4,  # most of one session
     },
     WatchHorizon.SWING: {
         "interval_seconds": 900,  # 15 minutes
-        "max_duration_hours": 120,  # 5 days
+        "max_duration_hours": 5 * TRADING_HOURS_PER_SESSION,  # 5 trading days
     },
     WatchHorizon.LEAP: {
         "interval_seconds": 3600,  # 1 hour
-        "max_duration_hours": 720,  # 30 days
+        "max_duration_hours": 30 * TRADING_HOURS_PER_SESSION,  # 30 trading days
     },
 }
+
+
+def nominal_window_hours(horizon: WatchHorizon | str) -> float:
+    """Trading hours a watch of this horizon is meant to observe.
+
+    Raises ``KeyError`` for an unknown horizon: a window that cannot be measured
+    against anything must not be silently treated as sound.
+    """
+    return float(POLL_CONFIG[WatchHorizon(horizon)]["max_duration_hours"])
+
+
+def window_is_truncated(horizon: WatchHorizon | str, window_duration_hours: float | None) -> bool:
+    """True if this window closed short of what its horizon promised.
+
+    ``window_duration_hours`` is wall-clock ``window_end - alert_time``, and
+    ``add_trading_hours`` only ever advances its cursor — it skips non-trading
+    time rather than consuming it. A correct window therefore always spans at
+    least its nominal count of hours in wall clock, so anything shorter cannot
+    have come from an intact calendar. A window that cannot be checked is
+    reported as truncated rather than assumed sound.
+    """
+    if window_duration_hours is None:
+        return True
+    try:
+        return not window_duration_hours >= nominal_window_hours(horizon)
+    except (KeyError, ValueError):
+        return True
