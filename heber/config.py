@@ -404,14 +404,17 @@ class Settings(BaseSettings):
         description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
     )
     catalog_coverage_verify_on_start: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Re-count every partition from its footers once per container start, "
             "taking no recorded count on trust. Runs as its own task alongside the "
-            "periodic refresh, never ahead of it. On the production mount it is ~20h "
-            "for feed=quotes alone, so it competes with the refresh for a "
-            "latency-bound mount and rarely finishes before a restart; disable it on "
-            "a host where that contention matters more than the re-verification."
+            "periodic refresh, never ahead of it. Off by default: on the production "
+            "mount it is ~20h for feed=quotes alone and has never once completed "
+            "before a restart, so it competes with the refresh for a latency-bound "
+            "mount without ever delivering the verification it exists for. What it "
+            "protects is approx_row_count; dt_min/dt_max come from the directory "
+            "walk every pass and are correct regardless. Enable it deliberately on a "
+            "container expected to stay up long enough to finish."
         ),
     )
     catalog_coverage_scan_workers: int = Field(

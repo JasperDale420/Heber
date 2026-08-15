@@ -20,7 +20,7 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.parquet as pq
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from heber.catalog.db import DataCoverage, Dataset, DatasetVersion, FeedMapping
@@ -640,6 +640,49 @@ async def _load_recorded_coverage(session: AsyncSession) -> dict[str, dict[str, 
     return recorded
 
 
+def _present_feed_names() -> set[str]:
+    """Feed names that currently have a directory under Silver."""
+    return {
+        e.name.split("=", 1)[1]
+        for e in settings.silver_path.iterdir()
+        if e.name.startswith("feed=") and not e.name.startswith(".")
+    }
+
+
+async def _prune_vanished_feeds(session: AsyncSession, recorded_feeds: set[str]) -> bool:
+    """Drop coverage for feeds with no directory left. Returns whether anything was pruned.
+
+    Coverage is derived entirely from disk and rebuilt every pass, so a row for
+    a feed that has no directory is stale metadata the catalog is presenting as
+    fact — `bars_1m`, `data` and `stocks` sat there for months after the feeds
+    were gone. It also makes per-feed staleness unusable, because the oldest
+    coverage is then always a decommissioned feed.
+
+    The listing is taken fresh rather than reusing the walk, so an interrupted
+    pass cannot mistake feeds it never reached for feeds that vanished. An empty
+    or failed listing prunes nothing: that is a missing mount, not a decommission.
+    """
+    if not recorded_feeds:
+        return False
+    try:
+        present = await asyncio.to_thread(_present_feed_names)
+    except OSError:
+        logger.warning("coverage_prune_skipped", reason="feed_listing_failed", exc_info=True)
+        return False
+    if not present:
+        logger.warning("coverage_prune_skipped", reason="empty_feed_listing", recorded=len(recorded_feeds))
+        return False
+
+    vanished = sorted(recorded_feeds - present)
+    if not vanished:
+        return False
+
+    await session.execute(delete(DataCoverage).where(DataCoverage.dataset_name.in_(vanished)))
+    await session.commit()
+    logger.info("coverage_pruned_vanished_feeds", feeds=vanished, count=len(vanished))
+    return True
+
+
 async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = True) -> int:
     """Scan Silver partition directories and populate data_coverage with accurate row counts.
 
@@ -719,8 +762,20 @@ async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = 
         upserted += await _write_feed_coverage(session, feed_name, scan_results, scan_started_at)
 
     logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds, upserted=upserted)
+
+    # Only after a pass that walked everything: a run cut short partway through
+    # has not seen the feeds it never reached, and must not read them as gone.
+    if not failed_feeds:
+        await _prune_vanished_feeds(session, await _recorded_feed_names(session))
+
     logger.info("coverage_seeded_from_disk", upserted=upserted)
     return upserted
+
+
+async def _recorded_feed_names(session: AsyncSession) -> set[str]:
+    """Feed names that currently hold coverage rows."""
+    result = await session.execute(select(DataCoverage.dataset_name).distinct())
+    return {name for (name,) in result.all()}
 
 
 async def _write_feed_coverage(

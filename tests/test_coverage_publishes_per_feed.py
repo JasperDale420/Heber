@@ -28,6 +28,13 @@ class _Session:
     async def commit(self):
         self.events.append("commit")
 
+    async def execute(self, _stmt):
+        class _R:
+            def all(self_inner):
+                return []
+
+        return _R()
+
 
 @pytest.fixture
 def _fake_lakehouse(tmp_path, monkeypatch):
