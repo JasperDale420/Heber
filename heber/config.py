@@ -744,6 +744,14 @@ class Settings(BaseSettings):
             "failure. Empty disables. The only monitoring that survives machine death."
         ),
     )
+    alert_heartbeat_github_repo: str = Field(
+        default="",
+        description=(
+            "owner/repo whose repo variable records the alert-check dead-man beat, "
+            "read by a scheduled workflow on GitHub's runners. Off-machine without "
+            "a third-party account; uses the existing `gh` login. Empty disables."
+        ),
+    )
     alert_heartbeat_url: str = Field(
         default="",
         description=(
