@@ -41,6 +41,7 @@ from heber.ml.datasets import (
     QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE,
     QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN,
     add_enrichment_provenance_flags,
+    provenance_bound,
     quality_flag_series,
 )
 
@@ -125,7 +126,7 @@ def main() -> None:
     parser.add_argument(
         "--bound-minutes",
         type=int,
-        default=settings.watch_live_enrichment_max_age_minutes,
+        default=int(provenance_bound().total_seconds() // 60),
         help="Capture lag above which enrichment is considered stale (default: the live gate's bound)",
     )
     args = parser.parse_args()
