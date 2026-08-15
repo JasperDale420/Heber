@@ -20,6 +20,7 @@ import structlog
 
 from heber.config import settings
 from heber.reader import HeberReader
+from heber.schemas.gold import META_LABEL_FEATURES_TYPES
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -166,7 +167,24 @@ def _atomic_write_parquet(
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         table = pa.Table.from_pandas(df, preserve_index=False)
-        for column, arrow_type in (schema_overrides or {}).items():
+        overrides = schema_overrides or {}
+
+        # A column that is all-null in this partition but has no declared type
+        # infers as Arrow `null`, which cannot be unified with the concrete type
+        # a later partition will infer. That is exactly how this dataset drifted.
+        undeclared_nulls = [
+            name
+            for name in table.column_names
+            if name not in overrides and pa.types.is_null(table.schema.field(name).type)
+        ]
+        if undeclared_nulls:
+            logger.warning(
+                "gold column written with an inferred null type — declare it to prevent schema drift",
+                path=str(out_file),
+                columns=undeclared_nulls,
+            )
+
+        for column, arrow_type in overrides.items():
             if column not in table.column_names:
                 continue
             index = table.schema.get_field_index(column)
@@ -332,10 +350,13 @@ class MetaLabelDatasetBuilder:
         ]
 
         try:
-            # Support arbitrary path config via read_parquet_dataset
+            # Support arbitrary path config via read_parquet_dataset.
+            # strict=True so an unreadable dataset raises instead of arriving
+            # here as an empty frame indistinguishable from "no alerts".
             df = self.client.read_parquet_dataset(
                 path=self.config.features_path,
                 filters=filters,
+                strict=True,
             )
 
             if df.empty:
@@ -348,8 +369,11 @@ class MetaLabelDatasetBuilder:
             return df
 
         except Exception as e:
+            # An unreadable dataset is not an empty one. Returning a bare frame
+            # here made a whole-dataset schema conflict look identical to "no
+            # alerts in range", so training silently ran on nothing.
             logger.error("Failed to load features", path=str(self.config.features_path), error=str(e))
-            return pd.DataFrame()
+            raise
 
     def _join_features_outcomes(
         self,
@@ -709,7 +733,7 @@ def persist_features_to_gold(
                 _atomic_write_parquet(
                     partition_df,
                     out_file,
-                    schema_overrides={"expiry": pa.date32()},
+                    schema_overrides=META_LABEL_FEATURES_TYPES,
                 )
         except Timeout:
             logger.warning(

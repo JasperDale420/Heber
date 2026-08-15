@@ -18,6 +18,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from heber.ml import gold_rewrite
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "repair_gold_expiry.py"
 
 
@@ -97,12 +99,12 @@ class TestRepairPartition:
         assert frame.loc["good-1", "expiry"] == date(2026, 4, 17)
 
     def test_dry_run_leaves_the_file_untouched(self, partition: Path) -> None:
-        before = repair_gold_expiry.sha256(partition)
+        before = gold_rewrite.sha256(partition)
 
         result = repair_gold_expiry.repair_partition(partition, write=False, backup_dir=None)
 
         assert result["status"] == "would_repair"
-        assert repair_gold_expiry.sha256(partition) == before
+        assert gold_rewrite.sha256(partition) == before
 
     def test_refuses_to_guess_when_the_occ_symbol_disagrees(self, tmp_path: Path) -> None:
         """A bad value whose OCC symbol says something else is not repairable."""
@@ -110,35 +112,35 @@ class TestRepairPartition:
             tmp_path / "dt=2026-04-14" / "data.parquet",
             [_row("bad-1", "VIX260101C00022000", 20260819)],
         )
-        before = repair_gold_expiry.sha256(path)
+        before = gold_rewrite.sha256(path)
 
         result = repair_gold_expiry.repair_partition(path, write=True, backup_dir=None)
 
         assert result["status"] == "unverified"
         assert "OCC symbol says 2026-01-01" in result["problems"][0]
-        assert repair_gold_expiry.sha256(path) == before, "an unverified partition must not be rewritten"
+        assert gold_rewrite.sha256(path) == before, "an unverified partition must not be rewritten"
 
     def test_does_not_touch_the_file_while_another_writer_holds_the_lock(self, partition: Path) -> None:
         """The lock is taken before the file is read, so a concurrent append
         cannot be overwritten by a stale in-memory table."""
         from filelock import FileLock
 
-        before = repair_gold_expiry.sha256(partition)
+        before = gold_rewrite.sha256(partition)
         with FileLock(str(partition.with_suffix(".parquet.lock")), timeout=5):
             result = repair_gold_expiry.repair_partition(partition, write=True, backup_dir=None, lock_timeout=0.5)
 
         assert result["status"] == "locked"
-        assert repair_gold_expiry.sha256(partition) == before
+        assert gold_rewrite.sha256(partition) == before
 
     def test_failed_verification_restores_the_original(self, partition: Path, tmp_path: Path, monkeypatch) -> None:
-        before = repair_gold_expiry.sha256(partition)
+        before = gold_rewrite.sha256(partition)
         calls = {"n": 0}
         real_verify = repair_gold_expiry.verify
 
-        def fail_after_publish(original, repaired, out_file):  # type: ignore[no-untyped-def]
+        def fail_after_publish(original, repaired):  # type: ignore[no-untyped-def]
             calls["n"] += 1
             # First call validates the staged file; fail only the post-publish check.
-            return real_verify(original, repaired, out_file) if calls["n"] == 1 else ["injected failure"]
+            return real_verify(original, repaired) if calls["n"] == 1 else ["injected failure"]
 
         monkeypatch.setattr(repair_gold_expiry, "verify", fail_after_publish)
 
@@ -146,4 +148,4 @@ class TestRepairPartition:
 
         assert result["status"] == "verify_failed"
         assert "original restored from backup" in result["problems"]
-        assert repair_gold_expiry.sha256(partition) == before, "the failed repair must not stay live"
+        assert gold_rewrite.sha256(partition) == before, "the failed repair must not stay live"

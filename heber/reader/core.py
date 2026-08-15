@@ -86,6 +86,10 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     return pa.table(arrays, schema=pa.schema(fields))
 
 
+# Rows deliberately withheld from a dataset live here; readers must not load them.
+_QUARANTINE_DIR = "_quarantine"
+
+
 def _collect_parquet_files(root: str | Path) -> list[str]:
     """Walk a Parquet dataset root and return only readable parquet files.
 
@@ -125,6 +129,7 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             return [str(base)]
         return []
     files: list[str] = []
+    quarantined = 0
     for f in base.rglob("*.parquet"):
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
         # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
@@ -134,6 +139,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             continue
         if any(part.startswith("._") for part in f.parts):
             continue
+        # Rows parked under `_quarantine/` were deliberately withheld from the
+        # dataset. Reading them back undoes the quarantine, and they keep the
+        # schema they had when parked, which breaks the dataset-wide read.
+        # Scoped to the path *below* the root, so a root that itself lives
+        # under a quarantine directory can still be read on purpose.
+        if _QUARANTINE_DIR in f.relative_to(base).parts[:-1]:
+            quarantined += 1
+            continue
         try:
             if not f.is_file():
                 continue
@@ -141,6 +154,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             # Defensive: any other unstattable path (rare) is also skipped.
             continue
         files.append(str(f))
+    if quarantined:
+        # Say so rather than returning a quietly short file list.
+        logger.info(
+            "heber_reader_skipped_quarantined_files",
+            path=str(base),
+            skipped=quarantined,
+            collected=len(files),
+        )
     return files
 
 
@@ -886,12 +907,19 @@ class HeberReader:
         filters: list[tuple[str, str, Any]] | None = None,
         time_range: tuple[str | datetime, str | datetime] | None = None,
         asof_time: str | datetime | None = None,
+        strict: bool = False,
     ) -> pd.DataFrame:
         """Read a parquet dataset at an arbitrary path with optional filtering.
 
         Accepts the same ``filters`` tuple format as PyArrow:
         ``[("column", "op", value), ...]``.  Use this when the caller already
         knows the full partition path (e.g. ``DatasetConfig.features_path``).
+
+        With ``strict=True`` an unreadable dataset raises instead of returning an
+        empty frame. Callers that feed model training want this: "the dataset is
+        corrupt" and "the range contains no rows" are the same value otherwise,
+        and the first one silently trains on nothing. A missing path still
+        returns empty — that is a genuine absence, not a failure.
         """
         if not path.exists():
             return pd.DataFrame()
@@ -903,10 +931,14 @@ class HeberReader:
             )
         except OSError:
             logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
+            if strict:
+                raise
             return pd.DataFrame()
 
         if dataset_obj is None:
             logger.warning("heber_reader_arbitrary_open_failed", path=str(path))
+            if strict:
+                raise ValueError(f"could not open a readable parquet dataset at {path}")
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)

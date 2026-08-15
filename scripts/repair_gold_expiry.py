@@ -20,11 +20,8 @@ Dry run by default:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 import re
-import shutil
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -34,6 +31,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from heber.config import settings
+from heber.ml.gold_rewrite import rewrite_partition
 
 # date32 day counts outside this window are not plausible option expiries and
 # indicate the YYYYMMDD-as-day-count bug rather than genuine data.
@@ -42,14 +40,6 @@ MAX_PLAUSIBLE_DAY = (date(2100, 1, 1) - date(1970, 1, 1)).days
 
 # OCC symbol: <root><YYMMDD><C|P><8-digit strike>, root is variable length.
 OCC_RE = re.compile(r"^(?P<root>[A-Z0-9.]+?)(?P<yymmdd>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def occ_expiry(instrument_key: object, occ_symbol: object) -> date | None:
@@ -119,11 +109,18 @@ def apply_repair(table: pa.Table, repairs: dict[int, date]) -> pa.Table:
     return table.set_column(index, pa.field("expiry", pa.date32()), pa.array(values, type=pa.date32()))
 
 
-def verify(original: pa.Table, repaired: pa.Table, out_file: Path) -> list[str]:
-    """Confirm the rewritten file preserved everything except the repaired values."""
+class UnverifiedRepair(Exception):
+    """A bad value could not be confirmed against its row's OCC symbol."""
+
+
+def verify(original: pa.Table, repaired: pa.Table) -> list[str]:
+    """Confirm the rewrite preserved everything except the repaired values."""
     problems: list[str] = []
     if original.num_rows != repaired.num_rows:
         problems.append(f"row count changed: {original.num_rows} -> {repaired.num_rows}")
+        return problems
+    if not pa.types.is_date32(repaired.schema.field("expiry").type):
+        problems.append("repaired expiry column is not date32")
 
     for name in original.column_names:
         if name == "expiry":
@@ -133,161 +130,79 @@ def verify(original: pa.Table, repaired: pa.Table, out_file: Path) -> list[str]:
         elif original.column(name) != repaired.column(name):
             problems.append(f"column {name} changed")
 
-    published = pq.ParquetFile(out_file)
-    if not pa.types.is_date32(published.schema_arrow.field("expiry").type):
-        problems.append("published expiry column is not date32")
-    if published.metadata.num_rows != original.num_rows:
-        problems.append(f"published row count {published.metadata.num_rows} != {original.num_rows}")
+    bad = find_bad_rows(repaired)
+    if bad:
+        problems.append(f"{len(bad)} out-of-range expiry values remain")
 
+    # The failure this script exists to remove is a pandas one: pyarrow reads an
+    # out-of-range date32 happily and only the conversion to pandas raises. So
+    # the repair is not proven until the consumer's own conversion succeeds.
     try:
-        frame = pd.read_parquet(out_file)
-    except Exception as exc:  # the exact failure this script exists to remove
-        problems.append(f"pandas still cannot read the file: {exc}")
+        frame = repaired.to_pandas()
+    except Exception as exc:
+        problems.append(f"pandas still cannot read the repaired table: {exc}")
         return problems
 
     if len(frame) != original.num_rows:
         problems.append(f"pandas read {len(frame)} rows, expected {original.num_rows}")
     if "alert_id" in original.column_names:
-        before = set(original.column("alert_id").to_pylist())
-        if set(frame["alert_id"]) != before:
+        if set(frame["alert_id"]) != set(original.column("alert_id").to_pylist()):
             problems.append("alert_id set changed")
     return problems
-
-
-def _fsync_dir(directory: Path) -> None:
-    dir_fd = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
-def stage_repaired(table: pa.Table, out_file: Path) -> Path:
-    """Write the replacement to a staging file and flush it to disk.
-
-    /Volumes/heber is exFAT with no journaling, so a rename without an explicit
-    flush can publish a zero-byte file. Staging separately from publishing also
-    lets the caller validate the replacement before it becomes the live file.
-    """
-    temp_path = out_file.with_name(f".{out_file.name}.repair-{os.getpid()}")
-    pq.write_table(table, temp_path, compression="snappy")
-    with temp_path.open("rb+") as handle:
-        os.fsync(handle.fileno())
-    return temp_path
-
-
-def publish(temp_path: Path, out_file: Path) -> None:
-    os.replace(temp_path, out_file)
-    _fsync_dir(out_file.parent)
-    # Writing on exFAT leaves an AppleDouble xattr sidecar next to the file.
-    # It holds no lake data and pyarrow's directory walk crashes on it, so the
-    # repair must not leave new ones behind.
-    out_file.with_name(f"._{out_file.name}").unlink(missing_ok=True)
-
-
-def restore(backup_path: Path, out_file: Path) -> None:
-    """Put the verified backup back in place after a failed repair."""
-    temp_path = out_file.with_name(f".{out_file.name}.restore-{os.getpid()}")
-    shutil.copy2(backup_path, temp_path)
-    with temp_path.open("rb+") as handle:
-        os.fsync(handle.fileno())
-    os.replace(temp_path, out_file)
-    _fsync_dir(out_file.parent)
-
-
-def _repair_locked(path: Path, result: dict, *, backup_dir: Path | None) -> dict:
-    """Read, plan, back up, publish and verify — all while holding the lock.
-
-    Everything happens inside the lock because the live writer appends to these
-    same files: a table read before the lock is taken can be stale by the time
-    it is published, which would silently drop a concurrently written alert.
-    """
-    partition = path.parent.name
-    table = pq.ParquetFile(path).read()
-    indices = find_bad_rows(table)
-    if indices is None:
-        result["status"] = "skipped_not_date32"
-        return result
-    if not indices:
-        return result
-
-    result["bad_rows"] = len(indices)
-    repairs, problems = plan_repair(table, indices)
-    result["repairs"] = {str(i): str(v) for i, v in repairs.items()}
-
-    if problems:
-        result["status"] = "unverified"
-        result["problems"] = problems
-        return result
-
-    backup_path: Path | None = None
-    if backup_dir is not None:
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = backup_dir / f"{partition}-{path.name}"
-        shutil.copy2(path, backup_path)
-        if sha256(backup_path) != sha256(path):
-            result["status"] = "backup_failed"
-            result["problems"] = ["backup checksum did not match source"]
-            return result
-        result["backup"] = str(backup_path)
-        result["source_sha256"] = sha256(path)
-
-    temp_path = stage_repaired(apply_repair(table, repairs), path)
-    try:
-        staged_problems = verify(table, pq.ParquetFile(temp_path).read(), temp_path)
-        if staged_problems:
-            result["status"] = "staging_failed"
-            result["problems"] = staged_problems
-            return result
-        publish(temp_path, path)
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-    verify_problems = verify(table, pq.ParquetFile(path).read(), path)
-    if verify_problems:
-        result["status"] = "verify_failed"
-        result["problems"] = verify_problems
-        if backup_path is not None:
-            restore(backup_path, path)
-            result["problems"].append("original restored from backup")
-        else:
-            result["problems"].append("NO BACKUP TAKEN — the bad file is still live")
-        return result
-
-    result["status"] = "repaired"
-    result["output_sha256"] = sha256(path)
-    return result
 
 
 def repair_partition(path: Path, *, write: bool, backup_dir: Path | None, lock_timeout: float = 30) -> dict:
     """Inspect one partition file; repair it when --write and all rows verify."""
     result: dict = {"partition": path.parent.name, "path": str(path), "status": "ok", "bad_rows": 0}
+    seen: dict = {}
+
+    def plan(table: pa.Table) -> pa.Table | None:
+        indices = find_bad_rows(table)
+        if indices is None:
+            seen["status"] = "skipped_not_date32"
+            return None
+        if not indices:
+            return None
+        seen["bad_rows"] = len(indices)
+        repairs, problems = plan_repair(table, indices)
+        seen["repairs"] = {str(i): str(v) for i, v in repairs.items()}
+        if problems:
+            seen["problems"] = problems
+            raise UnverifiedRepair("; ".join(problems))
+        return apply_repair(table, repairs)
 
     if not write:
         table = pq.ParquetFile(path).read()
-        indices = find_bad_rows(table)
-        if indices is None:
+        try:
+            plan(table)
+        except UnverifiedRepair:
+            pass
+        result.update({k: v for k, v in seen.items() if k != "status"})
+        if seen.get("status") == "skipped_not_date32":
             result["status"] = "skipped_not_date32"
-            return result
-        if not indices:
-            return result
-        result["bad_rows"] = len(indices)
-        repairs, problems = plan_repair(table, indices)
-        result["repairs"] = {str(i): str(v) for i, v in repairs.items()}
-        result["status"] = "unverified" if problems else "would_repair"
-        if problems:
-            result["problems"] = problems
+        elif "problems" in seen:
+            result["status"] = "unverified"
+        elif seen.get("bad_rows"):
+            result["status"] = "would_repair"
         return result
 
-    from filelock import FileLock, Timeout
-
-    try:
-        with FileLock(str(path.with_suffix(".parquet.lock")), timeout=lock_timeout):
-            return _repair_locked(path, result, backup_dir=backup_dir)
-    except Timeout:
-        result["status"] = "locked"
-        result["problems"] = ["could not acquire the partition write lock"]
-        return result
+    outcome = rewrite_partition(
+        path,
+        plan=plan,
+        validate=verify,
+        backup_dir=backup_dir,
+        lock_timeout=lock_timeout,
+    )
+    result.update({k: v for k, v in seen.items() if k != "status"})
+    result.update({k: v for k, v in outcome.items() if k != "partition"})
+    if outcome["status"] == "plan_failed" and "problems" in seen:
+        result["status"] = "unverified"
+        result["problems"] = seen["problems"]
+    elif outcome["status"] == "skipped":
+        result["status"] = seen.get("status", "ok")
+    elif outcome["status"] == "rewritten":
+        result["status"] = "repaired"
+    return result
 
 
 def main() -> int:
@@ -337,11 +252,11 @@ def main() -> int:
 
     print(f"\nscanned {len(files)} files, {len(interesting)} needed attention")
 
-    failed = [
-        r
-        for r in results
-        if r["status"] in {"unverified", "staging_failed", "verify_failed", "backup_failed", "locked"}
-    ]
+    # Allowlist the good outcomes: anything else — including restore_failed,
+    # where the live file may be an unverified replacement — must exit non-zero
+    # so a scheduled run cannot report success over unrecovered training data.
+    ok_statuses = {"ok", "repaired", "would_repair", "skipped", "skipped_not_date32"}
+    failed = [r for r in results if r["status"] not in ok_statuses]
     if args.write and backup_dir is not None and interesting:
         manifest = backup_dir / "manifest.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
