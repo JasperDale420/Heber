@@ -15,6 +15,7 @@ from heber.writer import bronze as bronze_module
 from heber.writer import compactor as compactor_module
 from heber.writer import consumer as consumer_module
 from heber.writer import silver as silver_module
+from heber.writer import utils as writer_utils_module
 
 
 def _build_envelope() -> EventEnvelope:
@@ -106,7 +107,11 @@ def test_silver_flush_records_write_metrics(monkeypatch, tmp_path: Path) -> None
 
     write_calls: list[dict[str, object]] = []
     error_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(silver_module, "record_write", lambda **kwargs: write_calls.append(kwargs))
+    # The single record_write for a Silver file lives in write_silver_parquet.
+    # SilverWriter._flush_partition used to record it a second time, inflating
+    # every Silver files/rows/bytes metric 2x — patch the real call site so the
+    # exactly-once assertion below is a genuine guard against that returning.
+    monkeypatch.setattr(writer_utils_module, "record_write", lambda **kwargs: write_calls.append(kwargs))
     monkeypatch.setattr(silver_module, "record_write_error", lambda **kwargs: error_calls.append(kwargs))
 
     writer = silver_module.SilverWriter()

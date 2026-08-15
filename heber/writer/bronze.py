@@ -18,7 +18,7 @@ import structlog
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
 from heber.ops.metrics import record_write, record_write_error
-from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key
+from heber.writer.utils import flush_partitions_concurrent, get_bronze_partition_key, publish_file_atomically
 
 logger = structlog.get_logger(__name__)
 
@@ -55,7 +55,15 @@ class BronzeWriter:
         event_dict = envelope.model_dump(mode="json")
         self.buffers[partition_key].append(event_dict)
 
-    def flush_if_needed(self) -> None:
+    def has_buffered(self) -> bool:
+        """True if any partition still holds unflushed events.
+
+        Pure in-memory check — the caller uses it to decide whether the batch is
+        durable enough to acknowledge, so it must not touch the filesystem.
+        """
+        return any(self.buffers.values())
+
+    def flush_if_needed(self, force: bool = False) -> None:
         """Flush buffers if conditions are met.
 
         Due partitions are flushed concurrently (``writer_flush_max_workers``);
@@ -65,6 +73,10 @@ class BronzeWriter:
         retaining emptied entries would leak one dead key per
         (provider,feed,dt,hour) forever, and a failed flush keeps its events
         buffered for redelivery.
+
+        ``force`` makes every non-empty partition due regardless of size or age.
+        The consumer uses it at an acknowledgement barrier and on shutdown, when
+        everything buffered must reach disk before the messages are ACKed.
         """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
@@ -74,7 +86,8 @@ class BronzeWriter:
             for partition_key in list(self.buffers)
             if self.buffers[partition_key]
             and (
-                len(self.buffers[partition_key]) >= settings.bronze_max_batch_size
+                force
+                or len(self.buffers[partition_key]) >= settings.bronze_max_batch_size
                 or elapsed >= settings.bronze_flush_interval_seconds
             )
         ]
@@ -96,15 +109,27 @@ class BronzeWriter:
         dataset = self._dataset_from_partition(partition_key)
 
         try:
-            # Write as gzipped JSONL (atomic: write to tmp, then rename)
+            # Write as gzipped JSONL, then publish once the bytes are on disk.
+            # Bronze is the replay source of truth, so an empty or half-written
+            # file here is loss with nothing left to recover it from.
             tmp_path = file_path.with_suffix(".tmp")
-            with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
-                for event in events:
-                    f.write(json.dumps(event, default=str) + "\n")
-            tmp_path.rename(file_path)
+            try:
+                with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
+                    for event in events:
+                        f.write(json.dumps(event, default=str) + "\n")
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
+            publish_file_atomically(tmp_path, file_path)
 
             duration_seconds = max(0.0, time.perf_counter() - started)
-            bytes_written = file_path.stat().st_size if file_path.exists() else 0
+            # One stat, not exists()+stat(). Each path lookup on the bind mount is
+            # an uncached round-trip costing ~2.4s, and the size is only used for
+            # a metric — the write already succeeded.
+            try:
+                bytes_written = file_path.stat().st_size
+            except OSError:
+                bytes_written = 0
             record_write(
                 layer="bronze",
                 dataset=dataset,

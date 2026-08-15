@@ -215,6 +215,15 @@ def _normalize_by_feed(
     # Fallback: generic symbol extraction
     if symbol is None:
         symbol = _normalize_symbol(payload.get("symbol")) or _normalize_symbol(payload.get("ticker"))
+    if symbol is None and instrument_type == "equity":
+        # SYMBOL_PATTERN rejects UW's units/warrants tickers outright, which left
+        # the equity cleanup below unreachable for exactly the symbols it exists
+        # to repair. Retry the raw candidates through the lenient normalizer.
+        for raw in (envelope.symbol, payload.get("symbol"), payload.get("ticker")):
+            recovered = _normalize_equity_symbol(raw)
+            if recovered is not None:
+                symbol = recovered
+                break
     if symbol is not None and instrument_type == "equity":
         # Re-normalize even when the symbol came pre-set: UW darkpool emits
         # units/warrants tickers with a trailing "=" (AAC=, SAMO=) that

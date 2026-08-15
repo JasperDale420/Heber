@@ -181,6 +181,23 @@ def _is_nyse_trading_day(dt: date) -> bool:
         return dt.weekday() < 5
 
 
+def _validate_pipeline_version_overrides(settings: Settings) -> None:
+    """Reject `gold_poller_pipeline_versions` entries naming no known pipeline.
+
+    A misspelled name is silent and permanent: the poller keeps writing the
+    global version while `read_gold` resolves whatever is latest on disk, so
+    the dataset stops updating with nothing logged. Checked here rather than in
+    `Settings` because importing the registry from config would make every
+    service that loads config fail on import.
+    """
+    known = {entry["name"] for entry in PIPELINE_REGISTRY}
+    unknown = sorted(set(settings.gold_poller_pipeline_version_map) - known)
+    if unknown:
+        raise ValueError(
+            f"gold_poller_pipeline_versions names unknown pipeline(s) {unknown}; known pipelines are {sorted(known)}"
+        )
+
+
 def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     """Lazy-import and instantiate a pipeline class."""
     import importlib
@@ -189,7 +206,7 @@ def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     cls = getattr(mod, entry["class"])
     return cls(
         project=settings.gold_poller_project,
-        version=settings.gold_poller_version,
+        version=settings.gold_poller_version_for(entry["name"]),
     )
 
 
@@ -243,6 +260,7 @@ class GoldFeaturePoller:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
+        _validate_pipeline_version_overrides(self._settings)
         self._running = False
         self._task: asyncio.Task[None] | None = None
         self._reader = HeberReader()

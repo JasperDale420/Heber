@@ -21,6 +21,7 @@ Services:
   massive-rest-backlog
   massive-ticker-meta
   massive-delisted-details
+  pause-events
 
 By default this installs plists without starting them. Pass --start to load and
 kickstart the selected services after copying the plist files.
@@ -42,7 +43,7 @@ for arg in "$@"; do
       usage
       exit 0
       ;;
-    dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily|massive-rest-backlog|massive-ticker-meta|massive-delisted-details)
+    dataflow-health|health-monitor|gold-poller|compactor|alert-check|massive-daily|massive-rest-backlog|massive-ticker-meta|massive-delisted-details|pause-events)
       services+=("${arg}")
       ;;
     *)

@@ -40,6 +40,22 @@ def _summarise(results: list[CheckResult]) -> dict[str, int]:
     return counts
 
 
+# Check names written only by the Tier 3 sweep. Tier 1 and 2 write into the same
+# dated partition all day, so completion is identified by these rather than by
+# the partition merely existing.
+TIER3_CHECK_NAMES = frozenset(
+    {
+        "schema_drift",
+        "statistical_null_rate",
+        "statistical_mean_shift",
+        "ml_cross_sectional",
+        "ml_feature_nulls",
+        "ml_label_stability",
+        "ml_leakage_audit",
+    }
+)
+
+
 class HealthMonitorService:
     """Async service that runs tiered data health checks.
 
@@ -61,6 +77,8 @@ class HealthMonitorService:
         self._redis: Any = None
         self._ctx: CheckContext | None = None
         self._last_tier3_date: date | None = None
+        # Cleared with the process; the probe below recovers it from disk once.
+        self._tier3_store_checked = False
         self._notifier: DiscordNotifier | None = None
         self._last_alert_ts: datetime | None = None
 
@@ -210,12 +228,44 @@ class HealthMonitorService:
 
             await asyncio.sleep(check_interval)
 
+    def _tier3_already_ran(self, today: date) -> bool:
+        """Whether a Tier 3 sweep for *today* is already on disk.
+
+        The in-memory marker is cleared by every restart, and this service
+        restarted 59 times in a week, so without consulting what was persisted
+        the daily sweep begins again each time. Results are already written to a
+        dated partition, so no extra marker is needed.
+
+        Read once per process, when the in-memory marker is empty — the loop
+        ticks every 60s and the store lives on the slow bind mount. If the read
+        fails, the answer is "not run": repeating the sweep is wasteful, but
+        skipping one because the volume blipped would lose the day's checks.
+        """
+        if self._tier3_store_checked:
+            return False
+        self._tier3_store_checked = True
+        try:
+            stored = self._store.read_results(today)
+        except Exception:
+            logger.warning("health_tier3_completion_probe_failed", exc_info=True)
+            return False
+        if stored is None or stored.empty or "check_name" not in stored.columns:
+            return False
+        ran = bool(set(stored["check_name"]) & TIER3_CHECK_NAMES)
+        if ran:
+            logger.info("health_tier3_already_completed_today", date=str(today))
+        return ran
+
     def _should_run_tier3(self) -> bool:
         """Return True if Tier 3 should run now (after 16:35 ET, once per day, trading day)."""
         now_et = datetime.now(ET)
         today = now_et.date()
 
         if self._last_tier3_date == today:
+            return False
+
+        if self._last_tier3_date is None and self._tier3_already_ran(today):
+            self._last_tier3_date = today
             return False
 
         if not self._calendar.is_trading_day(today):

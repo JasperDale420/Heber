@@ -77,7 +77,7 @@ sequenceDiagram
     alt ValidationError
         CONS->>DLQ: XADD reason=validation_error
     else parsed OK
-        CONS->>CONS: dedupe by event_id (SHA256)
+        CONS->>CONS: dedupe by event_id (BLAKE2b-128)
         alt duplicate
             CONS->>RS: XACK (drop)
         else new event

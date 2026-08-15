@@ -35,6 +35,7 @@ from heber.ml.datasets import (
     persist_features_to_gold,
 )
 from heber.ml.inference import AlertGate, MetaLabelScorer
+from heber.reader.core import HeberReadError
 from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.consumer import AlertWatchConsumer
 from heber.watch.features import (
@@ -236,13 +237,20 @@ class TestReadLabelEdgeCases:
         assert result.empty
 
     def test_read_label_parquet_read_error(self, tmp_path: Path):
-        """Line 290-292: exception while reading parquet."""
+        """An unparseable label file raises rather than reading back as zero labels.
+
+        The three cases above — no dataset, no version, no data file — are
+        genuine absences and still answer empty. Bytes that exist but cannot be
+        parsed are an unknown label count, and returning empty for that fed
+        silently incomplete labels into training with nothing to distinguish it
+        from a day that produced none.
+        """
         version_dir = tmp_path / "dataset=test" / "type=label" / "version=v1.0.0"
         version_dir.mkdir(parents=True)
         bad_file = version_dir / "data.parquet"
         bad_file.write_text("not a parquet file")
-        result = read_label(tmp_path, "test", datetime(2025, 1, 15, tzinfo=UTC))
-        assert result.empty
+        with pytest.raises(HeberReadError):
+            read_label(tmp_path, "test", datetime(2025, 1, 15, tzinfo=UTC))
 
     def test_read_label_missing_ts_available_warn_only(self, tmp_path: Path):
         """Line 301: warn but continue when fail_on_missing_ts_available=False."""
@@ -398,8 +406,8 @@ class TestBuildFromRedis:
 class TestLoadOutcomesAndFeatures:
     """Cover _load_outcomes and _load_features error paths (lines 192-243)."""
 
-    def test_load_outcomes_exception(self, tmp_path: Path):
-        """Lines 213-215: exception during outcome loading."""
+    def test_load_outcomes_absent_path_is_empty(self, tmp_path: Path):
+        """A path nobody has written is a genuine absence and reads as empty."""
         config = DatasetConfig(
             outcomes_path=tmp_path / "nonexistent",
             features_path=tmp_path / "features",
@@ -408,8 +416,8 @@ class TestLoadOutcomesAndFeatures:
         result = builder._load_outcomes(date(2025, 1, 1), date(2025, 1, 31))
         assert result.empty
 
-    def test_load_features_exception(self, tmp_path: Path):
-        """Lines 241-243: exception during feature loading."""
+    def test_load_features_absent_path_is_empty(self, tmp_path: Path):
+        """A path nobody has written is a genuine absence and reads as empty."""
         config = DatasetConfig(
             features_path=tmp_path / "nonexistent",
             outcomes_path=tmp_path / "outcomes",
@@ -417,6 +425,32 @@ class TestLoadOutcomesAndFeatures:
         builder = MetaLabelDatasetBuilder(config=config)
         result = builder._load_features(date(2025, 1, 1), date(2025, 1, 31))
         assert result.empty
+
+    def test_load_outcomes_unreadable_raises(self, tmp_path: Path):
+        """A corrupt outcomes file must not build an empty training set.
+
+        Both loaders used to catch every exception and return an empty frame,
+        so ``build_from_parquet`` logged "No outcomes found in date range" and
+        stopped — the same message it logs for a date range that genuinely holds
+        none. Training data going missing must not look like a quiet no-op.
+        """
+        outcomes = tmp_path / "outcomes"
+        outcomes.mkdir()
+        (outcomes / "corrupt.parquet").write_bytes(b"not parquet")
+        config = DatasetConfig(outcomes_path=outcomes, features_path=tmp_path / "features")
+        builder = MetaLabelDatasetBuilder(config=config)
+        with pytest.raises(HeberReadError):
+            builder._load_outcomes(date(2025, 1, 1), date(2025, 1, 31))
+
+    def test_load_features_unreadable_raises(self, tmp_path: Path):
+        """A corrupt features file must not build an empty training set."""
+        features = tmp_path / "features"
+        features.mkdir()
+        (features / "corrupt.parquet").write_bytes(b"not parquet")
+        config = DatasetConfig(features_path=features, outcomes_path=tmp_path / "outcomes")
+        builder = MetaLabelDatasetBuilder(config=config)
+        with pytest.raises(HeberReadError):
+            builder._load_features(date(2025, 1, 1), date(2025, 1, 31))
 
 
 class TestJoinFeaturesOutcomes:
