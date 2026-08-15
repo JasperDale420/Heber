@@ -245,6 +245,29 @@ def test_a_wide_branch_cannot_starve_its_sibling_inside_one_dataset(tmp_path: Pa
     )
 
 
+def test_quarantined_files_are_never_compacted(tmp_path: Path) -> None:
+    """Quarantine holds evidence. Compaction deletes what it merges.
+
+    `silver/_quarantine/` is where damaged or suspect files are moved to be
+    kept, and the walk descended into it — reached in production once the scan
+    was fast enough to get there. Today each quarantined file happens to sit
+    alone in its directory, so the `<= 1` guard saves them; two in one
+    directory would be merged into a new file and the originals unlinked.
+    `_`-prefixed paths are ignored by pyarrow and Hive tooling for exactly this
+    reason, so the walk ignores them too.
+    """
+    quarantined = tmp_path / "_quarantine" / "2026-04-29" / "feed=data" / "dt=2026-02-11"
+    _write(quarantined, "compacted-a.parquet")
+    _write(quarantined, "compacted-b.parquet")
+    live = tmp_path / "feed=data" / "dt=2026-02-11"
+    _write(live, "part-0.parquet")
+
+    found = list(Compactor()._iter_partition_dirs(tmp_path))
+
+    assert live in found, "the live partition must still be walked"
+    assert not any("_quarantine" in p.parts for p in found), "the walk descended into quarantine"
+
+
 def test_walk_cost_is_independent_of_how_many_files_a_partition_holds(tmp_path: Path) -> None:
     """Adding files to a partition must not add work to the walk."""
     few = tmp_path / "few" / "dt=2026-01-01"
