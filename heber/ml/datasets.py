@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -539,6 +539,96 @@ def _write_quarantine_partition(
     quarantine_file = quarantine_root / f"quarantine-{ts}-{uuid4().hex[:8]}.parquet"
     corrupted_df.to_parquet(quarantine_file, index=False, compression="snappy")
     return quarantine_file
+
+
+# The row carries live-fetched enrichment that was captured later than the
+# point-in-time bound, so it describes the market at write time rather than at
+# the alert. The values are real — these rows are not corrupt — but they are not
+# point-in-time.
+QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE = "enrichment_captured_late"
+
+# No usable ``ts_available`` on the row, so the capture lag cannot be measured
+# at all. Applies to partitions written before Heber recorded feature write time.
+QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN = "enrichment_provenance_unknown"
+
+# Enrichment that can only ever come from a live "as of now" fetch. Greeks are
+# the obvious case, but the pre-gate scanner re-enriched *any* null field and the
+# steps fail independently, so a row can carry null Greeks and a present-day
+# iv_rank or max_pain. Neither has a point-in-time recovery path, unlike gex and
+# market_tide, which are handled separately below.
+_LIVE_ONLY_COLUMNS: tuple[str, ...] = (*_REQUIRED_GREEK_COLUMNS, "iv_rank", "max_pain_strike")
+
+# These do have Silver recovery, so they only indicate a live fetch when the row
+# is not flagged as recovered.
+_RECOVERABLE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("gex", "gex_recovered_from_silver"),
+    ("vex", "gex_recovered_from_silver"),
+    ("market_tide_net_premium", "market_tide_recovered_from_silver"),
+)
+
+
+def _carries_live_enrichment(df: pd.DataFrame, flags: pd.Series) -> pd.Series:
+    """True for rows holding a value that could only have come from a live fetch."""
+    present = [c for c in _LIVE_ONLY_COLUMNS if c in df.columns]
+    carries = df[present].notna().any(axis=1) if present else pd.Series(False, index=df.index)
+
+    for column, recovered_flag in _RECOVERABLE_COLUMNS:
+        if column not in df.columns:
+            continue
+        not_recovered = pd.Series([recovered_flag not in f for f in flags], index=df.index)
+        carries = carries | (df[column].notna() & not_recovered)
+
+    return carries
+
+
+def add_enrichment_provenance_flags(
+    df: pd.DataFrame,
+    max_age: timedelta,
+) -> pd.DataFrame:
+    """Append provenance flags to rows whose enrichment was not point-in-time.
+
+    ``ts_available`` is the moment the row was written, and the live-only
+    enrichment on it was fetched at that moment, so ``ts_available - alert_time``
+    bounds how stale that enrichment was when captured. Before the freshness gate
+    existed, ``EnrichmentBackfillScanner`` refetched it up to three days after the
+    alert.
+
+    The measure is deliberately conservative: it spans enrichment *and* the write
+    that followed, so it is an upper bound on capture staleness and the flagged
+    set is a superset of the truly contaminated one. Both ``ts_available`` and
+    ``alert_time`` remain on every row, so a training run can recompute the exact
+    lag and apply a stricter threshold of its own.
+
+    A row is flagged only when it actually carries live-fetched enrichment: a
+    backfilled row whose enrichment the gate refused is null, not contaminated,
+    and a lag-only rule would mislabel every row in the 2026-08-06/07 partitions.
+
+    Returns a copy; only ``quality_flags`` is modified, and re-running is a no-op.
+    """
+    out = df.copy()
+    flags = quality_flag_series(out)
+    carries = _carries_live_enrichment(out, flags)
+
+    if "ts_available" in out.columns and "alert_time" in out.columns:
+        lag = pd.to_datetime(out["ts_available"], utc=True, errors="coerce") - pd.to_datetime(
+            out["alert_time"], utc=True, errors="coerce"
+        )
+        late = (lag > max_age).fillna(False) & carries
+        unknown = lag.isna() & carries
+    else:
+        late = pd.Series(False, index=out.index)
+        unknown = carries
+
+    # Assign positionally: label-based assignment raises on a duplicated index.
+    flag_lists = list(flags)
+    for pos, (is_late, is_unknown) in enumerate(zip(late, unknown, strict=True)):
+        if is_late and QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE not in flag_lists[pos]:
+            flag_lists[pos] = [*flag_lists[pos], QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE]
+        if is_unknown and QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN not in flag_lists[pos]:
+            flag_lists[pos] = [*flag_lists[pos], QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN]
+
+    out["quality_flags"] = pd.Series(flag_lists, index=out.index, dtype=object)
+    return out
 
 
 def persist_features_to_gold(
