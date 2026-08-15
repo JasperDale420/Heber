@@ -113,7 +113,25 @@ def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def normalize_expiry(root: Path, apply: bool, lock_timeout: float = DEFAULT_LOCK_TIMEOUT) -> list[dict]:
+def _target_files(root: Path, include_quarantine: bool) -> list[Path]:
+    """Parquet files to consider — canonical ``dt=`` partitions unless asked otherwise.
+
+    ``HeberReader`` excludes the ``_quarantine`` subtree, so its files cannot
+    take part in a read and rewriting them is dead work (this dataset holds
+    ~10k of them against 120 canonical partitions).
+    """
+    files = [f for f in sorted(root.rglob("*.parquet")) if not f.name.startswith(".")]
+    if include_quarantine:
+        return files
+    return [f for f in files if "_quarantine" not in f.parts]
+
+
+def normalize_expiry(
+    root: Path,
+    apply: bool,
+    lock_timeout: float = DEFAULT_LOCK_TIMEOUT,
+    include_quarantine: bool = False,
+) -> list[dict]:
     """Report (and, when ``apply``, rewrite) parquet files with a non-date32 expiry.
 
     Returns one record per file: ``{path, from_type, rows, unparseable, action}``
@@ -125,9 +143,7 @@ def normalize_expiry(root: Path, apply: bool, lock_timeout: float = DEFAULT_LOCK
     outcome than a stopped migration.
     """
     report: list[dict] = []
-    for path in sorted(root.rglob("*.parquet")):
-        if path.name.startswith("."):
-            continue
+    for path in _target_files(root, include_quarantine):
         try:
             schema = pq.read_schema(path)
         except Exception as exc:
@@ -186,10 +202,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Normalize the Gold meta_label_features expiry column to date32.")
     ap.add_argument("--root", type=Path, default=expected_root, help="must be the meta_label_features version root")
     ap.add_argument("--apply", action="store_true", help="actually rewrite (default: dry-run report only)")
+    ap.add_argument(
+        "--include-quarantine",
+        action="store_true",
+        help="also sweep the _quarantine subtree (readers exclude it, so this is rarely useful)",
+    )
     args = ap.parse_args()
 
     root = resolve_dataset_root(args.root, expected_root)
-    report = normalize_expiry(root, args.apply)
+    report = normalize_expiry(root, args.apply, include_quarantine=args.include_quarantine)
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     changed = [r for r in report if r["action"] in ("rewritten", "would-rewrite")]

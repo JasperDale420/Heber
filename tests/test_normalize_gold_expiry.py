@@ -117,11 +117,21 @@ class TestApply:
         assert list(df["alert_id"]) == ["a0"]
         assert list(df["delta"]) == [0.5]
 
-    def test_quarantine_subtree_included(self, tmp_path: Path) -> None:
+    def test_quarantine_subtree_skipped_by_default(self, tmp_path: Path) -> None:
+        """Readers exclude _quarantine, so rewriting it is 10k files of dead work."""
         root = _version_root(tmp_path)
         path = _write_partition(root, "2026-03-01", ["2026-03-20"], quarantine=True)
 
-        normalize_expiry(root, apply=True)
+        report = normalize_expiry(root, apply=True)
+
+        assert report == []
+        assert _expiry_type(path) == pa.string()
+
+    def test_quarantine_subtree_included_on_request(self, tmp_path: Path) -> None:
+        root = _version_root(tmp_path)
+        path = _write_partition(root, "2026-03-01", ["2026-03-20"], quarantine=True)
+
+        normalize_expiry(root, apply=True, include_quarantine=True)
 
         assert _expiry_type(path) == pa.date32()
 
