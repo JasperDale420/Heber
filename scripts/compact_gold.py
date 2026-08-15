@@ -34,6 +34,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from heber.gold.partition_lock import LOCK_TIMEOUT_SECONDS, partition_lock
+
 GOLD_ROOT = Path("/Volumes/heber/data/gold")
 COMPACTED_FILENAME = "compacted.parquet"
 
@@ -73,8 +77,20 @@ def find_parquet_files(partition_dir: Path) -> list[Path]:
 def compact_partition(partition_dir: Path, *, dry_run: bool = False) -> tuple[int, int, int]:
     """Compact a single dt= partition.
 
+    Merging fragments and deleting the originals is not safe alongside another
+    rewriter of the same partition (see scripts/flag_truncated_label_windows.py),
+    so the write path holds the shared partition lock across the whole read,
+    merge and delete. A dry run only reads metadata and takes nothing.
+
     Returns (files_before, files_after, rows).
     """
+    if dry_run:
+        return _compact_partition_unlocked(partition_dir, dry_run=True)
+    with partition_lock(partition_dir, timeout=LOCK_TIMEOUT_SECONDS):
+        return _compact_partition_unlocked(partition_dir, dry_run=False)
+
+
+def _compact_partition_unlocked(partition_dir: Path, *, dry_run: bool = False) -> tuple[int, int, int]:
     parquet_files = find_parquet_files(partition_dir)
     files_before = len(parquet_files)
 
