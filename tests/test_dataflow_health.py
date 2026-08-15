@@ -4,8 +4,65 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from heber.config import Settings
 from heber.ops import dataflow_health as dataflow_health_module
+
+# Captured before the autouse fixture can replace it, so the probe's own tests
+# exercise the real implementation rather than the stub standing in for it.
+_REAL_MOUNT_LIVENESS_CHECK = dataflow_health_module._mount_liveness_check
+_REAL_CATALOG_HEALTH_CHECK = dataflow_health_module._catalog_health_check
+
+
+def _ok_probe(probe_id: str, message: str):
+    def _probe(*_args, **_kwargs) -> dict:
+        return {
+            "id": probe_id,
+            "status": "ok",
+            "severity": "critical",
+            "observed": {},
+            "threshold": {},
+            "message": message,
+        }
+
+    return _probe
+
+
+@pytest.fixture(autouse=True)
+def _stub_environment_probes(monkeypatch):
+    """Neutralise the probes that inspect the host rather than the report logic.
+
+    ``_mount_liveness_check`` stats the lakehouse sentinel and
+    ``_catalog_health_check`` makes a real HTTP call to the catalog. On a developer
+    machine with the volume mounted and the catalog running they return ``ok``, so
+    these report-shape tests passed; on any machine without them — CI, or a laptop
+    with the volume unmounted — both return ``fail`` and every assertion about
+    ``overall_status`` collapses.
+
+    ``raising=False`` covers ``_catalog_coverage_check``, an in-flight sibling probe
+    that is not on every branch yet: stub it where it exists, no-op where it does not,
+    so this fixture does not have to land in lockstep with it.
+
+    Both stubbed probes keep dedicated coverage of their own further down this file,
+    so stubbing them here silences host coupling without dropping what they verify.
+    """
+    for name, probe_id in (
+        ("_mount_liveness_check", "mount_liveness"),
+        ("_catalog_health_check", "catalog_health"),
+    ):
+        # Must exist: if one is renamed, fail here rather than silently no-op and
+        # let the real host-coupled probe run again.
+        monkeypatch.setattr(dataflow_health_module, name, _ok_probe(probe_id, "stubbed"))
+
+    # In-flight on a sibling branch — stub where present, no-op where not, so this
+    # fixture need not land in lockstep with it.
+    monkeypatch.setattr(
+        dataflow_health_module,
+        "_catalog_coverage_check",
+        _ok_probe("catalog_coverage", "stubbed"),
+        raising=False,
+    )
 
 
 def _signals(now: datetime) -> dict:
@@ -277,6 +334,10 @@ def test_dataflow_health_all_checks_pass_during_market_open(monkeypatch) -> None
     assert report["overall_status"] == "ok"
     assert report["summary"]["fail"] == 0
     assert report["summary"]["warn"] == 0
+    # Pin the inventory: summary counts alone stay green if a probe is unwired.
+    assert {"mount_liveness", "catalog_health", "backup_freshness", "dlq_queue_size"} <= {
+        c["id"] for c in report["checks"]
+    }
 
 
 def test_dataflow_health_bars_stale_is_fail(monkeypatch) -> None:
@@ -302,6 +363,8 @@ def test_dataflow_health_trades_and_flow_alerts_stale_are_warning(monkeypatch) -
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
     monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
+
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -421,6 +484,8 @@ def test_dataflow_health_market_open_warns_when_gateway_passive_metric_missing(m
     monkeypatch.setattr(dataflow_health_module, "_collect_runtime_signals", lambda **_kwargs: signals)
     monkeypatch.setattr(dataflow_health_module, "_is_market_open", lambda _ts: True)
     monkeypatch.setattr(dataflow_health_module, "_backup_freshness_check", _ok_backup_check)
+
+    monkeypatch.setattr(dataflow_health_module, "_collect_dlq_size_check", _ok_dlq_check)
 
     report = dataflow_health_module.generate_dataflow_report(window_seconds=900, mode="manual", now=now)
 
@@ -592,3 +657,67 @@ def test_backup_freshness_missing_marker_is_fail(tmp_path) -> None:
 
     assert check["status"] == "fail"
     assert check["observed"]["age_hours"] is None
+
+
+def test_mount_liveness_present_sentinel_is_ok(tmp_path) -> None:
+    """Real coverage for the probe the autouse fixture stubs elsewhere."""
+    (tmp_path / dataflow_health_module._MOUNT_SENTINEL_NAME).write_text("")
+
+    check = _REAL_MOUNT_LIVENESS_CHECK(Settings(data_root=tmp_path))
+
+    assert check["id"] == "mount_liveness"
+    assert check["status"] == "ok"
+    assert check["observed"]["present"] is True
+
+
+def test_mount_liveness_missing_sentinel_is_fail(tmp_path) -> None:
+    """An unmounted volume must be reported, not inferred from the host's state."""
+    check = _REAL_MOUNT_LIVENESS_CHECK(Settings(data_root=tmp_path))
+
+    assert check["status"] == "fail"
+    assert check["severity"] == "critical"
+    assert check["observed"]["present"] is False
+
+
+def test_catalog_health_200_is_ok(monkeypatch) -> None:
+    """Real coverage for the probe the autouse fixture stubs elsewhere."""
+
+    class _Resp:
+        status_code = 200
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(lambda: _Resp()))
+
+    check = _REAL_CATALOG_HEALTH_CHECK(Settings())
+
+    assert check["id"] == "catalog_health"
+    assert check["status"] == "ok"
+    assert check["severity"] == "critical"
+    assert check["observed"]["error"] is None
+
+
+def test_catalog_health_non_200_is_fail(monkeypatch) -> None:
+    """A reachable but unhealthy catalog must fail, not pass on reachability alone."""
+
+    class _Resp:
+        status_code = 503
+
+    monkeypatch.setattr(dataflow_health_module, "create_http_client", lambda **_kw: _FakeClient(lambda: _Resp()))
+
+    check = _REAL_CATALOG_HEALTH_CHECK(Settings())
+
+    assert check["status"] == "fail"
+    assert check["observed"]["error"] == "HTTP 503"
+
+
+def test_catalog_health_unreachable_is_fail_with_truncated_error(monkeypatch) -> None:
+    """An unreachable catalog is the dead-Postgres case this probe exists for."""
+    monkeypatch.setattr(
+        dataflow_health_module,
+        "create_http_client",
+        lambda **_kw: _FakeClient(lambda: ConnectionError("x" * 500)),
+    )
+
+    check = _REAL_CATALOG_HEALTH_CHECK(Settings())
+
+    assert check["status"] == "fail"
+    assert len(check["observed"]["error"]) <= 200
