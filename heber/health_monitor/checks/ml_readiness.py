@@ -10,10 +10,12 @@ Four sub-checks ensuring Gold layer data is ready for ML consumption:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import structlog
 
 from heber.health_monitor.metrics import health_leakage_violations, health_null_rate
@@ -74,6 +76,39 @@ def _safe_read_gold(ctx: CheckContext, dataset: str, today_str: str) -> pd.DataF
     except Exception:
         logger.warning("ml_readiness_gold_read_failed", dataset=dataset, exc_info=True)
         return None
+
+
+def _quarantine_only_partitions(ctx: CheckContext, dataset: str, today_str: str) -> list[Path]:
+    """Quarantine partitions for a date whose canonical partition wrote nothing.
+
+    Quarantined rows sitting beside a healthy partition are routine. The
+    reportable case is a date where every row was diverted, which the reader
+    can no longer surface because it excludes the quarantine subtree.
+    Decided on the filesystem rather than from a read result — the audit read
+    is bounded to midnight UTC and comes back empty on any ordinary day.
+    """
+    root = Path(ctx.settings.gold_path) / f"dataset={dataset}"
+    quarantined = []
+    for quarantine_dir in root.glob(f"project=*/version=*/_quarantine/*/dt={today_str}"):
+        if not _has_rows(quarantine_dir):
+            continue
+        # <version=V>/_quarantine/<reason>/dt=X — compare against that same
+        # version's canonical day, not any other project's healthy one.
+        canonical = quarantine_dir.parents[2] / f"dt={today_str}"
+        if not _has_rows(canonical):
+            quarantined.append(quarantine_dir)
+    return quarantined
+
+
+def _has_rows(partition_dir: Path) -> bool:
+    """True when a partition directory holds at least one Parquet row."""
+    for f in partition_dir.rglob("*.parquet"):
+        try:
+            if pq.read_metadata(f).num_rows > 0:
+                return True
+        except Exception:
+            logger.warning("ml_readiness_parquet_metadata_unreadable", path=str(f), exc_info=True)
+    return False
 
 
 async def _check_leakage(ctx: CheckContext, today_str: str, now: datetime) -> list[CheckResult]:
@@ -298,7 +333,47 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
     for dataset in FEATURE_DATASETS:
         df = _safe_read_gold(ctx, dataset, today_str)
 
-        if df is None or df.empty:
+        if df is None:
+            # The read FAILED. Not the same as "no data" — reporting it as a
+            # clean PASS hides exactly the outage this check exists to catch.
+            results.append(
+                CheckResult(
+                    check_name="ml_feature_nulls",
+                    feed=dataset,
+                    severity=Severity.P1_WARNING,
+                    status=Status.ERROR,
+                    message=f"Could not read dataset={dataset}; null-rate check did not run",
+                    details={"dataset": dataset, "date": today_str},
+                    ts_checked=now,
+                )
+            )
+            continue
+
+        if df.empty:
+            # Rows the writer diverted to _quarantine (enrichment returned no
+            # Greeks) are excluded from reads, so a day lost entirely to a
+            # gateway outage would otherwise look like a quiet day.
+            quarantined = _quarantine_only_partitions(ctx, dataset, today_str)
+            if quarantined:
+                results.append(
+                    CheckResult(
+                        check_name="ml_feature_nulls",
+                        feed=dataset,
+                        severity=Severity.P1_WARNING,
+                        status=Status.WARN,
+                        message=(
+                            f"No usable feature data for {dataset} today — every row was quarantined "
+                            f"(enrichment returned no Greeks)"
+                        ),
+                        details={
+                            "dataset": dataset,
+                            "date": today_str,
+                            "quarantine_paths": [str(p) for p in quarantined],
+                        },
+                        ts_checked=now,
+                    )
+                )
+                continue
             results.append(
                 CheckResult(
                     check_name="ml_feature_nulls",

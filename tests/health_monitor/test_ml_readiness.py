@@ -270,3 +270,137 @@ async def test_no_gold_data_graceful_skip(mock_now: MagicMock, tmp_path: Path) -
     # Should have INFO results, no crashes
     for r in results:
         assert r.status in (Status.PASS, Status.WARN), f"Unexpected {r.status} for {r.check_name}: {r.message}"
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_fully_quarantined_day_warns_instead_of_skipping(mock_now: MagicMock, tmp_path: Path) -> None:
+    """An empty feature read is not benign when the day's rows were quarantined.
+
+    The reader excludes `_quarantine`, so a gateway outage that null-Greeks
+    every row of a day makes the feature read come back empty. Without this,
+    losing an entire training day reports as a clean PASS.
+    """
+    reader = MagicMock()
+    reader.read_gold = MagicMock(return_value=pd.DataFrame())
+
+    quarantine_dir = (
+        tmp_path
+        / "gold"
+        / "dataset=meta_label_features"
+        / "project=watch"
+        / "version=v1"
+        / "_quarantine"
+        / "all_greeks_null"
+        / f"dt={TRADING_DAY.isoformat()}"
+    )
+    quarantine_dir.mkdir(parents=True)
+    pd.DataFrame([{"alert_id": "a1", "delta": None}]).to_parquet(quarantine_dir / "q.parquet", index=False)
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    quarantine_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert len(quarantine_results) == 1
+    assert quarantine_results[0].status == Status.WARN
+    assert quarantine_results[0].severity == Severity.P1_WARNING
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_quarantine_alongside_clean_partition_does_not_warn(mock_now: MagicMock, tmp_path: Path) -> None:
+    """Quarantined rows are normal — only a day with NO usable rows is a problem.
+
+    Guards against a daily false alarm: the audit read is bounded to midnight
+    UTC on both ends, so it comes back empty even on days that wrote plenty of
+    intraday rows. Emptiness alone must not be read as total loss.
+    """
+    reader = MagicMock()
+    reader.read_gold = MagicMock(return_value=pd.DataFrame())
+
+    version_root = tmp_path / "gold" / "dataset=meta_label_features" / "project=watch" / "version=v1"
+    canonical = version_root / f"dt={TRADING_DAY.isoformat()}"
+    canonical.mkdir(parents=True)
+    pd.DataFrame([{"alert_id": "clean", "delta": 0.5}]).to_parquet(canonical / "data.parquet", index=False)
+    quarantine_dir = version_root / "_quarantine" / "all_greeks_null" / f"dt={TRADING_DAY.isoformat()}"
+    quarantine_dir.mkdir(parents=True)
+    pd.DataFrame([{"alert_id": "bad", "delta": None}]).to_parquet(quarantine_dir / "q.parquet", index=False)
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert len(null_results) == 1
+    assert null_results[0].status == Status.PASS
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_failed_feature_read_is_error_not_pass(mock_now: MagicMock, tmp_path: Path) -> None:
+    """A read that FAILED is not 'no data' — never report it as a clean PASS."""
+    reader = MagicMock()
+    reader.read_gold = MagicMock(side_effect=OSError("volume unavailable"))
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert len(null_results) == 1
+    assert null_results[0].status == Status.ERROR
+    assert null_results[0].severity == Severity.P1_WARNING
+
+
+def _write_quarantine_and_canonical(
+    tmp_path: Path,
+    *,
+    canonical_project: str,
+    canonical_rows: list[dict],
+) -> None:
+    """Quarantine under project=watch/version=v1 plus a canonical partition elsewhere."""
+    dataset_root = tmp_path / "gold" / "dataset=meta_label_features"
+    quarantine_dir = (
+        dataset_root / "project=watch" / "version=v1" / "_quarantine" / "all_greeks_null" / f"dt={TRADING_DAY}"
+    )
+    quarantine_dir.mkdir(parents=True)
+    pd.DataFrame([{"alert_id": "bad", "delta": None}]).to_parquet(quarantine_dir / "q.parquet", index=False)
+
+    canonical = dataset_root / f"project={canonical_project}" / "version=v1" / f"dt={TRADING_DAY}"
+    canonical.mkdir(parents=True)
+    pd.DataFrame(canonical_rows, columns=["alert_id", "delta"]).to_parquet(canonical / "data.parquet", index=False)
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_canonical_rows_under_other_project_do_not_suppress_warning(mock_now: MagicMock, tmp_path: Path) -> None:
+    """Another project's healthy day says nothing about this one's."""
+    reader = MagicMock()
+    reader.read_gold = MagicMock(return_value=pd.DataFrame())
+    _write_quarantine_and_canonical(
+        tmp_path, canonical_project="other", canonical_rows=[{"alert_id": "clean", "delta": 0.5}]
+    )
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert [r.status for r in null_results] == [Status.WARN]
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_empty_canonical_file_does_not_suppress_warning(mock_now: MagicMock, tmp_path: Path) -> None:
+    """A canonical file with no rows in it is not usable training data."""
+    reader = MagicMock()
+    reader.read_gold = MagicMock(return_value=pd.DataFrame())
+    _write_quarantine_and_canonical(tmp_path, canonical_project="watch", canonical_rows=[])
+
+    ctx = _make_ctx(tmp_path, reader=reader)
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert [r.status for r in null_results] == [Status.WARN]

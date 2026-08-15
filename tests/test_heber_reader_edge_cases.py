@@ -1011,3 +1011,53 @@ class TestGoldReadErrorBranches:
         reader = HeberReader(tmp_path)
         df = reader.read_gold("feat", project="kairos", version="v1")
         assert df.empty
+
+
+class TestQuarantineExclusion:
+    """Files under a ``_quarantine`` subtree are never returned to readers.
+
+    ``persist_features_to_gold`` diverts rows whose enrichment failed (all
+    Greeks null) into ``<version=>/_quarantine/...`` precisely so they stay
+    out of ML training inputs. The reader walks the whole version root, so
+    without an explicit skip the quarantine is decorative.
+    """
+
+    def _gold_row(self, feature_a: float) -> dict:
+        return {
+            "ts_event": _ts(0),
+            "ts_available": _ts(1),
+            "instrument_key": "equity:AAPL",
+            "feature_a": feature_a,
+        }
+
+    def test_collect_skips_quarantine_subtree(self, tmp_path: Path) -> None:
+        good = tmp_path / "dt=2026-01-15"
+        good.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(1.0)])), str(good / "data.parquet"))
+        bad = tmp_path / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(bad / "q.parquet"))
+
+        assert _collect_parquet_files(tmp_path) == [str(good / "data.parquet")]
+
+    def test_read_gold_excludes_quarantined_rows(self, tmp_path: Path) -> None:
+        version_root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        good = version_root / "dt=2026-01-15"
+        good.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(1.0)])), str(good / "data.parquet"))
+        bad = version_root / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(bad / "q.parquet"))
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert list(df["feature_a"]) == [1.0]
+
+    def test_direct_file_under_quarantine_skipped(self, tmp_path: Path) -> None:
+        """The single-file branch honours the same guard as the directory walk."""
+        bad = tmp_path / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        path = bad / "q.parquet"
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(path))
+
+        assert _collect_parquet_files(path) == []

@@ -103,6 +103,10 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
        healthy, pyarrow's auto-discovery includes them and errors with
        ``Parquet file size is X bytes, smaller than the minimum file
        footer (8 bytes)``.
+    4. Anything under a ``_quarantine`` directory. Writers divert rows that
+       failed validation there (e.g. Gold feature rows whose enrichment
+       returned no Greeks) specifically to keep them out of downstream
+       reads; including them would defeat the quarantine.
 
     Returning an explicit file list to ``ds.dataset(...)`` short-circuits
     pyarrow's recursive directory walk and lets hive partitioning still
@@ -121,6 +125,7 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             and not base.name.startswith("._")
             and not base.name.endswith(".tmp")
             and not any(part.startswith("._") for part in base.parts)
+            and "_quarantine" not in base.parts
         ):
             return [str(base)]
         return []
@@ -133,6 +138,8 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
         if f.name.startswith("._"):
             continue
         if any(part.startswith("._") for part in f.parts):
+            continue
+        if "_quarantine" in f.parts:
             continue
         try:
             if not f.is_file():
