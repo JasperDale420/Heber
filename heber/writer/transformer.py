@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import gzip
 import json
+import struct
+import zlib
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,6 +68,8 @@ class BronzeToSilverTransformer:
         self.bronze_path = bronze_path or settings.bronze_path
         self.silver_path = silver_path or settings.silver_path
         self.batch_size = batch_size
+        # Per-date read failures, reset at the start of each date partition.
+        self._read_failures: list[tuple[Path, str]] = []
 
     def transform_all(
         self,
@@ -231,8 +235,20 @@ class BronzeToSilverTransformer:
         # Lazily populated as new partition keys are encountered.
         existing_ids_cache: dict[str, set[str]] = {}
 
-        # Process all hour directories and files
-        for item in dt_dir.rglob("*.jsonl.gz"):
+        self._read_failures = []
+
+        # Process all hour directories and files. AppleDouble sidecars (`._name`)
+        # exist all over this volume and match the glob, so they would otherwise
+        # each be reported as a damaged Bronze file and drown out the real ones.
+        for item in sorted(dt_dir.rglob("*.jsonl.gz")):
+            if item.name.startswith("._"):
+                continue
+            if item.stat().st_size == 0:
+                # Reads as a clean empty file, so nothing else would ever mention it.
+                logger.error("bronze_file_empty", path=str(item))
+                self._read_failures.append((item, "empty"))
+                files_processed += 1
+                continue
             for row in self._read_bronze_file(item, feed):
                 # Calculate partition key for each row to match live ingestion layout
                 # (e.g. handle hourly partitioning for quotes/trades)
@@ -272,6 +288,9 @@ class BronzeToSilverTransformer:
                 self._flush_buffer(rows, p_key, silver_feed)
                 total_records += len(rows)
 
+        failures = list(self._read_failures)
+        io_failures = sum(1 for _, kind in failures if kind == "io")
+
         logger.info(
             "Transformed partition",
             source_feed=feed,
@@ -280,7 +299,21 @@ class BronzeToSilverTransformer:
             files=files_processed,
             records=total_records,
             skipped_duplicates=skipped_duplicates,
+            files_unreadable=len(failures),
+            files_io_error=io_failures,
         )
+
+        # A replay that could not read most of what it was given has not replayed
+        # the date, and must not return a number the caller will read as success —
+        # a dropped mount fails every file identically and would otherwise report
+        # "records=0" and exit clean.
+        if files_processed and len(failures) * 2 > files_processed:
+            raise OSError(
+                f"Bronze replay of {feed} dt={dt} could not read "
+                f"{len(failures)} of {files_processed} files ({io_failures} I/O errors); "
+                "refusing to report a partial replay as complete"
+            )
+
         return total_records
 
     def _read_bronze_file(self, file_path: Path, feed: str) -> list[dict[str, Any]]:
@@ -303,8 +336,59 @@ class BronzeToSilverTransformer:
                         logger.warning("bronze_line_parse_failed", error=str(e), exc_info=True)
                         continue
 
+        except gzip.BadGzipFile as e:
+            # A CRC failure means the bytes inflated but do not match what was
+            # written, so any record decoded from them is unverified — a flipped
+            # digit still parses as valid JSON. Damaged content is not salvageable
+            # the way a torn write is; drop it rather than pass it off as good.
+            if "CRC" in str(e).upper():
+                logger.error(
+                    "bronze_file_corrupt",
+                    path=str(file_path),
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    records_discarded=len(records),
+                    reason="crc_mismatch_content_unverifiable",
+                )
+                self._read_failures.append((file_path, "corrupt"))
+                return []
+            logger.error(
+                "bronze_file_corrupt",
+                path=str(file_path),
+                error=str(e),
+                error_type=type(e).__name__,
+                records_salvaged=len(records),
+            )
+            self._read_failures.append((file_path, "corrupt"))
+        except (EOFError, zlib.error, UnicodeDecodeError, struct.error) as e:
+            # The file did not land whole: truncated mid-stream by an unclean
+            # shutdown, or carrying a damaged block. gzip signals these as
+            # EOFError/zlib.error, and bytes that inflate to non-UTF-8 surface as
+            # UnicodeDecodeError from the text wrapper — none of which is an
+            # OSError, so letting them escape aborted the entire date's replay and
+            # discarded every record already decoded from this file. Keep what was
+            # readable and let the remaining files for the date be replayed.
+            logger.error(
+                "bronze_file_truncated",
+                path=str(file_path),
+                error=str(e),
+                error_type=type(e).__name__,
+                records_salvaged=len(records),
+            )
+            self._read_failures.append((file_path, "truncated"))
         except OSError as e:
-            logger.error("Failed to read Bronze file", path=str(file_path), error=str(e), exc_info=True)
+            # Not attributable to this file's contents — a failing mount looks
+            # exactly like this on every file it touches. Recorded under its own
+            # name so the caller's failure budget can tell a dying volume apart
+            # from a handful of damaged files.
+            logger.error(
+                "bronze_io_error",
+                path=str(file_path),
+                error=str(e),
+                errno=getattr(e, "errno", None),
+                error_type=type(e).__name__,
+            )
+            self._read_failures.append((file_path, "io"))
 
         return records
 
