@@ -7,6 +7,8 @@ Runs periodically to prevent "small file problem."
 import asyncio
 import os
 import signal
+from collections import deque
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -281,86 +283,84 @@ class Compactor:
         if len(parquet_files) <= 1:
             return None
 
-        sized_files: list[tuple[Path, int]] = []
+        # Stat only as far as the batch needs, stopping at the first limit hit.
+        #
+        # This used to stat every file in the partition before selecting any.
+        # exFAT directories carry no index, so a stat inside a 35,955-entry
+        # directory measured 53.7ms — about 32 minutes to choose one batch, paid
+        # again on every cycle because only MAX_FILES_PER_BATCH of them get
+        # merged per visit. Selection now costs the batch, not the partition.
+        #
+        # Two limits bound a batch. The count cap guards against pathological
+        # fan-out; the byte cap is the real memory bound, since feeds with large
+        # embedded data (option_chain_snapshot's chain_json) expand ~6x from
+        # compressed size. The count cap alone throttled the common case badly —
+        # a trading day lands ~274 files averaging 12 KB, two orders of
+        # magnitude inside the budget.
+        size_cache: dict[Path, int] = {}
+        small_files: list[Path] = []
+        running_bytes = 0
+        oversized = 0
+        stopped_at: str | None = None
+
         for file_path in parquet_files:
+            if len(small_files) >= MAX_FILES_PER_BATCH:
+                stopped_at = "file_count"
+                break
+
             file_size = self._safe_stat_size(file_path, partition_path)
-            if file_size is not None:
-                sized_files.append((file_path, file_size))
+            if file_size is None:
+                continue
+            if file_size == 0:
+                logger.warning("compactor_skip_empty_file", path=str(file_path))
+                continue
+            if file_size >= TARGET_FILE_SIZE:
+                continue
 
-        if len(sized_files) <= 1:
-            return None
+            # A file larger than the whole batch budget can never share a batch,
+            # and the budget check below always admits its first candidate — so
+            # one of these used to fill the batch alone, get discarded by the
+            # `<= 1` gate, and leave the partition unchanged. The next scan then
+            # repeated it forever: 297 massive_taq_* partitions were capped this
+            # way every day for a week without a single merge.
+            if file_size > MAX_BATCH_COMPRESSED_BYTES:
+                oversized += 1
+                continue
 
-        size_cache = {path: size for path, size in sized_files}
-        small_files = [path for path, size in sized_files if 0 < size < TARGET_FILE_SIZE]
-        skipped_empty = [path for path, size in sized_files if size == 0]
-        for empty_path in skipped_empty:
-            logger.warning("compactor_skip_empty_file", path=str(empty_path))
+            if running_bytes + file_size > MAX_BATCH_COMPRESSED_BYTES and small_files:
+                stopped_at = "byte_budget"
+                break
 
-        # A file larger than the whole batch budget can never share a batch, and
-        # the budget loop below always admits its first candidate — so one of
-        # these used to fill the batch alone, get discarded by the `<= 1` gate,
-        # and leave the partition unchanged. The next scan then repeated it
-        # forever: 297 massive_taq_* partitions were capped this way every day
-        # for a week without a single merge. Excluding them up front lets the
-        # compactable remainder through.
-        oversized = [p for p in small_files if size_cache[p] > MAX_BATCH_COMPRESSED_BYTES]
+            size_cache[file_path] = file_size
+            small_files.append(file_path)
+            running_bytes += file_size
+
         if oversized:
             logger.info(
                 "compactor_skip_oversized_files",
                 partition=str(partition_path),
-                skipped_files=len(oversized),
+                skipped_files=oversized,
                 budget_bytes=MAX_BATCH_COMPRESSED_BYTES,
             )
-            small_files = [p for p in small_files if p not in set(oversized)]
 
         if len(small_files) <= 1:
             return None
 
-        # Guard against pathological fan-out, but let the byte budget below be
-        # the real memory bound. Capping by count alone throttled the common
-        # case badly: a trading day lands ~274 files averaging 12 KB — 3.3 MB
-        # total, two orders of magnitude inside the budget — and draining 50 per
-        # hourly cycle left five-day-old partitions still holding 273 parts.
-        if len(small_files) > MAX_FILES_PER_BATCH:
+        if stopped_at:
             logger.info(
                 "compactor_batch_capped",
                 partition=str(partition_path),
-                total_files=len(small_files),
-                batch_size=MAX_FILES_PER_BATCH,
+                partition_files=len(parquet_files),
+                included_files=len(small_files),
+                included_bytes=running_bytes,
+                limit=stopped_at,
             )
-            small_files = small_files[:MAX_FILES_PER_BATCH]
 
-        # Cap total compressed bytes to prevent OOM on feeds with large embedded data
-        # (e.g. option_chain_snapshot chain_json expands ~6x from compressed size).
-        running_bytes = 0
-        byte_capped_files: list[Path] = []
-        for f in small_files:
-            file_size = size_cache.get(f)
-            if file_size is None:
-                continue
-            if running_bytes + file_size > MAX_BATCH_COMPRESSED_BYTES and byte_capped_files:
-                logger.info(
-                    "compactor_byte_budget_capped",
-                    partition=str(partition_path),
-                    total_files=len(small_files),
-                    included_files=len(byte_capped_files),
-                    included_bytes=running_bytes,
-                    budget_bytes=MAX_BATCH_COMPRESSED_BYTES,
-                )
-                break
-            byte_capped_files.append(f)
-            running_bytes += file_size
-        small_files = byte_capped_files
-
-        if len(small_files) <= 1:
-            return None
-
-        total_size = running_bytes
         logger.info(
             "Compacting partition",
             partition=str(partition_path),
             files=len(small_files),
-            total_bytes=total_size,
+            total_bytes=running_bytes,
         )
 
         return small_files, size_cache
@@ -525,6 +525,50 @@ class Compactor:
         finally:
             self._release_partition_lock(lock_path)
 
+    @staticmethod
+    def _iter_partition_dirs(layer_path: Path) -> Iterator[Path]:
+        """Yield every directory *below* ``layer_path``, never the root itself.
+
+        ``rglob("*")`` yielded files as well as directories and stat'd each one
+        through ``is_dir()`` to tell them apart. That is a syscall per file:
+        measured at 8 entries/s against ``feed=quotes``, whose 825,080 files
+        would take roughly 28 hours to walk past — the reason its partitions
+        were never compacted, and why no cycle ever ran to completion.
+        ``os.scandir`` answers the same question from the directory entry, so
+        the walk costs one read per directory and nothing per file.
+
+        Breadth-first, so no one dataset can monopolise a cycle by being deep.
+        `feed=quotes` sits four levels down and a depth-first walk spent 420s
+        without reaching any of its partitions.
+
+        The layer root is deliberately excluded. ``rglob`` never yields the
+        directory it starts from, and compaction deletes the files it merges —
+        so yielding the root would let two stray ``silver/*.parquet`` files be
+        treated as a partition, merged into one and unlinked.
+
+        Names starting with "." are skipped: macOS AppleDouble sidecars on
+        exFAT raise PermissionError from a stat, and their contents are not
+        lake data.
+        """
+
+        def subdirectories(directory: Path) -> list[Path]:
+            try:
+                with os.scandir(directory) as entries:
+                    return [
+                        Path(entry.path)
+                        for entry in entries
+                        if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
+                    ]
+            except OSError as exc:
+                logger.warning("compactor_scan_unreadable_dir", path=str(directory), error=str(exc))
+                return []
+
+        queue = deque(subdirectories(layer_path))
+        while queue:
+            current = queue.popleft()
+            yield current
+            queue.extend(subdirectories(current))
+
     def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
         layer_path = settings.data_root / layer
@@ -546,19 +590,12 @@ class Compactor:
         partitions_scanned = 0
         files_merged = 0
 
-        # Walk through all partitions (directories containing .parquet files).
-        # Skip names starting with "." so macOS AppleDouble resource-fork
-        # files (._foo) on exFAT/NTFS volumes don't raise PermissionError
-        # from the is_dir() stat call. Mirrors the catalog fix in 8af04ef.
-        for partition_path in layer_path.rglob("*"):
-            if partition_path.name.startswith("."):
-                continue
-            if partition_path.is_dir():
-                parquet_files = self._list_compactable_parquet_files(partition_path)
-                if parquet_files:
-                    partitions_scanned += 1
-                    merged = self.compact_partition(partition_path)
-                    files_merged += merged
+        for partition_path in self._iter_partition_dirs(layer_path):
+            parquet_files = self._list_compactable_parquet_files(partition_path)
+            if parquet_files:
+                partitions_scanned += 1
+                merged = self.compact_partition(partition_path)
+                files_merged += merged
 
         return {
             "partitions_scanned": partitions_scanned,
