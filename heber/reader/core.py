@@ -373,13 +373,19 @@ def _is_null_like(dt: pa.DataType) -> bool:
 
 
 def _needs_schema_union(file_list: list[str], required: tuple[tuple[str, ...], ...] = ()) -> bool:
-    """Whether merging every fragment's schema would recover a needed column.
+    """Whether merging every fragment's schema would recover a needed column
+    or catch a column whose type has drifted.
 
     Merging reads one footer per fragment — measured at 3s over 120 fragments
     and 197s over 9,415 on the lakehouse volume — so it has to earn its cost.
-    It earns it when a column the caller is filtering on is missing from the
-    schema pyarrow would infer (the first fragment's), because the predicate
-    would otherwise be dropped and the read would return unfiltered rows.
+    Probing only the oldest and newest fragment (two footer reads, not N)
+    earns it in both of the ways fragments are known to disagree: a column
+    the caller is filtering on missing from the schema pyarrow would infer
+    (the first fragment's) drops the predicate silently, and a column whose
+    *type* changed between the oldest and newest partition (``expiry`` as
+    ``int64`` then later ``string`` is the drift that motivated this check)
+    can merge into the wrong value without pyarrow ever raising, depending on
+    which fragment it happens to sample first.
 
     Each entry in ``required`` is a set of alternatives: a time predicate is
     satisfied by ``ts_event`` *or* ``ts_label``.
@@ -395,12 +401,6 @@ def _needs_schema_union(file_list: list[str], required: tuple[tuple[str, ...], .
         return True
     if any(not any(c in first.names for c in group) for group in required):
         return True
-    # No predicate is at risk, but the columns may still be missing from the
-    # read. Recovering them is worth two more footer reads, not N: partition
-    # paths sort by date and columns get added over time, so the oldest and
-    # newest fragment are where that shows up.
-    if all(c in first.names for c in _PREDICATE_COLUMNS):
-        return False
     try:
         last = pq.read_schema(ordered[-1])
     except Exception:
@@ -497,6 +497,14 @@ def _unified_dataset(
         # ``ArrowInvalid: Float value X was truncated converting to int64``
         # that fires when a float-typed fragment is read into an int-typed
         # schema.
+        #
+        # Everything else is a disagreement no merge can settle without
+        # changing the column's meaning (or, for decimal, its precision) —
+        # e.g. ``expiry`` written as ``int64`` in one partition and
+        # ``string`` in another. pyarrow's own dataset scan does not reject
+        # this uniformly: whether it raises depends on which fragment it
+        # samples first, so the same feed can read fine on one host and
+        # silently coerce every value to string on another. Reject instead.
         field_map: dict[str, pa.DataType] = {}
         field_order: list[str] = []
         for schema in schemas:
@@ -517,13 +525,37 @@ def _unified_dataset(
                         field_map[field.name] = incoming
                     elif _is_null_like(incoming):
                         continue
+                    elif pa.types.is_decimal(existing) or pa.types.is_decimal(incoming):
+                        # pyarrow casts decimal<->double without raising, but
+                        # decimal->double drops precision beyond 2^53 and
+                        # double->decimal can overflow — neither is a
+                        # widening, both are the producer disagreeing on
+                        # what the column holds.
+                        raise SchemaContractError(
+                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                            f"{incoming}); a decimal column cannot be merged with another type "
+                            "without silently losing precision"
+                        )
                     elif pa.types.is_string(existing) or pa.types.is_string(incoming):
-                        field_map[field.name] = pa.string()
+                        # Only a genuine cross-family mismatch reaches this
+                        # branch — same-family string encodings (dictionary,
+                        # large_string) were already normalized above and
+                        # took the ``existing.equals(incoming)`` exit.
+                        raise SchemaContractError(
+                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                            f"{incoming}); casting to string would silently change what the "
+                            "column holds rather than merely how it's encoded"
+                        )
                     elif pa.types.is_timestamp(existing) and pa.types.is_timestamp(incoming):
                         field_map[field.name] = _finer_timestamp(existing, incoming, field.name)
                     elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
                         # int64 vs float64 → widen to float64
                         field_map[field.name] = pa.float64()
+                    else:
+                        raise SchemaContractError(
+                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                            f"{incoming}) in a way that cannot be safely unified"
+                        )
 
         # Append hive partition columns to the unified schema. Without
         # them, ``ds.dataset(file_list, schema=unified, partitioning=hive)``
@@ -1240,8 +1272,18 @@ class HeberReader:
             return None
         latest_dir = version_dirs[0]
         resolved = latest_dir.name.removeprefix(_VERSION_PREFIX)
-        # Scan from parent so hive partitioning exposes the version= column.
-        return latest_dir.parent, resolved
+        # Scan the resolved version directly. pyarrow's hive-partitioning
+        # factory reads every key=value segment from each file's absolute
+        # path, not just those below the scanned root, so `version=` is
+        # still exposed even though we no longer walk the parent directory.
+        # Scanning the parent pulled every retired version's files into
+        # schema validation alongside the current one — the `version ==
+        # resolved` predicate below already filtered the returned rows down
+        # to one version, but an incompatible schema in a retired version
+        # (a type a later version deliberately changed) could still fail
+        # the whole read, or force an unneeded full-dataset schema union,
+        # for a caller who only asked for "latest".
+        return latest_dir, resolved
 
     # ------------------------------------------------------------------
     # Gold writes
@@ -1360,6 +1402,7 @@ class HeberReader:
             dataset_obj = _open_dataset_safe(
                 str(path),
                 partitioning=ds.partitioning(flavor="hive"),
+                unify_evolved=True,
             )
         except OSError as exc:
             logger.error("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
