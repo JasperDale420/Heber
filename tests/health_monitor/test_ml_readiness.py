@@ -404,3 +404,78 @@ async def test_empty_canonical_file_does_not_suppress_warning(mock_now: MagicMoc
 
     null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
     assert [r.status for r in null_results] == [Status.WARN]
+
+
+# --- The audit window must actually cover the trading day ---
+
+
+def _write_gold_day(tmp_path: Path, dataset: str, rows: pd.DataFrame) -> None:
+    """Write one Gold partition the real HeberReader can read."""
+    part = tmp_path / "gold" / f"dataset={dataset}" / "project=watch" / "version=v1" / f"dt={TRADING_DAY.isoformat()}"
+    part.mkdir(parents=True, exist_ok=True)
+    rows.to_parquet(part / "data.parquet", index=False)
+
+
+def _intraday_rows(n: int, *, null_pct: float = 0.0, leak: bool = False) -> pd.DataFrame:
+    """Rows stamped during market hours — 13:30Z is 09:30 ET, not midnight."""
+    ts_event = pd.date_range(f"{TRADING_DAY.isoformat()} 13:30", periods=n, freq="1min", tz="UTC")
+    ts_available = ts_event - pd.Timedelta(seconds=5) if leak else ts_event + pd.Timedelta(seconds=5)
+    values = [None if i < int(n * null_pct) else float(i) for i in range(n)]
+    return pd.DataFrame(
+        {
+            "ts_event": ts_event,
+            "ts_available": ts_available,
+            "instrument_key": [f"equity:SYM{i % 5}" for i in range(n)],
+            "feature_a": values,
+        }
+    )
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", [])
+async def test_null_check_sees_intraday_rows(mock_now: MagicMock, tmp_path: Path) -> None:
+    """The audit read must span the whole day, not just the midnight instant."""
+    from heber.reader import HeberReader
+
+    _write_gold_day(tmp_path, "meta_label_features", _intraday_rows(100, null_pct=0.20))
+
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path))
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    null_results = [r for r in results if r.check_name == "ml_feature_nulls" and r.feed == "meta_label_features"]
+    assert [r.status for r in null_results] == [Status.WARN]
+    assert "skipping" not in null_results[0].message
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", ["meta_label_features"])
+async def test_leakage_audit_sees_intraday_rows(mock_now: MagicMock, tmp_path: Path) -> None:
+    """The zero-leakage guardrail is worthless if its read window matches nothing."""
+    from heber.reader import HeberReader
+
+    _write_gold_day(tmp_path, "meta_label_features", _intraday_rows(10, leak=True))
+
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path))
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    leakage = [r for r in results if r.check_name == "ml_leakage_audit" and r.feed == "meta_label_features"]
+    assert [r.status for r in leakage] == [Status.FAIL]
+    assert leakage[0].details["violation_count"] == 10
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+async def test_leakage_audit_covers_the_real_label_dataset(mock_now: MagicMock, tmp_path: Path) -> None:
+    """The audited names must be datasets that exist, or the guardrail is decorative."""
+    from heber.reader import HeberReader
+
+    _write_gold_day(tmp_path, "labels_alert_barriers", _intraday_rows(10, leak=True))
+
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path))
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    leakage = [r for r in results if r.check_name == "ml_leakage_audit" and r.feed == "labels_alert_barriers"]
+    assert [r.status for r in leakage] == [Status.FAIL]
+    assert leakage[0].details["violation_count"] == 10

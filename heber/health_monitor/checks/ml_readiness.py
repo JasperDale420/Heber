@@ -27,7 +27,7 @@ ET = ZoneInfo("America/New_York")
 
 # Gold datasets to audit for zero-leakage. Can be extended as more Gold datasets are added.
 GOLD_DATASETS_TO_AUDIT: list[str] = [
-    "alert_barrier_labels",
+    "labels_alert_barriers",
     "meta_label_features",
 ]
 
@@ -64,14 +64,23 @@ def compute_psi(expected: np.ndarray, actual: np.ndarray) -> float:
 def _safe_read_gold(ctx: CheckContext, dataset: str, today_str: str) -> pd.DataFrame | None:
     """Read a Gold dataset for the audit window.
 
+    The window spans the whole UTC day. ``read_gold`` compares ``ts_event``
+    against both bounds inclusively, and a bare date resolves to midnight — so
+    passing the date twice matches only rows stamped exactly at 00:00:00Z and
+    every one of these checks reads an empty frame on a normal trading day.
+    Partitions are keyed on the UTC date of ``alert_time``, so a UTC day is the
+    right unit here.
+
     Returns an empty DataFrame when the read SUCCEEDS with no rows, and ``None``
     when the read FAILS. Callers must distinguish the two: a failed read is not
     "no data", and reporting it as a clean PASS hides the failure on a
     safety-critical check (the zero-leakage audit). Logged at WARNING so the
     failure is visible at the default INFO level.
     """
+    day_start = f"{today_str}T00:00:00+00:00"
+    day_end = f"{today_str}T23:59:59.999999+00:00"
     try:
-        df = ctx.reader.read_gold(dataset, time_range=(today_str, today_str))
+        df = ctx.reader.read_gold(dataset, time_range=(day_start, day_end))
         return pd.DataFrame() if df is None else df
     except Exception:
         logger.warning("ml_readiness_gold_read_failed", dataset=dataset, exc_info=True)
