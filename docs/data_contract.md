@@ -102,6 +102,18 @@ consumers treat them as source-data limitations, not pipeline bugs.
 | `iv_rank` | `dt=2026-07-20`, `dt=2026-07-21` | The 07-20/07-21 EOD publishes were evicted from the live stream (overload). The `/api/stock/{sym}/iv-rank` endpoint returns HTTP 422 for a historical `date` param, so the client falls back to the **current** snapshot (`gateway/providers/uw/options.py:383`). A re-pull can only ever produce today's value — verified: a 2026-07-22 backfill re-landed iv_rank only under `dt=2026-07-22`, never 07-20/07-21. | **No** — permanent |
 | `iv_term_structure` | `dt=2026-07-20`, `dt=2026-07-21` | Same eviction event. The provider method takes **no date param** — snapshot-only, returns the current term structure regardless of the requested range (`gateway/core/backfill.py:248`). The lost dates cannot be re-fetched. | **No** — permanent |
 
+### Gold
+
+| Dataset | Missing | Cause | Recoverable? |
+|---------|---------|-------|--------------|
+| `labels_alert_barriers` | one write within `dt=2026-06-09` | A rename published `part-20260609161826320314-62f8971d.parquet` before its data landed — the exFAT volume has no journaling — leaving a zero-byte file. The write never happened, so the rows it would have held were never on disk. The partition retains 28 healthy part files. Removed from the dataset on 2026-08-15 to unblock reads; the record is at `~/heber-repair-backups/lost-fragments/`. | **No** — permanent, row count unknown |
+
+The row count is unknowable (the file had no parquet footer), so this day is
+under-represented in the label set by an unmeasurable amount. It falls in the
+**training** side of the current 2026-06-25 split, not validation. Writers now
+fsync before publishing (`heber/utils/durable_write.py`), so this failure mode
+should not recur.
+
 Only 07-20 and 07-21 are lost; both feeds resume from the next daily snapshot.
 Other feeds hit by the same overload (`oi_change`, `darkpool`,
 `greek_exposure`, `historic_option_volume`, `short_data`, `ftd`) **are**
