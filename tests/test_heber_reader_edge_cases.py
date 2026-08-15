@@ -1111,16 +1111,22 @@ class TestReadParquetDatasetEdges:
         out = reader.read_parquet_dataset(d)
         assert out.empty
 
-    def test_corrupt_parquet_file_returns_empty(self, tmp_path: Path) -> None:
-        """A file named ``*.parquet`` with non-parquet bytes is collected (name
-        passes the filter) but fails at read → read_parquet_dataset swallows the
-        ArrowInvalid and returns an empty frame rather than raising."""
+    def test_corrupt_parquet_file_raises(self, tmp_path: Path) -> None:
+        """A file named ``*.parquet`` holding non-parquet bytes is collected (the
+        name passes the filter) but fails at open, and that must raise.
+
+        ``read_parquet_dataset`` gets the same contract as the Silver and Gold
+        reads: absence answers empty, unreadable bytes do not. It used to raise
+        only when the scan failed, so a file that failed one step earlier — at
+        open — still came back as an empty frame, and `read_label` reported zero
+        labels for a dataset nobody could read.
+        """
         d = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-01-15"
         d.mkdir(parents=True, exist_ok=True)
         (d / "corrupt.parquet").write_bytes(b"this is not parquet data at all")
         reader = HeberReader(tmp_path)
-        out = reader.read_parquet_dataset(d)
-        assert out.empty
+        with pytest.raises(HeberReadError):
+            reader.read_parquet_dataset(d)
 
 
 class TestSilverReadErrorBranches:

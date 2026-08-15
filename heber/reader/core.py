@@ -1234,12 +1234,20 @@ class HeberReader:
                 str(path),
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except OSError:
-            logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
-            return pd.DataFrame()
+        except OSError as exc:
+            logger.error("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
+            raise HeberReadError(f"Could not open dataset at {path}: {exc}") from exc
 
         if dataset_obj is None:
-            logger.warning("heber_reader_arbitrary_open_failed", path=str(path))
+            # Same split as the Silver and Gold reads: nothing readable found is
+            # an honest empty, but files that were found and could not be opened
+            # are an unknown row count, not zero.
+            if _collect_parquet_files(str(path)) or _failed_write_present(str(path)):
+                logger.error("heber_reader_arbitrary_open_failed", path=str(path))
+                raise HeberReadError(
+                    f"Could not open dataset at {path} — files are present but their schemas could not be unified"
+                )
+            logger.warning("heber_reader_no_readable_files", path=str(path))
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
