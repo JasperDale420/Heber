@@ -1,0 +1,72 @@
+# Off-machine dead-man for the native alert-check job.
+#
+# Every Heber monitor runs on the machine it watches, so none of them can report
+# that machine being dead, asleep, or the launchd job being unloaded. This runs
+# on GitHub's runners instead: alert-check stamps the HEBER_ALERT_HEARTBEAT repo
+# variable every cycle, and this reads it. A stale stamp means the alarm itself
+# is gone; a `fail` stamp means it is alive but broken (crashed run, or a Discord
+# send that did not land).
+#
+# Scheduled workflows only run from the default branch, so this file must be on
+# master to fire at all. It depends on nothing else in the repo.
+name: heartbeat-deadman
+
+on:
+  schedule:
+    # GitHub delays cron under load, sometimes by 10-20 minutes. The staleness
+    # threshold below is set well above the interval to absorb that.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the alert-check heartbeat
+        env:
+          BEAT: ${{ vars.HEBER_ALERT_HEARTBEAT }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Six alert-check cycles. High enough that a delayed run of this
+          # workflow cannot invent an outage, low enough to catch a real one
+          # inside half an hour.
+          MAX_AGE_MINUTES: "30"
+        run: |
+          set -uo pipefail
+
+          notify() {
+            if [ -z "${WEBHOOK}" ]; then
+              echo "::error::${1}  (no DISCORD_WEBHOOK_URL secret — cannot notify)"
+              exit 1
+            fi
+            # --fail so a rejected webhook fails the job loudly rather than
+            # letting the dead-man die quietly too.
+            curl -sS --fail --max-time 20 -H 'Content-Type: application/json' \
+              --data "$(jq -nc --arg c "$1" '{content:$c}')" "${WEBHOOK}" >/dev/null
+            echo "::error::${1}"
+            exit 1
+          }
+
+          if [ -z "${BEAT}" ]; then
+            notify "🚨 CRITICAL — Heber alert-check has never recorded a heartbeat. The host-side alarm is not running, so stack outages would go unreported."
+          fi
+
+          stamp="$(printf '%s' "${BEAT}" | awk '{print $1}')"
+          status="$(printf '%s' "${BEAT}" | awk '{print $2}')"
+
+          beat_epoch="$(date -u -d "${stamp}" +%s 2>/dev/null)" || \
+            notify "🚨 CRITICAL — Heber alert-check heartbeat is unparseable (\`${BEAT}\`). Treating the alarm as down."
+
+          age_min=$(( ( $(date -u +%s) - beat_epoch ) / 60 ))
+
+          if [ "${age_min}" -gt "${MAX_AGE_MINUTES}" ]; then
+            notify "🚨 CRITICAL — Heber alert-check has not checked in for ${age_min} minutes (limit ${MAX_AGE_MINUTES}). The host-side alarm is down: container, upstream and coverage outages are currently unreported. Check the Mac, Docker, and \`launchctl list | grep alert-check\`."
+          fi
+
+          if [ "${status}" = "fail" ]; then
+            notify "🚨 CRITICAL — Heber alert-check is running but reporting itself broken (last beat ${age_min}m ago). Its run crashed, or a Discord send failed — alerts may be silently vanishing. Check logs/native/alert-check.err.log and the webhook."
+          fi
+
+          echo "alert-check heartbeat OK — ${age_min}m old, status=${status}"
