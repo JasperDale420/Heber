@@ -90,29 +90,34 @@ class TestPartitionRowCounts:
 
 
 class TestWalkPartitionFiles:
-    """The walk decides what is handed to pyarrow, so assert on it directly.
+    """What the walk collects, and what it deliberately does not pay for.
 
     175 zero-byte part files exist in the lake, 173 of them under feed=quotes.
-    Each cost an open, a raised ArrowInvalid and a full traceback rendered into
-    a JSON log line on every pass. The compactor and HeberReader already skip
-    empty files by size; this scan now does too.
+    Each one reaching pyarrow costs an open, a raised ArrowInvalid and a full
+    traceback in a JSON log line — so they are still filtered, but by
+    `_read_row_count` at read time rather than by statting every file here.
     """
 
     def _walk(self, feed_dir: Path):
         with ThreadPoolExecutor(max_workers=2) as pool:
             return _walk_partition_files(feed_dir, pool)
 
-    def test_zero_byte_files_are_never_handed_to_pyarrow(self, tmp_path: Path) -> None:
+    def test_zero_byte_files_are_collected_but_filtered_at_read_time(self, tmp_path: Path) -> None:
+        """The walk no longer stats files, so the size filter moved to the read.
+
+        Statting every file cost 4.24ms each against 0.15ms for the scandir
+        entry — 29x, measured on the mount — and was paid even for the files a
+        reuse pass never opens. `_read_row_count` still keeps pyarrow away from
+        a zero-byte file; it just does it for the files actually being opened.
+        """
         part = _partition(tmp_path)
         _write_parquet(part / "good.parquet", 50)
         (part / "part-empty.parquet").touch()
 
         walk = self._walk(tmp_path)
-        files_by_date, skipped_empty = walk.files_by_date, walk.skipped_empty
 
-        collected = [p.name for paths in files_by_date.values() for p in paths]
-        assert collected == ["good.parquet"]
-        assert skipped_empty == 1
+        collected = sorted(p.name for paths in walk.files_by_date.values() for p in paths)
+        assert collected == ["good.parquet", "part-empty.parquet"]
 
     def test_reports_counts_for_per_feed_instrumentation(self, tmp_path: Path) -> None:
         """dirs/files/skipped counts are what the per-feed log line reports."""
@@ -121,13 +126,12 @@ class TestWalkPartitionFiles:
         _write_parquet(part / "b.parquet", 20)
 
         walk = self._walk(tmp_path)
-        files_by_date, dirs_scanned, skipped_empty = walk.files_by_date, walk.dirs_scanned, walk.skipped_empty
+        files_by_date, dirs_scanned = walk.files_by_date, walk.dirs_scanned
 
         assert list(files_by_date) == ["2024-01-15"]
         assert len(files_by_date["2024-01-15"]) == 2
         # feed dir + instrument_type= + dt=
         assert dirs_scanned == 3
-        assert skipped_empty == 0
 
     def test_attributes_hourly_files_to_their_date(self, tmp_path: Path) -> None:
         part = _partition(tmp_path)
@@ -141,11 +145,7 @@ class TestWalkPartitionFiles:
     def test_ignores_files_with_no_date_partition_above_them(self, tmp_path: Path) -> None:
         _write_parquet(tmp_path / "loose.parquet", 10)
 
-        walk = self._walk(tmp_path)
-        files_by_date, skipped_empty = walk.files_by_date, walk.skipped_empty
-
-        assert files_by_date == {}
-        assert skipped_empty == 0
+        assert self._walk(tmp_path).files_by_date == {}
 
 
 class TestReadRowCount:
