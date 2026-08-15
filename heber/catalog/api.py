@@ -54,23 +54,70 @@ def _should_auto_create_catalog_tables() -> bool:
     return settings.environment == "dev"
 
 
+# Strong references to fire-and-forget tasks; asyncio only holds weak ones.
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _initial_coverage_scan() -> None:
+    """Publish fresh coverage as soon as possible. Never raises.
+
+    This is the only coverage work on the critical path, and it reuses recorded
+    counts for partitions nothing has touched, so it finishes in minutes.
+
+    The verification pass used to run here instead. It re-reads every Parquet
+    footer, and Phase 2 writes nothing until the entire 80-feed walk finishes:
+    measured on the production mount at 11.3 files/sec, ``feed=quotes`` alone
+    (~825k files) is ~20 hours. That is longer than the 6h staleness threshold
+    and longer than this container stays up between restarts, so coverage could
+    not refresh at all — it sat frozen for 14h with the scan working the whole
+    time, and every restart discarded the walk and began again at the first feed.
+    """
+    try:
+        async with async_session() as session:
+            await seed_coverage_from_disk(session, reuse_recorded=True)
+        logger.info("catalog_coverage_refresh_done")
+    except Exception:
+        logger.exception("catalog_coverage_refresh_error")
+
+
+async def _verification_recount() -> None:
+    """Re-count every partition from its footers, ignoring recorded counts. Never raises.
+
+    Reuse trusts a recorded ``counted_at`` to mean "counted as of". Rows written
+    before that scheme existed were stamped when they were *written*, at the end
+    of a walk lasting hours, so a partition that changed mid-walk looks older
+    than its own row and would be skipped from then on. This pass is what bounds
+    that: it takes no recorded count on trust.
+
+    It runs as its own task rather than ahead of the refresh loop, because it is
+    a ~20h pass and gating five-minute refreshes behind it is what produced the
+    outage in the first place.
+
+    Its writes deliberately overwrite rows the refresh has restamped in the
+    meantime. Refusing to would neuter this pass entirely — the refresh restamps
+    rows throughout the multi-hour walk, so every write here would be skipped.
+    """
+    try:
+        async with async_session() as session:
+            await seed_coverage_from_disk(session, reuse_recorded=False)
+        logger.info("catalog_coverage_verification_done")
+    except Exception:
+        logger.exception("catalog_coverage_verification_error")
+
+
 async def _periodic_discovery_loop() -> None:
     """Background loop that periodically re-scans Silver for new datasets and coverage."""
     interval = settings.catalog_discover_interval_seconds
 
-    # Run an initial scan immediately (non-blocking to startup).
-    #
-    # The first pass of a process counts every partition rather than reusing
-    # recorded counts. Later passes skip partitions nothing has touched since
-    # they were counted, which is what keeps a pass to minutes — but that trust
-    # only holds for rows this scheme wrote, and it means one full
-    # re-verification per container lifetime bounds any mistake in it.
-    try:
-        async with async_session() as session:
-            await seed_coverage_from_disk(session, reuse_recorded=False)
-            logger.info("catalog_initial_coverage_scan_done")
-    except Exception:
-        logger.exception("catalog_initial_coverage_scan_error")
+    await _initial_coverage_scan()
+
+    if settings.catalog_coverage_verify_on_start:
+        # Held in a module-level set: asyncio's task registry is weak, so an
+        # unreferenced task can be collected mid-walk and the verification would
+        # vanish with nothing recording that it never finished.
+        task = asyncio.create_task(_verification_recount())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     while True:
         await asyncio.sleep(interval)
@@ -137,6 +184,17 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("catalog_periodic_scan_stopped")
+
+    # A verification walk can be hours from finishing; say so on the way out
+    # rather than leaving its non-completion to be inferred from silence.
+    for task in list(_background_tasks):
+        if not task.done():
+            logger.info("catalog_coverage_verification_cancelled_incomplete")
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 app = FastAPI(

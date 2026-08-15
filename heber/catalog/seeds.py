@@ -775,6 +775,18 @@ async def _upsert_coverage(
     coverage = existing.scalar_one_or_none()
 
     if coverage:
+        # Last write wins, deliberately, even when this pass started earlier
+        # than the row it replaces. A refusal to overwrite a newer timestamp
+        # would silently neuter the verification pass: the five-minute refresh
+        # restamps rows throughout verification's multi-hour walk, so every one
+        # of its writes would be skipped and no legacy count would ever be
+        # corrected. It is also backwards — verification counts by reading
+        # footers, while the refresh carries a recorded count forward, so the
+        # older-stamped value is the more accurate one.
+        #
+        # Writing an older stamp is self-correcting: reuse only applies when a
+        # partition's mtime predates the stamp, so a partition that changed
+        # since is simply recounted on the next pass.
         coverage.dt_min = dt_min
         coverage.dt_max = dt_max
         coverage.approx_row_count = row_count
