@@ -73,7 +73,7 @@ Data-Gateway → Redis Stream (heber:events)
   → EventConsumer
     → parse EventEnvelope (Pydantic)
     → validate payload + instrument key
-    → deduplicate (event_id SHA256)
+    → deduplicate (event_id BLAKE2b-128)
     → BronzeWriter (JSONL.gz, all contracted feeds)
     → is_bronze_only_feed? → stop
     → resolve_silver_feed (alias mapping)
@@ -234,7 +234,7 @@ Uses `structlog` via `heber/ops/logging.py`. JSON output in production, human-re
 - Bronze is append-only and immutable — never modify written files
 - Silver does rename + type coerce only — no computed fields, no cross-event joins
 - All timestamps must be timezone-aware UTC
-- Event deduplication by `event_id` (SHA256) at consumer level
+- Event deduplication by `event_id` (BLAKE2b-128) at consumer level
 - Failed messages retry with exponential backoff, then DLQ after `HEBER_REDIS_PROCESS_MAX_RETRIES` (default 3)
 - Dictionary-encoded vs plain string schema conflicts are auto-resolved by `HeberReader`
 

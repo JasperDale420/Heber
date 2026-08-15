@@ -55,7 +55,7 @@ def make_check_context(
     *,
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
-    reader: MagicMock | None = None,
+    reader: object | None = None,
     redis: AsyncMock | MagicMock | None = None,
     settings_overrides: dict | None = None,
 ) -> CheckContext:
