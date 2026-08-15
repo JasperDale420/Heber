@@ -10,10 +10,12 @@ Four sub-checks ensuring Gold layer data is ready for ML consumption:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import structlog
 
 from heber.health_monitor.metrics import health_leakage_violations, health_null_rate
@@ -25,18 +27,58 @@ ET = ZoneInfo("America/New_York")
 
 # Gold datasets to audit for zero-leakage. Can be extended as more Gold datasets are added.
 GOLD_DATASETS_TO_AUDIT: list[str] = [
-    "alert_barrier_labels",
+    "labels_alert_barriers",
     "meta_label_features",
 ]
 
-# Label dataset and column names
+# Label dataset and column names. The barrier outcome (expired / hit_sl /
+# hit_tp) is the label whose distribution PSI tracks — it separates "fewer
+# take-profits because more stop-losses" from "fewer because more expiries",
+# which the binary hit_tp_first cannot. Switch to hit_tp_first if you would
+# rather watch exactly what the meta-model trains on.
 LABEL_DATASET = "labels_alert_barriers"
-LABEL_COLUMN = "label"
+LABEL_COLUMN = "outcome"
 
 # Feature datasets to check for null rates
 FEATURE_DATASETS: list[str] = [
     "meta_label_features",
 ]
+
+# Feature columns populated by an outbound enrichment call rather than by the
+# alert payload. A null here means the call did not land — the enrichment
+# backfill scanner already tracks and retries those, and measured rates sit
+# between 34% and 44% in normal operation. Their rates are still reported and
+# still exported to Prometheus; they just do not raise an alert on their own.
+# Every other numeric column comes straight off the payload and is expected to
+# be populated, so a null there means the writer is broken and does alert.
+# Mirrors heber.watch.backfill_scanner.ENRICHABLE_FIELDS (kept in step by a
+# test) plus the underlying-bars lookups, which fail independently.
+OPTIONAL_FEATURE_COLUMNS: frozenset[str] = frozenset(
+    {
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "iv",
+        "iv_rank",
+        "gex",
+        "vex",
+        "max_pain_strike",
+        "max_pain_distance_pct",
+        "market_tide_net_premium",
+        "market_tide_direction",
+        "underlying_30d_return",
+        "underlying_5d_return",
+        "underlying_1d_return",
+        "realized_vol_20d",
+    }
+)
+
+# Enrichment columns are not exempt outright. At or above this null rate the
+# upstream returned nothing at all for the day, which is an outage rather than
+# partial coverage. Measured rates top out at 44%, so normal operation cannot
+# reach it.
+ENRICHMENT_OUTAGE_NULL_RATE = 0.95
 
 # Minimum expected distinct instrument keys (80% threshold applied on top)
 DEFAULT_MIN_INSTRUMENTS = 50
@@ -62,18 +104,60 @@ def compute_psi(expected: np.ndarray, actual: np.ndarray) -> float:
 def _safe_read_gold(ctx: CheckContext, dataset: str, today_str: str) -> pd.DataFrame | None:
     """Read a Gold dataset for the audit window.
 
+    The window spans the whole UTC day. ``read_gold`` compares ``ts_event``
+    against both bounds inclusively, and a bare date resolves to midnight — so
+    passing the date twice matches only rows stamped exactly at 00:00:00Z and
+    every one of these checks reads an empty frame on a normal trading day.
+    Partitions are keyed on the UTC date of ``alert_time``, so a UTC day is the
+    right unit here.
+
     Returns an empty DataFrame when the read SUCCEEDS with no rows, and ``None``
     when the read FAILS. Callers must distinguish the two: a failed read is not
     "no data", and reporting it as a clean PASS hides the failure on a
     safety-critical check (the zero-leakage audit). Logged at WARNING so the
     failure is visible at the default INFO level.
     """
+    day_start = f"{today_str}T00:00:00+00:00"
+    day_end = f"{today_str}T23:59:59.999999+00:00"
     try:
-        df = ctx.reader.read_gold(dataset, time_range=(today_str, today_str))
+        df = ctx.reader.read_gold(dataset, time_range=(day_start, day_end))
         return pd.DataFrame() if df is None else df
     except Exception:
         logger.warning("ml_readiness_gold_read_failed", dataset=dataset, exc_info=True)
         return None
+
+
+def _quarantine_only_partitions(ctx: CheckContext, dataset: str, today_str: str) -> list[Path]:
+    """Quarantine partitions for a date whose canonical partition wrote nothing.
+
+    Quarantined rows sitting beside a healthy partition are routine. The
+    reportable case is a date where every row was diverted, which the reader
+    can no longer surface because it excludes the quarantine subtree.
+    Decided on the filesystem rather than from a read result — the audit read
+    is bounded to midnight UTC and comes back empty on any ordinary day.
+    """
+    root = Path(ctx.settings.gold_path) / f"dataset={dataset}"
+    quarantined = []
+    for quarantine_dir in root.glob(f"project=*/version=*/_quarantine/*/dt={today_str}"):
+        if not _has_rows(quarantine_dir):
+            continue
+        # <version=V>/_quarantine/<reason>/dt=X — compare against that same
+        # version's canonical day, not any other project's healthy one.
+        canonical = quarantine_dir.parents[2] / f"dt={today_str}"
+        if not _has_rows(canonical):
+            quarantined.append(quarantine_dir)
+    return quarantined
+
+
+def _has_rows(partition_dir: Path) -> bool:
+    """True when a partition directory holds at least one Parquet row."""
+    for f in partition_dir.rglob("*.parquet"):
+        try:
+            if pq.read_metadata(f).num_rows > 0:
+                return True
+        except Exception:
+            logger.warning("ml_readiness_parquet_metadata_unreadable", path=str(f), exc_info=True)
+    return False
 
 
 async def _check_leakage(ctx: CheckContext, today_str: str, now: datetime) -> list[CheckResult]:
@@ -231,8 +315,10 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
             )
         ]
 
-    # Build aligned distributions for PSI
-    baseline_dist = baselines_df.set_index("label_value")["proportion"]
+    # Build aligned distributions for PSI. read_baselines returns one row per
+    # label per day, so a multi-day window holds several rows per label —
+    # indexing without collapsing them yields a Series per lookup, not a value.
+    baseline_dist = baselines_df.groupby("label_value")["proportion"].mean()
     all_labels = sorted(set(today_counts.index) | set(baseline_dist.index))
 
     expected = np.array([float(baseline_dist.get(lbl, 0)) for lbl in all_labels])
@@ -262,7 +348,7 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
         {"label_value": lbl, "count": int(today_counts.get(lbl, 0)), "proportion": float(actual_proportions[i])}
         for i, lbl in enumerate(all_labels)
     ]
-    ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str))
+    ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str), baseline_key="label_dist")
 
     if psi > psi_threshold:
         severity = ctx.calendar.adjust_severity(Severity.P1_WARNING, now)
@@ -329,6 +415,30 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
             continue
 
         if df.empty:
+            # Rows the writer diverted to _quarantine (enrichment returned no
+            # Greeks) are excluded from reads, so a day lost entirely to a
+            # gateway outage would otherwise look like a quiet day.
+            quarantined = _quarantine_only_partitions(ctx, dataset, today_str)
+            if quarantined:
+                results.append(
+                    CheckResult(
+                        check_name="ml_feature_nulls",
+                        feed=dataset,
+                        severity=Severity.P1_WARNING,
+                        status=Status.WARN,
+                        message=(
+                            f"No usable feature data for {dataset} today — every row was quarantined "
+                            f"(enrichment returned no Greeks)"
+                        ),
+                        details={
+                            "dataset": dataset,
+                            "date": today_str,
+                            "quarantine_paths": [str(p) for p in quarantined],
+                        },
+                        ts_checked=now,
+                    )
+                )
+                continue
             results.append(
                 CheckResult(
                     check_name="ml_feature_nulls",
@@ -358,7 +468,16 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
             }
         ]
 
-        for col in numeric_cols:
+        # A column that is null for every row loses its numeric dtype on the way
+        # through Parquet, so the dtype filter above cannot see the very outage
+        # this check exists to catch. Pick those up for the enrichment columns.
+        outage_cols = [
+            c
+            for c in sorted(OPTIONAL_FEATURE_COLUMNS)
+            if c in df.columns and c not in numeric_cols and df[c].isna().all()
+        ]
+
+        for col in numeric_cols + outage_cols:
             null_pct = float(df[col].isna().sum()) / len(df) if len(df) > 0 else 0.0
 
             # Update Prometheus gauge
@@ -367,7 +486,9 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
             except Exception:
                 pass
 
-            if null_pct > null_threshold:
+            optional = col in OPTIONAL_FEATURE_COLUMNS
+            breached = null_pct >= ENRICHMENT_OUTAGE_NULL_RATE if optional else null_pct > null_threshold
+            if breached:
                 severity = ctx.calendar.adjust_severity(Severity.P1_WARNING, now)
                 results.append(
                     CheckResult(
@@ -375,7 +496,12 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
                         feed=dataset,
                         severity=severity,
                         status=Status.WARN,
-                        message=(f"High null rate in {dataset}.{col}: {null_pct:.1%} (threshold {null_threshold:.1%})"),
+                        message=(
+                            f"Enrichment outage in {dataset}.{col}: {null_pct:.1%} null — the upstream call "
+                            f"returned nothing all day"
+                            if optional
+                            else f"High null rate in {dataset}.{col}: {null_pct:.1%} (threshold {null_threshold:.1%})"
+                        ),
                         details={
                             "dataset": dataset,
                             "column": col,
@@ -393,12 +519,17 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
                         feed=dataset,
                         severity=Severity.P2_INFO,
                         status=Status.PASS,
-                        message=f"Feature null rate OK for {dataset}.{col}: {null_pct:.1%}",
+                        message=(
+                            f"Enrichment coverage for {dataset}.{col}: {null_pct:.1%} null"
+                            if col in OPTIONAL_FEATURE_COLUMNS
+                            else f"Feature null rate OK for {dataset}.{col}: {null_pct:.1%}"
+                        ),
                         details={
                             "dataset": dataset,
                             "column": col,
                             "date": today_str,
                             "null_pct": round(null_pct, 4),
+                            "enrichment_column": col in OPTIONAL_FEATURE_COLUMNS,
                         },
                         ts_checked=now,
                     )

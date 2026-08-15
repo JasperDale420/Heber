@@ -60,6 +60,50 @@ class HeberReadError(RuntimeError):
     """
 
 
+class SchemaContractError(ValueError):
+    """A producer contract violation the reader refuses to paper over.
+
+    Raised when fragments disagree in a way no merge can settle without
+    changing values — disagreeing timezones on a point-in-time column, say.
+    Distinct from ``pyarrow.lib.ArrowInvalid`` (also a ``ValueError``) so a
+    genuine unreadable-file error still takes the ``HeberReadError`` path.
+    """
+
+
+_TIMESTAMP_UNIT_ORDER = ("s", "ms", "us", "ns")
+
+# Columns every scan predicate is built from. Their absence from the inferred
+# schema is what makes a read silently return unfiltered rows.
+_PREDICATE_COLUMNS = ("ts_event", "ts_available", "instrument_key")
+
+
+def _finer_timestamp(left: pa.DataType, right: pa.DataType, column: str = "") -> pa.DataType:
+    """Return whichever timestamp type holds both without losing precision.
+
+    Different writers emit ``alert_time``/``ts_event`` at different resolutions.
+    Casting the finer one down raises ``ArrowInvalid`` the moment a value has
+    precision the coarser unit cannot express, so always widen.
+    """
+    if left.tz != right.tz:
+        # The lakehouse contract is timezone-aware UTC everywhere, so this is a
+        # producer bug. Arrow reads a naive value as a UTC instant; if it was
+        # ever local time that silently moves a row across a cutoff. On the
+        # columns cutoffs are built from, refuse rather than pick a side.
+        if column in _PREDICATE_COLUMNS:
+            raise SchemaContractError(
+                f"fragments disagree on the timezone of {column} ({left} vs {right}); "
+                "refusing to guess a point-in-time boundary"
+            )
+        logger.warning(
+            "heber_reader_timestamp_timezone_mismatch",
+            column=column,
+            left=str(left),
+            right=str(right),
+        )
+    unit = max(left.unit, right.unit, key=_TIMESTAMP_UNIT_ORDER.index)
+    return pa.timestamp(unit, tz=left.tz or right.tz)
+
+
 def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     """Cast string-family columns to plain ``pa.string()``.
 
@@ -108,6 +152,11 @@ def _parquet_files_in(base: Path) -> list[str]:
         if f.name.startswith("._"):
             continue
         if any(part.startswith("._") for part in f.parts):
+            continue
+        # Writers divert rows that failed validation into `_quarantine`
+        # specifically to keep them out of downstream reads; including them
+        # would defeat the quarantine.
+        if "_quarantine" in f.parts:
             continue
         try:
             stat_result = f.stat()
@@ -242,6 +291,7 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
             and not base.name.startswith("._")
             and not base.name.endswith(".tmp")
             and not any(part.startswith("._") for part in base.parts)
+            and "_quarantine" not in base.parts
         ):
             return [str(base)]
         return []
@@ -322,10 +372,49 @@ def _is_null_like(dt: pa.DataType) -> bool:
     return False
 
 
+def _needs_schema_union(file_list: list[str], required: tuple[tuple[str, ...], ...] = ()) -> bool:
+    """Whether merging every fragment's schema would recover a needed column.
+
+    Merging reads one footer per fragment — measured at 3s over 120 fragments
+    and 197s over 9,415 on the lakehouse volume — so it has to earn its cost.
+    It earns it when a column the caller is filtering on is missing from the
+    schema pyarrow would infer (the first fragment's), because the predicate
+    would otherwise be dropped and the read would return unfiltered rows.
+
+    Each entry in ``required`` is a set of alternatives: a time predicate is
+    satisfied by ``ts_event`` *or* ``ts_label``.
+    """
+    if len(file_list) < 2:
+        return False
+    ordered = sorted(file_list)
+    try:
+        first = pq.read_schema(ordered[0])
+    except Exception:
+        # Cannot tell — assume it evolved and take the accurate path.
+        logger.debug("heber_reader_schema_probe_failed", path=ordered[0], exc_info=True)
+        return True
+    if any(not any(c in first.names for c in group) for group in required):
+        return True
+    # No predicate is at risk, but the columns may still be missing from the
+    # read. Recovering them is worth two more footer reads, not N: partition
+    # paths sort by date and columns get added over time, so the oldest and
+    # newest fragment are where that shows up.
+    if all(c in first.names for c in _PREDICATE_COLUMNS):
+        return False
+    try:
+        last = pq.read_schema(ordered[-1])
+    except Exception:
+        logger.debug("heber_reader_schema_probe_failed", path=ordered[-1], exc_info=True)
+        return True
+    return not first.equals(last, check_metadata=False)
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
     dt_range: tuple[str, str] | None = None,
+    required_columns: tuple[tuple[str, ...], ...] = (),
+    unify_evolved: bool = False,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
@@ -348,6 +437,16 @@ def _open_dataset_safe(
     file_list = _collect_parquet_files(path, dt_range=dt_range)
     if not file_list:
         return None
+
+    # A conflict is not the only way fragments disagree. pyarrow infers the
+    # schema from the first fragment, so a dataset whose columns grew over time
+    # exposes only what its oldest partition had — the later ones are dropped
+    # without any error at all. That is invisible to the recovery below, and a
+    # predicate on a dropped column is silently skipped rather than failing, so
+    # unify up front when a column the caller is filtering on is missing.
+    if unify_evolved and _needs_schema_union(file_list, required_columns):
+        logger.info("heber_reader_unifying_evolved_schema", path=path, fragments=len(file_list))
+        return _unified_dataset(file_list, partitioning)
 
     try:
         return ds.dataset(file_list, format="parquet", partitioning=partitioning)
@@ -420,6 +519,8 @@ def _unified_dataset(
                         continue
                     elif pa.types.is_string(existing) or pa.types.is_string(incoming):
                         field_map[field.name] = pa.string()
+                    elif pa.types.is_timestamp(existing) and pa.types.is_timestamp(incoming):
+                        field_map[field.name] = _finer_timestamp(existing, incoming, field.name)
                     elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
                         # int64 vs float64 → widen to float64
                         field_map[field.name] = pa.float64()
@@ -459,6 +560,11 @@ def _unified_dataset(
         unified = pa.schema(unified_fields)
 
         return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
+    except SchemaContractError:
+        # A producer contract breach the union deliberately refuses to settle
+        # (disagreeing timezones on a point-in-time column). Not an unreadable
+        # file — surface it rather than degrading to "could not open".
+        raise
     except Exception:
         logger.warning(
             "heber_reader_manual_schema_unification_failed",
@@ -1014,11 +1120,24 @@ class HeberReader:
                 _to_utc(time_range[1]).as_py().date().isoformat(),
             )
 
+        # Columns this call's predicates need. A missing one is not a cosmetic
+        # loss — the predicate would be dropped and the caller would get rows it
+        # filtered out — so it forces the schema merge.
+        required: list[tuple[str, ...]] = []
+        if time_range:
+            required.append(("ts_event", "ts_label"))
+        if asof_time:
+            required.append(("ts_available",))
+        if instrument_keys:
+            required.append(("instrument_key",))
+
         try:
             dataset_obj = _open_dataset_safe(
                 str(scan_path),
                 partitioning=ds.partitioning(flavor="hive"),
                 dt_range=walk_dt_range,
+                required_columns=tuple(required),
+                unify_evolved=True,
             )
         except OSError as exc:
             logger.error("heber_reader_gold_open_failed", path=str(scan_path), dataset=dataset, exc_info=True)
@@ -1060,7 +1179,15 @@ class HeberReader:
             exprs.append(ds.field(time_col) >= _to_utc(time_range[0]))
             exprs.append(ds.field(time_col) <= _to_utc(time_range[1]))
 
-        if asof_time and "ts_available" in schema_names:
+        if asof_time:
+            # Fail closed, as the timeframe predicate above does. Dropping this
+            # one because the column is absent hands the caller rows from after
+            # its cutoff while it believes the point-in-time filter applied.
+            if "ts_available" not in schema_names:
+                raise ValueError(
+                    f"asof_time requested but dataset={dataset} has no ts_available column; "
+                    "refusing to return unfiltered rows"
+                )
             exprs.append(ds.field("ts_available") <= _to_utc(asof_time))
 
         if instrument_keys and "instrument_key" in schema_names:
