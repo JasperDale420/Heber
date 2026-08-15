@@ -203,7 +203,6 @@ def _cmd_alert_check(args: argparse.Namespace) -> int:
     pinged on each cycle and alerts when the pings stop.
     """
     from heber.config import get_settings
-    from heber.ops import heartbeat
     from heber.ops.stack_check import run_stack_checks
 
     settings = get_settings()
@@ -222,16 +221,30 @@ def _cmd_alert_check(args: argparse.Namespace) -> int:
         # Nothing below can be trusted, and the alarm going down is exactly what
         # the dead-man is for — report it before propagating the exit code.
         logger.error("alert_check_failed", exc_info=True)
-        heartbeat.ping(settings.alert_heartbeat_url, ok=False)
+        _beat(settings, ok=False)
         return 1
 
-    heartbeat.ping(settings.alert_heartbeat_url, ok=delivered)
+    _beat(settings, ok=delivered)
 
     criticals = [r for r in results if r.status.value in ("fail", "error")]
     print(f"alert-check: {len(results)} checks, {len(criticals)} critical")
     for r in results:
         print(f"  {r.status.value.upper():4} {r.feed}: {r.message}")
     return 0
+
+
+def _beat(settings: Settings, *, ok: bool) -> None:
+    """Record the dead-man beat on whichever backends are configured.
+
+    Both are optional and independent: a GitHub repo variable read by a
+    scheduled workflow, and/or a healthchecks.io-style ping URL.
+    """
+    from datetime import UTC, datetime
+
+    from heber.ops import heartbeat
+
+    heartbeat.ping(settings.alert_heartbeat_url, ok=ok)
+    heartbeat.ping_github(settings.alert_heartbeat_github_repo, ok=ok, now=datetime.now(UTC))
 
 
 def _liveness_results(settings: Settings) -> list[CheckResult]:
