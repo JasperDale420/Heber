@@ -199,25 +199,23 @@ class MetaLabelDatasetBuilder:
             ("dt", "<=", end_date.strftime("%Y-%m-%d")),
         ]
 
-        try:
-            # Support arbitrary path config via read_parquet_dataset
-            df = self.client.read_parquet_dataset(
-                path=self.config.outcomes_path,
-                filters=filters,
+        # A read failure propagates. Training on whatever survived a partial
+        # read is worse than not training: the caller logs "No outcomes found"
+        # and stops, which is indistinguishable from a date range that genuinely
+        # holds none.
+        df = self.client.read_parquet_dataset(
+            path=self.config.outcomes_path,
+            filters=filters,
+        )
+
+        if df.empty:
+            logger.warning(
+                "Outcomes path does not exist or contains no data",
+                configured_path=str(self.config.outcomes_path),
             )
-
-            if df.empty:
-                logger.warning(
-                    "Outcomes path does not exist or contains no data",
-                    configured_path=str(self.config.outcomes_path),
-                )
-                return pd.DataFrame()
-
-            return df
-
-        except Exception as e:
-            logger.error("Failed to load outcomes", path=str(self.config.outcomes_path), error=str(e))
             return pd.DataFrame()
+
+        return df
 
     def _load_features(self, start_date: date, end_date: date) -> pd.DataFrame:
         """Load features from Gold layer."""
@@ -227,25 +225,20 @@ class MetaLabelDatasetBuilder:
             ("dt", "<=", end_date.strftime("%Y-%m-%d")),
         ]
 
-        try:
-            # Support arbitrary path config via read_parquet_dataset
-            df = self.client.read_parquet_dataset(
-                path=self.config.features_path,
-                filters=filters,
+        # A read failure propagates, for the same reason as the outcomes read.
+        df = self.client.read_parquet_dataset(
+            path=self.config.features_path,
+            filters=filters,
+        )
+
+        if df.empty:
+            logger.warning(
+                "Features path does not exist or contains no data",
+                configured_path=str(self.config.features_path),
             )
-
-            if df.empty:
-                logger.warning(
-                    "Features path does not exist or contains no data",
-                    configured_path=str(self.config.features_path),
-                )
-                return pd.DataFrame()
-
-            return df
-
-        except Exception as e:
-            logger.error("Failed to load features", path=str(self.config.features_path), error=str(e))
             return pd.DataFrame()
+
+        return df
 
     def _join_features_outcomes(
         self,

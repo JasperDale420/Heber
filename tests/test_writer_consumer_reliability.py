@@ -383,3 +383,127 @@ def test_flow_alert_schema_allows_id_without_warning(monkeypatch: pytest.MonkeyP
     consumer._validate_payload_schema(envelope)
 
     warning_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_flush_does_not_ack(monkeypatch) -> None:
+    """A flush that leaves events buffered must not acknowledge them.
+
+    ``flush_if_needed`` legitimately flushes nothing when no partition is due, so
+    "no exception raised" never meant "durable". With the accumulator enabled,
+    ACKing there would drop whatever stayed in memory on the next restart.
+    """
+    monkeypatch.setattr(consumer_module.settings, "writer_max_buffered_events", 150_000)
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+
+    # Flush succeeds (no raise) but leaves a partition behind.
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
+    consumer.bronze_writer.buffers = {"provider=uw/feed=oi_change/dt=2026-08-03/hour=00": [{"a": 1}]}
+    consumer.silver_writer.buffers = {}
+
+    consumer._pending_ack_ids = ["1-0", "2-0"]
+    assert consumer._flush_layers() is False
+    assert redis.acked == [], "acknowledged messages that were still only in memory"
+
+
+@pytest.mark.asyncio
+async def test_accumulator_disabled_acks_every_batch(monkeypatch) -> None:
+    """With the accumulator off the live consumer keeps its per-batch ACK timing.
+
+    Both consumers share this binary, so the default must be indistinguishable
+    from the historical behavior — deferring ACKs on the live path would widen the
+    window in which Redis reclaims and redelivers, duplicating Bronze rows.
+    """
+    monkeypatch.setattr(consumer_module.settings, "writer_max_buffered_events", 0)
+    consumer = EventConsumer()
+    consumer.redis = _StubRedis()
+
+    consumer.bronze_writer.flush_if_needed = MagicMock()
+    consumer.silver_writer.flush_if_needed = MagicMock()
+    # Residual buffers must NOT block the ACK when the accumulator is disabled.
+    consumer.bronze_writer.buffers = {"provider=uw/feed=oi_change/dt=2026-08-03/hour=00": [{"a": 1}]}
+    consumer.silver_writer.buffers = {}
+
+    # Disabled must mean "let the writers' own size/age thresholds decide", NOT
+    # "force every partition every batch" — forcing writes one file per row.
+    assert consumer._should_force_flush() is False
+    assert consumer._flush_layers(force=False) is True
+    consumer.bronze_writer.flush_if_needed.assert_called_once_with(force=False)
+
+
+@pytest.mark.asyncio
+async def test_ack_pending_chunks_large_barrier() -> None:
+    """XACK takes ids positionally, so a big barrier must be chunked."""
+    consumer = EventConsumer()
+    redis = _StubRedis()
+    consumer.redis = redis
+    consumer._pending_ack_ids = [f"{i}-0" for i in range(2500)]
+
+    await consumer._ack_pending()
+
+    assert consumer._pending_ack_ids == []
+    assert len(redis.acked) == 3  # 1000 + 1000 + 500
+    assert sum(len(a) - 2 for a in redis.acked) == 2500
+
+
+def _stale_backfill_envelope() -> dict:
+    """A legitimately old backfill record — UW history carries year-old ts_event."""
+    old = datetime(2025, 6, 1, 12, 0, tzinfo=UTC)
+    return {
+        "event_id": "evt-stale-backfill",
+        "provider": "unusual_whales",
+        "feed": "short_data",
+        # The backfill driver hardcodes source="rest"; "source" is the delivery
+        # method, never the literal "backfill".
+        "source": "rest",
+        "instrument_type": "equity",
+        "instrument_key": "equity:AAPL",
+        "symbol": "AAPL",
+        "ts_event": old.isoformat(),
+        "ts_ingest": datetime.now(UTC).isoformat(),
+        "payload": {"short_date": "2025-06-01", "short_interest": 1000},
+    }
+
+
+def test_stale_ts_warning_suppressed_on_backfill_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A consumer reading the backfill stream must not warn about old ts_event.
+
+    Regression for the 493k-warning storm: the check gated on envelope.source,
+    which is the delivery method ("rest"/"websocket"), so it never suppressed.
+    Stream identity is the correct signal.
+    """
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    monkeypatch.setattr(consumer_module.settings, "redis_stream_name", "heber:events:backfill")
+    monkeypatch.setattr(consumer_module.settings, "redis_backfill_stream_name", "heber:events:backfill")
+
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+
+    consumer._process_event_once({"data": json.dumps(_stale_backfill_envelope())})
+
+    emitted = [c.args[0] for c in warning_mock.call_args_list if c.args]
+    assert "stale_ts_event_live_source" not in emitted
+
+
+def test_stale_ts_warning_still_fires_on_live_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live stream must still surface ancient timestamps — that's the poisoned-record signal."""
+    consumer = EventConsumer()
+    consumer.bronze_writer.write = MagicMock()
+    consumer.silver_writer.write = MagicMock()
+
+    monkeypatch.setattr(consumer_module.settings, "redis_stream_name", "heber:events")
+    monkeypatch.setattr(consumer_module.settings, "redis_backfill_stream_name", "heber:events:backfill")
+
+    warning_mock = MagicMock()
+    monkeypatch.setattr(consumer_module.logger, "warning", warning_mock)
+
+    consumer._process_event_once({"data": json.dumps(_stale_backfill_envelope())})
+
+    emitted = [c.args[0] for c in warning_mock.call_args_list if c.args]
+    assert "stale_ts_event_live_source" in emitted

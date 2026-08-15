@@ -29,7 +29,7 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
+import stat
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +47,17 @@ from heber.utils.versioning import version_sort_key as _version_sort_key
 logger = structlog.get_logger(__name__)
 
 _VERSION_PREFIX = "version="
+
+
+class HeberReadError(RuntimeError):
+    """A read failed against files that exist but could not be parsed.
+
+    Distinct from an empty result: an unwritten partition legitimately has no
+    rows, whereas an unreadable one means the answer is unknown. These used to
+    be indistinguishable — every unreadable file returned an empty frame with
+    only a warning — so a corrupt file in one partition silently emptied an
+    entire feed and every consumer read that as "no data".
+    """
 
 
 def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
@@ -86,7 +97,109 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     return pa.table(arrays, schema=pa.schema(fields))
 
 
-def _collect_parquet_files(root: str | Path) -> list[str]:
+def _parquet_files_in(base: Path) -> list[str]:
+    """Recursively collect readable parquet files under one directory."""
+    files: list[str] = []
+    for f in base.rglob("*.parquet"):
+        # Filter by name BEFORE any stat() call. On macOS bind mounts inside
+        # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
+        # stat(), so calling f.is_file() first crashes the walk before we
+        # get a chance to skip them by name. Ordering matters here.
+        if f.name.startswith("._"):
+            continue
+        if any(part.startswith("._") for part in f.parts):
+            continue
+        try:
+            stat_result = f.stat()
+        except OSError:
+            # Defensive: any other unstattable path (rare) is also skipped.
+            continue
+        if not stat.S_ISREG(stat_result.st_mode):
+            continue
+        # Zero-byte parquet is a writer killed mid-write. pyarrow raises
+        # "Parquet file size is 0 bytes" on it, read_silver catches that and
+        # returns an empty frame, so one truncated file makes an entire feed
+        # look like it produced nothing — observed live on feed=darkpool, whose
+        # months of healthy partitions all became invisible. The compactor has
+        # skipped these since it was written; the reader had not.
+        if stat_result.st_size == 0:
+            logger.warning("heber_reader_skip_empty_file", path=str(f))
+            continue
+        files.append(str(f))
+    return files
+
+
+def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = None) -> bool:
+    """True when the walk found a data parquet it could not use.
+
+    ``_collect_parquet_files`` drops zero-byte files, so a partition whose only
+    artifact is a writer-killed ``part-*.parquet`` collects to nothing and would
+    otherwise be indistinguishable from a partition nobody has written. It is
+    not the same thing: the rows that file should hold are missing, and a caller
+    told "no data" will skip the date and report success.
+
+    AppleDouble sidecars and ``.tmp`` partial writes stay ignorable — those are
+    normal filesystem noise rather than a lost write.
+    """
+    base = Path(root)
+    if not base.exists():
+        return False
+    scoped = _scoped_dt_dirs(base, dt_range) if dt_range else None
+    search = [base] if scoped is None else scoped
+    for scope in search:
+        for f in scope.rglob("*.parquet"):
+            if f.name.startswith("._") or f.name.endswith(".tmp"):
+                continue
+            if any(part.startswith("._") for part in f.parts):
+                continue
+            try:
+                if f.stat().st_size == 0:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path] | None:
+    """Partition directories overlapping ``dt_range``.
+
+    Returns the matching directories, an empty list when the dataset *is*
+    ``dt=``-partitioned but none of its partitions fall in range, and ``None``
+    when it has no ``dt=`` partitioning at all.
+
+    That three-way answer matters: the caller falls back to walking everything
+    when this finds nothing, which is right for an unpartitioned layout and
+    badly wrong for a partitioned one — asking production ``feed=bars`` for a
+    month before its data begins collected all 5,967 files in the feed, in
+    165.7s, rather than none. The scan predicate then dropped every row, so the
+    result was correct and merely cost a full-feed walk per empty chunk.
+
+    ``dt=`` sits directly under the dataset root when a caller scopes by
+    ``instrument_type``, and one level lower when it does not, so both depths
+    are probed. Two shallow globs cost far less than the recursive walk they
+    replace. ``dt`` values are ISO dates, which sort lexically — the same
+    property the existing ``prune_by_dt`` scan predicate relies on.
+    """
+    lo, hi = dt_range
+    seen_any = False
+    for pattern in ("dt=*", "*/dt=*"):
+        matched: list[Path] = []
+        for candidate in base.glob(pattern):
+            if candidate.name.startswith("._") or not candidate.is_dir():
+                continue
+            seen_any = True
+            value = candidate.name.removeprefix("dt=")
+            if lo <= value <= hi:
+                matched.append(candidate)
+        # Keep probing the deeper pattern when the shallow one held `dt=`
+        # directories but none in range — returning early there would hide data
+        # in a layout carrying partitions at both depths.
+        if matched:
+            return matched
+    return [] if seen_any else None
+
+
+def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = None) -> list[str]:
     """Walk a Parquet dataset root and return only readable parquet files.
 
     Skips three classes of files that would otherwise cause pyarrow to
@@ -107,6 +220,14 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
     Returning an explicit file list to ``ds.dataset(...)`` short-circuits
     pyarrow's recursive directory walk and lets hive partitioning still
     be inferred from the path components.
+
+    ``dt_range`` restricts the walk to the ``dt=`` partitions overlapping an
+    inclusive ``(start_date, end_date)`` pair. Without it, reading one month of
+    the production bars feed still walks all 2,580 partition directories —
+    measured at 15m48s on a cold page cache, per read. Callers pass it via
+    ``prune_by_dt``, which already declares the same range to the scan filter.
+    Falls back to the full walk when no ``dt=`` directories are found, so
+    unpartitioned layouts still read.
     """
     base = Path(root)
     if not base.exists():
@@ -124,24 +245,25 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
         ):
             return [str(base)]
         return []
-    files: list[str] = []
-    for f in base.rglob("*.parquet"):
-        # Filter by name BEFORE any stat() call. On macOS bind mounts inside
-        # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
-        # stat(), so calling f.is_file() first crashes the walk before we
-        # get a chance to skip them by name. Ordering matters here.
-        if f.name.startswith("._"):
-            continue
-        if any(part.startswith("._") for part in f.parts):
-            continue
-        try:
-            if not f.is_file():
-                continue
-        except OSError:
-            # Defensive: any other unstattable path (rare) is also skipped.
-            continue
-        files.append(str(f))
-    return files
+
+    if dt_range is not None:
+        scoped = _scoped_dt_dirs(base, dt_range)
+        # Loose `*.parquet` sitting directly under the feed root alongside
+        # `dt=` directories are not collected on this path. Heber's writers
+        # always partition (`writer/utils.get_partition_key`), so such files do
+        # not occur; an unpartitioned dataset takes the None branch below.
+        #
+        # None means the dataset has no `dt=` partitioning, so fall through to
+        # the full walk. An empty list means it does and nothing matched, which
+        # is an answer — walking the whole feed to then filter every row out is
+        # what made each empty chunk of a historical read cost a full-feed scan.
+        if scoped is not None:
+            files: list[str] = []
+            for partition in scoped:
+                files.extend(_parquet_files_in(partition))
+            return files
+
+    return _parquet_files_in(base)
 
 
 def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
@@ -171,9 +293,39 @@ def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
     return dt
 
 
+# Arrow raises a different exception class per flavour of schema conflict:
+# ``ArrowInvalid`` for dictionary-vs-string and int-vs-float, ``ArrowTypeError``
+# for ``large_string`` vs ``string``, ``ArrowNotImplementedError`` for casts
+# that have no kernel at all (``Unsupported cast from string to null``). All
+# three mean the same thing to us — fragments disagree on a column's type — so
+# they share one recovery path.
+_SCHEMA_CONFLICT_ERRORS = (
+    pa.lib.ArrowInvalid,
+    pa.lib.ArrowNotImplementedError,
+    pa.lib.ArrowTypeError,
+)
+
+
+def _is_null_like(dt: pa.DataType) -> bool:
+    """Return True for a type that carries no values of its own.
+
+    A column that held nothing but nulls when its fragment was written is
+    serialized as Arrow ``null``; an empty list column is serialized as
+    ``list<element: null>``. Both appear in Silver — ``timeframe`` and
+    ``quality_flags`` respectively — and both must lose to whatever concrete
+    type another fragment supplies, because nothing can be cast *into* null.
+    """
+    if pa.types.is_null(dt):
+        return True
+    if pa.types.is_list(dt) or pa.types.is_large_list(dt):
+        return _is_null_like(dt.value_type)
+    return False
+
+
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
+    dt_range: tuple[str, str] | None = None,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
@@ -183,22 +335,42 @@ def _open_dataset_safe(
     ``EPERM`` or ``ArrowInvalid: Parquet file size is X bytes``.
 
     On the first attempt we let ``pyarrow.dataset`` infer the unified schema.
-    If that fails because fragments disagree on string-family encodings —
-    ``ArrowInvalid`` for dictionary-vs-string, ``ArrowTypeError`` for
-    ``large_string`` vs ``string`` — we manually read the schemas of
-    individual files, fold all string-family types down to plain
-    ``pa.string()``, and re-open the dataset with the explicit schema.
+    If that fails because fragments disagree on their column types we fall back
+    to :func:`_unified_dataset`.
+
+    Note that the open frequently does *not* raise on a conflicted dataset:
+    pyarrow infers the schema from a subset of fragments (one by default), so a
+    disagreement between fragments only surfaces later, when the scan tries to
+    cast a fragment into the inferred type. Callers must therefore route their
+    scan through :func:`_scan_to_table`, which applies the same recovery at
+    scan time.
     """
-    file_list = _collect_parquet_files(path)
+    file_list = _collect_parquet_files(path, dt_range=dt_range)
     if not file_list:
         return None
 
     try:
         return ds.dataset(file_list, format="parquet", partitioning=partitioning)
-    except (pa.lib.ArrowInvalid, pa.lib.ArrowNotImplementedError, pa.lib.ArrowTypeError):
+    except _SCHEMA_CONFLICT_ERRORS:
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
-    # Manual schema unification from individual fragment metadata.
+    return _unified_dataset(file_list, partitioning)
+
+
+def _unified_dataset(
+    file_list: list[str],
+    partitioning: ds.Partitioning | None = None,
+) -> ds.Dataset | None:
+    """Re-open ``file_list`` under a schema unified from every fragment.
+
+    Reads each file's physical schema, folds string-family types down to plain
+    ``pa.string()``, widens numeric disagreements, resolves ``null``-typed
+    columns to whichever concrete type another fragment supplies, and re-opens
+    the dataset with that explicit schema so the scanner has a single cast
+    target for every fragment.
+    """
+    if not file_list:
+        return None
     try:
         # Open without partitioning first — purely to enumerate fragments
         # and read their physical schemas. Partition columns are not part
@@ -210,7 +382,7 @@ def _open_dataset_safe(
             try:
                 schemas.append(fragment.physical_schema)
             except Exception:
-                logger.debug("fragment_schema_read_failed", path=str(path), exc_info=True)
+                logger.debug("fragment_schema_read_failed", path=fragment.path, exc_info=True)
                 continue
         if not schemas:
             return None
@@ -238,7 +410,15 @@ def _open_dataset_safe(
                     existing = field_map[field.name]
                     if existing.equals(incoming):
                         continue
-                    if pa.types.is_string(existing) or pa.types.is_string(incoming):
+                    if _is_null_like(existing) and not _is_null_like(incoming):
+                        # ``null`` / ``list<null>`` carry no values, so any
+                        # concrete type from another fragment wins outright —
+                        # null is the one type nothing can be cast *into*.
+                        # Order-independent: whichever side is null-like loses.
+                        field_map[field.name] = incoming
+                    elif _is_null_like(incoming):
+                        continue
+                    elif pa.types.is_string(existing) or pa.types.is_string(incoming):
                         field_map[field.name] = pa.string()
                     elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
                         # int64 vs float64 → widen to float64
@@ -248,18 +428,23 @@ def _open_dataset_safe(
         # them, ``ds.dataset(file_list, schema=unified, partitioning=hive)``
         # raises ``ArrowInvalid: No match for FieldRef.Name(dt) in ...``
         # because the partition factory expects the schema to declare each
-        # discovered partition column. The partitioning factory only
-        # treats ``key=value`` segments **below** the dataset root as
-        # partition columns, where the dataset root is the common prefix
-        # of the file list. We replicate that scope here and type each
-        # discovered key as ``pa.string()`` to match pyarrow's default
-        # hive-partitioning behaviour.
-        common_root = os.path.commonpath(file_list)
+        # discovered partition column.
+        # Declare the partition columns explicitly instead of guessing which
+        # ones pyarrow will infer. Its hive discovery does not simply take the
+        # common prefix of the file list: scoping a walk to a single `dt=`
+        # directory made it surface `instrument_type` as well, while the schema
+        # built here carried neither, and the mismatch failed the open — so any
+        # single-partition read of a schema-conflicted feed came back empty.
+        # Scanning every `key=value` segment in the full paths and handing that
+        # same set back as the partitioning keeps both sides consistent.
         partition_columns: list[str] = []
         seen_partition: set[str] = set()
         for fp in file_list:
-            rel = os.path.relpath(fp, common_root)
-            for segment in rel.split(os.sep):
+            # Directory components only. Hive keys are directory names, so the
+            # filename is not a candidate — `snapshot=2026.parquet` is a file,
+            # not a partition. pyarrow reconciles that away on its own today,
+            # so this is correctness rather than a fix for an observed failure.
+            for segment in Path(fp).parent.parts:
                 eq = segment.find("=")
                 if eq <= 0:
                     continue
@@ -275,7 +460,12 @@ def _open_dataset_safe(
 
         return ds.dataset(file_list, format="parquet", partitioning=partitioning, schema=unified)
     except Exception:
-        logger.warning("heber_reader_manual_schema_unification_failed", path=path, exc_info=True)
+        logger.warning(
+            "heber_reader_manual_schema_unification_failed",
+            path=str(Path(file_list[0]).parent),
+            files=len(file_list),
+            exc_info=True,
+        )
         return None
 
 
@@ -381,6 +571,52 @@ def _scan_batched(
     return pa.Table.from_batches(batches, schema=batches[0].schema)
 
 
+def _scan_to_table(
+    dataset_obj: ds.Dataset,
+    path: str,
+    partitioning: ds.Partitioning | None = None,
+    *,
+    scan_filter: ds.Expression | None = None,
+    projection: list[str] | None = None,
+    batch_size: int | None = None,
+) -> pa.Table:
+    """Materialize a scan, retrying once under a manually unified schema.
+
+    ``ds.dataset()`` infers its schema from a subset of fragments, so a dataset
+    whose fragments disagree on a column type opens perfectly happily and only
+    fails here, when the scanner tries to cast each fragment into the inferred
+    type. Which fragment "wins" that inference depends on filesystem
+    enumeration order, so the same feed can read fine on one host and fail on
+    another.
+
+    The recovery is the same schema unification :func:`_open_dataset_safe`
+    applies when the *open* fails — reached from the scan side, where these
+    conflicts actually surface.
+    """
+
+    def _scan(target: ds.Dataset) -> pa.Table:
+        if batch_size is not None:
+            return _scan_batched(target, scan_filter, projection, batch_size)
+        return target.to_table(filter=scan_filter, columns=projection)
+
+    try:
+        return _scan(dataset_obj)
+    except _SCHEMA_CONFLICT_ERRORS as exc:
+        logger.info("heber_reader_scan_schema_conflict", path=path)
+        conflict = exc
+
+    # Unify over the fragments this dataset was actually built from, not a
+    # fresh directory walk: re-walking would both repeat the I/O and risk
+    # unifying a different set of files than the scan that just failed, if a
+    # writer landed or removed a file in between.
+    unified = _unified_dataset(list(dataset_obj.files), partitioning)
+    if unified is None:
+        # Unification could not produce a readable dataset. Surface the
+        # original conflict rather than masking it as an empty result.
+        raise conflict
+    return _scan(unified)
+
+
 class HeberReader:
     """Thin filesystem reader for the Heber Bronze/Silver/Gold lakehouse.
 
@@ -430,6 +666,7 @@ class HeberReader:
         columns: list[str] | None = None,
         batch_size: int | None = None,
         prune_by_dt: bool = False,
+        timeframe: str | None = None,
     ) -> pd.DataFrame:
         """Read Silver layer data with optional point-in-time correctness.
 
@@ -465,6 +702,16 @@ class HeberReader:
             so the partition date always equals the event date; the ``ts_event``
             predicate still trims precisely within boundary partitions.  Off by
             default to preserve existing behaviour for callers that don't opt in.
+        timeframe:
+            Restrict to one bar interval (e.g. ``"1Day"``), pushed into the scan.
+            Only meaningful for feeds carrying a ``timeframe`` column.  Reading
+            every interval and reducing afterwards materialises ~62x the rows a
+            daily computation needs, so this is the difference between a scan
+            that fits the pipeline timeout and one that does not.
+
+            Raises ``ValueError`` when the feed has no ``timeframe`` column: a
+            filter that silently fails open would return every interval and be
+            read as daily data.
 
         Returns
         -------
@@ -479,17 +726,43 @@ class HeberReader:
             logger.warning("heber_reader_path_missing", path=str(base_path))
             return pd.DataFrame()
 
+        # prune_by_dt already declares the date range to the scan filter; give
+        # the walk the same range so it visits the matching partitions instead
+        # of every one in the feed.
+        walk_dt_range: tuple[str, str] | None = None
+        if prune_by_dt and time_range:
+            walk_dt_range = (
+                _to_utc(time_range[0]).as_py().date().isoformat(),
+                _to_utc(time_range[1]).as_py().date().isoformat(),
+            )
+
         try:
             dataset_obj = _open_dataset_safe(
                 str(base_path),
                 partitioning=ds.partitioning(flavor="hive"),
+                dt_range=walk_dt_range,
             )
-        except OSError:
-            logger.warning("heber_reader_open_failed", path=str(base_path), exc_info=True)
-            return pd.DataFrame()
+        except OSError as exc:
+            logger.error("heber_reader_open_failed", path=str(base_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(f"Could not open Silver dataset {dataset!r} at {base_path}: {exc}") from exc
 
         if dataset_obj is None:
-            logger.warning("heber_reader_open_failed", path=str(base_path))
+            # `None` covers two very different situations. If the walk found no
+            # readable file at all — an empty partition, or one holding only
+            # AppleDouble sidecars, `.tmp` partial writes or zero-byte stubs —
+            # there is genuinely nothing to read and an empty frame is the
+            # honest answer. If files *were* found, the open failed on them, and
+            # reporting that as "no data" is what let a corrupt fragment hide an
+            # entire feed.
+            if _collect_parquet_files(str(base_path), dt_range=walk_dt_range) or _failed_write_present(
+                str(base_path), dt_range=walk_dt_range
+            ):
+                logger.error("heber_reader_open_failed", path=str(base_path), dataset=dataset)
+                raise HeberReadError(
+                    f"Could not open Silver dataset {dataset!r} at {base_path} — files are present but "
+                    "their schemas could not be unified"
+                )
+            logger.warning("heber_reader_no_readable_files", path=str(base_path), dataset=dataset)
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
@@ -519,18 +792,32 @@ class HeberReader:
         if instrument_keys and "instrument_key" in schema_names:
             exprs.append(ds.field("instrument_key").isin(instrument_keys))
 
+        if timeframe is not None:
+            if "timeframe" not in schema_names:
+                # Fail closed. Silently skipping the predicate would return every
+                # interval to a caller that asked for one, and intraday rows read
+                # as daily bars are wrong rather than merely extra.
+                raise ValueError(f"Silver feed {dataset!r} has no 'timeframe' column to filter on")
+            exprs.append(ds.field("timeframe") == timeframe)
+
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            if batch_size is not None:
-                table = _scan_batched(dataset_obj, scan_filter, projection, batch_size)
-            else:
-                table = dataset_obj.to_table(filter=scan_filter, columns=projection)
+            table = _scan_to_table(
+                dataset_obj,
+                str(base_path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+                projection=projection,
+                batch_size=batch_size,
+            )
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_read_failed", path=str(base_path), exc_info=True)
-            return pd.DataFrame()
+        except (*_SCHEMA_CONFLICT_ERRORS, OSError) as exc:
+            logger.error("heber_reader_read_failed", path=str(base_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(
+                f"Read of {dataset!r} failed at {base_path} — files are present but unreadable: {exc}"
+            ) from exc
 
         logger.info(
             "heber_reader_silver_read",
@@ -674,6 +961,7 @@ class HeberReader:
         time_range: tuple[str | datetime, str | datetime] | None = None,
         instrument_keys: list[str] | None = None,
         asof_time: str | datetime | None = None,
+        prune_by_dt: bool = False,
     ) -> pd.DataFrame:
         """Read Gold layer features/labels.
 
@@ -697,6 +985,14 @@ class HeberReader:
             Pushed as an ``instrument_key`` scan filter.
         asof_time:
             When set, adds ``ts_available <= asof_time`` to the scan.
+        prune_by_dt:
+            When ``True`` and ``time_range`` is set, restrict both the file walk
+            and the scan to the ``dt=`` partitions overlapping the range.
+            ``write_gold`` partitions on ``date(ts_event)``, so this is only
+            sound for datasets whose time column is ``ts_event``; reading a
+            ``ts_label``-timed dataset this way raises rather than silently
+            under-reading, because the label range is a different axis from the
+            partition date.  Off by default so existing callers are unaffected.
         """
         gold_path = self._gold_root / f"dataset={dataset}"
         if project:
@@ -711,24 +1007,54 @@ class HeberReader:
             return pd.DataFrame()
         scan_path, resolved_version = scan_result
 
+        walk_dt_range: tuple[str, str] | None = None
+        if prune_by_dt and time_range:
+            walk_dt_range = (
+                _to_utc(time_range[0]).as_py().date().isoformat(),
+                _to_utc(time_range[1]).as_py().date().isoformat(),
+            )
+
         try:
             dataset_obj = _open_dataset_safe(
                 str(scan_path),
                 partitioning=ds.partitioning(flavor="hive"),
+                dt_range=walk_dt_range,
             )
-        except OSError:
-            logger.warning("heber_reader_gold_open_failed", path=str(scan_path), exc_info=True)
-            return pd.DataFrame()
+        except OSError as exc:
+            logger.error("heber_reader_gold_open_failed", path=str(scan_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(f"Could not open Gold dataset {dataset!r} at {scan_path}: {exc}") from exc
 
         if dataset_obj is None:
-            logger.warning("heber_reader_gold_open_failed", path=str(scan_path))
+            # Same absence-versus-unreadable split read_silver makes: an
+            # unwritten dataset legitimately has no rows, while one whose files
+            # cannot be opened must not answer "no data".
+            if _collect_parquet_files(str(scan_path), dt_range=walk_dt_range) or _failed_write_present(
+                str(scan_path), dt_range=walk_dt_range
+            ):
+                logger.error("heber_reader_gold_open_failed", path=str(scan_path), dataset=dataset)
+                raise HeberReadError(
+                    f"Could not open Gold dataset {dataset!r} at {scan_path} — files are present but "
+                    "their schemas could not be unified"
+                )
+            logger.warning("heber_reader_no_readable_files", path=str(scan_path), dataset=dataset)
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
 
         time_col = _detect_time_col(schema_names)
 
+        if walk_dt_range is not None and time_col != "ts_event":
+            # The walk already dropped partitions on the assumption that dt is
+            # date(ts_event). Filtering on any other column means those
+            # partitions may have held matching rows, so the result would be
+            # quietly short rather than wrong-but-complete.
+            raise ValueError(f"prune_by_dt requires a ts_event-timed dataset; {dataset!r} is timed by {time_col!r}")
+
         exprs: list[ds.Expression] = []
+
+        if walk_dt_range and "dt" in schema_names:
+            exprs.append(ds.field("dt") >= walk_dt_range[0])
+            exprs.append(ds.field("dt") <= walk_dt_range[1])
 
         if time_range and time_col:
             exprs.append(ds.field(time_col) >= _to_utc(time_range[0]))
@@ -746,12 +1072,19 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter)
+            table = _scan_to_table(
+                dataset_obj,
+                str(scan_path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+            )
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_gold_read_failed", path=str(scan_path), exc_info=True)
-            return pd.DataFrame()
+        except (*_SCHEMA_CONFLICT_ERRORS, OSError) as exc:
+            logger.error("heber_reader_gold_read_failed", path=str(scan_path), dataset=dataset, exc_info=True)
+            raise HeberReadError(
+                f"Read of {dataset!r} failed at {scan_path} — files are present but unreadable: {exc}"
+            ) from exc
 
         logger.info(
             "heber_reader_gold_read",
@@ -901,12 +1234,20 @@ class HeberReader:
                 str(path),
                 partitioning=ds.partitioning(flavor="hive"),
             )
-        except OSError:
-            logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
-            return pd.DataFrame()
+        except OSError as exc:
+            logger.error("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
+            raise HeberReadError(f"Could not open dataset at {path}: {exc}") from exc
 
         if dataset_obj is None:
-            logger.warning("heber_reader_arbitrary_open_failed", path=str(path))
+            # Same split as the Silver and Gold reads: nothing readable found is
+            # an honest empty, but files that were found and could not be opened
+            # are an unknown row count, not zero.
+            if _collect_parquet_files(str(path)) or _failed_write_present(str(path)):
+                logger.error("heber_reader_arbitrary_open_failed", path=str(path))
+                raise HeberReadError(
+                    f"Could not open dataset at {path} — files are present but their schemas could not be unified"
+                )
+            logger.warning("heber_reader_no_readable_files", path=str(path))
             return pd.DataFrame()
 
         schema_names = set(dataset_obj.schema.names)
@@ -928,12 +1269,18 @@ class HeberReader:
         scan_filter = _build_scan_filter(exprs)
 
         try:
-            table = dataset_obj.to_table(filter=scan_filter, columns=columns)
+            table = _scan_to_table(
+                dataset_obj,
+                str(path),
+                ds.partitioning(flavor="hive"),
+                scan_filter=scan_filter,
+                projection=columns,
+            )
             table = _coerce_dict_columns_to_string(table)
             return table.to_pandas()
-        except (pa.lib.ArrowInvalid, OSError):
-            logger.warning("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
-            return pd.DataFrame()
+        except (*_SCHEMA_CONFLICT_ERRORS, OSError) as exc:
+            logger.error("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
+            raise HeberReadError(f"Read of failed at {path} — files are present but unreadable: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Gold version discovery

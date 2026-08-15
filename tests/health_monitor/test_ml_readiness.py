@@ -11,6 +11,7 @@ import pytest
 
 from heber.health_monitor.checks.ml_readiness import compute_psi, run_ml_readiness_checks
 from heber.health_monitor.models import Severity, Status
+from heber.reader.core import HeberReader
 from tests.health_monitor.conftest import (
     MARKET_OPEN_DT,
     TRADING_DAY,
@@ -22,7 +23,7 @@ def _make_ctx(
     tmp_path: Path,
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
-    reader: MagicMock | None = None,
+    reader: object | None = None,
     settings_overrides: dict | None = None,
 ):
     return make_check_context(
@@ -150,17 +151,56 @@ async def test_leakage_violation_fail(mock_now: MagicMock, tmp_path: Path) -> No
 @patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
 @patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", ["test_features"])
 async def test_leakage_read_failure_is_error_not_pass(mock_now: MagicMock, tmp_path: Path) -> None:
-    """A failed Gold read must NOT report a clean PASS on the zero-leakage guardrail."""
-    reader = MagicMock()
-    reader.read_gold = MagicMock(side_effect=OSError("corrupt parquet"))
+    """A failed Gold read must NOT report a clean PASS on the zero-leakage guardrail.
 
-    ctx = _make_ctx(tmp_path, reader=reader)
+    Driven through a real ``HeberReader`` over a real corrupt file rather than a
+    mock that raises. A mock asserts only that the check handles an exception;
+    it cannot show that the reader raises one in the first place, which is the
+    half that used to be missing — an unreadable file came back as an empty
+    frame and the audit passed on data nobody could read.
+    """
+    part = tmp_path / "gold" / "dataset=test_features" / "project=heber" / "version=v1" / "dt=2026-03-25"
+    part.mkdir(parents=True, exist_ok=True)
+    (part / "corrupt.parquet").write_bytes(b"not parquet")
+
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path))
     results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
 
     leakage_results = [r for r in results if r.check_name == "ml_leakage_audit"]
     assert len(leakage_results) == 1
     assert leakage_results[0].status == Status.ERROR
     assert leakage_results[0].status != Status.PASS
+
+
+@pytest.mark.unit
+@patch("heber.health_monitor.checks.ml_readiness._now_et", return_value=MARKET_OPEN_DT)
+@patch("heber.health_monitor.checks.ml_readiness.GOLD_DATASETS_TO_AUDIT", ["test_features"])
+@patch("heber.health_monitor.checks.ml_readiness.FEATURE_DATASETS", ["test_features"])
+@patch("heber.health_monitor.checks.ml_readiness.LABEL_DATASET", "test_features")
+async def test_no_check_passes_on_a_dataset_it_could_not_read(mock_now: MagicMock, tmp_path: Path) -> None:
+    """No readiness guardrail may report PASS for a dataset whose read failed.
+
+    ``_safe_read_gold`` distinguishes a failed read (``None``) from a successful
+    empty one, but only the leakage audit acted on it — label stability and
+    feature nulls grouped ``None`` with "no data today" and returned PASS, and
+    cross-sectional completeness skipped it, emitting no result at all. A single
+    corrupt file could therefore leave the whole readiness report green.
+    """
+    part = tmp_path / "gold" / "dataset=test_features" / "project=heber" / "version=v1" / "dt=2026-03-25"
+    part.mkdir(parents=True, exist_ok=True)
+    (part / "corrupt.parquet").write_bytes(b"not parquet")
+
+    ctx = _make_ctx(tmp_path, reader=HeberReader(tmp_path))
+    results = await run_ml_readiness_checks(ctx, check_date=TRADING_DAY)
+
+    assert [r for r in results if r.status == Status.PASS] == []
+    reported = {r.check_name for r in results if r.status == Status.ERROR}
+    assert reported == {
+        "ml_leakage_audit",
+        "ml_label_stability",
+        "ml_feature_nulls",
+        "ml_cross_sectional",
+    }
 
 
 # --- 11b: Label Distribution Stability ---

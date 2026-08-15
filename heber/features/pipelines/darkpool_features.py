@@ -29,6 +29,28 @@ logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 30  # Need 20 trading days + buffer for z-score rolling window
 
+# Only these columns are consumed downstream; darkpool Silver rows carry far more.
+# Reading the full row for the whole universe over ~37 days is what OOM-killed
+# this pipeline nightly — it was the one Gold pipeline with no projection,
+# no batching and no chunking.
+DARKPOOL_COLUMNS = ["instrument_key", "underlying", "ts_event", "notional"]
+FLOW_ALERT_COLUMNS = ["instrument_key", "underlying", "ts_event", "premium"]
+READ_BATCH_SIZE = 500_000
+
+
+def _require_columns(frame: pd.DataFrame, required: list[str], dataset: str) -> None:
+    """Fail loudly when a projected column is absent.
+
+    HeberReader intersects the requested projection with the dataset schema, so a
+    column that is missing is silently dropped rather than raising. The compute
+    step then reads it via ``.get(name, 0)`` and would produce a full set of
+    zero-valued features instead of an error.
+    """
+    missing = [c for c in required if c not in frame.columns]
+    if missing:
+        raise ValueError(f"Silver {dataset} is missing required column(s): {', '.join(missing)}")
+
+
 # Output columns for empty DataFrame
 OUTPUT_COLUMNS = [
     "instrument_key",
@@ -211,8 +233,13 @@ class DarkpoolPipeline:
         darkpool = self.reader.read_silver(
             "darkpool",
             time_range=(read_start, end_date),
+            prune_by_dt=True,
+            columns=DARKPOOL_COLUMNS,
+            batch_size=READ_BATCH_SIZE,
         )
         logger.info("Loaded darkpool", rows=len(darkpool))
+        if not darkpool.empty:
+            _require_columns(darkpool, ["underlying", "notional"], "darkpool")
 
         logger.info(
             "Loading Silver flow_alerts for premium data",
@@ -222,8 +249,13 @@ class DarkpoolPipeline:
         flow_alerts = self.reader.read_silver(
             "flow_alerts",
             time_range=(read_start, end_date),
+            prune_by_dt=True,
+            columns=FLOW_ALERT_COLUMNS,
+            batch_size=READ_BATCH_SIZE,
         )
         logger.info("Loaded flow_alerts", rows=len(flow_alerts))
+        if not flow_alerts.empty:
+            _require_columns(flow_alerts, ["premium"], "flow_alerts")
 
         if darkpool.empty:
             logger.warning("No darkpool data found")

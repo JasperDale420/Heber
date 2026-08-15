@@ -117,8 +117,8 @@ Per-underlying analytics with `expiry` (e.g. `iv_term_structure`) are **equity, 
 
 ### Dedup
 
-- Consumer dedupes by `event_id` (SHA256 produced by Data-Gateway) before writing.
-- If you produce events outside the gateway, you own the dedup-stable `event_id`.
+- Consumer dedupes by `event_id` (BLAKE2b-128 produced by Data-Gateway) before writing.
+- If you produce events outside the gateway, you own the dedup-stable `event_id`. Reproduce it exactly or Bronze dedup silently admits duplicates — see [PRD §6.3](../PRD.md) for the digest recipe and the `Decimal` stringification rule.
 
 ## Database Patterns
 
