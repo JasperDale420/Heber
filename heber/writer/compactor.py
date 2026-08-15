@@ -566,9 +566,13 @@ class Compactor:
         so yielding the root would let two stray ``silver/*.parquet`` files be
         treated as a partition, merged into one and unlinked.
 
-        Names starting with "." are skipped: macOS AppleDouble sidecars on
+        Names starting with "." or "_" are skipped. AppleDouble sidecars on
         exFAT raise PermissionError from a stat, and their contents are not
-        lake data.
+        lake data. `_quarantine/` holds files moved aside to be *kept* —
+        damaged or suspect ones under investigation — and compaction deletes
+        whatever it merges, so walking in there risks destroying the evidence
+        it exists to preserve. pyarrow and Hive tooling ignore `_`-prefixed
+        paths for the same reason.
         """
 
         def subdirectories(directory: Path) -> list[Path]:
@@ -577,7 +581,7 @@ class Compactor:
                     return [
                         Path(entry.path)
                         for entry in entries
-                        if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
+                        if not entry.name.startswith((".", "_")) and entry.is_dir(follow_symlinks=False)
                     ]
             except OSError as exc:
                 logger.warning("compactor_scan_unreadable_dir", path=str(directory), error=str(exc))
