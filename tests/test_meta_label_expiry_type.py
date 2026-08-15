@@ -2,7 +2,7 @@
 
 Producers historically wrote ``expiry`` as ``date32``, ``int64`` or ``string``
 depending on which path created the row. A full-dataset read of the mixed
-partitions raises ``SchemaConflictError`` (string vs numeric cannot be unified
+partitions raises ``SchemaContractError`` (string vs numeric cannot be unified
 without silently changing the values), so every write path must funnel through
 one coercion.
 """

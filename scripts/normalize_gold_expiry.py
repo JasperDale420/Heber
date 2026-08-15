@@ -4,7 +4,7 @@
 Producers used to write ``expiry`` as whatever they held — a ``date``, an ISO
 string, or a ``YYYYMMDD`` int — so the same column exists under three Arrow
 types across ``dt=`` partitions. A read of the whole dataset cannot merge those
-and raises ``SchemaConflictError``. The writers now funnel through one coercion;
+and raises ``SchemaContractError``. The writers now funnel through one coercion;
 this backfills the partitions written before that.
 
 This rewrites live files, so:
