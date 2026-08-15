@@ -18,13 +18,14 @@ import asyncio
 import multiprocessing
 import queue
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
 
 from heber.config import Settings, get_settings
+from heber.gold_poller.child import pipeline_subprocess_entry
 from heber.gold_poller.reconcile import reconcile_eod_feeds
 from heber.reader import HeberReader
 
@@ -196,55 +197,6 @@ def _validate_pipeline_version_overrides(settings: Settings) -> None:
         raise ValueError(
             f"gold_poller_pipeline_versions names unknown pipeline(s) {unknown}; known pipelines are {sorted(known)}"
         )
-
-
-def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
-    """Lazy-import and instantiate a pipeline class."""
-    import importlib
-
-    mod = importlib.import_module(entry["module"])
-    cls = getattr(mod, entry["class"])
-    return cls(
-        project=settings.gold_poller_project,
-        version=settings.gold_poller_version_for(entry["name"]),
-    )
-
-
-def _compute_pipeline(entry: dict[str, Any], start_date: date, end_date: date) -> dict[str, Any]:
-    """Instantiate and run a single pipeline synchronously.
-
-    Module-level (not a method) so it can run inside an isolated ``spawn``
-    subprocess, which re-imports this module and reconstructs settings.
-    """
-    settings = get_settings()
-    pipeline = _instantiate_pipeline(entry, settings)
-
-    kwargs: dict[str, Any] = {
-        "start_date": datetime(start_date.year, start_date.month, start_date.day, tzinfo=UTC),
-        "end_date": datetime(end_date.year, end_date.month, end_date.day, tzinfo=UTC),
-    }
-    if entry["datasets"] is not None:
-        kwargs["datasets"] = entry["datasets"]
-
-    return pipeline.run(**kwargs)
-
-
-def _pipeline_subprocess_entry(
-    entry: dict[str, Any],
-    start_date: date,
-    end_date: date,
-    result_q: Any,
-) -> None:
-    """Child-process entrypoint for an isolated pipeline run.
-
-    A hard crash here (OOM SIGKILL, segfault) is contained to this process and
-    leaves no result on the queue — the parent detects the missing payload. Any
-    Python-level error is reported back so the parent can log and continue.
-    """
-    try:
-        result_q.put({"ok": True, "stats": _compute_pipeline(entry, start_date, end_date)})
-    except BaseException as exc:  # noqa: BLE001 - report every failure to the parent
-        result_q.put({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
 class GoldFeaturePoller:
@@ -545,7 +497,7 @@ class GoldFeaturePoller:
         ctx = multiprocessing.get_context("spawn")
         result_q: Any = ctx.Queue()
         proc = ctx.Process(
-            target=_pipeline_subprocess_entry,
+            target=pipeline_subprocess_entry,
             args=(entry, start_date, end_date, result_q),
             name=f"gold-pipeline-{entry['name']}",
         )
@@ -563,7 +515,14 @@ class GoldFeaturePoller:
                 break
             except queue.Empty:
                 if not proc.is_alive():
-                    break  # child died without delivering (e.g. OOM SIGKILL)
+                    # The child may have flushed its result in the window between
+                    # that get() timing out and this liveness check, so look once
+                    # more before calling it a death without a result.
+                    try:
+                        payload = result_q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    break
                 if time.monotonic() >= deadline:
                     timed_out = True
                     break
@@ -587,14 +546,24 @@ class GoldFeaturePoller:
                 proc.join()
 
         if payload is None:
-            # Child died before reporting — almost always an OOM SIGKILL (-9).
-            # This is the exact failure mode that used to take down the poller.
+            # Child died before reporting. A negative exitcode is a signal death
+            # (-9 is the OOM SIGKILL this isolation exists for); a positive one is
+            # the child's own interpreter exiting, which means it failed before or
+            # during bootstrap and its traceback went to the child's stderr. Naming
+            # which of the two happened is the difference between an actionable
+            # report and a guess.
+            code = proc.exitcode
+            cause = f"killed by signal {-code}" if code is not None and code < 0 else f"exited {code} before reporting"
             raise RuntimeError(
-                f"pipeline '{entry['name']}' subprocess died without a result "
-                f"(exitcode={proc.exitcode}); likely OOM-killed"
+                f"pipeline '{entry['name']}' subprocess died without a result ({cause}); "
+                f"any traceback is on the child's stderr"
             )
         if not payload.get("ok"):
-            raise RuntimeError(f"pipeline '{entry['name']}' failed: {payload.get('error')}")
+            # The child's traceback rides back on the queue; without it the only
+            # copy is the child's stderr, which is a different stream to whoever
+            # reads this error.
+            detail = payload.get("traceback") or payload.get("error")
+            raise RuntimeError(f"pipeline '{entry['name']}' failed: {detail}")
         return payload["stats"]
 
     # ----- Telemetry -----
