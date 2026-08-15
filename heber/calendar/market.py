@@ -220,17 +220,21 @@ class MarketCalendar:
             # Minutes until session close
             minutes_to_close = int((session_close - current).total_seconds() / 60)
 
-            if minutes_remaining <= minutes_to_close:
+            if minutes_remaining < minutes_to_close:
                 # Finish within this session
                 current = current + pd.Timedelta(minutes=minutes_remaining)
                 minutes_remaining = 0
             else:
-                # Use up this session and continue to next
+                # Use up this session and continue to next. Search from the close,
+                # not from `current`: _next_session returns the current session for
+                # any timestamp before its close. A span that ends exactly at the
+                # close lands here too, so it resolves to the next session's open
+                # rather than a minute the market is shut.
                 minutes_remaining -= minutes_to_close
-                next_session = self._next_session(current)
+                next_session = self._next_session(session_close)
                 current = self._cal.session_open(next_session)
 
-        return cast(datetime, current.to_pydatetime().replace(tzinfo=UTC))
+        return cast(datetime, current.tz_convert(UTC).to_pydatetime())
 
     def trading_minutes_until(
         self,
@@ -302,7 +306,7 @@ class MarketCalendar:
         # Move to next session if needed
         if session_close < end_ts:
             try:
-                next_session = self._next_session(current)
+                next_session = self._next_session(session_close)
                 return self._cal.session_open(next_session), minutes
             except ValueError:
                 return current, -1
