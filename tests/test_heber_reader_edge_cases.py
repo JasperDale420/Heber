@@ -1457,50 +1457,28 @@ class TestGoldSchemaEvolution:
 
         assert len(df) == 2, "a unit mismatch must not collapse the read to empty"
 
-    def test_uniform_dataset_skips_the_unification_cost(self, tmp_path: Path) -> None:
-        """Unifying reads every fragment footer — 4.4 minutes on a 9,415-fragment
-        dataset, for nothing when every fragment already agrees. Pay it only when
-        the oldest and newest fragments actually disagree."""
-        from heber.reader.core import _collect_parquet_files, _needs_schema_union
-
+    def test_middle_fragment_drift_is_still_caught(self, tmp_path: Path) -> None:
+        """A probe of only the oldest and newest fragment misses a column that
+        drifts and then drifts back — ``string`` (2026-01-14) -> ``int64``
+        (2026-01-15, the middle fragment) -> ``string`` (2026-01-16) has
+        matching endpoints, so a two-point check would wave this dataset
+        through and let pyarrow's default open (which infers its schema from
+        one fragment) silently coerce the middle partition's numbers to text.
+        ``read_gold`` unifies every fragment unconditionally, so this must
+        raise regardless of where in the file list the drift sits."""
         root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
-        for dt in ("2026-01-14", "2026-01-15", "2026-01-16"):
-            part = root / f"dt={dt}"
-            part.mkdir(parents=True)
-            pq.write_table(
-                pa.table({"instrument_key": pa.array(["equity:AAPL"]), "ts_event": pa.array([_ts(0)])}),
-                str(part / "data.parquet"),
-            )
-
-        assert _needs_schema_union(_collect_parquet_files(root)) is False
-
-    def test_evolved_dataset_is_detected_as_differing(self, tmp_path: Path) -> None:
-        from heber.reader.core import _collect_parquet_files, _needs_schema_union
-
-        self._seed(tmp_path)
-        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
-
-        assert _needs_schema_union(_collect_parquet_files(root)) is True
-
-    def test_drift_on_a_non_predicate_column_is_detected_even_when_predicate_columns_agree(
-        self, tmp_path: Path
-    ) -> None:
-        """All three predicate columns (ts_event, ts_available, instrument_key)
-        are present in the oldest fragment, which used to make this function
-        return False without ever looking at the newest one — the exact
-        blind spot the ``expiry`` bug (a non-predicate column drifting in
-        type) lived in."""
-        from heber.reader.core import _collect_parquet_files, _needs_schema_union
-
-        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
-        for dt, feature_a in (("2026-01-14", pa.array([1.0])), ("2026-01-15", pa.array(["not-a-float"]))):
+        for dt, feature_a in (
+            ("2026-01-14", pa.array(["a"])),
+            ("2026-01-15", pa.array([1])),
+            ("2026-01-16", pa.array(["b"])),
+        ):
             part = root / f"dt={dt}"
             part.mkdir(parents=True, exist_ok=True)
             pq.write_table(
                 pa.table(
                     {
                         "instrument_key": pa.array(["equity:AAPL"]),
-                        "feature_a": feature_a,  # drifts from float64 to string between fragments
+                        "feature_a": feature_a,
                         "ts_event": pa.array([_ts(0)]),
                         "ts_available": pa.array([_ts(1)]),
                     }
@@ -1508,7 +1486,21 @@ class TestGoldSchemaEvolution:
                 str(part / "data.parquet"),
             )
 
-        assert _needs_schema_union(_collect_parquet_files(root)) is True
+        with pytest.raises(SchemaContractError, match="feature_a"):
+            HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+    def test_evolved_dataset_columns_are_recovered_without_a_required_columns_hint(self, tmp_path: Path) -> None:
+        """Unifying every fragment unconditionally means a column added partway
+        through a dataset's life is recovered even without ``read_gold``
+        computing which predicate it would have fed — the same outcome
+        ``test_columns_added_later_are_not_dropped`` already covers, asserted
+        here without a predicate to show it isn't the predicate that causes
+        the recovery."""
+        self._seed(tmp_path)
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert {"ts_available", "ts_event", "feature_a"} <= set(df.columns)
 
 
 class TestAsofFailsClosed:
@@ -1640,26 +1632,34 @@ class TestGoldPredicateIntegrity:
 
         assert "x" not in unified.schema.names
 
-    def test_ts_label_only_dataset_does_not_force_unification(self, tmp_path: Path) -> None:
-        """time_range falls back to ts_label, so a ts_label-only dataset is fully
-        filterable — requiring ts_event would buy a full schema traversal for
-        nothing on every filtered read."""
-        from heber.reader.core import _collect_parquet_files, _needs_schema_union
-
+    def test_ts_label_timezone_conflict_fails_closed(self, tmp_path: Path) -> None:
+        """``ts_label`` is the ``time_range`` column on a dataset without
+        ``ts_event`` — a tz mismatch on it is exactly as capable of silently
+        moving a row across a requested window boundary as one on ``ts_event``
+        would be, so it gets the same fail-closed guard as the other
+        predicate columns rather than being merged permissively."""
         root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
-        for dt in ("2026-01-14", "2026-01-15"):
-            self._write(
-                root,
-                dt,
-                {
-                    "instrument_key": pa.array(["equity:AAPL"]),
-                    "ts_label": pa.array([_ts(0)]),
-                    "ts_available": pa.array([_ts(1)]),
-                },
-            )
+        self._write(
+            root,
+            "2026-01-14",
+            {
+                "instrument_key": pa.array(["equity:AAPL"]),
+                "ts_label": pa.array([_ts(0)], type=pa.timestamp("us")),
+                "ts_available": pa.array([_ts(1)]),
+            },
+        )
+        self._write(
+            root,
+            "2026-01-15",
+            {
+                "instrument_key": pa.array(["equity:AAPL"]),
+                "ts_label": pa.array([_ts(24)], type=pa.timestamp("us", tz="UTC")),
+                "ts_available": pa.array([_ts(25)]),
+            },
+        )
 
-        files = _collect_parquet_files(root)
-        assert _needs_schema_union(files, (("ts_event", "ts_label"),)) is False
+        with pytest.raises(SchemaContractError, match="ts_label"):
+            HeberReader(tmp_path).read_gold("feat", project="watch", version="v1", time_range=(_ts(0), _ts(24)))
 
     def _row(self, hours: int, tf: str) -> dict:
         return {
