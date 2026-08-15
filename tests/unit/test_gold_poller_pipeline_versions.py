@@ -24,9 +24,9 @@ import sys
 import pytest
 
 from heber.config import Settings
+from heber.gold_poller.child import _instantiate_pipeline
 from heber.gold_poller.service import (
     PIPELINE_REGISTRY,
-    _instantiate_pipeline,
     _validate_pipeline_version_overrides,
 )
 

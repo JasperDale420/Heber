@@ -35,7 +35,7 @@ def _instantiate_pipeline(entry: dict[str, Any], settings: Settings) -> Any:
     cls = getattr(mod, entry["class"])
     return cls(
         project=settings.gold_poller_project,
-        version=settings.gold_poller_version,
+        version=settings.gold_poller_version_for(entry["name"]),
     )
 
 
