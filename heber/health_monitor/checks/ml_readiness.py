@@ -31,14 +31,54 @@ GOLD_DATASETS_TO_AUDIT: list[str] = [
     "meta_label_features",
 ]
 
-# Label dataset and column names
+# Label dataset and column names. The barrier outcome (expired / hit_sl /
+# hit_tp) is the label whose distribution PSI tracks — it separates "fewer
+# take-profits because more stop-losses" from "fewer because more expiries",
+# which the binary hit_tp_first cannot. Switch to hit_tp_first if you would
+# rather watch exactly what the meta-model trains on.
 LABEL_DATASET = "labels_alert_barriers"
-LABEL_COLUMN = "label"
+LABEL_COLUMN = "outcome"
 
 # Feature datasets to check for null rates
 FEATURE_DATASETS: list[str] = [
     "meta_label_features",
 ]
+
+# Feature columns populated by an outbound enrichment call rather than by the
+# alert payload. A null here means the call did not land — the enrichment
+# backfill scanner already tracks and retries those, and measured rates sit
+# between 34% and 44% in normal operation. Their rates are still reported and
+# still exported to Prometheus; they just do not raise an alert on their own.
+# Every other numeric column comes straight off the payload and is expected to
+# be populated, so a null there means the writer is broken and does alert.
+# Mirrors heber.watch.backfill_scanner.ENRICHABLE_FIELDS (kept in step by a
+# test) plus the underlying-bars lookups, which fail independently.
+OPTIONAL_FEATURE_COLUMNS: frozenset[str] = frozenset(
+    {
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "iv",
+        "iv_rank",
+        "gex",
+        "vex",
+        "max_pain_strike",
+        "max_pain_distance_pct",
+        "market_tide_net_premium",
+        "market_tide_direction",
+        "underlying_30d_return",
+        "underlying_5d_return",
+        "underlying_1d_return",
+        "realized_vol_20d",
+    }
+)
+
+# Enrichment columns are not exempt outright. At or above this null rate the
+# upstream returned nothing at all for the day, which is an outage rather than
+# partial coverage. Measured rates top out at 44%, so normal operation cannot
+# reach it.
+ENRICHMENT_OUTAGE_NULL_RATE = 0.95
 
 # Minimum expected distinct instrument keys (80% threshold applied on top)
 DEFAULT_MIN_INSTRUMENTS = 50
@@ -260,8 +300,10 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
             )
         ]
 
-    # Build aligned distributions for PSI
-    baseline_dist = baselines_df.set_index("label_value")["proportion"]
+    # Build aligned distributions for PSI. read_baselines returns one row per
+    # label per day, so a multi-day window holds several rows per label —
+    # indexing without collapsing them yields a Series per lookup, not a value.
+    baseline_dist = baselines_df.groupby("label_value")["proportion"].mean()
     all_labels = sorted(set(today_counts.index) | set(baseline_dist.index))
 
     expected = np.array([float(baseline_dist.get(lbl, 0)) for lbl in all_labels])
@@ -291,7 +333,7 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
         {"label_value": lbl, "count": int(today_counts.get(lbl, 0)), "proportion": float(actual_proportions[i])}
         for i, lbl in enumerate(all_labels)
     ]
-    ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str))
+    ctx.store.write_baseline(pd.DataFrame(baseline_rows), date.fromisoformat(today_str), baseline_key="label_dist")
 
     if psi > psi_threshold:
         severity = ctx.calendar.adjust_severity(Severity.P1_WARNING, now)
@@ -412,7 +454,16 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
             }
         ]
 
-        for col in numeric_cols:
+        # A column that is null for every row loses its numeric dtype on the way
+        # through Parquet, so the dtype filter above cannot see the very outage
+        # this check exists to catch. Pick those up for the enrichment columns.
+        outage_cols = [
+            c
+            for c in sorted(OPTIONAL_FEATURE_COLUMNS)
+            if c in df.columns and c not in numeric_cols and df[c].isna().all()
+        ]
+
+        for col in numeric_cols + outage_cols:
             null_pct = float(df[col].isna().sum()) / len(df) if len(df) > 0 else 0.0
 
             # Update Prometheus gauge
@@ -421,7 +472,9 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
             except Exception:
                 pass
 
-            if null_pct > null_threshold:
+            optional = col in OPTIONAL_FEATURE_COLUMNS
+            breached = null_pct >= ENRICHMENT_OUTAGE_NULL_RATE if optional else null_pct > null_threshold
+            if breached:
                 severity = ctx.calendar.adjust_severity(Severity.P1_WARNING, now)
                 results.append(
                     CheckResult(
@@ -429,7 +482,12 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
                         feed=dataset,
                         severity=severity,
                         status=Status.WARN,
-                        message=(f"High null rate in {dataset}.{col}: {null_pct:.1%} (threshold {null_threshold:.1%})"),
+                        message=(
+                            f"Enrichment outage in {dataset}.{col}: {null_pct:.1%} null — the upstream call "
+                            f"returned nothing all day"
+                            if optional
+                            else f"High null rate in {dataset}.{col}: {null_pct:.1%} (threshold {null_threshold:.1%})"
+                        ),
                         details={
                             "dataset": dataset,
                             "column": col,
@@ -447,12 +505,17 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
                         feed=dataset,
                         severity=Severity.P2_INFO,
                         status=Status.PASS,
-                        message=f"Feature null rate OK for {dataset}.{col}: {null_pct:.1%}",
+                        message=(
+                            f"Enrichment coverage for {dataset}.{col}: {null_pct:.1%} null"
+                            if col in OPTIONAL_FEATURE_COLUMNS
+                            else f"Feature null rate OK for {dataset}.{col}: {null_pct:.1%}"
+                        ),
                         details={
                             "dataset": dataset,
                             "column": col,
                             "date": today_str,
                             "null_pct": round(null_pct, 4),
+                            "enrichment_column": col in OPTIONAL_FEATURE_COLUMNS,
                         },
                         ts_checked=now,
                     )
