@@ -68,13 +68,20 @@ def _recording_session(order: list[str]) -> MagicMock:
 
 
 async def test_no_transaction_is_held_open_across_the_walk(silver: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The walk must run with no transaction open.
+    """No transaction may still be open when the next feed's walk begins.
 
-    The scan reads recorded coverage before walking, so a statement does run
-    first — but it is closed before the walk starts, and nothing else runs
-    until every feed has been walked. Any statement issued *between* the first
-    and last scan would sit idle for the length of the remaining walk, which is
-    what the Postgres idle-in-transaction timeout kills.
+    This pins the property, not one implementation of it. It used to require
+    that no statement ran between the first and last scan at all — walk
+    everything, then write. That does satisfy the property, but it also meant a
+    pass that could not finish wrote nothing: on the production mount the walk
+    is ~20h for ``feed=quotes`` alone, so coverage sat 14h stale through a scan
+    that was working the whole time, and every restart began again at the first
+    feed. Writing each feed and committing it before the next walk starts keeps
+    the transaction just as short while making progress durable.
+
+    What must never happen is a statement left uncommitted across a scan — that
+    is the idle transaction Postgres kills at ``idle_in_transaction_session_timeout``,
+    which failed 232 of 235 passes in a single container lifetime.
     """
     order: list[str] = []
     real_scan = seeds._scan_partition_dates
@@ -88,14 +95,18 @@ async def test_no_transaction_is_held_open_across_the_walk(silver: Path, monkeyp
     await seeds.seed_coverage_from_disk(_recording_session(order))
 
     assert "scan" in order and "sql" in order, f"nothing happened: {order}"
-    first_scan = min(i for i, step in enumerate(order) if step == "scan")
-    last_scan = max(i for i, step in enumerate(order) if step == "scan")
 
-    during_walk = [i for i, step in enumerate(order) if step == "sql" and first_scan < i < last_scan]
-    assert not during_walk, f"SQL ran mid-walk, so a transaction idles across later scans: {order}"
-
-    closed_before_walk = [i for i, step in enumerate(order) if step in ("rollback", "commit") and i < first_scan]
-    assert closed_before_walk, f"the pre-walk read left its transaction open across the walk: {order}"
+    open_since: int | None = None
+    for i, step in enumerate(order):
+        if step == "sql":
+            open_since = open_since if open_since is not None else i
+        elif step in ("commit", "rollback"):
+            open_since = None
+        elif step == "scan":
+            assert open_since is None, (
+                f"a transaction opened at step {open_since} was still open when a walk "
+                f"started at step {i} — it would idle for the length of that walk: {order}"
+            )
 
 
 async def test_every_feed_is_still_recorded(silver: Path) -> None:

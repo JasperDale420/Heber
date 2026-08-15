@@ -689,6 +689,7 @@ async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = 
     entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
     manifest: list[tuple[str, list[tuple[str, int]]]] = []
     failed_feeds = 0
+    upserted = 0
 
     for entry in entries:
         # String checks first to avoid stat() on macOS AppleDouble resource fork files
@@ -715,37 +716,56 @@ async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = 
         if scan_results is None:
             continue
         manifest.append((feed_name, scan_results))
+        upserted += await _write_feed_coverage(session, feed_name, scan_results, scan_started_at)
 
-    logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds)
+    logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds, upserted=upserted)
+    logger.info("coverage_seeded_from_disk", upserted=upserted)
+    return upserted
 
-    # Phase 2 — write. Commit per feed so the transaction is short-lived and a
-    # late failure keeps the feeds already recorded instead of discarding the
-    # whole pass.
-    upserted = 0
-    for feed_name, scan_results in manifest:
-        all_dates = [d for d, _ in scan_results]
+
+async def _write_feed_coverage(
+    session: AsyncSession,
+    feed_name: str,
+    scan_results: list[tuple[str, int]],
+    scan_started_at: datetime,
+) -> int:
+    """Write one feed's coverage and commit. Returns rows upserted.
+
+    Called as each feed finishes walking rather than after all of them. The
+    walk is the entire cost of a pass — ``feed=quotes`` alone is hours on this
+    mount — and deferring every write until the last feed meant a pass that
+    could not finish published nothing at all. Coverage sat 14h stale through a
+    scan that was working the whole time, and each restart began again at the
+    first feed, so the feeds late in the alphabet were never reached.
+    Publishing per feed makes progress durable and survives a restart.
+
+    The commit is what keeps the transaction short. It is opened by the first
+    upsert here and closed immediately, so no transaction is ever held open
+    across the next feed's walk — the condition that failed 232 of 235 passes
+    in a single container lifetime against a 5-minute
+    ``idle_in_transaction_session_timeout``.
+    """
+    all_dates = [d for d, _ in scan_results]
+    upserted = await _upsert_coverage(
+        session,
+        feed_name,
+        instrument_key="__all__",
+        dt_min_str=min(all_dates),
+        dt_max_str=max(all_dates),
+        row_count=sum(r for _, r in scan_results),
+        counted_at=scan_started_at,
+    )
+    for date_str, row_count in scan_results:
         upserted += await _upsert_coverage(
             session,
             feed_name,
-            instrument_key="__all__",
-            dt_min_str=min(all_dates),
-            dt_max_str=max(all_dates),
-            row_count=sum(r for _, r in scan_results),
+            instrument_key=f"dt:{date_str}",
+            dt_min_str=date_str,
+            dt_max_str=date_str,
+            row_count=row_count,
             counted_at=scan_started_at,
         )
-        for date_str, row_count in scan_results:
-            upserted += await _upsert_coverage(
-                session,
-                feed_name,
-                instrument_key=f"dt:{date_str}",
-                dt_min_str=date_str,
-                dt_max_str=date_str,
-                row_count=row_count,
-                counted_at=scan_started_at,
-            )
-        await session.commit()
-
-    logger.info("coverage_seeded_from_disk", upserted=upserted)
+    await session.commit()
     return upserted
 
 
