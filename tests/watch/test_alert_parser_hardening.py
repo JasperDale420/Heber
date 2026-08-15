@@ -35,6 +35,9 @@ class _CaptureManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
+
     async def create_watch_async(self, **kwargs: Any):  # noqa: ANN401
         self.calls.append(kwargs)
         return SimpleNamespace(watch_id=f"watch-{len(self.calls)}")

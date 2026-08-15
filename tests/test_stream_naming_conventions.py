@@ -9,6 +9,9 @@ from heber.watch.consumer import AlertWatchConsumer
 
 
 class _NoopManager:
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
+
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         return None
 
