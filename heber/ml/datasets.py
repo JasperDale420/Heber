@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -86,6 +86,11 @@ class DatasetConfig:
     # Filtering
     min_outcomes_per_symbol: int = 5
     exclude_expired: bool = False  # Whether to exclude EXPIRED outcomes
+    # Rows flagged greeks_no_point_in_time_source have null Greeks because no
+    # as-of source exists for their timestamp. They are written to canonical
+    # Gold (their other features are point-in-time correct) but are excluded
+    # from training by default — opt in only if the model handles the gap.
+    include_unrecoverable_greeks: bool = False
 
     # Train/validation split
     train_ratio: float = 0.8
@@ -315,6 +320,24 @@ class MetaLabelDatasetBuilder:
         if df.empty:
             return df
 
+        # Drop rows whose Greeks could not be reconstructed point-in-time. They
+        # live in canonical Gold so their other (correct) features stay
+        # available, but their Greek columns are null and must not silently
+        # enter training as a distribution shift.
+        if not self.config.include_unrecoverable_greeks:
+            from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
+
+            unrecoverable = quality_flag_series(df).apply(
+                lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
+            )
+            if unrecoverable.any():
+                logger.info(
+                    "Excluded rows without point-in-time Greeks from dataset",
+                    rows=int(unrecoverable.sum()),
+                    total=len(df),
+                )
+                df = df[~unrecoverable].reset_index(drop=True)
+
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
             df = df[df["outcome"].astype(str).str.lower() != "expired"].reset_index(drop=True)
@@ -402,10 +425,15 @@ class MetaLabelDatasetBuilder:
             "symbol",
             "underlying",
             "occ_symbol",
-            # Timestamps
+            "instrument_key",
+            # Timestamps. ts_available is when the row was written, not
+            # something knowable at alert time — as a model input it leaks the
+            # very write-lag that distinguishes a live capture from a late one.
             "alert_time",
             "outcome_time",
             "expiry",
+            "ts_event",
+            "ts_available",
             # Targets/outcomes
             "outcome",
             "outcome_return",
@@ -420,6 +448,8 @@ class MetaLabelDatasetBuilder:
             "side",
             "aggressor",
             "put_call",
+            # Provenance metadata, not a model input
+            "quality_flags",
         }
 
         return [c for c in df.columns if c not in exclude]
@@ -456,6 +486,17 @@ class MetaLabelDatasetBuilder:
 _REQUIRED_GREEK_COLUMNS: tuple[str, ...] = ("delta", "gamma", "theta", "vega", "iv")
 
 
+def quality_flag_series(df: pd.DataFrame) -> pd.Series:
+    """Return ``quality_flags`` as a Series of lists, tolerating legacy rows.
+
+    Partitions written before the column existed have no ``quality_flags`` at
+    all, and concatenating them with newer rows leaves NaN in its place.
+    """
+    if "quality_flags" not in df.columns:
+        return pd.Series([[] for _ in range(len(df))], index=df.index, dtype=object)
+    return df["quality_flags"].apply(lambda v: list(v) if isinstance(v, list | tuple | np.ndarray) else [])
+
+
 def _split_greek_corrupted_rows(
     partition_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -464,14 +505,27 @@ def _split_greek_corrupted_rows(
     A row is considered corrupted only when every Greek column listed in
     ``_REQUIRED_GREEK_COLUMNS`` is null/NA. Rows missing one or two values are
     kept (some upstream feeds legitimately omit single Greeks).
+
+    Rows flagged ``greeks_no_point_in_time_source`` are exempt: their Greeks are
+    null by design because no as-of source exists for that alert's timestamp, so
+    they are honest missing data rather than the silent enrichment failure this
+    guard was built to catch. Their remaining features (premium, moneyness,
+    timing, dated returns) are still point-in-time correct, and the flag lets a
+    training run exclude or down-weight them.
     """
+    from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
+
     present_cols = [c for c in _REQUIRED_GREEK_COLUMNS if c in partition_df.columns]
     if not present_cols:
         # No Greek columns at all — nothing to validate. Pass through.
         return partition_df, partition_df.iloc[0:0]
     all_null_mask = partition_df[present_cols].isna().all(axis=1)
-    clean = partition_df.loc[~all_null_mask].reset_index(drop=True)
-    corrupted = partition_df.loc[all_null_mask].reset_index(drop=True)
+    deliberately_absent = quality_flag_series(partition_df).apply(
+        lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
+    )
+    corrupted_mask = all_null_mask & ~deliberately_absent
+    clean = partition_df.loc[~corrupted_mask].reset_index(drop=True)
+    corrupted = partition_df.loc[corrupted_mask].reset_index(drop=True)
     return clean, corrupted
 
 
@@ -492,6 +546,96 @@ def _write_quarantine_partition(
     quarantine_file = quarantine_root / f"quarantine-{ts}-{uuid4().hex[:8]}.parquet"
     corrupted_df.to_parquet(quarantine_file, index=False, compression="snappy")
     return quarantine_file
+
+
+# The row carries live-fetched enrichment that was captured later than the
+# point-in-time bound, so it describes the market at write time rather than at
+# the alert. The values are real — these rows are not corrupt — but they are not
+# point-in-time.
+QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE = "enrichment_captured_late"
+
+# No usable ``ts_available`` on the row, so the capture lag cannot be measured
+# at all. Applies to partitions written before Heber recorded feature write time.
+QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN = "enrichment_provenance_unknown"
+
+# Enrichment that can only ever come from a live "as of now" fetch. Greeks are
+# the obvious case, but the pre-gate scanner re-enriched *any* null field and the
+# steps fail independently, so a row can carry null Greeks and a present-day
+# iv_rank or max_pain. Neither has a point-in-time recovery path, unlike gex and
+# market_tide, which are handled separately below.
+_LIVE_ONLY_COLUMNS: tuple[str, ...] = (*_REQUIRED_GREEK_COLUMNS, "iv_rank", "max_pain_strike")
+
+# These do have Silver recovery, so they only indicate a live fetch when the row
+# is not flagged as recovered.
+_RECOVERABLE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("gex", "gex_recovered_from_silver"),
+    ("vex", "gex_recovered_from_silver"),
+    ("market_tide_net_premium", "market_tide_recovered_from_silver"),
+)
+
+
+def _carries_live_enrichment(df: pd.DataFrame, flags: pd.Series) -> pd.Series:
+    """True for rows holding a value that could only have come from a live fetch."""
+    present = [c for c in _LIVE_ONLY_COLUMNS if c in df.columns]
+    carries = df[present].notna().any(axis=1) if present else pd.Series(False, index=df.index)
+
+    for column, recovered_flag in _RECOVERABLE_COLUMNS:
+        if column not in df.columns:
+            continue
+        not_recovered = pd.Series([recovered_flag not in f for f in flags], index=df.index)
+        carries = carries | (df[column].notna() & not_recovered)
+
+    return carries
+
+
+def add_enrichment_provenance_flags(
+    df: pd.DataFrame,
+    max_age: timedelta,
+) -> pd.DataFrame:
+    """Append provenance flags to rows whose enrichment was not point-in-time.
+
+    ``ts_available`` is the moment the row was written, and the live-only
+    enrichment on it was fetched at that moment, so ``ts_available - alert_time``
+    bounds how stale that enrichment was when captured. Before the freshness gate
+    existed, ``EnrichmentBackfillScanner`` refetched it up to three days after the
+    alert.
+
+    The measure is deliberately conservative: it spans enrichment *and* the write
+    that followed, so it is an upper bound on capture staleness and the flagged
+    set is a superset of the truly contaminated one. Both ``ts_available`` and
+    ``alert_time`` remain on every row, so a training run can recompute the exact
+    lag and apply a stricter threshold of its own.
+
+    A row is flagged only when it actually carries live-fetched enrichment: a
+    backfilled row whose enrichment the gate refused is null, not contaminated,
+    and a lag-only rule would mislabel every row in the 2026-08-06/07 partitions.
+
+    Returns a copy; only ``quality_flags`` is modified, and re-running is a no-op.
+    """
+    out = df.copy()
+    flags = quality_flag_series(out)
+    carries = _carries_live_enrichment(out, flags)
+
+    if "ts_available" in out.columns and "alert_time" in out.columns:
+        lag = pd.to_datetime(out["ts_available"], utc=True, errors="coerce") - pd.to_datetime(
+            out["alert_time"], utc=True, errors="coerce"
+        )
+        late = (lag > max_age).fillna(False) & carries
+        unknown = lag.isna() & carries
+    else:
+        late = pd.Series(False, index=out.index)
+        unknown = carries
+
+    # Assign positionally: label-based assignment raises on a duplicated index.
+    flag_lists = list(flags)
+    for pos, (is_late, is_unknown) in enumerate(zip(late, unknown, strict=True)):
+        if is_late and QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE not in flag_lists[pos]:
+            flag_lists[pos] = [*flag_lists[pos], QUALITY_FLAG_ENRICHMENT_CAPTURED_LATE]
+        if is_unknown and QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN not in flag_lists[pos]:
+            flag_lists[pos] = [*flag_lists[pos], QUALITY_FLAG_ENRICHMENT_PROVENANCE_UNKNOWN]
+
+    out["quality_flags"] = pd.Series(flag_lists, index=out.index, dtype=object)
+    return out
 
 
 def persist_features_to_gold(
@@ -592,6 +736,11 @@ def persist_features_to_gold(
                         partition_df = partition_df.drop_duplicates(subset=["alert_id"], keep="last").reset_index(
                             drop=True
                         )
+                    # Rows from a partition written before quality_flags existed
+                    # carry NaN there; parquet cannot write NaN into a list
+                    # column, so normalize the whole column back to lists.
+                    if "quality_flags" in partition_df.columns:
+                        partition_df["quality_flags"] = quality_flag_series(partition_df)
 
                 _atomic_write_parquet(partition_df, out_file)
         except Timeout:
