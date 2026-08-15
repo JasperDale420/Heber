@@ -588,6 +588,22 @@ def _carries_live_enrichment(df: pd.DataFrame, flags: pd.Series) -> pd.Series:
     return carries
 
 
+def provenance_bound() -> timedelta:
+    """Capture-lag bound for provenance flagging, independent of the gate's switch.
+
+    `HEBER_WATCH_LIVE_ENRICHMENT_MAX_AGE_MINUTES=0` disables the *gate* — it is the
+    escape hatch for a deliberate backlog replay. It must not disable the *flagging*
+    too: a zero bound marks every row late, live writes included, which is precisely
+    backwards for the one configuration that lets stale enrichment through. The
+    fallback tracks the setting's own default rather than a hardcoded copy of it.
+    """
+    from heber.config import Settings
+
+    fallback = Settings.model_fields["watch_live_enrichment_max_age_minutes"].default
+    minutes = settings.watch_live_enrichment_max_age_minutes or fallback
+    return timedelta(minutes=minutes)
+
+
 def add_enrichment_provenance_flags(
     df: pd.DataFrame,
     max_age: timedelta,
@@ -652,6 +668,15 @@ def persist_features_to_gold(
     detector, and it logged but did not block — letting null-Greek rows
     pollute ML training inputs.
 
+    Incoming rows are stamped with their enrichment provenance before anything
+    else. ``ts_available`` is authoritative here — it is the moment the row is
+    written, and live-only enrichment on it was fetched at that moment — so a
+    write that lands present-day Greeks on a past alert records that fact
+    itself. The freshness gate normally prevents it, but the gate can be
+    disabled for a deliberate backlog replay, and that path previously wrote
+    unflagged. Only the incoming rows are evaluated; rows already in the
+    partition keep the flags they were written with.
+
     Args:
         features_df: DataFrame with feature rows
         output_path: Base path for features
@@ -660,8 +685,11 @@ def persist_features_to_gold(
     if features_df.empty:
         return
 
+    # Stamp provenance on the incoming rows before they are partitioned, so a
+    # write can never land enrichment that was captured late without saying so.
+    df = add_enrichment_provenance_flags(features_df, max_age=provenance_bound())
+
     # Add date partition column
-    df = features_df.copy()
     df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date
