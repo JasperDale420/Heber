@@ -199,21 +199,50 @@ def test_layer_root_is_never_itself_a_partition(tmp_path: Path, monkeypatch) -> 
     assert not list(silver.glob("compacted-*.parquet")), "the layer root was treated as a partition"
 
 
-def test_walk_is_breadth_first_so_one_dataset_cannot_starve_another(tmp_path: Path) -> None:
-    """Shallower directories must come first, across every dataset.
+def test_a_wide_dataset_cannot_starve_a_deep_one(tmp_path: Path) -> None:
+    """One dataset's shape must not decide when another is reached.
 
-    Draining one subtree to its leaves before touching the next lets a single
-    deep dataset monopolise a cycle. `feed=quotes` sits four levels down; a
-    depth-first walk spent 420s without reaching a single one of its
-    partitions.
+    `massive_bars` holds 11,010 per-ticker directories and `feed=quotes` keeps
+    its partitions four levels down. Breadth-first put all 11,010 and their
+    children ahead of the first `feed=quotes` partition — 26 minutes into a
+    cycle it had still not arrived. Depth-first drained whichever dataset it
+    entered first instead. Either way one dataset's shape starved another.
     """
-    for dataset in ("feed=aaa", "feed=zzz"):
-        (tmp_path / dataset / "instrument_type=option" / "dt=2026-06-18" / "hour=14").mkdir(parents=True)
+    wide = tmp_path / "massive_bars"
+    for i in range(300):
+        (wide / f"instrument_key=equity:T{i:04d}").mkdir(parents=True)
+    deep = tmp_path / "feed=quotes" / "instrument_type=option" / "dt=2026-06-18" / "hour=14"
+    deep.mkdir(parents=True)
 
-    order = [p.relative_to(tmp_path) for p in Compactor()._iter_partition_dirs(tmp_path)]
-    depths = [len(p.parts) for p in order]
+    order = list(Compactor()._iter_partition_dirs(tmp_path))
+    reached_at = order.index(deep)
 
-    assert depths == sorted(depths), f"walk is not breadth-first: {order}"
+    assert reached_at < 50, (
+        f"the deep partition was reached only after {reached_at} directories; a wide dataset is delaying it"
+    )
+
+
+def test_a_wide_branch_cannot_starve_its_sibling_inside_one_dataset(tmp_path: Path) -> None:
+    """Fairness has to hold at every level, not just between datasets.
+
+    Being fair only across top-level datasets moves the same starvation one
+    level down: `feed=quotes/instrument_type=option` holds thousands of
+    directories, and draining it before touching `instrument_type=equity`
+    delays that sibling by every directory *and every compaction* in the first
+    subtree — hours, on the live lakehouse.
+    """
+    feed = tmp_path / "feed=quotes"
+    for branch in ("instrument_type=option", "instrument_type=equity"):
+        for i in range(150):
+            (feed / branch / f"dt=2026-06-{i:03d}").mkdir(parents=True)
+
+    order = list(Compactor()._iter_partition_dirs(tmp_path))
+    first_partitions = [p for p in order if p.name.startswith("dt=")][:20]
+    branches = {p.parent.name for p in first_partitions}
+
+    assert branches == {"instrument_type=option", "instrument_type=equity"}, (
+        f"the first 20 partitions all came from {branches}; one branch is being drained before its sibling is touched"
+    )
 
 
 def test_walk_cost_is_independent_of_how_many_files_a_partition_holds(tmp_path: Path) -> None:

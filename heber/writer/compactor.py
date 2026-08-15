@@ -7,7 +7,6 @@ Runs periodically to prevent "small file problem."
 import asyncio
 import os
 import signal
-from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -548,9 +547,19 @@ class Compactor:
         ``os.scandir`` answers the same question from the directory entry, so
         the walk costs one read per directory and nothing per file.
 
-        Breadth-first, so no one dataset can monopolise a cycle by being deep.
-        `feed=quotes` sits four levels down and a depth-first walk spent 420s
-        without reaching any of its partitions.
+        Siblings are visited round-robin at *every* level, so no branch can be
+        starved by the shape of another. Order matters more than it looks here:
+        `massive_bars` alone holds 11,010 per-ticker directories, and
+        `feed=quotes` keeps its partitions four levels down. A breadth-first
+        walk puts all 11,010 and their children ahead of the first
+        `feed=quotes` partition — 26 minutes into a live cycle it had still not
+        arrived. A depth-first walk drains whichever branch it enters first and
+        spent 420s the same way. Being fair only between top-level datasets
+        just moves the problem one level down, where
+        `instrument_type=option`'s thousands of directories delay
+        `instrument_type=equity` by every compaction in between. Interleaving
+        at each level reaches real partitions everywhere within a few rounds:
+        the first `feed=quotes` partition now arrives 8.6s into a cycle.
 
         The layer root is deliberately excluded. ``rglob`` never yields the
         directory it starts from, and compaction deletes the files it merges —
@@ -574,11 +583,21 @@ class Compactor:
                 logger.warning("compactor_scan_unreadable_dir", path=str(directory), error=str(exc))
                 return []
 
-        queue = deque(subdirectories(layer_path))
-        while queue:
-            current = queue.popleft()
-            yield current
-            queue.extend(subdirectories(current))
+        def interleave(directories: list[Path]) -> Iterator[Path]:
+            """Yield each directory, then its subtrees a level at a time."""
+            walkers = [walk(directory) for directory in directories]
+            while walkers:
+                for walker in list(walkers):
+                    try:
+                        yield next(walker)
+                    except StopIteration:
+                        walkers.remove(walker)
+
+        def walk(root: Path) -> Iterator[Path]:
+            yield root
+            yield from interleave(subdirectories(root))
+
+        yield from interleave(subdirectories(layer_path))
 
     def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
