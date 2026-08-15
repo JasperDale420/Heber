@@ -10,8 +10,10 @@ from typing import Any
 import structlog
 
 from heber.calendar import MarketCalendar
+from heber.ops.metrics import record_watch_duplicate_alert_suppressed
 from heber.watch.gateway import coerce_optional_float
 from heber.watch.models import (
+    ALERT_CLAIM_TTL_SECONDS,
     POLL_CONFIG,
     AlertWatch,
     WatchHorizon,
@@ -59,8 +61,12 @@ class WatchManager:
         tp_threshold: float,
         sl_threshold: float,
         atr_at_alert: float | None = None,
-    ) -> AlertWatch:
+    ) -> AlertWatch | None:
         """Create a new alert watch.
+
+        Returns None when a watch already exists for this alert. The claim is an
+        atomic SET NX so a burst of concurrent re-deliveries of the same alert
+        cannot race into two watches.
 
         Args:
             alert_id: UW alert ID
@@ -78,7 +84,7 @@ class WatchManager:
             atr_at_alert: ATR value (optional)
 
         Returns:
-            Created AlertWatch
+            Created AlertWatch, or None if this alert already has a watch
         """
         watch_id = str(uuid.uuid4())
 
@@ -108,8 +114,26 @@ class WatchManager:
             status=WatchStatus.WATCHING,
         )
 
+        # Claim the alert immediately before persisting, so everything that can fail
+        # (calendar arithmetic, model validation) has already run. The claim is an
+        # atomic SET NX: a burst of concurrent re-deliveries yields exactly one winner.
+        claim_key = WatchKeys.by_alert_key(alert_id)
+        if not self.redis.set(claim_key, watch_id, nx=True, ex=ALERT_CLAIM_TTL_SECONDS):
+            logger.info(
+                "Suppressed duplicate alert delivery",
+                alert_id=alert_id,
+                occ_symbol=occ_symbol,
+                existing_watch_id=self._normalize_redis_id(self.redis.get(claim_key) or b""),
+            )
+            record_watch_duplicate_alert_suppressed()
+            return None
+
         # Store in Redis
-        self._save_watch(watch)
+        try:
+            self._save_watch(watch)
+        except Exception:
+            self._roll_back_failed_create(watch, claim_key)
+            raise
 
         logger.info(
             "Created alert watch",
@@ -137,7 +161,7 @@ class WatchManager:
         tp_threshold: float,
         sl_threshold: float,
         atr_at_alert: float | None = None,
-    ) -> AlertWatch:
+    ) -> AlertWatch | None:
         """Async wrapper for create_watch to avoid blocking event loops."""
         return await asyncio.to_thread(
             self.create_watch,
@@ -155,6 +179,37 @@ class WatchManager:
             sl_threshold,
             atr_at_alert,
         )
+
+    def _roll_back_failed_create(self, watch: AlertWatch, claim_key: str) -> None:
+        """Undo a half-written watch, then release its alert claim.
+
+        `_save_watch` writes the record and two index entries separately, so a failure
+        can leave the watch in the active set. The claim must not be released while
+        that partial state survives — a retry would add a second active watch for the
+        same alert. Order matters: the active index first (the poller reads it), then
+        the record, then the claim. If any step fails Redis is unreachable and the
+        claim is deliberately kept: losing one label beats admitting a duplicate one.
+        """
+        try:
+            self.redis.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+            self.redis.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch.watch_id)
+            self.redis.delete(WatchKeys.watch_key(watch.watch_id))
+            self.redis.delete(claim_key)
+        except Exception:
+            logger.error(
+                "Alert claim retained after failed watch rollback",
+                alert_id=watch.alert_id,
+                watch_id=watch.watch_id,
+                exc_info=True,
+            )
+
+    def has_alert_claim(self, alert_id: str) -> bool:
+        """Whether this alert already has a watch claim."""
+        return self.redis.get(WatchKeys.by_alert_key(alert_id)) is not None
+
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        """Async wrapper for has_alert_claim."""
+        return await asyncio.to_thread(self.has_alert_claim, alert_id)
 
     @staticmethod
     def _normalize_redis_id(value: str | bytes) -> str:

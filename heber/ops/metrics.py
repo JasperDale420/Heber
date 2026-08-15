@@ -202,6 +202,12 @@ watch_last_watch_created_unixtime = _get_or_create(
     "Unix timestamp of most recent watch creation",
 )
 
+watch_duplicate_alerts_suppressed_total = _get_or_create(
+    Counter,
+    "heber_watch_duplicate_alerts_suppressed_total",
+    "Re-delivered alerts that already had a watch and were skipped",
+)
+
 watch_enrichment_skipped_stale_total = _get_or_create(
     Counter,
     "heber_watch_enrichment_skipped_stale_total",
@@ -465,6 +471,11 @@ def record_watch_watch_created(timestamp_unixtime: float | None = None) -> None:
     """Record watch creation activity."""
     watch_watches_created_total.inc()
     watch_last_watch_created_unixtime.set(timestamp_unixtime if timestamp_unixtime is not None else time.time())
+
+
+def record_watch_duplicate_alert_suppressed() -> None:
+    """Record an alert re-delivery that was skipped because a watch already exists."""
+    watch_duplicate_alerts_suppressed_total.inc()
 
 
 def record_watch_poll_cycle(status: str, timestamp_unixtime: float | None = None) -> None:
