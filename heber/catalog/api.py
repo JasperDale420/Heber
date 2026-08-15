@@ -299,7 +299,22 @@ async def health_coverage() -> JSONResponse:
     # a dict detail into a message field, which a monitor cannot parse.
     try:
         async with async_session() as session:
-            result = await session.execute(text("SELECT max(last_updated_ts), count(*) FROM data_coverage"))
+            # The OLDEST per-feed scan, not the newest overall. Each feed's
+            # `__all__` row is rewritten every time that feed is walked, so the
+            # oldest of them is the feed that has gone longest without a scan.
+            # max() over every row reports only that *something* was written
+            # recently, which one feed can satisfy on behalf of all the others —
+            # and that is exactly the failure that hid here: the walk never got
+            # past feed=quotes, so every feed after it alphabetically was never
+            # scanned at all while the endpoint read fresh.
+            result = await session.execute(
+                text(
+                    "SELECT min(last_updated_ts), count(*), ("
+                    "  SELECT dataset_name FROM data_coverage WHERE instrument_key = '__all__'"
+                    "  ORDER BY last_updated_ts ASC LIMIT 1"
+                    ") FROM data_coverage WHERE instrument_key = '__all__'"
+                )
+            )
             row = result.first()
     except Exception as exc:
         logger.warning("catalog_coverage_probe_failed", error=str(exc)[:200])
@@ -309,6 +324,7 @@ async def health_coverage() -> JSONResponse:
         )
 
     last_updated, rows = (row[0], row[1]) if row else (None, 0)
+    stalest = row[2] if row is not None and len(row) > 2 else None
     age = None
     if last_updated is not None:
         if last_updated.tzinfo is None:
@@ -320,6 +336,7 @@ async def health_coverage() -> JSONResponse:
         "coverage_age_seconds": age,
         "last_updated_ts": last_updated.isoformat() if last_updated else None,
         "rows": rows,
+        "stalest_feed": stalest,
         "max_age_seconds": settings.catalog_coverage_max_age_seconds,
     }
 

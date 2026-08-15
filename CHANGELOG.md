@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Coverage staleness is now judged per feed, so one busy feed cannot hide a neglected one** (`heber/catalog/api.py`, `heber/catalog/seeds.py`): `/health/coverage` reported `max(last_updated_ts)` across every row, which only ever meant *something* was written recently — one feed could satisfy it on behalf of all the others. That is exactly how the stalled walk hid: it never got past `feed=quotes`, so every feed after it alphabetically went unscanned while the endpoint read fresh. It now reports the oldest per-feed scan and names the feed responsible (`stalest_feed`).
+  Coverage rows for feeds with no directory left are also dropped, after a complete pass only. `bars_1m`, `data` and `stocks` had sat in the table for months after those feeds were gone — the catalog advertising datasets that do not exist, and making per-feed staleness unusable because the oldest coverage was always a decommissioned feed. An empty or failed feed listing prunes nothing, since that is a missing mount rather than a decommission.
+
+### Changed
+
+- **The full coverage verification pass no longer runs on every container start** (`HEBER_CATALOG_COVERAGE_VERIFY_ON_START`, now off by default): it needs ~20h on the production mount and has never once completed before a restart, so it competed with the five-minute refresh for a latency-bound mount without ever delivering the verification it exists for. What it protects is `approx_row_count`; `dt_min`/`dt_max` are rebuilt from the directory walk every pass and are correct regardless. Enable it deliberately on a container expected to stay up long enough to finish.
+
+
 - **Catalog coverage can refresh again** (`heber/catalog/api.py`, `heber/catalog/seeds.py`, `HEBER_CATALOG_COVERAGE_VERIFY_ON_START`): coverage sat 14 hours stale while the scan worked the entire time, and it could not have recovered on its own. Every container start began a verification pass that re-reads every Parquet footer, and no coverage row is written until the whole 80-feed walk finishes — measured on the production mount at 11.3 files/sec, `feed=quotes` alone (~825k files) is ~20 hours. That is longer than the 6h staleness threshold and longer than the container stays up between restarts, so each of its 12 restarts discarded the walk and began again at the first feed. Coverage was structurally incapable of updating, and the five-minute refresh loop never started either, because it sat behind that pass.
   Startup now runs only the fast pass, which reuses counts for partitions nothing has touched and finishes in minutes, so coverage is current shortly after boot. The verification pass still runs, as its own task alongside the refresh instead of ahead of it, and can be turned off where its contention for the mount matters more than the re-verification.
 
