@@ -38,9 +38,21 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
+      # Coverage scan tuning. Both are bound by per-open latency on the
+      # lakehouse mount, so these are the knobs that matter if a pass slows
+      # down; without them listed here the env var never reaches the container.
+      - HEBER_CATALOG_COVERAGE_SCAN_WORKERS=${HEBER_CATALOG_COVERAGE_SCAN_WORKERS:-16}
+      - HEBER_CATALOG_COVERAGE_MAX_AGE_SECONDS=${HEBER_CATALOG_COVERAGE_MAX_AGE_SECONDS:-21600}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -70,7 +82,7 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
       # 5000 (config max) matches the backfill consumer: the SIP quotes firehose can
@@ -80,6 +92,13 @@ services:
       - HEBER_REDIS_READ_BATCH_SIZE=5000
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -104,6 +123,13 @@ services:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # Same writer code and the same double-buffering as heber-backfill-consumer
+    # below, so the same ceiling and the same reasoning apply: 3g covers a 150k-event
+    # accumulation window (~2.0-2.25GB peak) with headroom. Without a limit an
+    # over-large buffer is killed at the VM level with no OOMKilled flag and no exit
+    # code, which is unattributable — the week of Jul 6 lost 32 health-monitor and 6
+    # compactor deaths that way.
+    mem_limit: 3g
 
   # Dedicated consumer for the backfill stream, isolated from the live heber-consumer so a
   # multi-year UW backfill flood (Data-Gateway uw_backfill_driver.py publishes here by default)
@@ -118,12 +144,44 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_POSTGRES_URL=postgresql+asyncpg://heber:${POSTGRES_PASSWORD:-heber_dev_password}@postgres:5432/heber_catalog
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
       - HEBER_REDIS_STREAM_NAME=heber:events:backfill
+      # Must equal HEBER_REDIS_STREAM_NAME above. The writer suppresses the
+      # stale-ts warning only when the two match; renaming one without the other
+      # silently restores the 493k-warning storm that rotated away this
+      # container's log history.
+      - HEBER_REDIS_BACKFILL_STREAM_NAME=heber:events:backfill
       - HEBER_REDIS_CONSUMER_GROUP=heber-backfill-writers
       - HEBER_REDIS_READ_BATCH_SIZE=5000
+      # Accumulate across read batches before flushing. Cost on this bind mount is
+      # per-file (~4 metadata round-trips at ~2.4s each), not per-row, and a backfill
+      # batch scatters across ~250 date partitions — so flushing per batch wrote
+      # ~20-row files. Buffering ~150k events first turns those into far fewer, far
+      # larger files. Enabled ONLY here: the live consumer runs the same binary and
+      # must keep acknowledging inline (default 0 = off).
+      - HEBER_WRITER_MAX_BUFFERED_EVENTS=${HEBER_WRITER_MAX_BUFFERED_EVENTS:-150000}
+      - HEBER_WRITER_FLUSH_BARRIER_SECONDS=600
+      # The four thresholds below must be far enough out that the barrier above is
+      # the sole flush trigger; otherwise they fire first and the buffer never fills.
+      - HEBER_BRONZE_FLUSH_INTERVAL_SECONDS=86400
+      - HEBER_BRONZE_MAX_BATCH_SIZE=1000000
+      - HEBER_SILVER_MAX_FLUSH_TIME_SECONDS=86400
+      - HEBER_SILVER_MIN_ROWS_PER_FLUSH=10000
+      # A buffered message stays unacknowledged until its barrier, so the reclaim
+      # window must comfortably exceed barrier + worst-case flush or this consumer
+      # reclaims its own in-flight messages and reprocesses them into Bronze, which
+      # has no dedupe. Recovery must also stay above the barrier (config validator).
+      - HEBER_REDIS_CLAIM_IDLE_MS=3600000
+      - HEBER_REDIS_RECOVER_INTERVAL_SECONDS=1800
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -135,18 +193,27 @@ services:
         condition: service_healthy
     healthcheck:
       # Same run-loop heartbeat liveness as heber-consumer (gauge on :9090, fresh even on idle
-      # no-data cycles). Fails if the loop has not ticked in 180s.
-      test: [ "CMD-SHELL", "python -c \"import urllib.request,time,re,sys; b=urllib.request.urlopen('http://localhost:9090/',timeout=5).read().decode(); m=re.search(r'^heber_consumer_loop_heartbeat_unixtime (\\S+)',b,re.M); sys.exit(0 if m and time.time()-float(m.group(1))<180 else 1)\"" ]
+      # no-data cycles). Backfill flushes hundreds of date partitions across the slow bind mount
+      # and can occupy the flush thread for many minutes; the heartbeat is now ticked from the
+      # awaiting coroutine so it stays honest during that window, but the threshold is widened
+      # here (and only here — the live consumer keeps 180s) so a legitimately long flush is not
+      # reported as a failure. Progress, as distinct from liveness, is heber_consumer_acked_total.
+      test: [ "CMD-SHELL", "python -c \"import urllib.request,time,re,sys; b=urllib.request.urlopen('http://localhost:9090/',timeout=5).read().decode(); m=re.search(r'^heber_consumer_loop_heartbeat_unixtime (\\S+)',b,re.M); sys.exit(0 if m and time.time()-float(m.group(1))<600 else 1)\"" ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 300s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # The writer buffers each event twice (Bronze dict ~3KB measured, plus a Silver row) and
+    # materializes transient Arrow tables during a flush. Without a limit an over-large buffer
+    # is killed at the VM level with no container-visible OOM event, which is unattributable.
+    # 3g covers a 150k-event accumulation window (~2.0-2.25GB peak) with headroom.
+    mem_limit: 3g
 
   heber-compactor:
     build:
@@ -184,13 +251,20 @@ services:
     command: [ "python", "-m", "heber.watch" ]
     environment:
       # Uses heber:events stream from Data Gateway's Redis
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
-      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
+      - DATA_GATEWAY_URL=http://data-gateway:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
       - HEBER_WATCH_GATEWAY_LEGACY_FALLBACK_ENABLED=false
       - HEBER_GOLD_PATH=/data/gold
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -206,6 +280,14 @@ services:
         max-size: "50m"
         max-file: "5"
     restart: always
+    # Observed steady state ~150MB, peak ~960MB while the enrichment backfill
+    # scanner and snapshot poller run together. 3g is deliberately well clear of
+    # that: the point of this ceiling is attribution, not enforcement — an
+    # unbounded container killed at the VM level leaves no OOMKilled flag and no
+    # exit code, so its death is invisible. Sized not to cause kills it would
+    # otherwise avoid; if OOMKilled ever shows true here, raise it rather than
+    # assume the service leaked.
+    mem_limit: 3g
 
   # Gold Feature Poller - Refreshes Gold feature datasets after market close
   heber-gold-poller:
@@ -220,13 +302,34 @@ services:
     environment:
       - HEBER_DATA_ROOT=/data
       - HEBER_GOLD_POLLER_ENABLED=true
-      - HEBER_GOLD_POLLER_EOD_HOUR=16
-      - HEBER_GOLD_POLLER_EOD_MINUTE=35
+      # 18:15 ET, not 16:35. The poller used to trigger BEFORE its own EOD self-heal
+      # reconcile (17:45 ET, gold_poller_eod_reconcile_*), so every run read Silver the
+      # reconcile had not yet repaired. Pipelines now run after it.
+      - HEBER_GOLD_POLLER_EOD_HOUR=18
+      - HEBER_GOLD_POLLER_EOD_MINUTE=15
+      # 7 days, not the default 1. A run recomputes this many trailing days, so a missed
+      # or restarted run self-heals instead of leaving a permanent hole — three trading
+      # days (07-24, 07-30, 08-04) were silently lost with no run at all. Range is 1-30.
+      - HEBER_GOLD_POLLER_LOOKBACK_DAYS=7
+      # Held out of the scheduled run until their Gold data is rebuilt. Both were
+      # OOM-killed nightly and are now bounded, but the 7-day lookback would append
+      # rows to the very partitions the darkpool/market_regime regeneration has to
+      # replace — and Gold writes append without dedup on read. Clear this once the
+      # rebuild lands.
+      # market_regime stays disabled: its full-history rebuild is parked at
+      # version=staging-v2 pending a max-gap rule for returns spanning the
+      # 2024-2025 daily-bars gap, and a diagnosis of the UVXY quotes read
+      # returning zero rows. Its v1 is untouched and still what reads resolve.
+      - HEBER_GOLD_POLLER_DISABLED_PIPELINES=market_regime
+      # darkpool_features was regenerated into v2, which is what read_gold now
+      # resolves — so the nightly run has to write there too, or the dataset
+      # freezes silently. Every other pipeline keeps HEBER_GOLD_POLLER_VERSION.
+      - HEBER_GOLD_POLLER_PIPELINE_VERSIONS=darkpool=v2
       # EOD reconcile re-pulls missing daily feeds through the Data-Gateway, which
       # runs on a separate compose network — reach it over the host bridge and send
       # the same gateway key heber-watch uses (from .env, never committed). Without
       # these the reconcile POST cannot resolve/authenticate and every backfill fails.
-      - DATA_GATEWAY_URL=http://host.docker.internal:8080
+      - DATA_GATEWAY_URL=http://data-gateway:8080
       - HEBER_WATCH_GATEWAY_API_KEY=${HEBER_WATCH_GATEWAY_API_KEY}
       # Only feeds that can be back-dated. iv_rank/iv_term_structure are snapshot-only —
       # a re-pull lands under today, not the missing date. Matches the config.py default;
@@ -234,6 +337,13 @@ services:
       - HEBER_EOD_RECONCILE_FEEDS=oi_change,historic_option_volume
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -258,7 +368,7 @@ services:
     command: [ "python", "-m", "heber.ops.dataflow_health", "--loop", "--mode", "scheduled" ]
     environment:
       - HEBER_DATA_ROOT=/data
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
       - HEBER_HEALTH_CONSUMER_METRICS_URL=http://heber-consumer:9090/metrics
@@ -272,6 +382,13 @@ services:
       - HEBER_HEALTH_REPORT_DIR=/data/ops/dataflow-health
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     depends_on:
@@ -300,7 +417,7 @@ services:
     command: [ "python", "-m", "heber.health_monitor" ]
     environment:
       - HEBER_DATA_ROOT=/data
-      - HEBER_REDIS_URL=redis://host.docker.internal:6379
+      - HEBER_REDIS_URL=redis://data-gateway-redis:6379
       - HEBER_REDIS_STREAM_NAME=heber:events
       - HEBER_REDIS_CONSUMER_GROUP=heber-writers
       - HEBER_HEALTH_MONITOR_ENABLED=true
@@ -308,6 +425,13 @@ services:
       - HEBER_HEALTH_PARTITION_CHECK_INTERVAL_SECONDS=900
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Reaches data-gateway container-to-container over the shared bus instead of
+    # out via host.docker.internal and back through the published port. `default`
+    # stays listed because declaring any network replaces the implicit one, and
+    # postgres is only reachable there.
+    networks:
+      default: {}
+      empire-bus: {}
     volumes:
       - ${HEBER_VOLUME_ROOT:-/Volumes/heber}/data:/data
     ports:
@@ -333,7 +457,7 @@ services:
   #   command: [ "python", "-m", "heber.writer.dlq_reprocessor", "--analyze" ]
   #   environment:
   #     - HEBER_DATA_ROOT=/data
-  #     - HEBER_REDIS_URL=redis://host.docker.internal:6379
+  #     - HEBER_REDIS_URL=redis://data-gateway-redis:6379
   #     - HEBER_REDIS_DLQ_STREAM_NAME=heber:events:dlq
   #   extra_hosts:
   #     - "host.docker.internal:host-gateway"
@@ -349,6 +473,13 @@ services:
   #
   #   # Example: purge entries older than 30 days
   #   # command: [ "python", "-m", "heber.writer.dlq_reprocessor", "--purge", "--older-than", "30d", "--confirm" ]
+
+networks:
+  # Shared with the Data-Gateway compose project so Redis and the gateway are
+  # reachable by name. Created out of band (`docker network create empire-bus`)
+  # so neither project owns it and a `compose down` in either cannot remove it.
+  empire-bus:
+    external: true
 
 volumes:
   heber-data:

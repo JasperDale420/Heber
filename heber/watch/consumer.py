@@ -31,6 +31,7 @@ from heber.ops.metrics import (
     record_watch_duplicate_alert_suppressed,
     record_watch_gateway_request,
     record_watch_watch_created,
+    watch_last_xread_success_unixtime,
 )
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
@@ -171,6 +172,43 @@ class AlertWatchConsumer:
         """Async wrapper for consumer group setup."""
         await asyncio.to_thread(self.setup_consumer_group)
 
+    async def _setup_consumer_group_with_retry(self) -> None:
+        """Set up the consumer group, waiting out a transiently unavailable Redis.
+
+        The run loop below already backs off on transient errors, but it only
+        starts after setup returns — so an upstream that is down or still loading
+        its AOF killed the process here and `restart: always` turned that into a
+        crash-loop the watchdog restarted every 120s against the same dead Redis.
+        data-gateway-redis takes ~77s to load its AOF, so any restart of it hit this.
+
+        Only transient errors are retried; a real misconfiguration still fails fast.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                await self._setup_consumer_group_async()
+                return
+            except Exception as exc:
+                is_transient, error_kind = classify_runtime_error(exc)
+                if not is_transient:
+                    raise
+                delay = calculate_retry_delay(
+                    attempt=attempt,
+                    base_seconds=self.retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                logger.warning(
+                    "Redis unavailable during watch startup — retrying",
+                    error=str(exc),
+                    error_kind=error_kind,
+                    attempt=attempt,
+                    retry_delay_seconds=round(delay, 3),
+                    stream=self.stream_name,
+                )
+                await asyncio.sleep(delay)
+
     async def _read_messages(self):
         """Read stream messages without blocking the event loop.
 
@@ -181,7 +219,7 @@ class AlertWatchConsumer:
         recreation.
         """
         try:
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -199,7 +237,7 @@ class AlertWatchConsumer:
                 error=str(e),
             )
             await self._setup_consumer_group_async()
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -207,6 +245,13 @@ class AlertWatchConsumer:
                 count=100,
                 block=5000,
             )
+
+        # Upstream-reachability signal. An empty read still counts — it proves
+        # Redis answered. Set only on the success paths: the run loop keeps
+        # spinning (and the process keeps looking alive) through a Redis outage,
+        # so without this there is nothing to tell waiting from working.
+        watch_last_xread_success_unixtime.set(time.time())
+        return messages
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""
@@ -362,7 +407,7 @@ class AlertWatchConsumer:
     async def run(self) -> None:
         """Run the consumer as a continuous service."""
         self._running = True
-        await self._setup_consumer_group_async()
+        await self._setup_consumer_group_with_retry()
         log_fallback_backlog(settings.dlq_fallback_path, service="heber-watch")
         error_streak = 0
 

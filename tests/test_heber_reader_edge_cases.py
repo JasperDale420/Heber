@@ -17,16 +17,17 @@ built in ``tmp_path`` with hive partitions ``feed=X/instrument_type=Y/dt=Z``.
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 
-from heber.reader.core import HeberReader, _collect_parquet_files
+import heber.reader.core as core_module
+from heber.reader.core import HeberReader, HeberReadError, _collect_parquet_files
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -638,26 +639,9 @@ class TestStringEncodingUnification:
 # ---------------------------------------------------------------------------
 
 
-_NUMERIC_UNIFICATION_BUG = (
-    "REAL READER BUG (W2 finding): when two fragments in the SAME dt partition "
-    "disagree on a numeric column (int64 vs float64), _open_dataset_safe's manual "
-    "schema-unification fallback never runs. pyarrow's ds.dataset() construction "
-    "does NOT raise — it lazily infers int64 from the first fragment — so the "
-    "try/except around ds.dataset(...) in _open_dataset_safe is never tripped. The "
-    "conflict only surfaces later at dataset_obj.to_table() inside read_silver, "
-    "which catches ArrowInvalid and returns an EMPTY DataFrame, silently dropping "
-    "all rows for the feed. The fallback at core.py lines ~191-272 was written to "
-    "widen int64<->float64 to float64 (see its own 'Float value X was truncated' "
-    "comment) but is dead for this case. Fix would require materializing/validating "
-    "the merged schema inside _open_dataset_safe (e.g. a probe scan or eager "
-    "unify_schemas) rather than relying on lazy ds.dataset() construction to raise."
-)
-
-
 class TestManualSchemaUnification:
-    """When two fragments disagree on a column's type badly enough that
-    pyarrow's auto-merge raises (e.g. int64 vs float64), ``_open_dataset_safe``
-    is *intended* to fall back to reading each fragment's physical schema and
+    """When two fragments disagree on a column's type (e.g. int64 vs float64),
+    the reader falls back to reading each fragment's physical schema and
     widening to a common type. These tests force that conflict and assert the
     merged read.
     """
@@ -670,11 +654,6 @@ class TestManualSchemaUnification:
             "n": n,
         }
 
-    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
-    # but not on Linux (CI and the production Docker image), where pyarrow widens
-    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
-    # CI; the reason still documents the macOS manifestation.
-    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_int64_and_float64_fragments_widen_to_float(self, tmp_path: Path) -> None:
         int_schema = pa.schema(
             [
@@ -712,11 +691,6 @@ class TestManualSchemaUnification:
         # Both values readable; int fragment widened to float losslessly.
         assert set(df["n"]) == {5.0, 2.5}
 
-    # Platform-conditional: the lazy-inference bug reproduces on macOS local dev
-    # but not on Linux (CI and the production Docker image), where pyarrow widens
-    # int64<->float64 correctly. Non-strict so version/platform drift never breaks
-    # CI; the reason still documents the macOS manifestation.
-    @pytest.mark.xfail(sys.platform == "darwin", strict=False, reason=_NUMERIC_UNIFICATION_BUG)
     def test_filter_pushdown_survives_numeric_unification(self, tmp_path: Path) -> None:
         """instrument_key pruning still works through the manual-unification
         fallback (the unified schema must retain the partition column)."""
@@ -804,6 +778,179 @@ class TestManualSchemaUnification:
         assert "dt" in df.columns
         assert set(df["dt"]) == {"2026-01-15", "2026-01-16"}
         assert len(df) == 3
+
+
+def _pin_file_order(monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+    """Force ``_collect_parquet_files`` to enumerate ``first`` ahead of the rest.
+
+    pyarrow infers a dataset's schema from a *subset* of fragments (one, by
+    default), so which physical file lands first in the list decides the
+    inferred type of a conflicting column. On a real volume that order comes
+    from ``rglob`` — i.e. from filesystem enumeration order, which is arbitrary
+    and differs between machines. Pinning it here makes both orderings
+    reproducible instead of leaving the assertion at the mercy of the FS.
+    """
+    real = core_module._collect_parquet_files
+
+    def ordered(*args: object, **kwargs: object) -> list[str]:
+        files = real(*args, **kwargs)
+        return sorted(files, key=lambda f: (Path(f).name != first, Path(f).name))
+
+    monkeypatch.setattr(core_module, "_collect_parquet_files", ordered)
+
+
+class TestNullTypedColumnUnification:
+    """A column that was entirely null when one fragment was written lands on
+    disk as Arrow ``null`` type, while another fragment types it ``string``.
+
+    pyarrow infers the dataset schema lazily from a subset of fragments, so the
+    conflict does not surface at ``ds.dataset()`` — it surfaces at scan time as
+    ``ArrowNotImplementedError: Unsupported cast from string to null``. That is
+    not an ``ArrowInvalid``, so it escapes the read-path handler entirely and
+    propagates to the caller, taking the whole feed's read down with it.
+
+    Each case runs with the null fragment enumerated first (the broken
+    direction — inferred type is ``null``, so the concrete fragment cannot be
+    cast into it) and last (the benign direction), because production hits
+    whichever order the filesystem happens to yield.
+    """
+
+    def _row(self, key: str, hours: int, value: object, column: str) -> dict:
+        return {
+            "ts_event": _ts(hours),
+            "ts_available": _ts(hours + 1),
+            "instrument_key": key,
+            column: value,
+        }
+
+    def _schemas(self, column: str, concrete: pa.DataType, null_type: pa.DataType) -> tuple[pa.Schema, pa.Schema]:
+        base = [
+            ("ts_event", pa.timestamp("us", tz="UTC")),
+            ("ts_available", pa.timestamp("us", tz="UTC")),
+            ("instrument_key", pa.string()),
+        ]
+        return pa.schema([*base, (column, null_type)]), pa.schema([*base, (column, concrete)])
+
+    def _build(
+        self,
+        tmp_path: Path,
+        column: str,
+        concrete: pa.DataType,
+        value: object,
+        key: str = "equity:AAPL",
+        null_type: pa.DataType | None = None,
+        null_value: object = None,
+    ) -> None:
+        null_schema, concrete_schema = self._schemas(column, concrete, null_type or pa.null())
+        # Both fragments share one dt partition so pyarrow must reconcile them.
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row("equity:AAPL", 0, null_value, column)],
+            file_name="a_null.parquet",
+            schema=null_schema,
+        )
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row(key, 1, value, column)],
+            file_name="b_concrete.parquet",
+            schema=concrete_schema,
+        )
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_null_and_string_fragments_unify(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        assert set(df["note"].dropna()) == {"hello"}
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_null_and_float_fragments_unify(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str) -> None:
+        """null vs a non-string concrete type must widen to that type too."""
+        self._build(tmp_path, "vwap", pa.float64(), 12.5)
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        assert df["vwap"].dropna().tolist() == [pytest.approx(12.5)]
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_filter_pushdown_survives_null_unification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        self._build(tmp_path, "note", pa.string(), "hello", key="equity:TSLA")
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars", instrument_keys=["equity:TSLA"])
+        assert len(df) == 1
+        assert df["instrument_key"].iloc[0] == "equity:TSLA"
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_list_of_null_and_list_of_string_fragments_unify(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        """An empty list column serializes as ``list<element: null>``.
+
+        Silver's ``quality_flags`` is a ``list<string>``; a fragment where every
+        row had an empty list lands on disk as ``list<element: null>``. That is
+        not a null *type* at the top level, so it needs the same resolution one
+        level down — it raises the identical "Unsupported cast from string to
+        null" as the scalar case.
+        """
+        self._build(
+            tmp_path,
+            "quality_flags",
+            pa.list_(pa.string()),
+            ["ok"],
+            null_type=pa.list_(pa.null()),
+            null_value=[],
+        )
+        _pin_file_order(monkeypatch, first)
+        df = HeberReader(tmp_path).read_silver("bars")
+        assert len(df) == 2
+        flags = [list(v) for v in df["quality_flags"] if v is not None and len(v) > 0]
+        assert flags == [["ok"]]
+
+    def test_unresolvable_conflict_surfaces_instead_of_reading_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When unification cannot rescue the read, the failure must surface as
+        a ``HeberReadError`` — not be flattened into an empty DataFrame.
+
+        An empty result is indistinguishable from "this feed had no data
+        today", which is exactly how the bars audit stayed silently broken.
+        """
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, "a_null.parquet")
+        monkeypatch.setattr(core_module, "_unified_dataset", lambda *_a, **_k: None)
+
+        with pytest.raises(HeberReadError, match="unreadable"):
+            HeberReader(tmp_path).read_silver("bars")
+
+    @pytest.mark.parametrize("first", ["a_null.parquet", "b_concrete.parquet"])
+    def test_asof_leakage_gate_survives_null_unification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        """The ``ts_available`` anti-leakage predicate must still be enforced
+        when the read is served from the unified-schema retry.
+
+        Recovering from a schema conflict must never widen what a
+        point-in-time read can see: the concrete fragment here is available at
+        ``_ts(2)``, so an asof of ``_ts(1)`` must exclude it.
+        """
+        self._build(tmp_path, "note", pa.string(), "hello")
+        _pin_file_order(monkeypatch, first)
+        reader = HeberReader(tmp_path)
+
+        # Fragment ts_available values are _ts(1) (null frag) and _ts(2).
+        visible = reader.read_silver("bars", asof_time=_ts(1))
+        assert len(visible) == 1
+        assert visible["note"].isna().all(), "future-available row leaked into an asof read"
+
+        # Past the later fragment's availability, both rows are visible.
+        assert len(reader.read_silver("bars", asof_time=_ts(2))) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -965,30 +1112,41 @@ class TestReadParquetDatasetEdges:
         out = reader.read_parquet_dataset(d)
         assert out.empty
 
-    def test_corrupt_parquet_file_returns_empty(self, tmp_path: Path) -> None:
-        """A file named ``*.parquet`` with non-parquet bytes is collected (name
-        passes the filter) but fails at read → read_parquet_dataset swallows the
-        ArrowInvalid and returns an empty frame rather than raising."""
+    def test_corrupt_parquet_file_raises(self, tmp_path: Path) -> None:
+        """A file named ``*.parquet`` holding non-parquet bytes is collected (the
+        name passes the filter) but fails at open, and that must raise.
+
+        ``read_parquet_dataset`` gets the same contract as the Silver and Gold
+        reads: absence answers empty, unreadable bytes do not. It used to raise
+        only when the scan failed, so a file that failed one step earlier — at
+        open — still came back as an empty frame, and `read_label` reported zero
+        labels for a dataset nobody could read.
+        """
         d = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-01-15"
         d.mkdir(parents=True, exist_ok=True)
         (d / "corrupt.parquet").write_bytes(b"this is not parquet data at all")
         reader = HeberReader(tmp_path)
-        out = reader.read_parquet_dataset(d)
-        assert out.empty
+        with pytest.raises(HeberReadError):
+            reader.read_parquet_dataset(d)
 
 
 class TestSilverReadErrorBranches:
     """read_silver's defensive empty-return branches."""
 
-    def test_corrupt_silver_file_returns_empty(self, tmp_path: Path) -> None:
-        """A corrupt parquet under a Silver feed makes read_silver swallow the
-        ArrowInvalid at read time and return an empty frame."""
+    def test_corrupt_silver_file_raises(self, tmp_path: Path) -> None:
+        """A corrupt parquet under a Silver feed must fail the read, not empty it.
+
+        This asserted the opposite until a zero-byte fragment under
+        `feed=darkpool` silently emptied that entire feed and a Gold
+        regeneration reported `no_data` and exited 0. An unreadable partition
+        and an unwritten one are different answers.
+        """
         d = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-01-15"
         d.mkdir(parents=True, exist_ok=True)
         (d / "corrupt.parquet").write_bytes(b"definitely not parquet")
         reader = HeberReader(tmp_path)
-        df = reader.read_silver("bars")
-        assert df.empty
+        with pytest.raises(HeberReadError):
+            reader.read_silver("bars")
 
     def test_feed_dir_with_only_sidecars_returns_empty(self, tmp_path: Path) -> None:
         """When every candidate file is filtered out, _open_dataset_safe returns
@@ -1002,12 +1160,375 @@ class TestSilverReadErrorBranches:
 
 
 class TestGoldReadErrorBranches:
-    def test_corrupt_gold_file_returns_empty(self, tmp_path: Path) -> None:
-        """A corrupt parquet under a Gold version makes read_gold swallow the
-        read error and return an empty frame."""
+    def test_corrupt_gold_file_raises(self, tmp_path: Path) -> None:
+        """Gold gets the same contract as Silver: unreadable is not empty.
+
+        A dataset whose files cannot be opened must not answer "no data" —
+        that made a corrupt fragment indistinguishable from a version nobody
+        had written, which is how a whole feed went missing unnoticed.
+        """
         part = tmp_path / "gold" / "dataset=feat" / "project=kairos" / "version=v1" / "dt=2026-01-15"
         part.mkdir(parents=True, exist_ok=True)
         (part / "corrupt.parquet").write_bytes(b"not parquet")
         reader = HeberReader(tmp_path)
-        df = reader.read_gold("feat", project="kairos", version="v1")
-        assert df.empty
+        with pytest.raises(HeberReadError):
+            reader.read_gold("feat", project="kairos", version="v1")
+
+
+class TestQuarantineExclusion:
+    """Files under a ``_quarantine`` subtree are never returned to readers.
+
+    ``persist_features_to_gold`` diverts rows whose enrichment failed (all
+    Greeks null) into ``<version=>/_quarantine/...`` precisely so they stay
+    out of ML training inputs. The reader walks the whole version root, so
+    without an explicit skip the quarantine is decorative.
+    """
+
+    def _gold_row(self, feature_a: float) -> dict:
+        return {
+            "ts_event": _ts(0),
+            "ts_available": _ts(1),
+            "instrument_key": "equity:AAPL",
+            "feature_a": feature_a,
+        }
+
+    def test_collect_skips_quarantine_subtree(self, tmp_path: Path) -> None:
+        good = tmp_path / "dt=2026-01-15"
+        good.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(1.0)])), str(good / "data.parquet"))
+        bad = tmp_path / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(bad / "q.parquet"))
+
+        assert _collect_parquet_files(tmp_path) == [str(good / "data.parquet")]
+
+    def test_read_gold_excludes_quarantined_rows(self, tmp_path: Path) -> None:
+        version_root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        good = version_root / "dt=2026-01-15"
+        good.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(1.0)])), str(good / "data.parquet"))
+        bad = version_root / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(bad / "q.parquet"))
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert list(df["feature_a"]) == [1.0]
+
+    def test_direct_file_under_quarantine_skipped(self, tmp_path: Path) -> None:
+        """The single-file branch honours the same guard as the directory walk."""
+        bad = tmp_path / "_quarantine" / "all_greeks_null" / "dt=2026-01-15"
+        bad.mkdir(parents=True)
+        path = bad / "q.parquet"
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame([self._gold_row(2.0)])), str(path))
+
+        assert _collect_parquet_files(path) == []
+
+
+class TestGoldSchemaEvolution:
+    """A Gold dataset whose older partitions predate a column must still expose it.
+
+    ``ds.dataset(file_list)`` takes its schema from the first fragment, so one
+    old partition written before ``ts_event``/``ts_available`` existed hides
+    those columns across the whole dataset — which silently disables the
+    ``asof_time`` and ``time_range`` predicates that the zero-leakage contract
+    depends on.
+    """
+
+    def _write(self, root: Path, dt: str, rows: list[dict]) -> None:
+        part = root / "gold" / "dataset=feat" / "project=watch" / "version=v1" / f"dt={dt}"
+        part.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.Table.from_pandas(pd.DataFrame(rows)), str(part / "data.parquet"))
+
+    def _seed(self, tmp_path: Path) -> None:
+        # Older partition: no ts_available / ts_event, as the early writer wrote it.
+        self._write(tmp_path, "2026-01-14", [{"instrument_key": "equity:AAPL", "feature_a": 1.0}])
+        # Newer partition: the current writer's schema.
+        self._write(
+            tmp_path,
+            "2026-01-15",
+            [
+                {
+                    "instrument_key": "equity:AAPL",
+                    "feature_a": 2.0,
+                    "ts_event": _ts(0),
+                    "ts_available": _ts(1),
+                }
+            ],
+        )
+
+    def test_columns_added_later_are_not_dropped(self, tmp_path: Path) -> None:
+        self._seed(tmp_path)
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert "ts_available" in df.columns
+        assert "ts_event" in df.columns
+        assert len(df) == 2
+        assert sorted(df["feature_a"]) == [1.0, 2.0]
+
+    def test_asof_filter_applies_once_the_column_is_visible(self, tmp_path: Path) -> None:
+        """The point-in-time guard is skipped entirely when ts_available is absent."""
+        self._seed(tmp_path)
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1", asof_time=_ts(0))
+
+        assert list(df["feature_a"]) == []
+
+    def test_timestamp_resolution_mismatch_keeps_the_finer_unit(self, tmp_path: Path) -> None:
+        """Fragments written by different writers disagree on ns vs us.
+
+        Whichever is seen first must not become the cast target: reading ns
+        data into a us schema either raises or truncates, and which fragment
+        comes first is just filename order.
+        """
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        for dt, unit in (("2026-01-14", "us"), ("2026-01-15", "ns")):
+            part = root / f"dt={dt}"
+            part.mkdir(parents=True)
+            table = pa.table(
+                {
+                    "instrument_key": pa.array(["equity:AAPL"]),
+                    "ts_event": pa.array([_ts(0)], type=pa.timestamp(unit, tz="UTC")),
+                    "ts_available": pa.array([_ts(1)], type=pa.timestamp(unit, tz="UTC")),
+                }
+            )
+            pq.write_table(table, str(part / "data.parquet"))
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert len(df) == 2
+
+    def test_sub_microsecond_fragment_is_not_lost_to_a_coarser_schema(self, tmp_path: Path) -> None:
+        """Casting ns to us raises when the value has sub-microsecond precision.
+
+        read_gold catches ArrowInvalid and returns an empty frame, so the whole
+        dataset would silently read as "no data" depending on which fragment
+        happened to be first.
+        """
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        for dt, arr in (
+            ("2026-01-14", pa.array([1767225600_000000], type=pa.timestamp("us", tz="UTC"))),
+            ("2026-01-15", pa.array([1767225600_000000_500], type=pa.timestamp("ns", tz="UTC"))),
+        ):
+            part = root / f"dt={dt}"
+            part.mkdir(parents=True)
+            pq.write_table(
+                pa.table({"instrument_key": pa.array(["equity:AAPL"]), "ts_event": arr}), str(part / "data.parquet")
+            )
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert len(df) == 2, "a unit mismatch must not collapse the read to empty"
+
+    def test_uniform_dataset_skips_the_unification_cost(self, tmp_path: Path) -> None:
+        """Unifying reads every fragment footer — 4.4 minutes on a 9,415-fragment
+        dataset, for nothing when every fragment already agrees. Pay it only when
+        the oldest and newest fragments actually disagree."""
+        from heber.reader.core import _collect_parquet_files, _needs_schema_union
+
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        for dt in ("2026-01-14", "2026-01-15", "2026-01-16"):
+            part = root / f"dt={dt}"
+            part.mkdir(parents=True)
+            pq.write_table(
+                pa.table({"instrument_key": pa.array(["equity:AAPL"]), "ts_event": pa.array([_ts(0)])}),
+                str(part / "data.parquet"),
+            )
+
+        assert _needs_schema_union(_collect_parquet_files(root)) is False
+
+    def test_evolved_dataset_is_detected_as_differing(self, tmp_path: Path) -> None:
+        from heber.reader.core import _collect_parquet_files, _needs_schema_union
+
+        self._seed(tmp_path)
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+
+        assert _needs_schema_union(_collect_parquet_files(root)) is True
+
+
+class TestAsofFailsClosed:
+    def test_asof_on_a_dataset_without_ts_available_raises(self, tmp_path: Path) -> None:
+        """Silently dropping the point-in-time predicate hands the caller
+        future data while it believes it asked for a cutoff."""
+        part = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1" / "dt=2026-01-15"
+        part.mkdir(parents=True)
+        pq.write_table(
+            pa.table({"instrument_key": pa.array(["equity:AAPL"]), "feature_a": pa.array([1.0])}),
+            str(part / "data.parquet"),
+        )
+
+        with pytest.raises(ValueError, match="ts_available"):
+            HeberReader(tmp_path).read_gold("feat", project="watch", version="v1", asof_time=_ts(0))
+
+    def test_scan_time_unit_conflict_recovers_instead_of_reading_empty(self, tmp_path: Path) -> None:
+        """The gate skips unification when the first fragment already has every
+        predicate column — but a unit conflict only raises at scan time, and
+        read_gold turns that into an empty frame. Retry, don't silently lose the
+        dataset."""
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        rows = [
+            ("2026-01-14", pa.array([1767225600_000000], type=pa.timestamp("us", tz="UTC"))),
+            ("2026-01-15", pa.array([1767225600_000000_500], type=pa.timestamp("ns", tz="UTC"))),
+        ]
+        for dt, ts in rows:
+            part = root / f"dt={dt}"
+            part.mkdir(parents=True)
+            pq.write_table(
+                pa.table(
+                    {
+                        "instrument_key": pa.array(["equity:AAPL"]),
+                        "ts_event": ts,
+                        "ts_available": ts,
+                    }
+                ),
+                str(part / "data.parquet"),
+            )
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1")
+
+        assert len(df) == 2
+
+    def test_union_declares_the_same_partition_columns_as_inference(self, tmp_path: Path) -> None:
+        """Declaring fewer partition fields than the hive factory discovers drops
+        them from the read and makes any predicate on one raise. The two paths
+        must agree, or which one you got changes the result."""
+        from heber.reader.core import _open_dataset_safe
+
+        root_path = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        for dt, cols in (
+            ("2026-01-14", {"instrument_key": pa.array(["equity:AAPL"])}),
+            ("2026-01-15", {"instrument_key": pa.array(["equity:AAPL"]), "ts_event": pa.array([_ts(0)])}),
+        ):
+            part = root_path / f"dt={dt}"
+            part.mkdir(parents=True)
+            pq.write_table(pa.table(cols), str(part / "data.parquet"))
+        root = str(root_path)
+
+        inferred = _open_dataset_safe(root, partitioning=ds.partitioning(flavor="hive"))
+        unified = core_module._unified_dataset(_collect_parquet_files(root), ds.partitioning(flavor="hive"))
+
+        for name in ("dataset", "project", "version", "dt"):
+            assert name in inferred.schema.names, f"{name} missing from inference"
+            assert name in unified.schema.names, f"{name} missing from union"
+
+
+class TestGoldPredicateIntegrity:
+    """A predicate the caller asked for must be applied or the read must fail."""
+
+    def _write(self, root: Path, dt: str, cols: dict) -> None:
+        part = root / f"dt={dt}"
+        part.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.table(cols), str(part / "data.parquet"))
+
+    def test_predicate_column_only_in_a_middle_partition_is_still_applied(self, tmp_path: Path) -> None:
+        """Oldest and newest agree, so a two-endpoint probe sees nothing — but the
+        middle partition carries the column the caller is filtering on."""
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        key = pa.array(["equity:AAPL"])
+        self._write(root, "2026-01-14", {"instrument_key": key, "feature_a": pa.array([1.0])})
+        self._write(
+            root,
+            "2026-01-15",
+            {"instrument_key": key, "feature_a": pa.array([2.0]), "ts_event": pa.array([_ts(100)])},
+        )
+        self._write(root, "2026-01-16", {"instrument_key": key, "feature_a": pa.array([3.0])})
+
+        df = HeberReader(tmp_path).read_gold("feat", project="watch", version="v1", time_range=(_ts(0), _ts(1)))
+
+        # The only row with a ts_event is at _ts(100), far outside the window.
+        assert list(df["feature_a"]) == [], "rows outside the requested window were returned"
+
+    def test_timezone_conflict_on_a_point_in_time_column_fails(self, tmp_path: Path) -> None:
+        """A naive fragment beside an aware one makes the cutoff meaningless."""
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        self._write(
+            root,
+            "2026-01-14",
+            {"instrument_key": pa.array(["equity:AAPL"]), "ts_available": pa.array([_ts(0)], type=pa.timestamp("us"))},
+        )
+        self._write(
+            root,
+            "2026-01-15",
+            {
+                "instrument_key": pa.array(["equity:AAPL"]),
+                "ts_available": pa.array([_ts(0)], type=pa.timestamp("ns", tz="UTC")),
+                "extra": pa.array([1.0]),
+            },
+        )
+
+        with pytest.raises(ValueError, match="timezone"):
+            HeberReader(tmp_path).read_gold("feat", project="watch", version="v1", asof_time=_ts(1))
+
+    def test_filename_containing_an_equals_is_not_a_partition_column(self, tmp_path: Path) -> None:
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        part = root / "dt=2026-01-15"
+        part.mkdir(parents=True)
+        pq.write_table(pa.table({"instrument_key": pa.array(["equity:AAPL"])}), str(part / "x=y.parquet"))
+        older = root / "dt=2026-01-14"
+        older.mkdir(parents=True)
+        pq.write_table(
+            pa.table({"instrument_key": pa.array(["equity:AAPL"]), "ts_event": pa.array([_ts(0)])}),
+            str(older / "data.parquet"),
+        )
+
+        unified = core_module._unified_dataset(_collect_parquet_files(str(root)), ds.partitioning(flavor="hive"))
+
+        assert "x" not in unified.schema.names
+
+    def test_ts_label_only_dataset_does_not_force_unification(self, tmp_path: Path) -> None:
+        """time_range falls back to ts_label, so a ts_label-only dataset is fully
+        filterable — requiring ts_event would buy a full schema traversal for
+        nothing on every filtered read."""
+        from heber.reader.core import _collect_parquet_files, _needs_schema_union
+
+        root = tmp_path / "gold" / "dataset=feat" / "project=watch" / "version=v1"
+        for dt in ("2026-01-14", "2026-01-15"):
+            self._write(
+                root,
+                dt,
+                {
+                    "instrument_key": pa.array(["equity:AAPL"]),
+                    "ts_label": pa.array([_ts(0)]),
+                    "ts_available": pa.array([_ts(1)]),
+                },
+            )
+
+        files = _collect_parquet_files(root)
+        assert _needs_schema_union(files, (("ts_event", "ts_label"),)) is False
+
+    def _row(self, hours: int, tf: str) -> dict:
+        return {
+            "ts_event": _ts(hours),
+            "ts_available": _ts(hours + 1),
+            "instrument_key": "equity:AAPL",
+            "timeframe": tf,
+            "close": 100.0 + hours,
+        }
+
+    def test_filters_to_the_requested_interval(self, tmp_path: Path) -> None:
+        _write_partition(
+            tmp_path,
+            "bars",
+            "equity",
+            [self._row(0, "1Day"), self._row(1, "1Min"), self._row(2, "5Min")],
+        )
+        reader = HeberReader(tmp_path)
+
+        assert len(reader.read_silver("bars", instrument_type="equity")) == 3
+        daily = reader.read_silver("bars", instrument_type="equity", timeframe="1Day")
+        assert len(daily) == 1
+        assert set(daily["timeframe"]) == {"1Day"}
+
+    def test_raises_when_the_feed_has_no_timeframe_column(self, tmp_path: Path) -> None:
+        """Failing open would return every interval to a caller asking for one."""
+        _write_partition(
+            tmp_path,
+            "tags",
+            "equity",
+            [{"ts_event": _ts(0), "ts_available": _ts(1), "instrument_key": "equity:AAPL"}],
+        )
+        reader = HeberReader(tmp_path)
+
+        with pytest.raises(ValueError, match="timeframe"):
+            reader.read_silver("tags", instrument_type="equity", timeframe="1Day")

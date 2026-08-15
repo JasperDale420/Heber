@@ -24,7 +24,7 @@ _PUT_CALL_DESC = "P or C"
 class SilverBase(BaseModel):
     """Base columns present in EVERY Silver dataset (PRD §8.7.1)."""
 
-    event_id: str = Field(..., description="Deterministic idempotency key (SHA256)")
+    event_id: str = Field(..., description="Deterministic idempotency key (BLAKE2b-128)")
     provider: str = Field(..., description="alpaca, unusual_whales, etc")
     feed: str = Field(..., description="Canonical feed name")
     instrument_type: str = Field(..., description="equity|option|crypto|forex")

@@ -31,7 +31,7 @@ This audit compares:
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `event_id` | `str` | ✅ | SHA256 hash (32 chars) |
+| `event_id` | `str` | ✅ | BLAKE2b-128 hex hash (32 chars). Digest of `provider\|feed\|instrument_key\|ts_event\|*uniques`; `Decimal` uniques are stringified with `str(d)` (`1.50`), never `str(float(d))` (`1.5`). See [PRD §6.3](../PRD.md) |
 | `provider` | `str` | ✅ | e.g., `unusual_whales` |
 | `feed` | `str` | ✅ | e.g., `flow_alerts`, `darkpool` |
 | `source` | `str` | ✅ | `websocket` or `rest` |

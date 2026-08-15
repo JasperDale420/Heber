@@ -305,15 +305,17 @@ def read_label(
         logger.warning("Label data file not found", path=str(data_path))
         return pd.DataFrame()
 
-    try:
-        reader = HeberReader()
-        df = reader.read_parquet_dataset(
-            path=data_path,
-            asof_time=asof_time,
-        )
-    except Exception as e:
-        logger.error("Failed to read label dataset", dataset=dataset, error=str(e), exc_info=True)
-        return pd.DataFrame()
+    # A read failure propagates. An absent dataset, an absent version and an
+    # absent data file are each answered as "no labels" above, so anything
+    # reaching here has bytes on disk that could not be parsed — a count that
+    # is unknown, not zero. Returning empty for that fed silently incomplete
+    # labels into training and evaluation with nothing to distinguish it from
+    # a day that genuinely produced none.
+    reader = HeberReader()
+    df = reader.read_parquet_dataset(
+        path=data_path,
+        asof_time=asof_time,
+    )
 
     if "ts_available" not in df.columns and not df.empty:
         message = (
