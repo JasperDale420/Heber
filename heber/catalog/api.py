@@ -307,12 +307,20 @@ async def health_coverage() -> JSONResponse:
             # and that is exactly the failure that hid here: the walk never got
             # past feed=quotes, so every feed after it alphabetically was never
             # scanned at all while the endpoint read fresh.
+            # `status` still gates on the newest scan. The oldest is carried
+            # alongside it, named, because it is the more honest number — but it
+            # cannot gate yet. `_walk_partition_files` enumerates a feed's whole
+            # tree every pass regardless of reuse (reuse only skips footers), so
+            # feed=quotes at ~825k files has never once finished, and every feed
+            # after it alphabetically is never reached. Gating on the oldest
+            # would therefore report stale permanently. Once that walk is pruned
+            # so a pass can complete, this should gate on `stalest` instead.
             result = await session.execute(
                 text(
-                    "SELECT min(last_updated_ts), count(*), ("
+                    "SELECT max(last_updated_ts), count(*), ("
                     "  SELECT dataset_name FROM data_coverage WHERE instrument_key = '__all__'"
                     "  ORDER BY last_updated_ts ASC LIMIT 1"
-                    ") FROM data_coverage WHERE instrument_key = '__all__'"
+                    "), min(last_updated_ts) FROM data_coverage WHERE instrument_key = '__all__'"
                 )
             )
             row = result.first()
@@ -325,6 +333,16 @@ async def health_coverage() -> JSONResponse:
 
     last_updated, rows = (row[0], row[1]) if row else (None, 0)
     stalest = row[2] if row is not None and len(row) > 2 else None
+    oldest = row[3] if row is not None and len(row) > 3 else None
+
+    def _age(ts: datetime | None) -> float | None:
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - ts).total_seconds()
+
+    stalest_age = _age(oldest)
     age = None
     if last_updated is not None:
         if last_updated.tzinfo is None:
@@ -337,6 +355,7 @@ async def health_coverage() -> JSONResponse:
         "last_updated_ts": last_updated.isoformat() if last_updated else None,
         "rows": rows,
         "stalest_feed": stalest,
+        "stalest_feed_age_seconds": stalest_age,
         "max_age_seconds": settings.catalog_coverage_max_age_seconds,
     }
 
