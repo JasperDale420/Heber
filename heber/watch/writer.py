@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ import pandas as pd
 import structlog
 
 from heber.core.http_client import create_async_http_client
+from heber.utils.durable_write import fsync_dir
 from heber.watch.checker import BarrierChecker, outcome_to_label_row
 from heber.watch.gateway import (
     GATEWAY_AUTH_HEADER_NAME,
@@ -167,6 +169,12 @@ class LabelWriter:
                 )
 
                 write_group.to_parquet(current_tmp_file, index=False, compression="snappy")
+                # Flush before the rename can publish the name. The lakehouse
+                # volume is exFAT with no journaling, so a rename that lands
+                # ahead of the data publishes a zero-byte file — and one of
+                # those makes the whole dataset unreadable to pyarrow.
+                with current_tmp_file.open("rb+") as handle:
+                    os.fsync(handle.fileno())  # noqa: PTH123 — flush before the rename publishes the name
                 staged_files.append((current_tmp_file, final_file_path, len(group)))
                 current_tmp_file = None
 
@@ -174,6 +182,12 @@ class LabelWriter:
                 tmp_file.replace(final_file)
                 promoted_files.append(final_file)
                 logger.debug("Wrote partition", path=str(final_file), rows=rows)
+
+            # One flush per distinct partition directory — a single flush
+            # would leave every other date's rename undurable, and those
+            # labels would vanish without even a zero-byte file to notice.
+            for directory in {f.parent for f in promoted_files}:
+                fsync_dir(directory)
 
         except Exception:
             self._cleanup_staged_files(current_tmp_file, staged_files, promoted_files)

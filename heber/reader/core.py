@@ -33,6 +33,7 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any
 
 import pandas as pd
@@ -42,6 +43,7 @@ import pyarrow.parquet as pq
 import structlog
 
 from heber.config import settings
+from heber.utils.durable_write import publish_atomically
 from heber.utils.versioning import version_sort_key as _version_sort_key
 
 logger = structlog.get_logger(__name__)
@@ -90,7 +92,7 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
 _QUARANTINE_DIR = "_quarantine"
 
 
-def _collect_parquet_files(root: str | Path) -> list[str]:
+def _collect_parquet_files(root: str | Path, skipped_empty: list[str] | None = None) -> list[str]:
     """Walk a Parquet dataset root and return only readable parquet files.
 
     Skips three classes of files that would otherwise cause pyarrow to
@@ -129,6 +131,7 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             return [str(base)]
         return []
     files: list[str] = []
+    empty: list[str] = []
     quarantined = 0
     for f in base.rglob("*.parquet"):
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
@@ -148,10 +151,22 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             quarantined += 1
             continue
         try:
-            if not f.is_file():
-                continue
+            file_stat = f.stat()
         except OSError:
             # Defensive: any other unstattable path (rare) is also skipped.
+            continue
+        if not S_ISREG(file_stat.st_mode):
+            continue
+        # A zero-byte parquet file is a write that never landed — the lakehouse
+        # volume is exFAT, where a rename without an explicit flush can publish
+        # an empty file. It is not readable and never becomes readable, and one
+        # of them fails the scan for the entire dataset, so it is skipped for
+        # the same reason `*.tmp` partial writes are. Reported, never silent:
+        # the rows it should have held are genuinely missing.
+        if file_stat.st_size == 0:
+            empty.append(str(f))
+            if skipped_empty is not None:
+                skipped_empty.append(str(f))
             continue
         files.append(str(f))
     if quarantined:
@@ -161,6 +176,15 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
             path=str(base),
             skipped=quarantined,
             collected=len(files),
+        )
+    if empty:
+        logger.warning(
+            "heber_reader_skipped_zero_byte_files",
+            path=str(base),
+            skipped=len(empty),
+            collected=len(files),
+            files=empty[:10],
+            hint="A zero-byte parquet is a lost write; the rows it held are not recoverable from it.",
         )
     return files
 
@@ -195,6 +219,7 @@ def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
 def _open_dataset_safe(
     path: str,
     partitioning: ds.Partitioning | None = None,
+    skipped_empty: list[str] | None = None,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
@@ -210,7 +235,7 @@ def _open_dataset_safe(
     individual files, fold all string-family types down to plain
     ``pa.string()``, and re-open the dataset with the explicit schema.
     """
-    file_list = _collect_parquet_files(path)
+    file_list = _collect_parquet_files(path, skipped_empty)
     if not file_list:
         return None
 
@@ -883,7 +908,10 @@ class HeberReader:
                 encoded = {k.encode(): json.dumps(v).encode() for k, v in metadata.items()}
                 table = table.replace_schema_metadata({**existing, **encoded})
 
-            pq.write_table(table, str(out_path), compression="snappy", use_dictionary=False)
+            def _write(staged: Path, table: pa.Table = table) -> None:
+                pq.write_table(table, str(staged), compression="snappy", use_dictionary=False)  # type: ignore[no-untyped-call]
+
+            publish_atomically(_write, out_path)
             output_paths.append(out_path)
 
         logger.info(
@@ -924,10 +952,12 @@ class HeberReader:
         if not path.exists():
             return pd.DataFrame()
 
+        skipped_empty: list[str] = []
         try:
             dataset_obj = _open_dataset_safe(
                 str(path),
                 partitioning=ds.partitioning(flavor="hive"),
+                skipped_empty=skipped_empty,
             )
         except OSError:
             logger.warning("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
@@ -940,6 +970,17 @@ class HeberReader:
             if strict:
                 raise ValueError(f"could not open a readable parquet dataset at {path}")
             return pd.DataFrame()
+
+        if strict and skipped_empty:
+            # Skipping a zero-byte fragment keeps the dataset readable, but the
+            # rows it should have held are gone and their count is unknowable.
+            # A strict caller is asking for the complete dataset, so it must not
+            # receive a quietly partial one.
+            raise ValueError(
+                f"{len(skipped_empty)} zero-byte parquet file(s) under {path} — the rows they held "
+                f"are lost, so this dataset is incomplete. Remove them once the loss is accepted, "
+                f"or restore them from backup. First: {skipped_empty[0]}"
+            )
 
         schema_names = set(dataset_obj.schema.names)
 
@@ -964,7 +1005,12 @@ class HeberReader:
             table = _coerce_dict_columns_to_string(table)
             return table.to_pandas()
         except (pa.lib.ArrowInvalid, OSError):
+            # Corruption inside a row group fails here rather than at open, so
+            # this handler needs the same strictness as the open path — without
+            # it a truncated data page still reaches the caller as "no rows".
             logger.warning("heber_reader_arbitrary_read_failed", path=str(path), exc_info=True)
+            if strict:
+                raise
             return pd.DataFrame()
 
     # ------------------------------------------------------------------

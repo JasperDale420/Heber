@@ -5,7 +5,6 @@ Builds training datasets by joining captured features with outcomes.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -21,6 +20,7 @@ import structlog
 from heber.config import settings
 from heber.reader import HeberReader
 from heber.schemas.gold import META_LABEL_FEATURES_TYPES
+from heber.utils.durable_write import publish_atomically
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -164,41 +164,38 @@ def _atomic_write_parquet(
     column infers as ``null``, a mixed column picks whichever type it sees
     first) and produces datasets that cannot be read as a whole.
     """
-    temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
-    try:
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        overrides = schema_overrides or {}
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    overrides = schema_overrides or {}
 
-        # A column that is all-null in this partition but has no declared type
-        # infers as Arrow `null`, which cannot be unified with the concrete type
-        # a later partition will infer. That is exactly how this dataset drifted.
-        undeclared_nulls = [
-            name
-            for name in table.column_names
-            if name not in overrides and pa.types.is_null(table.schema.field(name).type)
-        ]
-        if undeclared_nulls:
-            logger.warning(
-                "gold column written with an inferred null type — declare it to prevent schema drift",
-                path=str(out_file),
-                columns=undeclared_nulls,
-            )
+    # A column that is all-null in this partition but has no declared type
+    # infers as Arrow `null`, which cannot be unified with the concrete type
+    # a later partition will infer. That is exactly how this dataset drifted.
+    undeclared_nulls = [
+        name for name in table.column_names if name not in overrides and pa.types.is_null(table.schema.field(name).type)
+    ]
+    if undeclared_nulls:
+        logger.warning(
+            "gold column written with an inferred null type — declare it to prevent schema drift",
+            path=str(out_file),
+            columns=undeclared_nulls,
+        )
 
-        for column, arrow_type in overrides.items():
-            if column not in table.column_names:
-                continue
-            index = table.schema.get_field_index(column)
-            if table.schema.field(index).type == arrow_type:
-                continue
-            table = table.set_column(
-                index,
-                pa.field(column, arrow_type),
-                table.column(column).cast(arrow_type),
-            )
-        pq.write_table(table, temp_path, compression="snappy")  # type: ignore[no-untyped-call]
-        os.replace(temp_path, out_file)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    for column, arrow_type in overrides.items():
+        if column not in table.column_names:
+            continue
+        index = table.schema.get_field_index(column)
+        if table.schema.field(index).type == arrow_type:
+            continue
+        table = table.set_column(
+            index,
+            pa.field(column, arrow_type),
+            table.column(column).cast(arrow_type),
+        )
+
+    publish_atomically(
+        lambda staged: pq.write_table(table, staged, compression="snappy"),  # type: ignore[no-untyped-call]
+        out_file,
+    )
 
 
 @dataclass
@@ -279,6 +276,9 @@ class MetaLabelDatasetBuilder:
         logger.info(
             "Built meta-label dataset",
             rows=len(dataset),
+            # Rows can exceed distinct alerts when outcomes repeat an alert_id;
+            # the distinct count is the number of independent observations.
+            distinct_alerts=int(dataset["alert_id"].nunique()) if "alert_id" in dataset.columns else None,
             start_date=str(start_date),
             end_date=str(end_date),
         )
@@ -322,10 +322,13 @@ class MetaLabelDatasetBuilder:
         ]
 
         try:
-            # Support arbitrary path config via read_parquet_dataset
+            # Support arbitrary path config via read_parquet_dataset.
+            # strict=True so an unreadable dataset raises instead of arriving
+            # here as an empty frame indistinguishable from "no outcomes".
             df = self.client.read_parquet_dataset(
                 path=self.config.outcomes_path,
                 filters=filters,
+                strict=True,
             )
 
             if df.empty:
@@ -338,8 +341,11 @@ class MetaLabelDatasetBuilder:
             return df
 
         except Exception as e:
+            # An unreadable dataset is not an empty one. Returning a bare frame
+            # here made a total read failure look identical to "no outcomes in
+            # range", so training silently ran on nothing.
             logger.error("Failed to load outcomes", path=str(self.config.outcomes_path), error=str(e))
-            return pd.DataFrame()
+            raise
 
     def _load_features(self, start_date: date, end_date: date) -> pd.DataFrame:
         """Load features from Gold layer."""
@@ -404,6 +410,23 @@ class MetaLabelDatasetBuilder:
             "hit_tp_first",
         ]
         available_outcome_cols = [c for c in outcome_cols if c in outcomes.columns]
+
+        # An alert_id appearing more than once in outcomes fans the join out:
+        # its feature row is emitted once per outcome row, silently reweighting
+        # that alert in training. Report it — the joined row count is not the
+        # number of independent observations when this fires.
+        duplicated = outcomes["alert_id"].duplicated().sum()
+        if duplicated:
+            counts = outcomes["alert_id"].value_counts()
+            repeated = counts[counts > 1]
+            logger.error(
+                "outcomes contain repeated alert_id values — the join will overweight these alerts",
+                repeated_alert_ids=int(len(repeated)),
+                extra_rows=int(duplicated),
+                worst_alert_id=str(repeated.index[0]),
+                worst_count=int(repeated.iloc[0]),
+                hint="Deduplicate the label writer's output; joined rows are not independent samples.",
+            )
 
         # Inner join - only keep alerts with both features and outcomes
         return pd.merge(
