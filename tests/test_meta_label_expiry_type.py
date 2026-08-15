@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from heber.ml.datasets import persist_features_to_gold
+from heber.ml.datasets import coerce_expiry_to_date, persist_features_to_gold
 
 ALERT_TIME = datetime(2026, 2, 17, 15, 0, tzinfo=UTC)
 
@@ -169,7 +169,17 @@ class TestProducerPaths:
         assert _written_frame(tmp_path)["expiry"].iloc[0] == date(2026, 3, 20)
 
     def test_backfill_path_writes_date32(self, tmp_path: Path) -> None:
+        """The backfill patches a partition in place and writes it back through
+        the same funnel, so a legacy string-typed expiry is normalised on the
+        way out."""
         from heber.watch.backfill_scanner import EnrichmentBackfillScanner
+
+        row = _feature_row("backfill-1", "2026-03-20")
+        row["delta"] = None
+        partition = tmp_path / "dt=2026-02-17"
+        partition.mkdir(parents=True)
+        pd.DataFrame([row]).to_parquet(partition / "data.parquet", index=False)
+        assert pq.read_schema(partition / "data.parquet").field("expiry").type == pa.string()
 
         scanner = EnrichmentBackfillScanner(
             feature_extractor=AsyncMock(),
@@ -177,7 +187,44 @@ class TestProducerPaths:
             calendar=MagicMock(),
         )
 
-        scanner._patch_partition(_feature_row("backfill-1", "20260320"))
+        assert scanner._patch_partition(row, {"delta": 0.55}) is True
 
         assert _written_expiry_type(tmp_path) == pa.date32()
         assert _written_frame(tmp_path)["expiry"].iloc[0] == date(2026, 3, 20)
+
+
+class TestCoerceExpiryToDate:
+    """Unit coverage for the shared coercion.
+
+    It used to live beside the backfill scanner; it now belongs with the write
+    funnel in ``heber.ml.datasets``, which is the only caller.
+    """
+
+    def test_iso_string(self) -> None:
+        assert coerce_expiry_to_date("2026-09-18") == date(2026, 9, 18)
+
+    def test_compact_string(self) -> None:
+        assert coerce_expiry_to_date("20260918") == date(2026, 9, 18)
+
+    def test_yyyymmdd_int(self) -> None:
+        # The exact value that wrote the bad int64 partition.
+        assert coerce_expiry_to_date(20260918) == date(2026, 9, 18)
+
+    def test_date_passthrough(self) -> None:
+        assert coerce_expiry_to_date(date(2026, 9, 18)) == date(2026, 9, 18)
+
+    def test_datetime_to_date(self) -> None:
+        assert coerce_expiry_to_date(datetime(2026, 9, 18, 14, 30)) == date(2026, 9, 18)
+
+    def test_none_and_nan(self) -> None:
+        assert coerce_expiry_to_date(None) is None
+        assert coerce_expiry_to_date(float("nan")) is None
+
+    def test_invalid_returns_none(self) -> None:
+        assert coerce_expiry_to_date("not-a-date") is None
+
+    def test_all_results_are_date_type(self) -> None:
+        # Every non-None result must be a date so the written column is date32
+        # uniformly across partitions.
+        for v in ("2026-09-18", "20260918", 20260918, date(2026, 9, 18)):
+            assert isinstance(coerce_expiry_to_date(v), date)

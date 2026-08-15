@@ -165,7 +165,9 @@ Jacob has multiple trading projects ingesting market + intelligence data from **
 
 ### 6.3 event\_id standard
 
-`event_id = SHA256(provider|feed|instrument_key|ts_event|uniques...)`
+`event_id = BLAKE2b-128(provider|feed|instrument_key|ts_event|uniques...)` — `hashlib.blake2b(..., digest_size=16).hexdigest()`, 32 hex chars.
+
+The hash input is the pipe-joined UTF-8 string of those parts. `Decimal` values are stringified with `str(d)`, preserving trailing zeros (`1.50`), **never** `str(float(d))` (`1.5`) — the two produce different `event_id`s and break dedup. The canonical implementation is Data-Gateway's `gateway/core/envelope.py`.
 
 **Unique fields rules:**
 
@@ -572,7 +574,7 @@ All Silver tables MUST include these columns.
 
 | Column            | Type      | Required | Description                                                |
 | ----------------- | --------- | -------- | ---------------------------------------------------------- |
-| `event_id`        | string    | ✅        | Deterministic idempotency key (SHA256)                     |
+| `event_id`        | string    | ✅        | Deterministic idempotency key (BLAKE2b-128)                |
 | `provider`        | string    | ✅        | `alpaca`, `unusual_whales`, …                              |
 | `feed`            | string    | ✅        | Canonical feed name (`bars`, `quotes`, …)                  |
 | `instrument_type` | string    | ✅        | `equity`\|`option`\|`crypto`\|`forex`                      |

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
@@ -56,7 +55,7 @@ def make_check_context(
     *,
     calendar: MagicMock | None = None,
     store: MagicMock | None = None,
-    reader: Any | None = None,
+    reader: object | None = None,
     redis: AsyncMock | MagicMock | None = None,
     settings_overrides: dict | None = None,
 ) -> CheckContext:

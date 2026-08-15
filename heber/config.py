@@ -103,6 +103,7 @@ class WatchConfig(NamedTuple):
     gateway_legacy_fallback_enabled: bool
     enrichment_timeout_seconds: float
     enrichment_option_chain_timeout_seconds: float
+    live_enrichment_max_age_minutes: int
     enrichment_backfill_enabled: bool
     enrichment_backfill_interval: int
     enrichment_backfill_lookback_days: int
@@ -191,6 +192,10 @@ class Settings(BaseSettings):
     redis_stream_name: str = Field(
         default="heber:events",
         description="Redis stream name for incoming events",
+    )
+    redis_backfill_stream_name: str = Field(
+        default="heber:events:backfill",
+        description="Stream carrying historical backfill; old ts_event is expected here",
     )
     redis_consumer_group: str = Field(
         default="heber-writers",
@@ -334,6 +339,37 @@ class Settings(BaseSettings):
             "serial behavior."
         ),
     )
+    writer_max_buffered_events: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Buffer this many events across read batches before forcing a flush + acknowledgement "
+            "barrier. Every file written to the bind mount costs ~4 metadata round-trips at ~2.4s "
+            "each regardless of how many rows it holds, so amortizing one flush over many batches "
+            "is the main throughput lever for backfill. 0 DISABLES the accumulator entirely: each "
+            "batch flushes with force=True and ACKs immediately, byte-for-byte the historical "
+            "behavior. The live consumer and the backfill consumer share this binary, so 0 must "
+            "stay the default — deferring ACKs on the live path would widen the window in which "
+            "Redis reclaims and redelivers, producing duplicate Bronze rows."
+        ),
+    )
+    writer_flush_barrier_seconds: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Max seconds a buffered event may wait before the accumulator forces a flush + ACK. "
+            "Must stay below redis_recover_interval_seconds so a recovery sweep cannot fire mid-"
+            "window and flush a half-filled buffer. Ignored when writer_max_buffered_events=0."
+        ),
+    )
+    writer_max_pending_ack: int = Field(
+        default=50_000,
+        ge=1000,
+        description=(
+            "Force a barrier once this many message IDs await acknowledgement, bounding the "
+            "pending-entries list even if the event-count trigger is set high."
+        ),
+    )
 
     # Silver file sizing targets (PRD §7.5)
     silver_target_file_size_mb: int = Field(default=256, description="Target Parquet file size (128-512 MB)")
@@ -355,9 +391,39 @@ class Settings(BaseSettings):
         default=True,
         description="Scan Silver directory on startup and auto-register unknown datasets",
     )
+    catalog_coverage_max_age_seconds: int = Field(
+        default=21600,
+        description=(
+            "Age past which /health/coverage reports stale. Generous against the "
+            "300s scan interval so a couple of failed cycles do not flap; the "
+            "condition it exists to catch ran 24 days."
+        ),
+    )
     catalog_discover_interval_seconds: int = Field(
         default=300,
         description="Seconds between periodic Silver directory discovery scans (0 to disable periodic scan)",
+    )
+    catalog_coverage_verify_on_start: bool = Field(
+        default=True,
+        description=(
+            "Re-count every partition from its footers once per container start, "
+            "taking no recorded count on trust. Runs as its own task alongside the "
+            "periodic refresh, never ahead of it. On the production mount it is ~20h "
+            "for feed=quotes alone, so it competes with the refresh for a "
+            "latency-bound mount and rarely finishes before a restart; disable it on "
+            "a host where that contention matters more than the re-verification."
+        ),
+    )
+    catalog_coverage_scan_workers: int = Field(
+        default=16,
+        ge=1,
+        le=64,
+        description=(
+            "Threads used to list directories and read Parquet footers during a "
+            "coverage scan. The scan is bound by per-open latency on the lakehouse "
+            "mount, not by CPU or bandwidth, so this is the main tuning knob for "
+            "how long a pass takes; the right value depends on the mount."
+        ),
     )
 
     # Gold layer paths (used by feature_views/_paths.py)
@@ -430,6 +496,15 @@ class Settings(BaseSettings):
         le=120.0,
         description="HTTP timeout for option chain enrichment requests (seconds); "
         "higher than the default because large chains (QQQ, SPY) can take 6-7s",
+    )
+    watch_live_enrichment_max_age_minutes: int = Field(
+        default=60,
+        ge=0,
+        description="Maximum age of an alert, in minutes, for which live-only enrichment "
+        "(option chain Greeks, IV rank, GEX, max pain, market tide) may still be applied. "
+        "Those gateway routes answer 'as of now' and accept no as-of timestamp, so beyond "
+        "this bound they are skipped and the row is flagged instead of being stamped with "
+        "present-day values. 0 disables the gate (deliberate backlog replay only).",
     )
 
     # Enrichment backfill scanner
@@ -510,6 +585,44 @@ class Settings(BaseSettings):
         if not self.gold_poller_disabled_pipelines:
             return set()
         return {p.strip() for p in self.gold_poller_disabled_pipelines.split(",") if p.strip()}
+
+    gold_poller_pipeline_versions: str = Field(
+        default="",
+        description=(
+            "Per-pipeline Gold version overrides, comma-separated 'pipeline=version' "
+            "(e.g. 'darkpool=v2'). Pipelines not listed use gold_poller_version."
+        ),
+    )
+
+    @property
+    def gold_poller_pipeline_version_map(self) -> dict[str, str]:
+        """Parse the per-pipeline version overrides.
+
+        Only the *shape* is checked here. Validating the pipeline names would
+        mean importing the poller's registry, and the poller imports this
+        module — every service that reads config (consumer, catalog, watch,
+        and the reader itself) would then fail to import the moment this
+        setting was set. The name check lives in the poller, which is both
+        where the registry already is and the only service the setting affects.
+        """
+        raw = self.gold_poller_pipeline_versions.strip()
+        if not raw:
+            return {}
+
+        overrides: dict[str, str] = {}
+        for item in raw.split(","):
+            if not item.strip():
+                continue
+            name, sep, version = item.partition("=")
+            name, version = name.strip(), version.strip()
+            if not sep or not name or not version:
+                raise ValueError(f"gold_poller_pipeline_versions entry {item.strip()!r} is not 'pipeline=version'")
+            overrides[name] = version
+        return overrides
+
+    def gold_poller_version_for(self, pipeline_name: str) -> str:
+        """Gold version this pipeline writes to."""
+        return self.gold_poller_pipeline_version_map.get(pipeline_name, self.gold_poller_version)
 
     # Post-EOD self-heal: re-pull daily UW feeds whose Silver partition never landed
     # (e.g. evicted from the capped stream while the consumer was down) via the
@@ -701,6 +814,24 @@ class Settings(BaseSettings):
             "failure. Empty disables. The only monitoring that survives machine death."
         ),
     )
+    alert_heartbeat_github_repo: str = Field(
+        default="",
+        description=(
+            "owner/repo whose repo variable records the alert-check dead-man beat, "
+            "read by a scheduled workflow on GitHub's runners. Off-machine without "
+            "a third-party account; uses the existing `gh` login. Empty disables."
+        ),
+    )
+    alert_heartbeat_url: str = Field(
+        default="",
+        description=(
+            "Off-machine dead-man heartbeat URL for the native alert-check job. "
+            "Pinged after each cycle; /fail appended when the run crashed or a "
+            "Discord send failed. Empty disables. Must be a DIFFERENT check from "
+            "heartbeat_url — sharing one would let a live dataflow-health mask a "
+            "dead alert-check, which is the job that reports stack outages."
+        ),
+    )
     backup_freshness_hours: int = Field(
         default=30,
         description="Max age (hours) of the lakehouse backup marker before backup_freshness fails",
@@ -755,6 +886,16 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
+    def _validate_gold_poller_pipeline_versions(self) -> "Settings":
+        """Reject unusable per-pipeline version overrides at startup.
+
+        Shape only — see `gold_poller_pipeline_version_map`. The pipeline
+        names are checked by the poller at its own startup.
+        """
+        _ = self.gold_poller_pipeline_version_map
+        return self
+
+    @model_validator(mode="after")
     def _reject_default_postgres_password_outside_dev(self) -> "Settings":
         """Fail fast if a non-dev environment still uses the dev Postgres password.
 
@@ -767,6 +908,27 @@ class Settings(BaseSettings):
                 f"Refusing to start in environment='{self.environment}' with the default "
                 f"development Postgres password. Set HEBER_POSTGRES_PASSWORD (or a full "
                 f"HEBER_POSTGRES_URL) to real credentials for non-dev environments."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_barrier_at_or_above_recover_interval(self) -> "Settings":
+        """Keep the acknowledgement barrier ahead of the pending-message recovery sweep.
+
+        The accumulator holds messages unacknowledged until a barrier. If a recovery
+        sweep can fire first it force-flushes a half-filled buffer, writing exactly the
+        tiny files the accumulator exists to avoid — and, at the extreme, reclaims this
+        consumer's own in-flight messages and reprocesses them into Bronze, which has no
+        dedupe. Only meaningful when the accumulator is enabled.
+        """
+        if self.writer_max_buffered_events > 0 and (
+            self.writer_flush_barrier_seconds >= self.redis_recover_interval_seconds
+        ):
+            raise ValueError(
+                f"writer_flush_barrier_seconds ({self.writer_flush_barrier_seconds}) must be less "
+                f"than redis_recover_interval_seconds ({self.redis_recover_interval_seconds}) when "
+                f"writer_max_buffered_events is enabled, or a recovery sweep will flush and "
+                f"redeliver mid-window."
             )
         return self
 
@@ -883,6 +1045,7 @@ class Settings(BaseSettings):
             gateway_legacy_fallback_enabled=self.watch_gateway_legacy_fallback_enabled,
             enrichment_timeout_seconds=self.watch_enrichment_timeout_seconds,
             enrichment_option_chain_timeout_seconds=self.watch_enrichment_option_chain_timeout_seconds,
+            live_enrichment_max_age_minutes=self.watch_live_enrichment_max_age_minutes,
             enrichment_backfill_enabled=self.enrichment_backfill_enabled,
             enrichment_backfill_interval=self.enrichment_backfill_interval,
             enrichment_backfill_lookback_days=self.enrichment_backfill_lookback_days,

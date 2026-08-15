@@ -259,7 +259,22 @@ async def _check_label_stability(ctx: CheckContext, today_str: str, now: datetim
     """11b: Label distribution stability via PSI."""
     df = _safe_read_gold(ctx, LABEL_DATASET, today_str)
 
-    if df is None or df.empty or LABEL_COLUMN not in df.columns:
+    if df is None:
+        # The read FAILED. Grouping it with "no labels today" would report a
+        # clean PASS for a distribution nobody was able to measure.
+        return [
+            CheckResult(
+                check_name="ml_label_stability",
+                feed=LABEL_DATASET,
+                severity=Severity.P1_WARNING,
+                status=Status.ERROR,
+                message=f"Could not read dataset={LABEL_DATASET}; PSI check did not run",
+                details={"dataset": LABEL_DATASET, "date": today_str},
+                ts_checked=now,
+            )
+        ]
+
+    if df.empty or LABEL_COLUMN not in df.columns:
         return [
             CheckResult(
                 check_name="ml_label_stability",
@@ -385,15 +400,14 @@ async def _check_feature_nulls(ctx: CheckContext, today_str: str, now: datetime)
         df = _safe_read_gold(ctx, dataset, today_str)
 
         if df is None:
-            # The read FAILED. Not the same as "no data" — reporting it as a
-            # clean PASS hides exactly the outage this check exists to catch.
+            # The read FAILED — a PASS here claims the null rates were checked.
             results.append(
                 CheckResult(
                     check_name="ml_feature_nulls",
                     feed=dataset,
                     severity=Severity.P1_WARNING,
                     status=Status.ERROR,
-                    message=f"Could not read dataset={dataset}; null-rate check did not run",
+                    message=f"Could not read dataset={dataset}; null check did not run",
                     details={"dataset": dataset, "date": today_str},
                     ts_checked=now,
                 )
@@ -531,7 +545,24 @@ async def _check_cross_sectional_completeness(ctx: CheckContext, today_str: str,
     for dataset in FEATURE_DATASETS + [LABEL_DATASET]:
         df = _safe_read_gold(ctx, dataset, today_str)
 
-        if df is None or df.empty or "instrument_key" not in df.columns:
+        if df is None:
+            # The read FAILED. Skipping silently produces no result at all,
+            # which reads downstream as a dataset that had nothing to check
+            # rather than one whose completeness is unknown.
+            results.append(
+                CheckResult(
+                    check_name="ml_cross_sectional",
+                    feed=dataset,
+                    severity=Severity.P1_WARNING,
+                    status=Status.ERROR,
+                    message=f"Could not read dataset={dataset}; completeness check did not run",
+                    details={"dataset": dataset, "date": today_str},
+                    ts_checked=now,
+                )
+            )
+            continue
+
+        if df.empty or "instrument_key" not in df.columns:
             continue
 
         distinct_keys = df["instrument_key"].nunique()

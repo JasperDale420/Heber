@@ -633,9 +633,7 @@ def _mount_liveness_check(settings: Settings) -> dict[str, Any]:
         "observed": {"sentinel": str(sentinel), "present": present, "error": error},
         "threshold": {"required": True},
         "message": (
-            "Data volume sentinel present."
-            if present
-            else "Data volume missing or unmounted: sentinel not found."
+            "Data volume sentinel present." if present else "Data volume missing or unmounted: sentinel not found."
         ),
     }
 
@@ -683,6 +681,40 @@ def _catalog_health_check(settings: Settings) -> dict[str, Any]:
         "observed": {"url": url, "error": detail},
         "threshold": {"required": True},
         "message": "Catalog healthy (DB exercised)." if ok else f"Catalog unhealthy: {detail}",
+    }
+
+
+def _catalog_coverage_check(settings: Settings) -> dict[str, Any]:
+    """Report whether the catalog's coverage table is still being refreshed.
+
+    `_catalog_health_check` above polls `/health`, which only runs `SELECT 1`.
+    That stayed green through 24 days of frozen `data_coverage` while
+    `catalog_periodic_scan_error` fired every cycle, so this report — the one
+    thing that runs every five minutes — said the catalog was fine. Freshness
+    needs its own probe.
+    """
+    url = settings.health_catalog_url.rstrip("/") + "/coverage"
+    age: float | None = None
+    rows: int | None = None
+    try:
+        with create_http_client(timeout=5.0) as client:
+            resp = client.get(url)
+        body = resp.json() if resp.status_code in (200, 503) else {}
+        age = body.get("coverage_age_seconds")
+        rows = body.get("rows")
+        ok = resp.status_code == 200
+        detail = None if ok else body.get("status", f"HTTP {resp.status_code}")
+    except Exception as exc:  # noqa: BLE001 — any failure means freshness is unknown
+        ok, detail = False, str(exc)[:200]
+    return {
+        "id": "catalog_coverage",
+        "status": "ok" if ok else "fail",
+        "severity": "critical",
+        "observed": {"url": url, "coverage_age_seconds": age, "rows": rows, "error": detail},
+        "threshold": {"max_age_seconds": settings.catalog_coverage_max_age_seconds},
+        "message": (
+            "Catalog coverage is being refreshed." if ok else f"Catalog coverage stale or unreachable: {detail}"
+        ),
     }
 
 
@@ -792,6 +824,7 @@ def generate_dataflow_report(
     # or never looked at the catalog/volume at all.
     checks.append(_mount_liveness_check(active_settings))
     checks.append(_catalog_health_check(active_settings))
+    checks.append(_catalog_coverage_check(active_settings))
     checks.append(_backup_freshness_check(active_settings))
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "skipped": 0}
@@ -842,11 +875,7 @@ def _dispatch_alerts(report: dict[str, Any], settings: Settings | None = None) -
             CheckResult(
                 check_name=f"dataflow:{check['id']}",
                 feed=None,
-                severity=(
-                    Severity.P0_CRITICAL
-                    if check.get("severity") == "critical"
-                    else Severity.P1_WARNING
-                ),
+                severity=(Severity.P0_CRITICAL if check.get("severity") == "critical" else Severity.P1_WARNING),
                 status=Status.FAIL if check["status"] == "fail" else Status.PASS,
                 message=f"dataflow {check['id']}: {check.get('message', '')}",
                 details=check.get("observed") or {},

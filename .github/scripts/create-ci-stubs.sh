@@ -100,6 +100,10 @@ def clear_context():
 def unbind_context(*keys):
     structlog.contextvars.unbind_contextvars(*keys)
 
+def shutdown_logging():
+    # ponytail: stub logs synchronously (no QueueListener), so there's nothing to flush/stop.
+    pass
+
 def log_error(logger, exc, *a, **kw):
     logger.error(str(exc), exc_info=True)
 

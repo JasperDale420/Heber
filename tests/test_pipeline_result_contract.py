@@ -116,7 +116,11 @@ def test_instantiate_pipeline_helper_round_trips() -> None:
     """The poller's lazy import/instantiate path resolves every registry class."""
     from types import SimpleNamespace
 
-    settings = SimpleNamespace(gold_poller_project="test", gold_poller_version="v1")
+    settings = SimpleNamespace(
+        gold_poller_project="test",
+        gold_poller_version="v1",
+        gold_poller_version_for=lambda _name: "v1",
+    )
     for entry in PIPELINE_REGISTRY:
         pipeline = _instantiate_pipeline(entry, settings)
         assert hasattr(pipeline, "run"), f"{entry['name']} has no run()"

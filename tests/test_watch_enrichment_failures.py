@@ -53,6 +53,11 @@ def _make_extractor() -> AlertFeatureExtractor:
         request_max_attempts=1,
         retry_base_delay_seconds=0.0,
         retry_jitter_seconds=0.0,
+        # These tests use a fixed past alert timestamp to exercise per-step
+        # failure recording. The freshness gate would otherwise skip the
+        # live-only steps before they can fail; it is covered on its own in
+        # test_enrichment_freshness_gate.py.
+        live_enrichment_max_age=None,
     )
 
 
