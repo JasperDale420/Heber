@@ -126,6 +126,16 @@ def _collect_parquet_files(root: str | Path) -> list[str]:
         return []
     files: list[str] = []
     for f in base.rglob("*.parquet"):
+        # Underscore-prefixed directories are not data. Gold writers move rows
+        # they refuse to serve into a sibling `_quarantine` tree and assume
+        # readers never walk it; without this, every quarantined row came back
+        # through read_gold. `_locks` holds partition lock files. Real
+        # partitions are `dt=`, `hour=`, `project=`, `version=`, `feed=`,
+        # `instrument_type=` — none start with an underscore. Only components
+        # below the root are inspected, so a caller whose own path contains one
+        # still sees its data.
+        if any(part.startswith("_") for part in f.relative_to(base).parts):
+            continue
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
         # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
         # stat(), so calling f.is_file() first crashes the walk before we

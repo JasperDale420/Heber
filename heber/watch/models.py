@@ -195,7 +195,27 @@ class WatchKeys:
         return cls.SNAPSHOTS.format(watch_id=watch_id)
 
 
-# Polling configuration per horizon
+# Polling configuration per horizon.
+#
+# UNRESOLVED: `max_duration_hours` is stated in calendar hours — 120 is 5 x 24
+# and 720 is 30 x 24, matching the day counts in the comments below. But the
+# only consumer, watch window_end, passes it to `MarketCalendar.add_trading_hours`,
+# which spends it at 6.5 hours per session. A SWING window is therefore 18.5
+# sessions (~26 calendar days) and a LEAP window 110.8 sessions (~5 months), both
+# of which can outlive the contract being watched — SWING alerts are 3-21 DTE.
+#
+# Either the values should be trading hours (32.5 and 195) or the call site
+# should advance calendar time and roll forward to the next session open. That
+# is a product decision about what a "5 day" watch means, and it is deliberately
+# not made here.
+#
+# Two things depend on the current values before changing them:
+#   - `heber.ml.datasets.label_window_truncated_mask` uses them as the wall-clock
+#     floor that identifies labels resolved against a truncated window. Lowering
+#     them to 32.5/195 unflags 514 genuinely truncated SWING rows whose bad
+#     window happened to span a weekend.
+#   - Any change alters window_end for live watches, and so the horizon that
+#     every future label answers.
 POLL_CONFIG = {
     WatchHorizon.INTRADAY: {
         "interval_seconds": 300,  # 5 minutes
