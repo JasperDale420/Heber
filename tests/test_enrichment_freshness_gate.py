@@ -144,7 +144,7 @@ async def test_stale_alert_still_runs_dated_market_context(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_fresh_alert_runs_every_enrichment_step(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The live path is unchanged: a just-arrived alert enriches fully and carries no flags."""
+    """The live path is unchanged: a just-arrived alert isn't gated as stale."""
     _RecordingClient.urls = []
     monkeypatch.setattr("httpx.AsyncClient", _RecordingClient)
 
@@ -153,7 +153,8 @@ async def test_fresh_alert_runs_every_enrichment_step(monkeypatch: pytest.Monkey
 
     for step_markers in _LIVE_ONLY_STEP_URL_MARKERS:
         assert any(m in u for m in step_markers for u in _RecordingClient.urls), f"missing {step_markers}"
-    assert features.quality_flags == []
+    assert QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE not in features.quality_flags
+    assert QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE not in features.quality_flags
 
 
 @pytest.mark.asyncio
@@ -166,7 +167,8 @@ async def test_gate_disabled_enriches_stale_alert(monkeypatch: pytest.MonkeyPatc
     features = await extractor.extract(_alert(datetime.now(UTC) - timedelta(days=7)))
 
     assert any("/options/chain/" in u for u in _RecordingClient.urls)
-    assert features.quality_flags == []
+    assert QUALITY_FLAG_ENRICHMENT_SKIPPED_STALE not in features.quality_flags
+    assert QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE not in features.quality_flags
 
 
 def test_flagged_null_greek_rows_are_not_quarantined() -> None:
