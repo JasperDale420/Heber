@@ -228,3 +228,33 @@ class TestCoerceExpiryToDate:
         # uniformly across partitions.
         for v in ("2026-09-18", "20260918", 20260918, date(2026, 9, 18)):
             assert isinstance(coerce_expiry_to_date(v), date)
+
+    def test_exact_float_with_no_fraction_still_accepted(self) -> None:
+        assert coerce_expiry_to_date(20260918.0) == date(2026, 9, 18)
+
+
+class TestCoerceExpiryToDateRejectsTruncation:
+    """A malformed value that happens to truncate into a valid-looking date
+
+    must be rejected, not silently guessed at — a guess written as a real
+    ``date32`` value is indistinguishable from a clean one, so nothing would
+    ever flag the row as bad.
+    """
+
+    def test_fractional_number_is_rejected_not_truncated(self) -> None:
+        # int(20260320.5) == 20260320 would otherwise fabricate a real date.
+        assert coerce_expiry_to_date(20260320.5) is None
+
+    def test_string_with_trailing_garbage_is_rejected_not_truncated(self) -> None:
+        # cleaned[:8] would otherwise drop "junk" and keep the date.
+        assert coerce_expiry_to_date("2026-03-20junk") is None
+
+    def test_string_with_extra_trailing_digit_is_rejected(self) -> None:
+        # A 9-digit string sliced to 8 would fabricate 2026-03-20 from garbage.
+        assert coerce_expiry_to_date("202603201") is None
+
+    def test_int_with_extra_trailing_digit_is_rejected(self) -> None:
+        assert coerce_expiry_to_date(202603201) is None
+
+    def test_too_short_string_is_rejected(self) -> None:
+        assert coerce_expiry_to_date("2026-03") is None

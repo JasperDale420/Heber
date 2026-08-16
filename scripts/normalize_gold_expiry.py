@@ -34,9 +34,7 @@ Usage:
 
 import argparse
 import os
-import re
 import shutil
-from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -52,7 +50,6 @@ logger = structlog.get_logger("heber-normalize-expiry")
 
 BACKUP_SUFFIX = ".pre-expiry-migration"
 DEFAULT_LOCK_TIMEOUT = 30.0
-_EXACT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$")
 
 
 def resolve_dataset_root(root: Path, expected: Path) -> Path:
@@ -61,26 +58,6 @@ def resolve_dataset_root(root: Path, expected: Path) -> Path:
     if resolved != expected.resolve():
         raise ValueError(f"refusing {resolved}: expected {expected.resolve()}")
     return resolved
-
-
-def _coerce_for_migration(val: object) -> date | None:
-    """Coerce one expiry value, accepting only an unambiguous whole date.
-
-    ``coerce_expiry_to_date`` is deliberately forgiving — it truncates
-    ``20260320.5`` and ``"2026-03-20junk"`` to 2026-03-20. Guessing at a
-    malformed value is tolerable when writing a fresh row; permanently
-    replacing the original with the guess is not, so anything that is not
-    exactly a date, ``YYYY-MM-DD`` or ``YYYYMMDD`` is refused here.
-    """
-    if isinstance(val, datetime | date):
-        return coerce_expiry_to_date(val)
-    if isinstance(val, str):
-        return coerce_expiry_to_date(val) if _EXACT_DATE_RE.match(val.strip()) else None
-    if isinstance(val, int | float) and not isinstance(val, bool):
-        if pd.isna(val) or not float(val).is_integer():
-            return None
-        return coerce_expiry_to_date(val) if _EXACT_DATE_RE.match(str(int(val))) else None
-    return None
 
 
 def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
@@ -97,7 +74,7 @@ def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
         raise RuntimeError(f"backup already exists, resolve it before re-running: {backup_path}")
 
     idx = table.schema.get_field_index("expiry")
-    coerced = pa.array([_coerce_for_migration(v) for v in values], type=pa.date32())
+    coerced = pa.array([coerce_expiry_to_date(v) for v in values], type=pa.date32())
     new_table = table.set_column(idx, pa.field("expiry", pa.date32()), coerced)
 
     temp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid4().hex}")
@@ -165,7 +142,7 @@ def normalize_expiry(
             table = pq.read_table(path)
             values = table.column("expiry").to_pylist()
             unparseable = sum(
-                1 for raw in values if raw is not None and not pd.isna(raw) and _coerce_for_migration(raw) is None
+                1 for raw in values if raw is not None and not pd.isna(raw) and coerce_expiry_to_date(raw) is None
             )
 
             if apply:
