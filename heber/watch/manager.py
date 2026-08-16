@@ -472,44 +472,6 @@ class WatchManager:
 
         return [WatchSnapshot.model_validate_json(d) for d in data]
 
-    def get_expired_watches(self) -> list[AlertWatch]:
-        """Get watches that have passed their window_end time."""
-        now = datetime.now(UTC)
-        active = self.get_active_watches()
-        expired: list[AlertWatch] = []
-        for watch in active:
-            window_end = watch.window_end
-            normalized_window_end = window_end if window_end.tzinfo is not None else window_end.replace(tzinfo=UTC)
-            if normalized_window_end <= now:
-                expired.append(watch)
-        return expired
-
-    def cleanup_expired(self) -> int:
-        """Mark expired watches as EXPIRED and remove from active.
-
-        Returns:
-            Number of watches expired
-        """
-        expired = self.get_expired_watches()
-
-        for watch in expired:
-            final_return = self._coerce_finite_outcome_return(watch.current_return)
-            self.complete_watch(
-                watch.watch_id,
-                WatchStatus.EXPIRED,
-                final_return,
-                bars_to_hit=watch.snapshot_count,
-                outcome_time=watch.window_end,
-            )
-
-        logger.info("Cleaned up expired watches", count=len(expired))
-
-        return len(expired)
-
-    async def cleanup_expired_async(self) -> int:
-        """Async wrapper for cleanup_expired."""
-        return await asyncio.to_thread(self.cleanup_expired)
-
     def delete_watch(self, watch_id: str | bytes) -> bool:
         """Delete a watch and its snapshots."""
         watch_id = self._normalize_redis_id(watch_id)

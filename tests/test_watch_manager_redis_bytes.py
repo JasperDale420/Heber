@@ -266,21 +266,6 @@ def test_update_watch_price_preserves_zero_mae_baseline() -> None:
     assert updated.mae == 0.0
 
 
-def test_cleanup_expired_handles_naive_window_end() -> None:
-    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
-    watch = _create_watch(manager)
-
-    watch.window_end = datetime.now() - timedelta(minutes=1)
-    manager._save_watch(watch)
-
-    expired = manager.cleanup_expired()
-
-    assert expired == 1
-    stored = manager.get_watch(watch.watch_id)
-    assert stored is not None
-    assert stored.status == WatchStatus.EXPIRED
-
-
 def test_delete_watch_with_byte_id_removes_primary_watch_key() -> None:
     redis_client = _BytesRedis()
     manager = WatchManager(redis_client=redis_client, calendar=_CalendarStub())
@@ -339,22 +324,6 @@ def test_complete_watch_non_finite_outcome_return_defaults_to_zero() -> None:
     assert completed.outcome_return == 0.0
     stored = manager.get_watch(watch.watch_id)
     assert stored is not None
-    assert stored.outcome_return == 0.0
-
-
-def test_cleanup_expired_non_finite_current_return_defaults_to_zero() -> None:
-    manager = WatchManager(redis_client=_BytesRedis(), calendar=_CalendarStub())
-    watch = _create_watch(manager)
-    watch.current_return = float("nan")
-    watch.window_end = datetime.now(UTC) - timedelta(minutes=1)
-    manager.get_expired_watches = lambda: [watch]  # type: ignore[method-assign]
-
-    expired = manager.cleanup_expired()
-
-    assert expired == 1
-    stored = manager.get_watch(watch.watch_id)
-    assert stored is not None
-    assert stored.status == WatchStatus.EXPIRED
     assert stored.outcome_return == 0.0
 
 

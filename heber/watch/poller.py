@@ -177,6 +177,12 @@ class SnapshotPoller:
 
         Uses the minimum interval from POLL_CONFIG (5 min for intraday).
         Only polls during market hours to avoid wasted API calls.
+
+        Deliberately does not expire or complete watches itself: that used
+        to bypass BarrierChecker (writing no label and using an unfiltered
+        return path). BarrierChecker.check_all(), driven by WatchService's
+        60s check-and-write loop, already force-expires any active watch
+        whose window has passed, so it is the sole place completion happens.
         """
         self._running = True
         min_interval = min(c["interval_seconds"] for c in POLL_CONFIG.values())
@@ -202,11 +208,6 @@ class SnapshotPoller:
                 # Poll for quotes
                 stats = await self.poll_once()
                 logger.info("Poll cycle complete", **stats)
-
-                # Cleanup expired watches
-                expired = await self.manager.cleanup_expired_async()
-                if expired:
-                    logger.info("Expired watches cleaned", count=expired)
 
             except Exception as e:
                 logger.error("Poll cycle failed", error=str(e), exc_info=True)
