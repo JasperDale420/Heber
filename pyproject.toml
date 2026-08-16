@@ -109,7 +109,7 @@ markers = [
     "unit: Fast, isolated unit tests (no I/O, no network)",
     "integration: Tests with real DB, file I/O, or component interactions",
     "e2e: End-to-end full system flow tests",
-    "slow: Tests that take >1s (opt-in, excluded by default)",
+    "slow: Tests that take >1s (runs by default; deselect with -m 'not slow')",
 ]
 
 [tool.coverage.run]

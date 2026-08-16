@@ -97,6 +97,24 @@ consumer_loop_heartbeat_unixtime = _get_or_create(
     "stays fresh while the event loop spins even when no data is flowing — unlike last-write)",
 )
 
+consumer_acked_total = _get_or_create(
+    Counter,
+    "heber_consumer_acked_total",
+    "Messages acknowledged to Redis. The heartbeat proves the event loop is alive but not that "
+    "it is making progress — a flush stuck retrying keeps ticking. Rate of this counter is the "
+    "progress signal that distinguishes 'flushing slowly' from 'wedged'.",
+)
+
+consumer_last_xread_success_unixtime = _get_or_create(
+    Gauge,
+    "heber_consumer_last_xread_success_unixtime",
+    "Unix timestamp of the last successful XREADGROUP round-trip (upstream-reachability signal). "
+    "An empty read still advances it — it proves Redis answered. Complements acked_total, which "
+    "cannot separate 'idle, nothing to read' from 'Redis is gone': both hold the counter flat. "
+    "Also distinct from the loop heartbeat, which the run loop refreshes even on iterations that "
+    "caught a Redis error and slept, so only this gauge detects a consumer spinning on a dead Redis",
+)
+
 
 # =============================================================================
 # Writer Metrics (PRD §12.5.2)
@@ -184,6 +202,12 @@ watch_last_watch_created_unixtime = _get_or_create(
     "Unix timestamp of most recent watch creation",
 )
 
+watch_duplicate_alerts_suppressed_total = _get_or_create(
+    Counter,
+    "heber_watch_duplicate_alerts_suppressed_total",
+    "Re-delivered alerts that already had a watch and were skipped",
+)
+
 watch_enrichment_skipped_stale_total = _get_or_create(
     Counter,
     "heber_watch_enrichment_skipped_stale_total",
@@ -208,6 +232,15 @@ watch_alert_parse_total = _get_or_create(
     "heber_watch_alert_parse_total",
     "Alert parse outcomes in watch consumer",
     ["status"],
+)
+
+watch_last_xread_success_unixtime = _get_or_create(
+    Gauge,
+    "heber_watch_last_xread_success_unixtime",
+    "Unix timestamp of the watch consumer's last successful XREADGROUP round-trip. Same role as "
+    "the writer consumer's gauge: now that startup waits out an unavailable Redis instead of "
+    "crash-looping, nothing else distinguishes 'waiting for Redis' from 'consuming' — the run "
+    "loop is alive either way",
 )
 
 
@@ -438,6 +471,11 @@ def record_watch_watch_created(timestamp_unixtime: float | None = None) -> None:
     """Record watch creation activity."""
     watch_watches_created_total.inc()
     watch_last_watch_created_unixtime.set(timestamp_unixtime if timestamp_unixtime is not None else time.time())
+
+
+def record_watch_duplicate_alert_suppressed() -> None:
+    """Record an alert re-delivery that was skipped because a watch already exists."""
+    watch_duplicate_alerts_suppressed_total.inc()
 
 
 def record_watch_poll_cycle(status: str, timestamp_unixtime: float | None = None) -> None:

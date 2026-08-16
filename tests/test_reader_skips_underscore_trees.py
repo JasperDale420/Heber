@@ -67,9 +67,9 @@ def test_appledouble_and_tmp_filters_still_apply(tmp_path: Path) -> None:
     assert [Path(f).name for f in _collect_parquet_files(tmp_path)] == ["part-a.parquet"]
 
 
-def test_a_file_passed_directly_from_inside_quarantine_is_still_readable(tmp_path: Path) -> None:
-    """Inspecting a quarantined file on purpose stays possible."""
+def test_a_quarantined_file_is_excluded_even_when_addressed_directly(tmp_path: Path) -> None:
+    """No read path may reach quarantine, not even a caller naming the exact file."""
     held = tmp_path / "_quarantine" / "reason" / "dt=2026-03-11" / "q.parquet"
     _parquet(held, "held")
 
-    assert _collect_parquet_files(held) == [str(held)]
+    assert _collect_parquet_files(held) == []

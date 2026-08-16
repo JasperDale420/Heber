@@ -238,25 +238,26 @@ def test_scanner_skips_rows_flagged_as_unrecoverable() -> None:
     """Rows that can never be filled must not be re-selected on every scan cycle."""
     df = pd.DataFrame(
         [
-            {"alert_id": "recoverable", "delta": None, "quality_flags": []},
+            {"alert_id": "recoverable", "alert_time": datetime.now(UTC), "delta": None, "quality_flags": []},
             {
                 "alert_id": "unrecoverable",
+                "alert_time": datetime.now(UTC),
                 "delta": None,
                 "quality_flags": [QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE],
             },
         ]
     )
 
-    incomplete = EnrichmentBackfillScanner._find_incomplete_rows(df)
+    incomplete = EnrichmentBackfillScanner._find_incomplete_rows(df, timedelta(minutes=60))
 
     assert incomplete["alert_id"].tolist() == ["recoverable"]
 
 
 def test_scanner_handles_partitions_without_quality_flags_column() -> None:
     """Partitions written before the flag existed have no such column at all."""
-    df = pd.DataFrame([{"alert_id": "legacy", "delta": None}])
+    df = pd.DataFrame([{"alert_id": "legacy", "alert_time": datetime.now(UTC), "delta": None}])
 
-    incomplete = EnrichmentBackfillScanner._find_incomplete_rows(df)
+    incomplete = EnrichmentBackfillScanner._find_incomplete_rows(df, timedelta(minutes=60))
 
     assert incomplete["alert_id"].tolist() == ["legacy"]
 

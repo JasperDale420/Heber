@@ -21,7 +21,7 @@ import structlog
 
 from heber.config import settings
 from heber.models.envelope import EventEnvelope
-from heber.ops.metrics import record_write, record_write_error
+from heber.ops.metrics import record_write_error
 from heber.schemas.silver import get_silver_schema
 from heber.writer.ingest_contracts import resolve_feed_alias, resolve_silver_feed
 from heber.writer.key_normalization import normalize_envelope_for_silver
@@ -115,7 +115,15 @@ class SilverWriter:
         """
         self.buffers[partition_key].append(row)
 
-    def flush_if_needed(self) -> None:
+    def has_buffered(self) -> bool:
+        """True if any partition still holds unflushed rows.
+
+        Pure in-memory check — the caller uses it to decide whether the batch is
+        durable enough to acknowledge, so it must not touch the filesystem.
+        """
+        return any(self.buffers.values())
+
+    def flush_if_needed(self, force: bool = False) -> None:
         """Flush buffers if conditions are met.
 
         A partition is flushed when:
@@ -127,10 +135,14 @@ class SilverWriter:
         The min-rows gate prevents creating tiny parquet files during backfill,
         where a single XREADGROUP batch scatters records across hundreds of
         date partitions with only 2-4 rows each.
+
+        ``force`` makes every non-empty partition due regardless of size or age.
+        The consumer uses it at an acknowledgement barrier and on shutdown, when
+        everything buffered must reach disk before the messages are ACKed.
         """
         now = datetime.now(UTC)
         elapsed = (now - self.last_flush).total_seconds()
-        time_triggered = elapsed >= settings.silver_max_flush_time_seconds
+        time_triggered = force or elapsed >= settings.silver_max_flush_time_seconds
 
         # Due partitions are flushed concurrently (``writer_flush_max_workers``).
         # Each drops its key only on success — partition keys embed dt=/hour=, so
@@ -170,18 +182,16 @@ class SilverWriter:
         file_path = self._get_file_path(partition_key)
 
         try:
-            t0 = datetime.now(UTC)
+            # write_silver_parquet already calls record_write for this file.
+            # Recording it again here double-counted every Silver files/rows/bytes
+            # metric and cost two extra bind-mount round-trips (exists + stat) per
+            # file purely to recompute a size the callee had already measured.
             write_silver_parquet(
                 rows=rows,
                 schema=schema,
                 file_path=file_path,
                 partition_key=partition_key,
                 dataset=feed,
-            )
-            duration = (datetime.now(UTC) - t0).total_seconds()
-            bytes_written = file_path.stat().st_size if file_path.exists() else 0
-            record_write(
-                layer="silver", dataset=feed, rows=len(rows), bytes_written=bytes_written, duration_seconds=duration
             )
         except (OSError, pa.ArrowTypeError, pa.ArrowInvalid):
             record_write_error(layer="silver", error_type="flush_failed")

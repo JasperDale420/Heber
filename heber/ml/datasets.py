@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import structlog
 
 from heber.config import settings
@@ -33,6 +34,37 @@ _VERSION_V1 = "version=v1"
 DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
+
+
+def coerce_expiry_to_date(val: object) -> date | None:
+    """Convert an expiry value to a ``datetime.date`` (Arrow ``date32`` on write).
+
+    Handles:
+      - date / datetime objects
+      - ISO date strings  ("2026-04-18")
+      - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
+      - None / NaN / unparseable → None
+    """
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    # datetime is a subclass of date — check it first.
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, int | float):
+        cleaned = str(int(val))
+    elif isinstance(val, str):
+        cleaned = val.strip().replace("-", "")
+    else:
+        return None
+    if not cleaned:
+        return None
+    try:
+        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
+    except ValueError:
+        logger.warning("Cannot coerce expiry to date", raw_value=val)
+        return None
 
 
 def _read_existing_partition_or_quarantine(out_file: Path) -> pd.DataFrame | None:
@@ -65,7 +97,19 @@ def _read_existing_partition_or_quarantine(out_file: Path) -> pd.DataFrame | Non
 
 
 def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
-    """Write parquet via temp file then atomic rename to avoid partial reads."""
+    """Write parquet via temp file then atomic rename to avoid partial reads.
+
+    ``expiry`` is coerced to ``date`` here — the single funnel every
+    meta_label_features producer passes through. Producers hand us dates,
+    ISO strings and YYYYMMDD ints; letting each land as-is wrote the column
+    as date32/string/int64 in different partitions, which no reader can
+    unify without changing the values.
+    """
+    if "expiry" in df.columns:
+        # ArrowDtype (not plain object) so an all-null column is still written
+        # as date32 rather than Arrow's inferred `null` type.
+        coerced = [coerce_expiry_to_date(v) for v in df["expiry"]]
+        df = df.assign(expiry=pd.array(coerced, dtype=pd.ArrowDtype(pa.date32())))
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         df.to_parquet(temp_path, index=False)
@@ -205,25 +249,23 @@ class MetaLabelDatasetBuilder:
             ("dt", "<=", end_date.strftime("%Y-%m-%d")),
         ]
 
-        try:
-            # Support arbitrary path config via read_parquet_dataset
-            df = self.client.read_parquet_dataset(
-                path=self.config.outcomes_path,
-                filters=filters,
+        # A read failure propagates. Training on whatever survived a partial
+        # read is worse than not training: the caller logs "No outcomes found"
+        # and stops, which is indistinguishable from a date range that genuinely
+        # holds none.
+        df = self.client.read_parquet_dataset(
+            path=self.config.outcomes_path,
+            filters=filters,
+        )
+
+        if df.empty:
+            logger.warning(
+                "Outcomes path does not exist or contains no data",
+                configured_path=str(self.config.outcomes_path),
             )
-
-            if df.empty:
-                logger.warning(
-                    "Outcomes path does not exist or contains no data",
-                    configured_path=str(self.config.outcomes_path),
-                )
-                return pd.DataFrame()
-
-            return df
-
-        except Exception as e:
-            logger.error("Failed to load outcomes", path=str(self.config.outcomes_path), error=str(e))
             return pd.DataFrame()
+
+        return df
 
     def _load_features(self, start_date: date, end_date: date) -> pd.DataFrame:
         """Load features from Gold layer."""
@@ -233,25 +275,20 @@ class MetaLabelDatasetBuilder:
             ("dt", "<=", end_date.strftime("%Y-%m-%d")),
         ]
 
-        try:
-            # Support arbitrary path config via read_parquet_dataset
-            df = self.client.read_parquet_dataset(
-                path=self.config.features_path,
-                filters=filters,
+        # A read failure propagates, for the same reason as the outcomes read.
+        df = self.client.read_parquet_dataset(
+            path=self.config.features_path,
+            filters=filters,
+        )
+
+        if df.empty:
+            logger.warning(
+                "Features path does not exist or contains no data",
+                configured_path=str(self.config.features_path),
             )
-
-            if df.empty:
-                logger.warning(
-                    "Features path does not exist or contains no data",
-                    configured_path=str(self.config.features_path),
-                )
-                return pd.DataFrame()
-
-            return df
-
-        except Exception as e:
-            logger.error("Failed to load features", path=str(self.config.features_path), error=str(e))
             return pd.DataFrame()
+
+        return df
 
     def _join_features_outcomes(
         self,
@@ -592,14 +629,16 @@ def _write_quarantine_partition(
     """Write quarantined rows under a sibling `_quarantine` partition.
 
     Quarantined files live at
-    ``<output_path>/_quarantine/all_greeks_null/dt=<dt>/quarantine-<ts>.parquet``
-    so downstream readers (which only read ``dt=`` partitions) never load them.
+    ``<output_path>/_quarantine/all_greeks_null/dt=<dt>/quarantine-<ts>.parquet``.
+    ``HeberReader`` walks the whole ``version=`` root and does not exclude this
+    subtree, so quarantined files must honour the same column types as the
+    canonical partitions or they reintroduce cross-fragment schema conflicts.
     """
     quarantine_root = output_path / "_quarantine" / "all_greeks_null" / f"dt={dt_str}"
     quarantine_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
     quarantine_file = quarantine_root / f"quarantine-{ts}-{uuid4().hex[:8]}.parquet"
-    corrupted_df.to_parquet(quarantine_file, index=False, compression="snappy")
+    _atomic_write_parquet(corrupted_df, quarantine_file)
     return quarantine_file
 
 
@@ -712,6 +751,22 @@ def add_label_window_flags(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def provenance_bound() -> timedelta:
+    """Capture-lag bound for provenance flagging, independent of the gate's switch.
+
+    `HEBER_WATCH_LIVE_ENRICHMENT_MAX_AGE_MINUTES=0` disables the *gate* — it is the
+    escape hatch for a deliberate backlog replay. It must not disable the *flagging*
+    too: a zero bound marks every row late, live writes included, which is precisely
+    backwards for the one configuration that lets stale enrichment through. The
+    fallback tracks the setting's own default rather than a hardcoded copy of it.
+    """
+    from heber.config import Settings
+
+    fallback = Settings.model_fields["watch_live_enrichment_max_age_minutes"].default
+    minutes = settings.watch_live_enrichment_max_age_minutes or fallback
+    return timedelta(minutes=minutes)
+
+
 def add_enrichment_provenance_flags(
     df: pd.DataFrame,
     max_age: timedelta,
@@ -776,6 +831,15 @@ def persist_features_to_gold(
     detector, and it logged but did not block — letting null-Greek rows
     pollute ML training inputs.
 
+    Incoming rows are stamped with their enrichment provenance before anything
+    else. ``ts_available`` is authoritative here — it is the moment the row is
+    written, and live-only enrichment on it was fetched at that moment — so a
+    write that lands present-day Greeks on a past alert records that fact
+    itself. The freshness gate normally prevents it, but the gate can be
+    disabled for a deliberate backlog replay, and that path previously wrote
+    unflagged. Only the incoming rows are evaluated; rows already in the
+    partition keep the flags they were written with.
+
     Args:
         features_df: DataFrame with feature rows
         output_path: Base path for features
@@ -784,8 +848,11 @@ def persist_features_to_gold(
     if features_df.empty:
         return
 
+    # Stamp provenance on the incoming rows before they are partitioned, so a
+    # write can never land enrichment that was captured late without saying so.
+    df = add_enrichment_provenance_flags(features_df, max_age=provenance_bound())
+
     # Add date partition column
-    df = features_df.copy()
     df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date

@@ -182,9 +182,16 @@ class WatchKeys:
     # List: snapshots:{watch_id} -> list of WatchSnapshot JSON
     SNAPSHOTS = "heber:snapshots:{watch_id}"
 
+    # String: watch:by_alert:{alert_id} -> watch_id (SET NX claim, one watch per alert)
+    BY_ALERT = "heber:watch:by_alert:{alert_id}"
+
     @classmethod
     def watch_key(cls, watch_id: str) -> str:
         return cls.WATCH.format(watch_id=watch_id)
+
+    @classmethod
+    def by_alert_key(cls, alert_id: str) -> str:
+        return cls.BY_ALERT.format(alert_id=alert_id)
 
     @classmethod
     def by_symbol_key(cls, occ_symbol: str) -> str:
@@ -206,6 +213,18 @@ QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
 # One regular XNYS session. `max_duration_hours` below is spent by
 # `MarketCalendar.add_trading_hours` at this rate.
 TRADING_HOURS_PER_SESSION = 6.5
+
+# Lifetime of the per-alert claim that keeps a re-delivered alert from minting a
+# second watch. The longest window (LEAP: 30 trading days, 195 trading hours) is
+# 30 sessions, spanning roughly 42 calendar days; 270 days clears that plus a
+# large recovery margin while still letting the keys expire instead of
+# accumulating forever. (Before the horizon-units fix below, LEAP's raw
+# max_duration_hours of 720 was being spent as if it were trading hours,
+# stretching the window to ~111 sessions / ~156 calendar days — this TTL predates
+# that fix and was sized for it, so the margin is now considerably wider than
+# the reasoning above requires.)
+ALERT_CLAIM_TTL_SECONDS = 270 * 24 * 3600
+
 
 # Polling configuration per horizon.
 #

@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -352,48 +353,127 @@ class MarketRegimePipeline:
         """Load Silver bars and compute dispersion."""
         bar_start = start_date - timedelta(days=LOOKBACK_DAYS)
         logger.info("Loading Silver bars for dispersion", start=bar_start.isoformat(), end=end_date.isoformat())
-        bars = self.reader.read_silver(
-            "bars",
-            instrument_type="equity",
-            time_range=(bar_start, end_date),
-            columns=["instrument_key", "symbol", "ts_event", "ts_available", "timeframe", "close"],
-            batch_size=500_000,
-        )
-        logger.info("Loaded bars for dispersion", rows=len(bars))
 
-        if bars.empty:
+        # Read a month at a time and reduce to daily closes before moving on.
+        # The whole window is every equity ticker over ~127 days — ~6.4M rows, of
+        # which ~160k survive the reduction — and materialising it at once
+        # OOM-killed this pipeline on all three attempts every night.
+        #
+        # Chunk size is a balance, and both ends of it are load-bearing. Every
+        # read pays a fixed open cost that does not depend on rows returned:
+        # _open_dataset_safe walks the whole fragment list and, because bars
+        # fragments disagree on string vs large_string, falls back to reading
+        # each fragment's schema individually. prune_by_dt only adds a scan
+        # predicate — it never shrinks that walk. Measured ~90s per open on a
+        # cold page cache and ~5s warm, so per-day chunking costs 127 opens
+        # (~3.2h cold, still 8-17 min warm) against an 1800s timeout, while a
+        # month costs ~5 and holds ~1.4M rows per chunk instead of 6.4M.
+        #
+        # Daily bars only, filtered at the scan rather than after materialising.
+        # A month of every interval is 1,986,898 rows against 32,214 daily ones
+        # — 62x — and reading the difference only to discard it is what pushed
+        # the cold-cache run past the 1800s timeout.
+        #
+        # The cost is ticker-dates that have intraday bars but no 1Day bar: they
+        # no longer contribute a close. That restores what every Gold row written
+        # before 2026-06-09 was computed with — the old len(bars) > 1_000_000
+        # branch always fired on the production window and filtered to 1Day — so
+        # the series stays comparable with its own history. A gap-filled close is
+        # the last intraday print of the UTC day, not an official close, and
+        # mixing the two into a cross-sectional return SD adds asynchronous
+        # pricing noise for exactly the thinnest-data tickers.
+        #
+        # PRECONDITION: chunk edges must be UTC midnight. _to_daily_close buckets
+        # on ts_event.dt.date in UTC, so an edge at any other time splits one UTC
+        # day across two chunks and emits two rows for the same
+        # (instrument_key, date) — which compute_dispersion then reads as an
+        # intra-date return. Normalising here keeps the per-chunk reduction
+        # exactly equivalent to reducing the whole window at once, which is what
+        # makes chunk size a cost decision rather than a correctness one.
+        daily_parts: list[pd.DataFrame] = []
+        chunk_start = bar_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        while chunk_start <= end_date:
+            next_month = (
+                chunk_start.replace(year=chunk_start.year + 1, month=1, day=1)
+                if chunk_start.month == 12
+                else chunk_start.replace(month=chunk_start.month + 1, day=1)
+            )
+            # microseconds, not seconds: ts_event is timestamp("us") and the
+            # predicate is inclusive, so a 1s step drops rows in the final second
+            # of each month into no chunk at all.
+            chunk_end = min(next_month - timedelta(microseconds=1), end_date)
+
+            chunk = self.reader.read_silver(
+                "bars",
+                instrument_type="equity",
+                time_range=(chunk_start, chunk_end),
+                columns=["instrument_key", "ts_event", "timeframe", "close"],
+                batch_size=500_000,
+                prune_by_dt=True,
+                timeframe="1Day",
+            )
+            chunk_start = next_month
+            if chunk.empty:
+                continue
+            daily_parts.append(self._to_daily_close(chunk))
+            del chunk
+            gc.collect()
+
+        if not daily_parts:
             return pd.DataFrame()
 
-        # Drop intraday rows early — _to_daily_close only needs close prices
-        # and prefers 1Day bars.  Loading millions of intraday rows causes OOM.
-        if "timeframe" in bars.columns and len(bars) > 1_000_000:
-            daily_only = bars[bars["timeframe"] == "1Day"]
-            if not daily_only.empty:
-                logger.info("Dropped intraday bars", before=len(bars), after=len(daily_only))
-                bars = daily_only
-
-        # Resample to daily if needed — take last close per (instrument_key, date)
-        bars = self._to_daily_close(bars)
+        bars = pd.concat(daily_parts, ignore_index=True)
+        logger.info("Loaded bars for dispersion", daily_rows=len(bars), chunks_with_data=len(daily_parts))
         return compute_dispersion(bars)
 
     def _compute_vol_of_vol(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Load Silver quotes for UVXY and compute vol_of_vol."""
         vix_start = start_date - timedelta(days=60)  # Extra lookback for 20d rolling
         logger.info("Loading Silver quotes for UVXY", start=vix_start.isoformat(), end=end_date.isoformat())
+        # instrument_type is load-bearing, not tidiness. instrument_keys is only a
+        # scan predicate, applied after _open_dataset_safe has already walked and
+        # schema-unified every fragment under the feed root. Unscoped, this read
+        # opens feed=quotes entire: 3,799 equity fragments plus 826,797 option
+        # fragments. The unification loop retains ~70 KiB per fragment, so it
+        # exhausts the 3 GiB container about 5% of the way through — this single
+        # line is why market_regime both timed out and OOM-killed, and dispersion
+        # being fixed does not save it.
         quotes = self.reader.read_silver(
             "quotes",
+            instrument_type="equity",
             instrument_keys=["equity:UVXY"],
             time_range=(vix_start, end_date),
+            columns=["ts_event", "ask_px", "bid_px"],
+            batch_size=200_000,
+            prune_by_dt=True,
         )
         logger.info("Loaded UVXY quotes", rows=len(quotes))
 
         if quotes.empty:
-            # Fallback: try bars for UVXY
+            # This is the branch that actually runs: UVXY has never been in the
+            # quotes subscription (0 rows across all 337 equity dt partitions),
+            # so vol_of_vol is computed from bars every night.
+            #
+            # "close" must stay in the projection. bars genuinely has it, and the
+            # derivation below falls through to ask/bid names that bars does not
+            # have — dropping it would silently return empty and make vol_of_vol
+            # all-NaN rather than fail.
+            # Daily bars only. compute_vol_of_vol reduces to one close per date
+            # anyway, and the scan is 4.9x faster for it: measured over the
+            # production window, all intervals returned 1,623 rows against 46
+            # for 1Day. The file count is identical either way — the saving is
+            # Parquet row-group statistics letting the scanner skip pages
+            # instead of decoding them.
             logger.info("No quotes for UVXY, trying bars")
             quotes = self.reader.read_silver(
                 "bars",
+                instrument_type="equity",
                 instrument_keys=["equity:UVXY"],
                 time_range=(vix_start, end_date),
+                columns=["ts_event", "close"],
+                batch_size=200_000,
+                prune_by_dt=True,
+                timeframe="1Day",
             )
             logger.info("Loaded UVXY bars", rows=len(quotes))
 
@@ -420,6 +500,7 @@ class MarketRegimePipeline:
             "momentum_features",
             project=self.project,
             time_range=(start_date, end_date),
+            prune_by_dt=True,
         )
         logger.info("Loaded momentum_features", rows=len(momentum))
 

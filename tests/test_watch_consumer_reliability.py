@@ -43,6 +43,9 @@ class _RedisDlqFailure(_RedisWithDlq):
 
 
 class _NoopManager:
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
+
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         return None
 
@@ -51,6 +54,9 @@ class _CaptureManager:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.calendar = SimpleNamespace(add_trading_hours=lambda alert_time, hours: alert_time + timedelta(hours=hours))
+
+    async def has_alert_claim_async(self, alert_id: str) -> bool:
+        return False
 
     async def create_watch_async(self, **kwargs):  # noqa: ANN003
         self.calls.append(kwargs)
@@ -713,3 +719,93 @@ async def test_extract_and_store_features_preserves_flow_payload_fields(
     assert record.side == "ask"
     assert record.aggressor == "BULLISH"
     assert record.tags == ["bullish", "unusual"]
+
+
+@pytest.mark.asyncio
+async def test_run_retries_consumer_group_setup_when_redis_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup must ride out an upstream Redis restart instead of exiting.
+
+    `run()` calls `_setup_consumer_group_async()` before entering the loop that
+    handles transient errors, so on 2026-08-08 the watch service died here —
+    `ConnectionError: Error 101 ... Network is unreachable` inside xgroup_create —
+    and crash-looped for 1h38m while the watchdog restarted it every 120s against
+    the same dead Redis. data-gateway-redis takes ~77s to load its AOF.
+    """
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.01)
+
+    attempts = 0
+
+    async def _flaky_setup() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ConnectionError("Error 101 connecting to host.docker.internal:6379. Network is unreachable.")
+
+    consumer._setup_consumer_group_async = _flaky_setup  # type: ignore[method-assign]
+    consumer._read_messages = AsyncMock(side_effect=[asyncio.CancelledError()])  # type: ignore[method-assign]
+
+    async def _instant_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run()
+
+    assert attempts == 3, "startup consumer-group setup must retry transient Redis errors"
+
+
+@pytest.mark.asyncio
+async def test_run_still_raises_non_transient_setup_errors() -> None:
+    """A real misconfiguration stays loud — only transient errors are retried."""
+    redis_client = _RedisWithDlq()
+    consumer = AlertWatchConsumer(redis_client, _NoopManager(), retry_backoff_seconds=0.01)
+
+    async def _fatal() -> None:
+        raise ValueError("invalid stream name")
+
+    consumer._setup_consumer_group_async = _fatal  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="invalid stream name"):
+        await consumer.run()
+
+
+@pytest.mark.asyncio
+async def test_read_messages_advances_the_upstream_progress_gauge() -> None:
+    """Watch needs its own stall signal now that it waits Redis out instead of dying.
+
+    Its run loop keeps spinning (and the process keeps looking alive) through a
+    Redis outage, so without this the crash-loop it used to announce itself with
+    is simply replaced by silence. An empty read still counts — Redis answered.
+    """
+    import time
+
+    from heber.ops.metrics import watch_last_xread_success_unixtime
+
+    consumer = AlertWatchConsumer(_RedisWithDlq(), _NoopManager())
+    watch_last_xread_success_unixtime.set(1000.0)  # long-stale
+
+    await consumer._read_messages()
+
+    assert watch_last_xread_success_unixtime._value.get() > time.time() - 5
+
+
+@pytest.mark.asyncio
+async def test_failed_read_leaves_the_progress_gauge_stale() -> None:
+    """A failed read must not look like progress, or the gauge is worthless."""
+    from heber.ops.metrics import watch_last_xread_success_unixtime
+
+    class _DeadRedis(_RedisWithDlq):
+        def xreadgroup(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise ConnectionError("Error 101 ... Network is unreachable")
+
+    consumer = AlertWatchConsumer(_DeadRedis(), _NoopManager())
+    watch_last_xread_success_unixtime.set(1000.0)
+
+    with pytest.raises(ConnectionError):
+        await consumer._read_messages()
+
+    assert watch_last_xread_success_unixtime._value.get() == 1000.0

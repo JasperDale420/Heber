@@ -9,11 +9,16 @@ Extracted from scripts/seed_catalog.py so the catalog lifespan can import cleanl
 from __future__ import annotations
 
 import asyncio
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from datetime import date as date_type
 from pathlib import Path
+from typing import NamedTuple
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -394,65 +399,248 @@ async def discover_datasets_from_disk(session: AsyncSession) -> int:
     return count
 
 
-def _count_parquet_rows(dt_dir: Path) -> int:
-    """Sum row counts from Parquet file metadata in a date partition.
+class _DirectoryListing(NamedTuple):
+    """What one directory contributed to the partition walk."""
 
-    Reads only footer metadata — never loads actual data.
+    subdirs: list[tuple[Path, str | None]]
+    files: list[tuple[str, Path]]
+    mtimes: list[tuple[str, float]]
+    skipped_empty: int
+
+
+class _FeedWalk(NamedTuple):
+    """What a whole feed's walk found."""
+
+    files_by_date: dict[str, list[Path]]
+    mtime_by_date: dict[str, float]
+    dirs_scanned: int
+    skipped_empty: int
+
+
+def _list_one_directory(directory: Path, date_str: str | None) -> _DirectoryListing:
+    """List a single directory for the partition walk.
+
+    ``date_str`` is the ``dt=`` partition this directory sits under, carried
+    down so files inside ``hour=`` sub-partitions are attributed to their date.
+
+    Also reports each subdirectory's mtime against the date it belongs to, so
+    the caller can tell whether a partition has changed since it was last
+    counted. Zero-byte Parquet files are skipped by size rather than opened:
+    pyarrow raises ``ArrowInvalid: Parquet file size is 0 bytes`` on them, and
+    the compactor and ``HeberReader`` already filter them the same way.
     """
-
-    def _visible_parquet_files() -> list[Path]:
-        # rglob so hour=* sub-partitions are counted; skip macOS ._ sidecar
-        # files and anything nested inside a ._ sidecar directory.
-        return [
-            pf
-            for pf in dt_dir.rglob("*.parquet")
-            if not any(part.startswith(".") for part in pf.relative_to(dt_dir).parts)
-        ]
+    subdirs: list[tuple[Path, str | None]] = []
+    files: list[tuple[str, Path]] = []
+    mtimes: list[tuple[str, float]] = []
+    skipped_empty = 0
 
     try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        # Fallback: count files if pyarrow not available
-        return len(_visible_parquet_files())
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                # Skips macOS AppleDouble sidecars, both the ._ files and the
+                # ._ directories whose contents must not be counted.
+                if entry.name.startswith("."):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    match = _DATE_PARTITION_RE.match(entry.name)
+                    child_date = match.group(1) if match else date_str
+                    subdirs.append((Path(entry.path), child_date))
+                    if child_date is not None:
+                        try:
+                            mtimes.append((child_date, entry.stat().st_mtime))
+                        except OSError:
+                            # Unknown mtime must never look unchanged.
+                            mtimes.append((child_date, float("inf")))
+                elif date_str is not None and entry.name.endswith(".parquet"):
+                    try:
+                        if entry.stat().st_size == 0:
+                            skipped_empty += 1
+                            continue
+                    except OSError:
+                        # Size unknown is not the same as empty — keep the file
+                        # so the footer read reports why it could not be used.
+                        pass
+                    files.append((date_str, Path(entry.path)))
+    except OSError as exc:
+        logger.warning("catalog_partition_scan_oserror", path=str(directory), error=str(exc)[:200])
 
-    total = 0
-    for pf in _visible_parquet_files():
-        try:
-            meta = pq.read_metadata(pf)
-            total += meta.num_rows
-        except Exception:
-            logger.warning("catalog_parquet_metadata_unreadable", path=str(pf), exc_info=True)
-            continue
-    return total
+    return _DirectoryListing(subdirs, files, mtimes, skipped_empty)
 
 
-def _scan_partition_dates(feed_dir: Path) -> list[tuple[str, int]] | None:
+def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> _FeedWalk:
+    """Walk a feed directory, mapping each dt= date to the Parquet files under it.
+
+    Each level of the tree is listed concurrently, because the cost here is
+    per-open latency on the lakehouse mount rather than CPU.
+    """
+    files_by_date: dict[str, list[Path]] = {}
+    mtime_by_date: dict[str, float] = {}
+    dirs_scanned = 0
+    skipped_empty = 0
+
+    level: list[tuple[Path, str | None]] = [(feed_dir, None)]
+    while level:
+        dirs_scanned += len(level)
+        next_level: list[tuple[Path, str | None]] = []
+        for listing in pool.map(lambda item: _list_one_directory(*item), level):
+            next_level.extend(listing.subdirs)
+            skipped_empty += listing.skipped_empty
+            for date_str, path in listing.files:
+                files_by_date.setdefault(date_str, []).append(path)
+            for date_str, mtime in listing.mtimes:
+                if mtime > mtime_by_date.get(date_str, 0.0):
+                    mtime_by_date[date_str] = mtime
+        level = next_level
+
+    return _FeedWalk(files_by_date, mtime_by_date, dirs_scanned, skipped_empty)
+
+
+def _read_row_count(path: Path) -> int | None:
+    """Row count from a Parquet footer, or None if the footer cannot be read.
+
+    None rather than 0 so an unreadable file is distinguishable from an empty
+    one: both contribute no rows, but only one of them means coverage is now
+    undercounting.
+    """
+    try:
+        return int(pq.read_metadata(path).num_rows)
+    except Exception as exc:
+        # No traceback: a corrupt file is expected debris, and rendering a
+        # stack into every JSON log line cost more than reading the footer.
+        logger.warning("catalog_parquet_metadata_unreadable", path=str(path), error=str(exc)[:200])
+        return None
+
+
+# A partition is only treated as unchanged if it is older than the recorded
+# count by this margin. The lakehouse mount's mtimes were measured running
+# ~0.5s ahead of the container clock, and exFAT stores local time, so the two
+# clocks are close but not identical. Without a margin, a file landing in the
+# same moment a directory was walked could read as older than the pass that
+# missed it and be skipped from then on — a permanent silent undercount. The
+# cost of being wrong in the other direction is re-reading one partition.
+_MTIME_SKEW_MARGIN_SECONDS = 60.0
+
+
+def _counted_before(recorded_ts: datetime) -> float:
+    """Epoch cutoff below which a partition counts as unchanged since ``recorded_ts``."""
+    if recorded_ts.tzinfo is None:
+        recorded_ts = recorded_ts.replace(tzinfo=UTC)
+    return recorded_ts.timestamp() - _MTIME_SKEW_MARGIN_SECONDS
+
+
+def _scan_partition_dates(
+    feed_dir: Path,
+    recorded: dict[str, tuple[datetime, int]] | None = None,
+) -> list[tuple[str, int]] | None:
     """Scan a feed directory for dt= partitions and return per-date row counts.
 
-    Returns a list of (date_str, row_count) tuples — one per date partition found.
-    Row counts are read from Parquet file metadata (footer only, no data loaded).
+    Returns a list of (date_str, row_count) tuples — one per date found, summed
+    across every ``instrument_type=`` and ``hour=`` partition holding that date.
+    Row counts come from Parquet footers; no data is loaded.
+
+    The lakehouse sits on an exFAT bind mount where each directory open costs
+    ~28ms and each footer read ~106ms, so this walk — not the database write —
+    is the whole cost of a coverage pass. Both are latency, not bandwidth, so
+    directories are listed a level at a time in parallel and footers are read
+    in parallel.
+
+    ``recorded`` maps a date to the (timestamp, row count) already in
+    ``data_coverage``. A date whose directories have not been modified since
+    that timestamp holds the same files and therefore the same rows, so its
+    footers are not read again. This is what keeps the pass proportional to
+    what changed: ``feed=quotes`` alone holds ~825k Parquet files, and reading
+    every footer every five minutes cost ~2h12m of a ~2h30m pass. Nothing in
+    Heber rewrites a Parquet file in place — Silver writes new part files and
+    the compactor writes a temp file then renames — so a directory's mtime is
+    a sound signal that its contents changed.
     """
-    results: list[tuple[str, int]] = []
-    # rglob is blocking and can be slow on large trees
-    try:
-        for sub in feed_dir.rglob("dt=*"):
-            if not sub.is_dir():
+    started = time.monotonic()
+
+    workers = settings.catalog_coverage_scan_workers
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="coverage-scan") as pool:
+        walk = _walk_partition_files(feed_dir, pool)
+
+        totals: dict[str, int] = {}
+        reused = 0
+        to_read: list[tuple[str, Path]] = []
+        for date_str, paths in walk.files_by_date.items():
+            prior = (recorded or {}).get(date_str)
+            if prior is not None and walk.mtime_by_date.get(date_str, float("inf")) < _counted_before(prior[0]):
+                totals[date_str] = prior[1]
+                reused += 1
                 continue
-            match = _DATE_PARTITION_RE.match(sub.name)
-            if match:
-                date_str = match.group(1)
-                row_count = _count_parquet_rows(sub)
-                if row_count > 0:
-                    results.append((date_str, row_count))
-    except OSError:
-        logger.warning("catalog_partition_scan_oserror", path=str(feed_dir), exc_info=True)
+            to_read.extend((date_str, path) for path in paths)
 
-    if not results:
-        return None
-    return results
+        counts = list(pool.map(_read_row_count, [path for _, path in to_read]))
+
+    unreadable = 0
+    for (date_str, _), rows in zip(to_read, counts, strict=True):
+        if rows is None:
+            unreadable += 1
+            continue
+        totals[date_str] = totals.get(date_str, 0) + rows
+
+    results = [(date_str, rows) for date_str, rows in sorted(totals.items()) if rows > 0]
+
+    # The reuse decision assumes this container's clock and the mount's agree to
+    # within _MTIME_SKEW_MARGIN_SECONDS — measured at ~0.5s. Drift in the
+    # dangerous direction (this clock ahead of the filesystem's) would silently
+    # skip partitions, so the newest mtime seen is reported rather than assumed:
+    # a value going sharply negative means the margin no longer covers reality.
+    newest_mtime = max(walk.mtime_by_date.values(), default=None)
+
+    logger.info(
+        "coverage_feed_scanned",
+        feed=feed_dir.name.removeprefix("feed="),
+        dates=len(results),
+        files=len(to_read),
+        dirs=walk.dirs_scanned,
+        reused_dates=reused,
+        skipped_empty=walk.skipped_empty,
+        unreadable=unreadable,
+        newest_mtime_age_seconds=round(time.time() - newest_mtime, 1) if newest_mtime else None,
+        elapsed_seconds=round(time.monotonic() - started, 2),
+    )
+
+    return results or None
 
 
-async def seed_coverage_from_disk(session: AsyncSession) -> int:
+async def _load_recorded_coverage(session: AsyncSession) -> dict[str, dict[str, tuple[datetime, int]]]:
+    """Per-date coverage already recorded, as {feed: {date: (counted_at, rows)}}.
+
+    One query. This is what lets a pass skip partitions nothing has touched
+    since they were last counted.
+    """
+    result = await session.execute(
+        select(
+            DataCoverage.dataset_name,
+            DataCoverage.instrument_key,
+            DataCoverage.last_updated_ts,
+            DataCoverage.approx_row_count,
+        ).where(DataCoverage.instrument_key.startswith("dt:"))
+    )
+
+    recorded: dict[str, dict[str, tuple[datetime, int]]] = {}
+    for dataset_name, instrument_key, last_updated_ts, row_count in result.all():
+        # Only per-date rows this scan writes may seed the skip decision.
+        # `CatalogService.update_coverage` and backfill also write coverage,
+        # keyed by real instrument keys and stamped when they were written; a
+        # write-time stamp reaching the reuse path could freeze a date short.
+        if not instrument_key.startswith("dt:"):
+            continue
+        if last_updated_ts is None or row_count is None:
+            continue
+        recorded.setdefault(dataset_name, {})[instrument_key.removeprefix("dt:")] = (last_updated_ts, row_count)
+
+    # Close the read's transaction before returning. The walk that follows runs
+    # for minutes, and leaving this SELECT's transaction open across it would
+    # reintroduce the idle-in-transaction timeout that froze coverage for 24
+    # days — the walk must hold no transaction at all.
+    await session.rollback()
+    return recorded
+
+
+async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = True) -> int:
     """Scan Silver partition directories and populate data_coverage with accurate row counts.
 
     Walks ``settings.silver_path`` for ``feed={name}`` directories, then scans
@@ -471,9 +659,37 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
         logger.warning("coverage_scan_skipped", reason="silver_path_not_found", path=str(silver_root))
         return 0
 
-    upserted = 0
-    # Directory listing is blocking
+    # Phase 1 — walk everything first, touching no session.
+    #
+    # This used to alternate: scan a feed, upsert its rows, scan the next. The
+    # transaction opened by the first upsert then sat idle for the length of
+    # every later scan, and Postgres here runs
+    # idle_in_transaction_session_timeout = 5min. 232 of 235 discovery passes
+    # failed in one container lifetime, always at an upsert, leaving
+    # data_coverage frozen since 2026-07-20. Collecting first means no
+    # transaction is open while the slow work happens.
+    # Stamped onto every row this pass writes, and compared against partition
+    # mtimes on the next pass. It must be the moment the pass *started*: rows
+    # are written minutes later, and a file that landed mid-pass would then
+    # look older than its own coverage row and be skipped from then on.
+    scan_started_at = datetime.now(UTC)
+
+    # ``reuse_recorded=False`` counts every partition from its footers, ignoring
+    # what is already recorded. The first pass of a process always does this.
+    #
+    # Reuse is only sound against timestamps that mean "counted as of", and rows
+    # written before this scheme existed were stamped when they were *written* —
+    # for a pass that walked for hours and wrote at the end, that stamp sits
+    # long after the files it counted. Trusting one would permanently skip any
+    # partition whose last write landed mid-pass. Recounting once per process
+    # also bounds the damage of any future mistake in the mtime comparison to a
+    # single container lifetime, rather than letting a wrong count persist.
+    recorded = await _load_recorded_coverage(session) if reuse_recorded else {}
+
     entries = await asyncio.to_thread(lambda: sorted(silver_root.iterdir()))
+    manifest: list[tuple[str, list[tuple[str, int]]]] = []
+    failed_feeds = 0
+    upserted = 0
 
     for entry in entries:
         # String checks first to avoid stat() on macOS AppleDouble resource fork files
@@ -486,41 +702,70 @@ async def seed_coverage_from_disk(session: AsyncSession) -> int:
             logger.debug("coverage_scan_skip_stat", path=str(entry), exc_info=True)
             continue
 
+        # Per feed, for the same reason Phase 2 commits per feed: one feed that
+        # cannot be walked must not discard every feed behind it and leave
+        # coverage frozen until the staleness alarm fires.
         feed_name = entry.name.split("=", 1)[1]
-
-        # Run blocking rglob scan in thread — returns per-date row counts
-        scan_results = await asyncio.to_thread(_scan_partition_dates, entry)
+        try:
+            scan_results = await asyncio.to_thread(_scan_partition_dates, entry, recorded.get(feed_name))
+        except Exception as exc:
+            failed_feeds += 1
+            logger.warning("coverage_feed_scan_failed", feed=entry.name, error=str(exc)[:200], exc_info=True)
+            continue
 
         if scan_results is None:
             continue
+        manifest.append((feed_name, scan_results))
+        upserted += await _write_feed_coverage(session, feed_name, scan_results, scan_started_at)
 
-        # Upsert aggregate record (dt_min → dt_max, total rows)
-        all_dates = [d for d, _ in scan_results]
-        total_rows = sum(r for _, r in scan_results)
+    logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds, upserted=upserted)
+    logger.info("coverage_seeded_from_disk", upserted=upserted)
+    return upserted
+
+
+async def _write_feed_coverage(
+    session: AsyncSession,
+    feed_name: str,
+    scan_results: list[tuple[str, int]],
+    scan_started_at: datetime,
+) -> int:
+    """Write one feed's coverage and commit. Returns rows upserted.
+
+    Called as each feed finishes walking rather than after all of them. The
+    walk is the entire cost of a pass — ``feed=quotes`` alone is hours on this
+    mount — and deferring every write until the last feed meant a pass that
+    could not finish published nothing at all. Coverage sat 14h stale through a
+    scan that was working the whole time, and each restart began again at the
+    first feed, so the feeds late in the alphabet were never reached.
+    Publishing per feed makes progress durable and survives a restart.
+
+    The commit is what keeps the transaction short. It is opened by the first
+    upsert here and closed immediately, so no transaction is ever held open
+    across the next feed's walk — the condition that failed 232 of 235 passes
+    in a single container lifetime against a 5-minute
+    ``idle_in_transaction_session_timeout``.
+    """
+    all_dates = [d for d, _ in scan_results]
+    upserted = await _upsert_coverage(
+        session,
+        feed_name,
+        instrument_key="__all__",
+        dt_min_str=min(all_dates),
+        dt_max_str=max(all_dates),
+        row_count=sum(r for _, r in scan_results),
+        counted_at=scan_started_at,
+    )
+    for date_str, row_count in scan_results:
         upserted += await _upsert_coverage(
             session,
             feed_name,
-            instrument_key="__all__",
-            dt_min_str=min(all_dates),
-            dt_max_str=max(all_dates),
-            row_count=total_rows,
+            instrument_key=f"dt:{date_str}",
+            dt_min_str=date_str,
+            dt_max_str=date_str,
+            row_count=row_count,
+            counted_at=scan_started_at,
         )
-
-        # Upsert per-date records so coverage API returns individual dates
-        for date_str, row_count in scan_results:
-            upserted += await _upsert_coverage(
-                session,
-                feed_name,
-                instrument_key=f"dt:{date_str}",
-                dt_min_str=date_str,
-                dt_max_str=date_str,
-                row_count=row_count,
-            )
-
-    if upserted:
-        await session.commit()
-
-    logger.info("coverage_seeded_from_disk", upserted=upserted)
+    await session.commit()
     return upserted
 
 
@@ -531,8 +776,14 @@ async def _upsert_coverage(
     dt_min_str: str,
     dt_max_str: str,
     row_count: int,
+    counted_at: datetime,
 ) -> int:
-    """Upsert a DataCoverage record for a feed."""
+    """Upsert a DataCoverage record for a feed.
+
+    ``counted_at`` is the moment the pass began, not the moment of the write:
+    the next pass compares partition mtimes against it to decide what it can
+    skip, and a write-time stamp would sit after files that landed mid-pass.
+    """
     dt_min = date_type.fromisoformat(dt_min_str)
     dt_max = date_type.fromisoformat(dt_max_str)
 
@@ -544,10 +795,22 @@ async def _upsert_coverage(
     coverage = existing.scalar_one_or_none()
 
     if coverage:
+        # Last write wins, deliberately, even when this pass started earlier
+        # than the row it replaces. A refusal to overwrite a newer timestamp
+        # would silently neuter the verification pass: the five-minute refresh
+        # restamps rows throughout verification's multi-hour walk, so every one
+        # of its writes would be skipped and no legacy count would ever be
+        # corrected. It is also backwards — verification counts by reading
+        # footers, while the refresh carries a recorded count forward, so the
+        # older-stamped value is the more accurate one.
+        #
+        # Writing an older stamp is self-correcting: reuse only applies when a
+        # partition's mtime predates the stamp, so a partition that changed
+        # since is simply recounted on the next pass.
         coverage.dt_min = dt_min
         coverage.dt_max = dt_max
         coverage.approx_row_count = row_count
-        coverage.last_updated_ts = datetime.now(UTC)
+        coverage.last_updated_ts = counted_at
     else:
         coverage = DataCoverage(
             dataset_name=feed_name,
@@ -555,6 +818,7 @@ async def _upsert_coverage(
             dt_min=dt_min,
             dt_max=dt_max,
             approx_row_count=row_count,
+            last_updated_ts=counted_at,
         )
         session.add(coverage)
 

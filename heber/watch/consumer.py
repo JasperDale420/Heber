@@ -28,8 +28,10 @@ from heber.features.templates.alert_labels import (
 )
 from heber.ops.metrics import (
     record_watch_alert_parse,
+    record_watch_duplicate_alert_suppressed,
     record_watch_gateway_request,
     record_watch_watch_created,
+    watch_last_xread_success_unixtime,
 )
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
@@ -170,6 +172,43 @@ class AlertWatchConsumer:
         """Async wrapper for consumer group setup."""
         await asyncio.to_thread(self.setup_consumer_group)
 
+    async def _setup_consumer_group_with_retry(self) -> None:
+        """Set up the consumer group, waiting out a transiently unavailable Redis.
+
+        The run loop below already backs off on transient errors, but it only
+        starts after setup returns — so an upstream that is down or still loading
+        its AOF killed the process here and `restart: always` turned that into a
+        crash-loop the watchdog restarted every 120s against the same dead Redis.
+        data-gateway-redis takes ~77s to load its AOF, so any restart of it hit this.
+
+        Only transient errors are retried; a real misconfiguration still fails fast.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                await self._setup_consumer_group_async()
+                return
+            except Exception as exc:
+                is_transient, error_kind = classify_runtime_error(exc)
+                if not is_transient:
+                    raise
+                delay = calculate_retry_delay(
+                    attempt=attempt,
+                    base_seconds=self.retry_backoff_seconds,
+                    max_seconds=30.0,
+                    jitter_ratio=0.2,
+                )
+                logger.warning(
+                    "Redis unavailable during watch startup — retrying",
+                    error=str(exc),
+                    error_kind=error_kind,
+                    attempt=attempt,
+                    retry_delay_seconds=round(delay, 3),
+                    stream=self.stream_name,
+                )
+                await asyncio.sleep(delay)
+
     async def _read_messages(self):
         """Read stream messages without blocking the event loop.
 
@@ -180,7 +219,7 @@ class AlertWatchConsumer:
         recreation.
         """
         try:
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -198,7 +237,7 @@ class AlertWatchConsumer:
                 error=str(e),
             )
             await self._setup_consumer_group_async()
-            return await asyncio.to_thread(
+            messages = await asyncio.to_thread(
                 self.redis.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
@@ -206,6 +245,13 @@ class AlertWatchConsumer:
                 count=100,
                 block=5000,
             )
+
+        # Upstream-reachability signal. An empty read still counts — it proves
+        # Redis answered. Set only on the success paths: the run loop keeps
+        # spinning (and the process keeps looking alive) through a Redis outage,
+        # so without this there is nothing to tell waiting from working.
+        watch_last_xread_success_unixtime.set(time.time())
+        return messages
 
     async def _ack_message(self, msg_id: str) -> None:
         """Acknowledge stream message without blocking the event loop."""
@@ -361,7 +407,7 @@ class AlertWatchConsumer:
     async def run(self) -> None:
         """Run the consumer as a continuous service."""
         self._running = True
-        await self._setup_consumer_group_async()
+        await self._setup_consumer_group_with_retry()
         log_fallback_backlog(settings.dlq_fallback_path, service="heber-watch")
         error_streak = 0
 
@@ -453,10 +499,13 @@ class AlertWatchConsumer:
         missing_occ: int,
         stale_window: int,
         exceptions: int,
+        duplicates: int = 0,
     ) -> tuple[bool, bool, str]:
         """Classify batch processing results into (success, retryable, reason)."""
         if created > 0:
             return True, False, "watch_created"
+        if duplicates > 0 and stale_window == 0 and missing_occ == 0 and exceptions == 0:
+            return True, False, "duplicate_alert"
         if stale_window > 0 and missing_occ == 0 and exceptions == 0:
             return True, False, "stale_alert_window"
         if missing_occ > 0 and exceptions == 0:
@@ -528,6 +577,7 @@ class AlertWatchConsumer:
         skipped_missing_occ = 0
         skipped_stale_window = 0
         processing_exceptions = 0
+        skipped_duplicates = 0
 
         for batch_index, alert in enumerate(alerts):
             result = await self._process_one_alert_safe(alert, msg_id, batch_index)
@@ -537,6 +587,8 @@ class AlertWatchConsumer:
                 skipped_missing_occ += 1
             elif result == "stale_alert_window":
                 skipped_stale_window += 1
+            elif result == "duplicate_alert":
+                skipped_duplicates += 1
             elif result == "processing_exception":
                 processing_exceptions += 1
 
@@ -545,6 +597,7 @@ class AlertWatchConsumer:
             skipped_missing_occ,
             skipped_stale_window,
             processing_exceptions,
+            duplicates=skipped_duplicates,
         )
 
     async def _process_parsed_alert(self, alert: dict[str, Any]) -> str:
@@ -575,6 +628,13 @@ class AlertWatchConsumer:
                     window_end=window_end.isoformat(),
                 )
                 return "stale_alert_window"
+
+        # Cheap pre-check so a re-delivery storm does not fire a live quote lookup per
+        # copy. Advisory only — the authoritative claim is the SET NX in create_watch.
+        if await self.manager.has_alert_claim_async(alert["id"]):
+            logger.debug("Skipping already-claimed alert", alert_id=alert["id"])
+            record_watch_duplicate_alert_suppressed()
+            return "duplicate_alert"
 
         entry_price, entry_price_source = await self._resolve_entry_price(alert)
         if entry_price is None or entry_price <= 0:
@@ -607,8 +667,14 @@ class AlertWatchConsumer:
             tp_threshold=self.config.tp_pct,
             sl_threshold=self.config.sl_pct,
         )
+        if watch is None:
+            return "duplicate_alert"
 
-        # Extract and store features for meta-labeling
+        # Extract and store features for meta-labeling. The watch and its claim are
+        # already durable: if extraction dies on a fatal auth failure the alert keeps
+        # its claim, so a redelivery is suppressed rather than watched twice. That
+        # costs one training row (a label with no feature row is dropped by the join)
+        # and never costs a duplicate one.
         await self._extract_and_store_features(alert, watch.watch_id)
 
         logger.info(

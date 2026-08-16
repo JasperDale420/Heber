@@ -20,8 +20,11 @@ class _BytesRedis:
             return value
         return value.encode("utf-8")
 
-    def set(self, key: str, value: str | bytes) -> None:
+    def set(self, key: str, value: str | bytes, *, nx: bool = False, ex: int | None = None) -> bool | None:
+        if nx and key in self._kv:
+            return None
         self._kv[key] = self._to_bytes(value)
+        return True
 
     def get(self, key: str) -> bytes | None:
         return self._kv.get(key)

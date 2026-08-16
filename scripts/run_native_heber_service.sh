@@ -48,10 +48,17 @@ mkdir -p "${HEBER_NATIVE_LOG_DIR}"
 # cycle) or split-brains the lakehouse onto the boot disk. Guard first.
 if [[ ! -d "${HEBER_DATA_ROOT}" ]]; then
   echo "ERROR: HEBER_DATA_ROOT does not exist (volume not mounted?): ${HEBER_DATA_ROOT}" >&2
-  exit 1
+  # alert-check is the alarm, so it is the one service that must still run when
+  # the volume is gone — an unmounted volume is itself something to report, and
+  # exiting here is what makes that failure silent. Its notifier state lives on
+  # the boot disk for the same reason. Every other service genuinely cannot work
+  # without the lakehouse.
+  if [[ "${SERVICE}" != "alert-check" ]]; then
+    exit 1
+  fi
+else
+  mkdir -p "${HEBER_HEALTH_REPORT_DIR}"
 fi
-
-mkdir -p "${HEBER_HEALTH_REPORT_DIR}"
 
 cd "${PROJECT_DIR}"
 

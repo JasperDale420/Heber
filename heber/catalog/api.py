@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -53,25 +54,83 @@ def _should_auto_create_catalog_tables() -> bool:
     return settings.environment == "dev"
 
 
+# Strong references to fire-and-forget tasks; asyncio only holds weak ones.
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _initial_coverage_scan() -> None:
+    """Publish fresh coverage as soon as possible. Never raises.
+
+    This is the only coverage work on the critical path, and it reuses recorded
+    counts for partitions nothing has touched, so it finishes in minutes.
+
+    The verification pass used to run here instead. It re-reads every Parquet
+    footer, and Phase 2 writes nothing until the entire 80-feed walk finishes:
+    measured on the production mount at 11.3 files/sec, ``feed=quotes`` alone
+    (~825k files) is ~20 hours. That is longer than the 6h staleness threshold
+    and longer than this container stays up between restarts, so coverage could
+    not refresh at all — it sat frozen for 14h with the scan working the whole
+    time, and every restart discarded the walk and began again at the first feed.
+    """
+    try:
+        async with async_session() as session:
+            await seed_coverage_from_disk(session, reuse_recorded=True)
+        logger.info("catalog_coverage_refresh_done")
+    except Exception:
+        logger.exception("catalog_coverage_refresh_error")
+
+
+async def _verification_recount() -> None:
+    """Re-count every partition from its footers, ignoring recorded counts. Never raises.
+
+    Reuse trusts a recorded ``counted_at`` to mean "counted as of". Rows written
+    before that scheme existed were stamped when they were *written*, at the end
+    of a walk lasting hours, so a partition that changed mid-walk looks older
+    than its own row and would be skipped from then on. This pass is what bounds
+    that: it takes no recorded count on trust.
+
+    It runs as its own task rather than ahead of the refresh loop, because it is
+    a ~20h pass and gating five-minute refreshes behind it is what produced the
+    outage in the first place.
+
+    Its writes deliberately overwrite rows the refresh has restamped in the
+    meantime. Refusing to would neuter this pass entirely — the refresh restamps
+    rows throughout the multi-hour walk, so every write here would be skipped.
+    """
+    try:
+        async with async_session() as session:
+            await seed_coverage_from_disk(session, reuse_recorded=False)
+        logger.info("catalog_coverage_verification_done")
+    except Exception:
+        logger.exception("catalog_coverage_verification_error")
+
+
 async def _periodic_discovery_loop() -> None:
     """Background loop that periodically re-scans Silver for new datasets and coverage."""
     interval = settings.catalog_discover_interval_seconds
 
-    # Run an initial scan immediately (non-blocking to startup)
-    try:
-        async with async_session() as session:
-            await seed_coverage_from_disk(session)
-            logger.info("catalog_initial_coverage_scan_done")
-    except Exception:
-        logger.exception("catalog_initial_coverage_scan_error")
+    await _initial_coverage_scan()
+
+    if settings.catalog_coverage_verify_on_start:
+        # Held in a module-level set: asyncio's task registry is weak, so an
+        # unreferenced task can be collected mid-walk and the verification would
+        # vanish with nothing recording that it never finished.
+        task = asyncio.create_task(_verification_recount())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     while True:
         await asyncio.sleep(interval)
         try:
+            # Separate sessions on purpose. Sharing one meant discovery's
+            # statements opened a transaction that then sat idle through the
+            # whole coverage walk — the condition that failed 232 of 235 passes
+            # in a single container lifetime.
             async with async_session() as session:
                 discovered = await discover_datasets_from_disk(session)
-                if discovered:
-                    logger.info("catalog_periodic_discovery", new_datasets=discovered)
+            if discovered:
+                logger.info("catalog_periodic_discovery", new_datasets=discovered)
+            async with async_session() as session:
                 await seed_coverage_from_disk(session)
         except Exception:
             logger.exception("catalog_periodic_scan_error")
@@ -125,6 +184,17 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("catalog_periodic_scan_stopped")
+
+    # A verification walk can be hours from finishing; say so on the way out
+    # rather than leaving its non-completion to be inferred from silence.
+    for task in list(_background_tasks):
+        if not task.done():
+            logger.info("catalog_coverage_verification_cancelled_incomplete")
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 app = FastAPI(
@@ -207,6 +277,58 @@ async def health() -> dict[str, str]:
             detail={"status": "unhealthy", "service": "heber-catalog", "error": str(exc)[:200]},
         ) from exc
     return {"status": "healthy", "service": "heber-catalog"}
+
+
+@app.get("/health/coverage")
+async def health_coverage() -> JSONResponse:
+    """Report how stale the coverage table is.
+
+    Deliberately separate from ``/health``. That route is the container
+    healthcheck and gates ``heber-consumer`` and ``heber-backfill-consumer``
+    through ``depends_on: service_healthy``, and the host watchdog restarts
+    anything unhealthy — so failing it on stale data would turn a
+    data-freshness problem into a restart loop and could block ingest from
+    starting. Liveness and freshness are different questions and get different
+    routes.
+
+    Coverage rows carry ``last_updated_ts``, rewritten on every successful
+    scan, so their maximum already is the completed-scan watermark; no separate
+    bookkeeping is needed to know when the scan last got all the way through.
+    """
+    # JSONResponse rather than HTTPException: the app's error handler stringifies
+    # a dict detail into a message field, which a monitor cannot parse.
+    try:
+        async with async_session() as session:
+            result = await session.execute(text("SELECT max(last_updated_ts), count(*) FROM data_coverage"))
+            row = result.first()
+    except Exception as exc:
+        logger.warning("catalog_coverage_probe_failed", error=str(exc)[:200])
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "service": "heber-catalog", "error": str(exc)[:200]},
+        )
+
+    last_updated, rows = (row[0], row[1]) if row else (None, 0)
+    age = None
+    if last_updated is not None:
+        if last_updated.tzinfo is None:
+            last_updated = last_updated.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - last_updated).total_seconds()
+
+    payload: dict[str, object] = {
+        "service": "heber-catalog",
+        "coverage_age_seconds": age,
+        "last_updated_ts": last_updated.isoformat() if last_updated else None,
+        "rows": rows,
+        "max_age_seconds": settings.catalog_coverage_max_age_seconds,
+    }
+
+    if age is None or age > settings.catalog_coverage_max_age_seconds:
+        payload["status"] = "stale"
+        return JSONResponse(status_code=503, content=payload)
+
+    payload["status"] = "ok"
+    return JSONResponse(status_code=200, content=payload)
 
 
 # Dataset endpoints

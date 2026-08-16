@@ -2,7 +2,14 @@
 
 Scans recent Gold feature partitions for rows with null enrichment fields
 (Greeks, GEX, IV rank, max pain, market tide), re-enriches them via the
-Data Gateway, and patches the parquet files using dedup-on-alert_id.
+Data Gateway, and fills the still-null fields in place.
+
+The patch is strictly additive. Every enrichable field comes from a gateway
+route that answers "as of now", so a re-enrichment can only ever contribute a
+value the row is missing — it can never improve one already captured live at
+alert time. Overwriting is therefore always a loss, whether the fresh value is
+null (stale alert, gateway failure) or a present-day reading stamped onto a
+past observation.
 """
 
 from __future__ import annotations
@@ -59,40 +66,13 @@ backfill_duration_seconds = Histogram(
 )
 
 
-def _coerce_expiry_to_date(val: object) -> date | None:
-    """Convert an expiry value to a ``datetime.date`` (Arrow ``date32`` on write).
+def _is_null(value: object) -> bool:
+    """Scalar null test covering None, NaN, pd.NA and NaT.
 
-    The live watch writer persists ``expiry`` as a ``date`` (date32); the backfill
-    path must match, or a gold dataset spanning both writers' ``dt=`` partitions
-    raises ``ArrowNotImplementedError: Unsupported cast from int64 to date32`` on
-    read (2026-06-30 incident).
-
-    Handles:
-      - date / datetime objects
-      - ISO date strings  ("2026-04-18")
-      - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
-      - None / NaN        → None
+    Parquet nulls surface as any of those depending on column dtype, and plain
+    truthiness would wrongly treat a legitimate ``0.0`` delta as missing.
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    # datetime is a subclass of date — check it first.
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, int | float):
-        cleaned = str(int(val))
-    elif isinstance(val, str):
-        cleaned = val.strip().replace("-", "")
-    else:
-        return None
-    if not cleaned:
-        return None
-    try:
-        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
-    except ValueError:
-        logger.warning("Cannot coerce expiry to date", raw_value=val)
-        return None
+    return bool(pd.isna(value))
 
 
 def _is_polars_panic_exception(exc: BaseException) -> bool:
@@ -164,14 +144,15 @@ class EnrichmentBackfillScanner:
             Summary dict with scanned, patched, and failed counts.
         """
         start = time.monotonic()
-        summary = {"scanned": 0, "patched": 0, "failed": 0}
+        summary = {"scanned": 0, "patched": 0, "failed": 0, "skipped": 0}
 
         df = await asyncio.to_thread(self._read_recent_partitions)
         if df is None or df.empty:
             logger.debug("Enrichment backfill: no partitions found")
             return summary
 
-        incomplete = self._find_incomplete_rows(df)
+        max_age = self.feature_extractor.live_enrichment_max_age
+        incomplete = self._find_incomplete_rows(df, max_age)
         summary["scanned"] = len(df)
         backfill_scanned_total.inc(len(df))
 
@@ -193,17 +174,17 @@ class EnrichmentBackfillScanner:
 
         for row in batch.to_dict(orient="records"):
             try:
-                updated = await self._re_enrich_row(row)
-                if updated is not None:
-                    await asyncio.to_thread(
-                        self._patch_partition,
-                        updated,
-                    )
+                filled = await self._re_enrich_row(row, max_age)
+                if filled is None:
+                    summary["failed"] += 1
+                    backfill_failed_total.inc()
+                elif not filled:
+                    summary["skipped"] += 1
+                elif await asyncio.to_thread(self._patch_partition, row, filled):
                     summary["patched"] += 1
                     backfill_patched_total.inc()
                 else:
-                    summary["failed"] += 1
-                    backfill_failed_total.inc()
+                    summary["skipped"] += 1
             except Exception:
                 logger.warning(
                     "Re-enrichment failed for row",
@@ -224,8 +205,13 @@ class EnrichmentBackfillScanner:
         return summary
 
     def _read_recent_partitions(self) -> pd.DataFrame | None:
-        """Read Gold feature parquet for the last N days."""
-        today = date.today()
+        """Read Gold feature parquet for the last N days.
+
+        Partitions are enumerated in UTC because that is what the writer's
+        ``dt=`` derivation uses; a local date would drift off the current
+        partition whenever the two calendars disagree.
+        """
+        today = datetime.now(UTC).date()
         frames: list[pd.DataFrame] = []
 
         for offset in range(self.lookback_days):
@@ -254,43 +240,71 @@ class EnrichmentBackfillScanner:
         return pd.concat(frames, ignore_index=True)
 
     @staticmethod
-    def _find_incomplete_rows(df: pd.DataFrame) -> pd.DataFrame:
-        """Return rows where at least one enrichable field is null.
+    def _find_incomplete_rows(df: pd.DataFrame, max_age: timedelta | None) -> pd.DataFrame:
+        """Return rows where at least one enrichable field is null and is still fillable.
 
-        Rows flagged ``greeks_no_point_in_time_source`` are excluded: no as-of
-        source exists for them, so re-enriching would either fail again or stamp
-        present-day values onto a past alert. Without this they would be
-        re-selected on every scan cycle forever.
+        Selection fails closed on three counts:
+
+        - Rows older than ``max_age`` are excluded. Past that bound the extractor
+          refuses every live-only step, so re-enrichment cannot contribute a value
+          — it can only return nulls and stale-source flags.
+        - ``max_age is None`` (the extractor's age gate switched off) excludes
+          everything. Without the gate a re-enrichment would stamp present-day
+          market state onto an alert up to ``lookback_days`` old.
+        - Rows with a missing or unparseable ``alert_time`` are excluded, since
+          their age cannot be established.
+        - Future-dated rows are excluded. Flow alerts can carry a timestamp a few
+          seconds ahead of wall clock, and patching one would stamp an
+          availability time earlier than the event it describes.
+
+        Rows flagged ``greeks_no_point_in_time_source`` are excluded for the same
+        reason: no as-of source exists for them.
         """
         from heber.ml.datasets import quality_flag_series
         from heber.watch.features import QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE
 
         available_fields = [f for f in ENRICHABLE_FIELDS if f in df.columns]
-        if not available_fields:
+        if not available_fields or max_age is None or "alert_time" not in df.columns:
             return df.iloc[0:0]
+
+        alert_time = pd.to_datetime(df["alert_time"], utc=True, errors="coerce")
+        age = pd.Timestamp.now(tz=UTC) - alert_time
+        fresh = alert_time.notna() & (age >= pd.Timedelta(0)) & (age <= max_age)
 
         mask = df[available_fields].isna().any(axis=1)
         unrecoverable = quality_flag_series(df).apply(
             lambda flags: QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE in flags
         )
-        return df[mask & ~unrecoverable].reset_index(drop=True)
+        return df[mask & fresh & ~unrecoverable].reset_index(drop=True)
 
-    async def _re_enrich_row(self, row: dict) -> dict | None:
+    async def _re_enrich_row(self, row: dict, max_age: timedelta | None) -> dict | None:
         """Reconstruct a FlowAlertRecord and re-run enrichment.
 
         Returns:
-            Updated feature dict, or None on failure.
+            The enrichable fields the fresh extract can fill (empty when there is
+            nothing to add), or None on failure.
         """
         from heber.models.silver import FlowAlertRecord
         from heber.watch.features import feature_row_for_gold
 
-        alert_time = row.get("alert_time")
-        if isinstance(alert_time, str):
-            alert_time = datetime.fromisoformat(alert_time)
-        if alert_time is None:
-            alert_time = datetime.now(UTC)
-        elif alert_time.tzinfo is None:
-            alert_time = alert_time.replace(tzinfo=UTC)
+        alert_time = pd.to_datetime(row.get("alert_time"), utc=True, errors="coerce")
+        if pd.isna(alert_time) or max_age is None:
+            return {}
+
+        # A batch takes minutes of gateway calls to work through, so a row that
+        # was fresh at selection can cross the bound before its turn. Re-check
+        # here: extracting past the bound yields nulls and stale-source flags
+        # that would misdescribe the values the row already holds.
+        age = pd.Timestamp.now(tz=UTC) - alert_time
+        if age > max_age or age < pd.Timedelta(0):
+            logger.debug(
+                "Skipping re-enrichment: alert outside the live enrichment window",
+                alert_id=row.get("alert_id"),
+                age_seconds=int(age.total_seconds()),
+            )
+            return {}
+
+        alert_time = alert_time.to_pydatetime()
 
         expiry = row.get("expiry")
         if isinstance(expiry, str):
@@ -326,7 +340,7 @@ class EnrichmentBackfillScanner:
             )
 
             features = await self.feature_extractor.extract(record)
-            return feature_row_for_gold(features)
+            fresh = feature_row_for_gold(features)
         except Exception:
             logger.warning(
                 "Failed to re-enrich row",
@@ -336,33 +350,96 @@ class EnrichmentBackfillScanner:
             )
             return None
 
-    def _patch_partition(self, updated_row: dict) -> None:
-        """Write updated feature row back to parquet using dedup-on-alert_id.
+        # Only the enrichable whitelist crosses over, and only where the row is
+        # actually missing a value. Everything else the fresh extract carries is
+        # either identity/source data reconstructed from this very row (with
+        # fabricated defaults where the row was null) or a present-day reading
+        # that must not displace what was captured at alert time.
+        return {
+            field_: fresh[field_]
+            for field_ in ENRICHABLE_FIELDS
+            if field_ in fresh and not _is_null(fresh[field_]) and _is_null(row.get(field_))
+        }
 
-        Rows arrive from ``_re_enrich_row`` already normalized by
-        ``feature_row_for_gold``, so the Gold contract fields are present.
+    def _patch_partition(self, row: dict, filled: dict) -> bool:
+        """Fill the row's still-null enrichment fields in place.
+
+        The read-modify-write runs under the same partition lock the canonical
+        writer uses, and re-checks nullness against the on-disk row rather than
+        the scan snapshot — a live write for the same ``alert_id`` can land in
+        the minutes between the two, and must not be reverted.
+
+        Returns:
+            True when the partition was rewritten.
         """
-        from heber.ml.datasets import persist_features_to_gold
+        from filelock import FileLock, Timeout
 
-        features_df = pd.DataFrame([updated_row])
+        from heber.ml.datasets import _atomic_write_parquet
 
-        # Coerce alert_time to datetime if needed
-        if "alert_time" in features_df.columns:
-            features_df["alert_time"] = pd.to_datetime(features_df["alert_time"], utc=True)
+        alert_id = row.get("alert_id")
+        dt = pd.to_datetime(row["alert_time"], utc=True).date()
+        out_file = self.features_output_path / f"dt={dt:%Y-%m-%d}" / "data.parquet"
+        lock_file = out_file.with_suffix(".parquet.lock")
 
-        # Coerce expiry to a date (date32) — matches the live watch writer so a
-        # gold dataset spanning live + backfill partitions reads cleanly.
-        # Enrichment returns date strings like "2026-04-18" or "20260418".
-        if "expiry" in features_df.columns:
-            features_df["expiry"] = features_df["expiry"].apply(_coerce_expiry_to_date)
+        try:
+            with FileLock(lock_file, timeout=10):
+                if not out_file.exists():
+                    return False
 
-        # Coerce ts_event / ts_available to datetime if present as strings
-        for ts_col in ("ts_event", "ts_available"):
-            if ts_col in features_df.columns:
-                features_df[ts_col] = pd.to_datetime(features_df[ts_col], utc=True)
+                current = pd.read_parquet(out_file)
+                if "ts_available" not in current.columns:
+                    # Without an availability column the fill could never be held
+                    # back from a point-in-time read, so leave the row alone.
+                    logger.warning(
+                        "Skipping backfill patch: partition has no ts_available column",
+                        alert_id=alert_id,
+                        path=str(out_file),
+                    )
+                    return False
 
-        persist_features_to_gold(
-            features_df=features_df,
-            output_path=self.features_output_path,
-            partition_col="alert_time",
+                targets = current.index[current["alert_id"] == alert_id]
+                if targets.empty:
+                    logger.warning(
+                        "Backfill target row vanished from partition",
+                        alert_id=alert_id,
+                        path=str(out_file),
+                    )
+                    return False
+
+                applied: list[str] = []
+                for idx in targets:
+                    for field_, value in filled.items():
+                        if field_ in current.columns and _is_null(current.at[idx, field_]):
+                            current.at[idx, field_] = value
+                            applied.append(field_)
+
+                if not applied:
+                    return False
+
+                # A value fetched now only becomes queryable now. Keeping the
+                # original ts_available would backdate it and reintroduce the
+                # look-ahead the zero-leakage contract exists to prevent. It is
+                # clamped to the event time so the Gold invariant
+                # ts_available >= ts_event holds even for a future-dated alert.
+                now = pd.Timestamp.now(tz=UTC)
+                event_col = "ts_event" if "ts_event" in current.columns else "alert_time"
+                for idx in targets:
+                    event = pd.to_datetime(current.at[idx, event_col], utc=True, errors="coerce")
+                    current.at[idx, "ts_available"] = now if pd.isna(event) else max(now, event)
+
+                _atomic_write_parquet(current, out_file)
+        except Timeout:
+            logger.warning(
+                "Could not acquire partition lock, skipping backfill patch",
+                alert_id=alert_id,
+                path=str(out_file),
+            )
+            return False
+
+        logger.info(
+            "Backfilled enrichment fields",
+            alert_id=alert_id,
+            fields=sorted(set(applied)),
+            path=str(out_file),
         )
+        return True
