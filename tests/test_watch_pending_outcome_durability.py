@@ -98,6 +98,10 @@ class _FakePipeline:
         self._ops.append(("sadd", key, values))
         return self
 
+    def srem(self, key: str, value: str | bytes) -> _FakePipeline:
+        self._ops.append(("srem", key, (value,)))
+        return self
+
     def execute(self) -> None:
         for op, key, *rest in self._ops:
             if op == "set":
@@ -106,7 +110,29 @@ class _FakePipeline:
             elif op == "sadd":
                 (values,) = rest
                 self._redis.sadd(key, *values)
+            elif op == "srem":
+                (values,) = rest
+                self._redis.srem(key, *values)
         self._ops = []
+
+
+class _BoomPipeline:
+    """A pipeline whose execute() fails before applying anything — models a
+    connection drop between queuing commands and the server ever seeing
+    EXEC, so nothing in the batch takes effect.
+    """
+
+    def set(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
+        return self
+
+    def sadd(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
+        return self
+
+    def srem(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
+        return self
+
+    def execute(self) -> None:
+        raise ConnectionError("redis unreachable")
 
 
 class _CalendarStub:
@@ -240,3 +266,69 @@ async def test_write_failure_does_not_permanently_lose_the_label(
     assert rows.iloc[0]["watch_id"] == watch.watch_id
 
     assert manager.get_pending_outcomes() == [], "cleared once durably written"
+
+
+@pytest.mark.unit
+def test_pipeline_failure_leaves_watch_active_instead_of_done_but_unstaged() -> None:
+    """Completing a watch and staging its outcome must be one atomic step.
+
+    Before this, complete_watch and stage_pending_outcome were separate
+    writes: a crash between them left the watch off the active set with no
+    trace of its outcome anywhere retryable — done, but unfindable. If the
+    Redis transaction that does both never lands, the watch must come back
+    unchanged (still WATCHING, still active) so the next checker pass
+    retries it from scratch, rather than being half-completed.
+    """
+    manager = _make_manager()
+    watch = _create_already_expired_watch(manager)
+    assert watch is not None
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    manager.redis.pipeline = lambda: _BoomPipeline()  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectionError):
+        checker.check_all()
+
+    active = manager.get_active_watches()
+    assert [w.watch_id for w in active] == [watch.watch_id], "must stay retryable, not vanish"
+    assert manager.get_pending_outcomes() == []
+
+
+@pytest.mark.unit
+async def test_crash_before_clear_does_not_duplicate_the_row_on_retry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: ANN001
+) -> None:
+    """A crash between a successful Gold write and clearing its pending
+    entry must not produce a duplicate row when the still-pending outcome
+    is retried on the next tick (or after a restart).
+    """
+    manager = _make_manager()
+    watch = _create_already_expired_watch(manager)
+    assert watch is not None
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+    writer = LabelWriter(output_path=tmp_path)
+    service = _make_service(manager, checker, writer)
+
+    original_clear = manager.clear_pending_outcome
+    manager.clear_pending_outcome = lambda watch_id: None  # type: ignore[method-assign]
+
+    # Tick 1: writes successfully, then "crashes" before the clear lands.
+    await _run_one_tick(service, monkeypatch)
+
+    committed = list(tmp_path.rglob("*.parquet"))
+    assert len(committed) == 1
+    assert [o.watch_id for o in manager.get_pending_outcomes()] == [watch.watch_id]
+
+    # "Restart": clear works again, and the still-pending outcome is retried.
+    manager.clear_pending_outcome = original_clear
+    writer2 = LabelWriter(output_path=tmp_path)
+    service2 = _make_service(manager, checker, writer2)
+    await _run_one_tick(service2, monkeypatch)
+
+    committed = list(tmp_path.rglob("*.parquet"))
+    assert len(committed) == 1, "retry must overwrite the same file, not add a second one"
+    rows = pd.read_parquet(committed[0])
+    assert len(rows) == 1
+    assert rows.iloc[0]["watch_id"] == watch.watch_id
+    assert manager.get_pending_outcomes() == []

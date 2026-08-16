@@ -57,11 +57,6 @@ class BarrierChecker:
         for watch in active:
             outcome = self.check_watch(watch)
             if outcome:
-                # Stage durably before returning: check_watch() has already
-                # completed the watch and dropped it from the active set, so
-                # this is the last point a crash or downstream write failure
-                # could otherwise lose the label for good.
-                self.manager.stage_pending_outcome(outcome)
                 outcomes.append(outcome)
 
         return outcomes
@@ -116,15 +111,6 @@ class BarrierChecker:
         outcome_return, barrier_time = self._resolve_outcome_return(returns, return_timestamps, bars_to_hit)
         outcome_time = window_end if status == WatchStatus.EXPIRED else (barrier_time or now)
 
-        # Complete the watch
-        self.manager.complete_watch(
-            watch.watch_id,
-            status,
-            outcome_return,
-            bars_to_hit,
-            outcome_time=outcome_time,
-        )
-
         outcome = self._build_outcome(
             watch,
             status,
@@ -135,6 +121,17 @@ class BarrierChecker:
             mae,
             alert_time,
             window_end,
+        )
+
+        # Complete the watch and durably stage its outcome atomically — see
+        # WatchManager.complete_watch_and_stage_outcome.
+        self.manager.complete_watch_and_stage_outcome(
+            watch,
+            status,
+            outcome_return,
+            bars_to_hit,
+            outcome_time,
+            outcome,
         )
 
         logger.info(
@@ -182,14 +179,7 @@ class BarrierChecker:
             return None
 
         bars_to_hit = len(snapshots)
-        self.manager.complete_watch(
-            watch.watch_id,
-            WatchStatus.EXPIRED,
-            0.0,
-            bars_to_hit,
-            outcome_time=window_end,
-        )
-        return self._build_outcome(
+        outcome = self._build_outcome(
             watch,
             WatchStatus.EXPIRED,
             window_end,
@@ -200,6 +190,15 @@ class BarrierChecker:
             alert_time,
             window_end,
         )
+        self.manager.complete_watch_and_stage_outcome(
+            watch,
+            WatchStatus.EXPIRED,
+            0.0,
+            bars_to_hit,
+            window_end,
+            outcome,
+        )
+        return outcome
 
     def _handle_no_snapshots(
         self,
@@ -212,14 +211,7 @@ class BarrierChecker:
         if now < window_end:
             return None
 
-        self.manager.complete_watch(
-            watch.watch_id,
-            WatchStatus.EXPIRED,
-            0.0,
-            bars_to_hit=0,
-            outcome_time=window_end,
-        )
-        return self._build_outcome(
+        outcome = self._build_outcome(
             watch,
             WatchStatus.EXPIRED,
             window_end,
@@ -230,6 +222,15 @@ class BarrierChecker:
             alert_time,
             window_end,
         )
+        self.manager.complete_watch_and_stage_outcome(
+            watch,
+            WatchStatus.EXPIRED,
+            0.0,
+            0,
+            window_end,
+            outcome,
+        )
+        return outcome
 
     @staticmethod
     def _resolve_outcome_return(

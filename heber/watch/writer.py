@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -128,14 +126,27 @@ class LabelWriter:
         )
 
     def _write_to_parquet(self, df: pd.DataFrame) -> None:
-        """Write directly to Parquet files."""
-        # Partition by date.
+        """Write directly to Parquet files.
+
+        One file per outcome, named deterministically by watch_id rather than
+        a per-flush timestamp+random suffix: retrying the exact same outcome
+        (a pending entry that was written successfully but never cleared,
+        e.g. because the process crashed in between) overwrites its own file
+        with the same content instead of creating a duplicate row under a
+        different filename. That's what makes it safe for the caller to
+        retry a pending outcome without knowing whether it already landed.
+        """
         # Stage writes to temp files first so a mid-flush failure does not
         # partially commit some partitions and duplicate rows on retry.
         write_df = df.copy()
         write_df["_date"] = pd.to_datetime(write_df["ts_event"]).dt.date
         staged_files: list[tuple[Path, Path, int]] = []
-        promoted_files: list[Path] = []
+        # (final_file, already_existed_before_this_flush) — only files this
+        # flush newly created get rolled back on a later failure; a file
+        # that already held a prior successful write of the same watch_id
+        # is left as-is, since deleting it would destroy durable data over
+        # a failure in an unrelated row of this batch.
+        promoted_files: list[tuple[Path, bool]] = []
         current_tmp_file: Path | None = None
 
         try:
@@ -149,30 +160,33 @@ class LabelWriter:
                 )
                 partition_path.mkdir(parents=True, exist_ok=True)
 
-                ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-                # Include a unique suffix so multiple flushes within the same timestamp cannot overwrite files.
-                final_file_path = partition_path / f"part-{ts}-{uuid.uuid4().hex[:8]}.parquet"
-                current_tmp_file = partition_path / f".{final_file_path.name}.tmp"
+                for idx in group.index:
+                    row_df = group.loc[[idx]].drop(columns=["_date"])
+                    watch_id = str(row_df["watch_id"].iloc[0])
+                    if not watch_id or "/" in watch_id or watch_id in (".", ".."):
+                        raise ValueError(f"Unsafe watch_id for Gold filename: {watch_id!r}")
 
-                write_group = group.drop(columns=["_date"])
+                    final_file_path = partition_path / f"outcome-{watch_id}.parquet"
+                    current_tmp_file = partition_path / f".outcome-{watch_id}.parquet.tmp"
 
-                # Audit for unexpected null values before writing
-                from heber.quality.write_audit import audit_null_fields
+                    # Audit for unexpected null values before writing
+                    from heber.quality.write_audit import audit_null_fields
 
-                audit_null_fields(
-                    write_group,
-                    layer="gold",
-                    dataset=self.dataset,
-                    context={"date": str(dt), "path": str(partition_path)},
-                )
+                    audit_null_fields(
+                        row_df,
+                        layer="gold",
+                        dataset=self.dataset,
+                        context={"date": str(dt), "path": str(partition_path)},
+                    )
 
-                write_group.to_parquet(current_tmp_file, index=False, compression="snappy")
-                staged_files.append((current_tmp_file, final_file_path, len(group)))
-                current_tmp_file = None
+                    row_df.to_parquet(current_tmp_file, index=False, compression="snappy")
+                    staged_files.append((current_tmp_file, final_file_path, 1))
+                    current_tmp_file = None
 
             for tmp_file, final_file, rows in staged_files:
+                already_existed = final_file.exists()
                 tmp_file.replace(final_file)
-                promoted_files.append(final_file)
+                promoted_files.append((final_file, already_existed))
                 logger.debug("Wrote partition", path=str(final_file), rows=rows)
 
         except Exception:
@@ -183,16 +197,23 @@ class LabelWriter:
     def _cleanup_staged_files(
         current_tmp_file: Path | None,
         staged_files: list[tuple[Path, Path, int]],
-        promoted_files: list[Path],
+        promoted_files: list[tuple[Path, bool]],
     ) -> None:
-        """Remove staged and promoted files on write failure."""
+        """Remove staged and promoted files on write failure.
+
+        A promoted file that already existed before this flush (an
+        idempotent overwrite of a prior successful write) is left in
+        place — it isn't this flush's own contribution to roll back, and
+        deleting it would destroy already-durable data over a failure
+        unrelated to that row.
+        """
         if current_tmp_file is not None and current_tmp_file.exists():
             current_tmp_file.unlink()
         for tmp_file, _final_file, _rows in staged_files:
             if tmp_file.exists():
                 tmp_file.unlink()
-        for committed_file in reversed(promoted_files):
-            if committed_file.exists():
+        for committed_file, already_existed in reversed(promoted_files):
+            if not already_existed and committed_file.exists():
                 committed_file.unlink()
 
 

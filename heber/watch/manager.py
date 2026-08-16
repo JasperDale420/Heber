@@ -425,14 +425,7 @@ class WatchManager:
         if not watch:
             return None
 
-        normalized_outcome_time = outcome_time
-        if normalized_outcome_time is None:
-            normalized_outcome_time = datetime.now(UTC)
-        elif normalized_outcome_time.tzinfo is None:
-            normalized_outcome_time = normalized_outcome_time.replace(tzinfo=UTC)
-        else:
-            normalized_outcome_time = normalized_outcome_time.astimezone(UTC)
-
+        normalized_outcome_time = self._normalize_outcome_time(outcome_time)
         normalized_outcome_return = self._coerce_finite_outcome_return(outcome_return)
 
         watch.status = status
@@ -455,6 +448,65 @@ class WatchManager:
             )
 
         return watch
+
+    def complete_watch_and_stage_outcome(
+        self,
+        watch: AlertWatch,
+        status: WatchStatus,
+        outcome_return: float,
+        bars_to_hit: int | None,
+        outcome_time: datetime | None,
+        outcome: WatchOutcome,
+    ) -> AlertWatch:
+        """Atomically complete a watch and durably stage its Gold outcome.
+
+        Completing a watch (leaving the active set) and staging its outcome
+        for durable retry used to be two separate writes with an unprotected
+        gap between them: a crash in that gap left the watch complete with
+        its outcome nowhere retryable — done, but unfindable. Both now go
+        through one Redis pipeline, so either both land or neither does; on
+        failure the watch is untouched and stays active for the next
+        checker pass to retry from scratch.
+
+        Unlike complete_watch, this is only ever called with a terminal
+        status, so both indexes are unconditionally removed rather than
+        conditionally kept (no WATCHING case to preserve).
+        """
+        normalized_outcome_time = self._normalize_outcome_time(outcome_time)
+        normalized_outcome_return = self._coerce_finite_outcome_return(outcome_return)
+
+        watch.status = status
+        watch.outcome_time = normalized_outcome_time
+        watch.outcome_return = normalized_outcome_return
+        watch.bars_to_hit = bars_to_hit
+        watch.updated_at = datetime.now(UTC)
+
+        pipeline = self.redis.pipeline()
+        pipeline.set(WatchKeys.watch_key(watch.watch_id), watch.model_dump_json())
+        pipeline.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
+        pipeline.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch.watch_id)
+        pipeline.set(WatchKeys.pending_outcome_key(outcome.watch_id), outcome.model_dump_json())
+        pipeline.sadd(WatchKeys.PENDING_OUTCOMES, outcome.watch_id)
+        pipeline.execute()
+
+        if status != WatchStatus.EXPIRED:
+            logger.info(
+                "Completed alert watch",
+                watch_id=watch.watch_id,
+                status=status.value,
+                outcome_return=normalized_outcome_return,
+            )
+
+        return watch
+
+    @staticmethod
+    def _normalize_outcome_time(outcome_time: datetime | None) -> datetime:
+        """Normalize a watch's outcome time to a tz-aware UTC datetime."""
+        if outcome_time is None:
+            return datetime.now(UTC)
+        if outcome_time.tzinfo is None:
+            return outcome_time.replace(tzinfo=UTC)
+        return outcome_time.astimezone(UTC)
 
     def stage_pending_outcome(self, outcome: WatchOutcome) -> None:
         """Durably persist a completed watch's outcome before it's written to Gold.
