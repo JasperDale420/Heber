@@ -21,11 +21,17 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from heber.ml.datasets import quality_flag_series
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 90  # Rolling window for base rate computation
+
+# Stamped by the label-window-truncation migration on labels_alert_barriers
+# rows resolved against a collapsed barrier-check window. Not yet exported
+# as a shared constant anywhere on this branch — mirrors the literal value.
+QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
 
 EXPECTED_OUTPUT_COLUMNS = [
     "instrument_key",
@@ -117,6 +123,20 @@ def compute_ticker_base_rates(
         return empty_result
 
     df = labels.copy()
+
+    # Drop rows whose label was resolved against a truncated barrier-check
+    # window (MarketCalendar.add_trading_hours session-boundary bug) — their
+    # hit_tp_first reflects a ~3-5h window, not the alert's real horizon, and
+    # must not pollute this ticker's win-rate feature. Mirrors the exclusion
+    # MetaLabelDatasetBuilder already applies to the same flag as a training
+    # target.
+    flagged = quality_flag_series(df).apply(lambda flags: QUALITY_FLAG_LABEL_WINDOW_TRUNCATED in flags)
+    dropped = int(flagged.sum())
+    if dropped:
+        logger.warning("ticker_base_rates_dropped_truncated_labels", rows=dropped, remaining=len(df) - dropped)
+    df = df.loc[~flagged]
+    if df.empty:
+        return empty_result
 
     # Normalize ticker column
     df["instrument_key"] = _extract_ticker_column(df)
