@@ -326,6 +326,50 @@ class TestScanAndBackfill:
         assert summary["failed"] == 1
 
     @pytest.mark.asyncio()
+    async def test_malformed_expiry_is_rejected_not_truncated(
+        self, tmp_features_dir: Path, mock_extractor: AsyncMock, mock_calendar: MagicMock
+    ) -> None:
+        """A malformed stored expiry must not be silently truncated into a fake
+        clean date before re-enrichment fetches Greeks for the wrong contract."""
+        row = _make_feature_row("a1", complete=False, partial_fields={"expiry": "2026-02-20junk"})
+        today = datetime.now(UTC).date()
+        _write_partition(tmp_features_dir, today, [row])
+
+        scanner = EnrichmentBackfillScanner(
+            feature_extractor=mock_extractor,
+            features_output_path=tmp_features_dir,
+            lookback_days=3,
+            calendar=mock_calendar,
+        )
+
+        summary = await scanner.scan_and_backfill()
+
+        mock_extractor.extract.assert_not_awaited()
+        assert summary["failed"] == 1
+        assert summary["patched"] == 0
+
+    @pytest.mark.asyncio()
+    async def test_missing_expiry_is_rejected_not_fabricated_as_today(
+        self, tmp_features_dir: Path, mock_extractor: AsyncMock, mock_calendar: MagicMock
+    ) -> None:
+        """A missing stored expiry must not be fabricated as date.today()."""
+        row = _make_feature_row("a1", complete=False, partial_fields={"expiry": None})
+        today = datetime.now(UTC).date()
+        _write_partition(tmp_features_dir, today, [row])
+
+        scanner = EnrichmentBackfillScanner(
+            feature_extractor=mock_extractor,
+            features_output_path=tmp_features_dir,
+            lookback_days=3,
+            calendar=mock_calendar,
+        )
+
+        summary = await scanner.scan_and_backfill()
+
+        mock_extractor.extract.assert_not_awaited()
+        assert summary["failed"] == 1
+
+    @pytest.mark.asyncio()
     async def test_batch_size_limits_processing(
         self, tmp_features_dir: Path, mock_extractor: AsyncMock, mock_calendar: MagicMock
     ) -> None:

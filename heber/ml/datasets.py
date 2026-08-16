@@ -6,6 +6,7 @@ Builds training datasets by joining captured features with outcomes.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ import structlog
 
 from heber.config import settings
 from heber.reader import HeberReader
+from heber.writer.utils import fsync_directory, publish_parquet_atomically
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -35,6 +37,8 @@ DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
 
+_EXACT_EXPIRY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$", re.ASCII)
+
 
 def coerce_expiry_to_date(val: object) -> date | None:
     """Convert an expiry value to a ``datetime.date`` (Arrow ``date32`` on write).
@@ -44,8 +48,17 @@ def coerce_expiry_to_date(val: object) -> date | None:
       - ISO date strings  ("2026-04-18")
       - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
       - None / NaN / unparseable → None
+
+    Only an exact ASCII match is accepted — a fractional number, a string
+    with extra leading/trailing characters or digits, or one built from
+    non-ASCII decimal digits (``\\d`` without ``re.ASCII`` matches those
+    too), is rejected rather than truncated to the first 8 digits.
+    Truncating would fabricate a real-looking ``date32`` value with no
+    trace the input was malformed, which is worse than the null a reject
+    produces: row-completeness checks catch nulls, not wrong-looking-fine
+    dates.
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if val is None or val is pd.NaT or (isinstance(val, float) and pd.isna(val)):
         return None
     # datetime is a subclass of date — check it first.
     if isinstance(val, datetime):
@@ -53,15 +66,21 @@ def coerce_expiry_to_date(val: object) -> date | None:
     if isinstance(val, date):
         return val
     if isinstance(val, int | float):
+        if isinstance(val, float) and not val.is_integer():
+            logger.warning("Cannot coerce expiry to date", raw_value=val)
+            return None
         cleaned = str(int(val))
     elif isinstance(val, str):
-        cleaned = val.strip().replace("-", "")
+        cleaned = val.strip()
     else:
         return None
     if not cleaned:
         return None
+    if not _EXACT_EXPIRY_RE.match(cleaned):
+        logger.warning("Cannot coerce expiry to date", raw_value=val)
+        return None
     try:
-        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
+        return datetime.strptime(cleaned.replace("-", ""), "%Y%m%d").date()
     except ValueError:
         logger.warning("Cannot coerce expiry to date", raw_value=val)
         return None
@@ -113,9 +132,14 @@ def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         df.to_parquet(temp_path, index=False)
-        os.replace(temp_path, out_file)
-    finally:
+    except BaseException:
         temp_path.unlink(missing_ok=True)
+        raise
+    publish_parquet_atomically(temp_path, out_file, expected_rows=len(df))
+    # Flush the publish's own directory entry too, so the rename that
+    # displaces any existing partition (the merge-and-rewrite callers of this
+    # function) cannot be lost on this non-journaling volume.
+    fsync_directory(out_file.parent)
 
 
 @dataclass
@@ -856,6 +880,7 @@ def persist_features_to_gold(
     df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date
+    failed_dates: list[str] = []
     for dt_val in df["dt"].unique():
         partition_df = df[df["dt"] == dt_val].drop(columns=["dt"]).reset_index(drop=True)
         dt_str = pd.Timestamp(dt_val).strftime("%Y-%m-%d")
@@ -941,6 +966,22 @@ def persist_features_to_gold(
                 lock_file=str(lock_file),
             )
             continue
+        except OSError as write_exc:
+            # A durability failure on one date's partition (empty/truncated
+            # staged file, row-count mismatch, or a post-publish fsync that
+            # failed after the rename itself already landed) must not discard
+            # every other date already queued in this call. It also must not
+            # be silently swallowed: raised once as an aggregate failure below
+            # so a caller can't mistake a partial batch for a complete one.
+            logger.error(
+                "Failed to durably persist features partition for this date",
+                date=dt_str,
+                path=str(out_file),
+                error=str(write_exc),
+                exc_info=True,
+            )
+            failed_dates.append(dt_str)
+            continue
 
         logger.info(
             "Persisted features partition",
@@ -948,3 +989,6 @@ def persist_features_to_gold(
             rows=len(partition_df),
             path=str(out_file),
         )
+
+    if failed_dates:
+        raise OSError(f"Failed to persist Gold features for {len(failed_dates)} date(s): {failed_dates}")
