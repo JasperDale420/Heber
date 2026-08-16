@@ -340,9 +340,16 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "occ_symbol": outcome.occ_symbol,
         "underlying": outcome.underlying,
         "put_call": outcome.put_call,
-        # Timing
+        # Timing. ts_available is stamped now (write time), not from
+        # outcome.outcome_time: for a watch recovered from a restart backlog,
+        # outcome_time (window_end) can be hours or days stale, and a value
+        # only becomes queryable once it's actually written -- backdating it
+        # would let a point-in-time reader see a row before it existed.
+        # Clamped to alert_time so a future-dated/clock-skewed alert can't
+        # produce ts_available < ts_event, mirroring the same guard already
+        # applied in heber/watch/backfill_scanner.py.
         "ts_event": outcome.alert_time,
-        "ts_available": outcome.outcome_time,
+        "ts_available": max(datetime.now(UTC), outcome.alert_time),
         "horizon": outcome.horizon,
         # THE LABEL
         "outcome": outcome_value,
