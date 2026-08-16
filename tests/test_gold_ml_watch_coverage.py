@@ -372,6 +372,11 @@ class TestMetaLabelDatasetBuilderBuildFromParquet:
                 "bars_to_hit": [3, 5, None],
                 "trading_minutes_to_hit": [30, 60, None],
                 "hit_tp_first": [1, 0, 0],
+                # Written on every label row since the first version of the
+                # writer; the builder refuses outcomes whose observation window
+                # it cannot check against their horizon.
+                "horizon": ["swing", "swing", "swing"],
+                "window_duration_hours": [448.0, 448.0, 448.0],
             }
         )
 

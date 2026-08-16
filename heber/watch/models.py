@@ -202,25 +202,80 @@ class WatchKeys:
         return cls.SNAPSHOTS.format(watch_id=watch_id)
 
 
+# The row's observation window closed before its horizon's nominal span had
+# elapsed, so its outcome describes a shorter horizon than the one it is filed
+# under. `expired` in particular means "no barrier touched in the truncated
+# window", not "no barrier touched in the nominal one"; a barrier that was
+# touched is a real touch, but the touch population is selected on happening
+# before the early close.
+QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
+
+# One regular XNYS session. `max_duration_hours` below is spent by
+# `MarketCalendar.add_trading_hours` at this rate.
+TRADING_HOURS_PER_SESSION = 6.5
+
 # Lifetime of the per-alert claim that keeps a re-delivered alert from minting a
-# second watch. The longest window (LEAP: 720 *trading* hours) is ~111 sessions,
-# spanning roughly 156 calendar days; 270 days clears that plus recovery margin
-# while still letting the keys expire instead of accumulating forever.
+# second watch. The longest window (LEAP: 30 trading days, 195 trading hours) is
+# 30 sessions, spanning roughly 42 calendar days; 270 days clears that plus a
+# large recovery margin while still letting the keys expire instead of
+# accumulating forever. (Before the horizon-units fix below, LEAP's raw
+# max_duration_hours of 720 was being spent as if it were trading hours,
+# stretching the window to ~111 sessions / ~156 calendar days — this TTL predates
+# that fix and was sized for it, so the margin is now considerably wider than
+# the reasoning above requires.)
 ALERT_CLAIM_TTL_SECONDS = 270 * 24 * 3600
 
 
-# Polling configuration per horizon
+# Polling configuration per horizon.
+#
+# `max_duration_hours` is in *trading* hours, the unit add_trading_hours spends.
+# These were previously 120 and 720 — 5 x 24 and 30 x 24, i.e. calendar hours —
+# which the calendar then spent at 6.5 hours per session, making a SWING window
+# 18.5 sessions (~26 calendar days) and a LEAP window 110.8 sessions (~5 months).
+# Both routinely outlived the contract being watched, since SWING alerts are
+# 3-21 DTE and LEAP 22+. The day counts are now expressed in sessions.
+#
+# Changing these changes the horizon every future label answers. Rows already
+# written carry `label_window_truncated` in `quality_flags`, so lowering the
+# nominal does not un-exclude them.
 POLL_CONFIG = {
     WatchHorizon.INTRADAY: {
         "interval_seconds": 300,  # 5 minutes
-        "max_duration_hours": 4,
+        "max_duration_hours": 4,  # most of one session
     },
     WatchHorizon.SWING: {
         "interval_seconds": 900,  # 15 minutes
-        "max_duration_hours": 120,  # 5 days
+        "max_duration_hours": 5 * TRADING_HOURS_PER_SESSION,  # 5 trading days
     },
     WatchHorizon.LEAP: {
         "interval_seconds": 3600,  # 1 hour
-        "max_duration_hours": 720,  # 30 days
+        "max_duration_hours": 30 * TRADING_HOURS_PER_SESSION,  # 30 trading days
     },
 }
+
+
+def nominal_window_hours(horizon: WatchHorizon | str) -> float:
+    """Trading hours a watch of this horizon is meant to observe.
+
+    Raises ``KeyError`` for an unknown horizon: a window that cannot be measured
+    against anything must not be silently treated as sound.
+    """
+    return float(POLL_CONFIG[WatchHorizon(horizon)]["max_duration_hours"])
+
+
+def window_is_truncated(horizon: WatchHorizon | str, window_duration_hours: float | None) -> bool:
+    """True if this window closed short of what its horizon promised.
+
+    ``window_duration_hours`` is wall-clock ``window_end - alert_time``, and
+    ``add_trading_hours`` only ever advances its cursor — it skips non-trading
+    time rather than consuming it. A correct window therefore always spans at
+    least its nominal count of hours in wall clock, so anything shorter cannot
+    have come from an intact calendar. A window that cannot be checked is
+    reported as truncated rather than assumed sound.
+    """
+    if window_duration_hours is None:
+        return True
+    try:
+        return not window_duration_hours >= nominal_window_hours(horizon)
+    except (KeyError, ValueError):
+        return True
