@@ -157,10 +157,15 @@ def _parquet_files_in(base: Path) -> list[str]:
             continue
         if any(part.startswith("._") for part in f.parts):
             continue
-        # Writers divert rows that failed validation into `_quarantine`
-        # specifically to keep them out of downstream reads; including them
-        # would defeat the quarantine.
-        if "_quarantine" in f.parts:
+        # Underscore-prefixed directories are not data. Writers divert rows
+        # they refuse to serve into a sibling `_quarantine` tree, and
+        # `_locks`/`_source_backup` hold coordination and recovery files, all
+        # of which readers must never walk. Real partitions are `dt=`,
+        # `hour=`, `project=`, `version=`, `feed=`, `instrument_type=` — none
+        # start with an underscore. Checked relative to `base` so a caller
+        # whose own path contains one (e.g. inspecting a quarantine tree
+        # directly) still sees its data.
+        if any(part.startswith("_") for part in f.relative_to(base).parts):
             continue
         try:
             stat_result = f.stat()
@@ -295,7 +300,11 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
             and not base.name.startswith("._")
             and not base.name.endswith(".tmp")
             and not any(part.startswith("._") for part in base.parts)
-            and "_quarantine" not in base.parts
+            # Excluded even when addressed directly: quarantine (and `_locks`,
+            # `_source_backup`) must never be reachable through any read path,
+            # matching the underscore-prefix convention `_parquet_files_in`
+            # applies to the recursive walk below.
+            and not any(part.startswith("_") for part in base.parts)
         ):
             return [str(base)]
         return []

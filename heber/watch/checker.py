@@ -13,9 +13,11 @@ from heber.calendar import MarketCalendar
 from heber.features.templates.alert_labels import SlippageModel
 from heber.watch.manager import WatchManager
 from heber.watch.models import (
+    QUALITY_FLAG_LABEL_WINDOW_TRUNCATED,
     AlertWatch,
     WatchOutcome,
     WatchStatus,
+    window_is_truncated,
 )
 
 logger = structlog.get_logger(__name__)
@@ -79,11 +81,19 @@ class BarrierChecker:
         if not snapshots:
             return self._handle_no_snapshots(watch, now, alert_time, window_end)
 
+        # Only snapshots collected within the watch's own window may decide its outcome —
+        # the check loop runs on an interval, so a snapshot collected after window_end
+        # (before the next check pass marks it EXPIRED) must not win the barrier race.
+        windowed_snapshots = [snap for snap in snapshots if alert_time <= snap.timestamp <= window_end]
+
+        if not windowed_snapshots:
+            return self._handle_no_snapshots(watch, now, alert_time, window_end)
+
         # Build return path
-        returns, return_timestamps = self._build_return_path(snapshots, watch.entry_price)
+        returns, return_timestamps = self._build_return_path(windowed_snapshots, watch.entry_price)
 
         if not returns:
-            return self._handle_no_returns(watch, snapshots, now, alert_time, window_end)
+            return self._handle_no_returns(watch, windowed_snapshots, now, alert_time, window_end)
 
         returns_arr = np.array(returns)
 
@@ -356,4 +366,13 @@ def outcome_to_label_row(outcome: WatchOutcome) -> dict[str, Any]:
         "entry_price": outcome.entry_price,
         "spot_at_alert": outcome.spot_at_alert,
         "window_duration_hours": outcome.window_duration_hours,
+        # Stamped here rather than left to the reader. The meta-label builder
+        # recomputes this, but it is not the only consumer — the ticker base
+        # rates pipeline aggregates these rows straight off the lakehouse — so
+        # a label resolved against a short window has to say so itself.
+        "quality_flags": (
+            [QUALITY_FLAG_LABEL_WINDOW_TRUNCATED]
+            if window_is_truncated(outcome.horizon, outcome.window_duration_hours)
+            else []
+        ),
     }

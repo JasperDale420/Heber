@@ -372,6 +372,11 @@ class TestMetaLabelDatasetBuilderBuildFromParquet:
                 "bars_to_hit": [3, 5, None],
                 "trading_minutes_to_hit": [30, 60, None],
                 "hit_tp_first": [1, 0, 0],
+                # Written on every label row since the first version of the
+                # writer; the builder refuses outcomes whose observation window
+                # it cannot check against their horizon.
+                "horizon": ["swing", "swing", "swing"],
+                "window_duration_hours": [448.0, 448.0, 448.0],
             }
         )
 
@@ -660,6 +665,43 @@ class TestPersistFeaturesToGold:
         persist_features_to_gold(df, tmp_path)
         assert (tmp_path / "dt=2025-01-10" / "data.parquet").exists()
         assert (tmp_path / "dt=2025-01-11" / "data.parquet").exists()
+
+    def test_one_bad_date_does_not_abort_the_rest_of_the_batch(self, tmp_path: Path, monkeypatch):
+        """A durability failure writing one date's partition must not discard
+        every other date already queued in the same call — only filelock.Timeout
+        used to be isolated per-date; a new OSError from the write's own
+        validation (empty/truncated staged file, row-count mismatch) escaped
+        the loop entirely and aborted dates that hadn't failed at all."""
+        df = pd.DataFrame(
+            {
+                "alert_id": ["a1", "a2", "a3"],
+                "alert_time": [
+                    datetime(2025, 1, 10, 10, 0, tzinfo=UTC),
+                    datetime(2025, 1, 11, 10, 0, tzinfo=UTC),
+                    datetime(2025, 1, 12, 10, 0, tzinfo=UTC),
+                ],
+                "feature_x": [1.0, 2.0, 3.0],
+            }
+        )
+
+        real_atomic_write = _atomic_write_parquet
+
+        def failing_on_one_date(partition_df, out_file):
+            if "2025-01-11" in str(out_file):
+                raise OSError("simulated truncated write")
+            real_atomic_write(partition_df, out_file)
+
+        monkeypatch.setattr("heber.ml.datasets._atomic_write_parquet", failing_on_one_date)
+
+        # Every date is still attempted, but the caller must not be told this
+        # succeeded — an aggregate failure is raised only after the loop, so a
+        # bad date can't silently look identical to a fully successful batch.
+        with pytest.raises(OSError, match="2025-01-11"):
+            persist_features_to_gold(df, tmp_path)
+
+        assert (tmp_path / "dt=2025-01-10" / "data.parquet").exists()
+        assert not (tmp_path / "dt=2025-01-11" / "data.parquet").exists()
+        assert (tmp_path / "dt=2025-01-12" / "data.parquet").exists()
 
 
 # ===========================================================================
