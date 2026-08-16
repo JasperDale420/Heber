@@ -432,6 +432,62 @@ def test_checker_uses_window_end_for_expired_outcome_metadata() -> None:
     assert manager.completed[4] == window_end
 
 
+def test_checker_ignores_barrier_hits_from_snapshots_past_window_end() -> None:
+    """A snapshot collected after window_end must not win the barrier race.
+
+    Regression for: the check loop runs on an interval, so a late-arriving
+    snapshot collected between window_end and the next check pass could cross
+    TP/SL and be reported as hit_tp/hit_sl even though the watch's own window
+    never authorised that snapshot. It must expire instead.
+    """
+    now = datetime.now(UTC)
+    alert_time = now - timedelta(hours=2)
+    window_end = now - timedelta(minutes=5)
+    watch = AlertWatch(
+        watch_id="watch-late-snapshot",
+        alert_id="alert-late-snapshot",
+        occ_symbol="AAPL260220C00100000",
+        underlying="AAPL",
+        put_call="C",
+        expiry="2026-02-20",
+        strike=100.0,
+        entry_price=1.0,
+        spot_at_alert=200.0,
+        alert_time=alert_time,
+        window_end=window_end,
+        horizon=WatchHorizon.INTRADAY,
+        tp_threshold=0.25,
+        sl_threshold=0.10,
+    )
+    snapshots = [
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=alert_time + timedelta(minutes=10),
+            mid_px=1.05,  # return 0.05, no barrier hit, still inside the window
+            return_pct=None,
+        ),
+        WatchSnapshot(
+            watch_id=watch.watch_id,
+            occ_symbol=watch.occ_symbol,
+            timestamp=window_end + timedelta(minutes=2),  # collected after window_end
+            mid_px=1.35,  # return 0.35, crosses TP but only outside the window
+            return_pct=None,
+        ),
+    ]
+    manager = _CheckerManagerStub(snapshots)
+    checker = BarrierChecker(manager, calendar=_CalendarStub())
+
+    outcome = checker.check_watch(watch)
+
+    assert outcome is not None
+    assert outcome.status == WatchStatus.EXPIRED
+    assert outcome.outcome_time == window_end
+    assert manager.completed is not None
+    assert manager.completed[1] == WatchStatus.EXPIRED
+    assert manager.completed[4] == window_end
+
+
 def test_checker_expires_watch_without_snapshots_after_window_end() -> None:
     now = datetime.now(UTC)
     alert_time = now - timedelta(hours=3)

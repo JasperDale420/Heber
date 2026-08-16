@@ -81,11 +81,19 @@ class BarrierChecker:
         if not snapshots:
             return self._handle_no_snapshots(watch, now, alert_time, window_end)
 
+        # Only snapshots collected within the watch's own window may decide its outcome —
+        # the check loop runs on an interval, so a snapshot collected after window_end
+        # (before the next check pass marks it EXPIRED) must not win the barrier race.
+        windowed_snapshots = [snap for snap in snapshots if alert_time <= snap.timestamp <= window_end]
+
+        if not windowed_snapshots:
+            return self._handle_no_snapshots(watch, now, alert_time, window_end)
+
         # Build return path
-        returns, return_timestamps = self._build_return_path(snapshots, watch.entry_price)
+        returns, return_timestamps = self._build_return_path(windowed_snapshots, watch.entry_price)
 
         if not returns:
-            return self._handle_no_returns(watch, snapshots, now, alert_time, window_end)
+            return self._handle_no_returns(watch, windowed_snapshots, now, alert_time, window_end)
 
         returns_arr = np.array(returns)
 
