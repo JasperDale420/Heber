@@ -10,7 +10,7 @@ from typing import Any
 import structlog
 
 from heber.calendar import MarketCalendar
-from heber.ops.metrics import record_watch_duplicate_alert_suppressed
+from heber.ops.metrics import record_watch_duplicate_alert_suppressed, record_watch_pending_outcome_corrupt
 from heber.watch.gateway import coerce_optional_float
 from heber.watch.models import (
     ALERT_CLAIM_TTL_SECONDS,
@@ -18,6 +18,7 @@ from heber.watch.models import (
     AlertWatch,
     WatchHorizon,
     WatchKeys,
+    WatchOutcome,
     WatchSnapshot,
     WatchStatus,
 )
@@ -454,6 +455,57 @@ class WatchManager:
             )
 
         return watch
+
+    def stage_pending_outcome(self, outcome: WatchOutcome) -> None:
+        """Durably persist a completed watch's outcome before it's written to Gold.
+
+        The label writer can fail (transient Parquet/filesystem error) after the
+        watch has already been marked complete and dropped from the active set —
+        at that point nothing else will ever recheck it. Staging the outcome here
+        means a failed write is retryable from Redis instead of silently lost,
+        whether the retry happens on the next loop tick or after a restart.
+        """
+        # Pipelined so the JSON write and its set-index entry land atomically —
+        # otherwise a crash between the two calls could leave one without the
+        # other: an un-indexed outcome (invisible to get_pending_outcomes) or
+        # an indexed watch_id with nothing behind it.
+        pipeline = self.redis.pipeline()
+        pipeline.set(WatchKeys.pending_outcome_key(outcome.watch_id), outcome.model_dump_json())
+        pipeline.sadd(WatchKeys.PENDING_OUTCOMES, outcome.watch_id)
+        pipeline.execute()
+
+    def get_pending_outcomes(self) -> list[WatchOutcome]:
+        """Get all outcomes awaiting a durable Gold write."""
+        watch_ids = self.redis.smembers(WatchKeys.PENDING_OUTCOMES)
+        if not watch_ids:
+            return []
+
+        keys = [WatchKeys.pending_outcome_key(self._normalize_redis_id(wid)) for wid in watch_ids]
+        data_list = self.redis.mget(keys)
+
+        outcomes = []
+        for key, data in zip(keys, data_list, strict=False):
+            if data:
+                try:
+                    outcomes.append(WatchOutcome.model_validate_json(data))
+                except Exception as e:
+                    # The watch behind this is already complete and off the
+                    # active set — a corrupt record here is stuck forever
+                    # with nothing else to retry it, so this must be loud
+                    # (not a warning) and counted, not just logged.
+                    record_watch_pending_outcome_corrupt()
+                    logger.error(
+                        "Pending outcome is corrupt and stuck — label will not be written until repaired",
+                        pending_outcome_key=key,
+                        error=str(e),
+                        exc_info=True,
+                    )
+        return outcomes
+
+    def clear_pending_outcome(self, watch_id: str) -> None:
+        """Clear a pending outcome once it has been durably written to Gold."""
+        self.redis.delete(WatchKeys.pending_outcome_key(watch_id))
+        self.redis.srem(WatchKeys.PENDING_OUTCOMES, watch_id)
 
     def add_snapshot(self, snapshot: WatchSnapshot) -> None:
         """Add a price snapshot for a watch."""

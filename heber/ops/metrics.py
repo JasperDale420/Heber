@@ -208,6 +208,12 @@ watch_duplicate_alerts_suppressed_total = _get_or_create(
     "Re-delivered alerts that already had a watch and were skipped",
 )
 
+watch_pending_outcome_corrupt_total = _get_or_create(
+    Counter,
+    "heber_watch_pending_outcome_corrupt_total",
+    "Pending watch outcomes that failed to deserialize from the durable outbox and were stuck unwritten",
+)
+
 watch_enrichment_skipped_stale_total = _get_or_create(
     Counter,
     "heber_watch_enrichment_skipped_stale_total",
@@ -476,6 +482,15 @@ def record_watch_watch_created(timestamp_unixtime: float | None = None) -> None:
 def record_watch_duplicate_alert_suppressed() -> None:
     """Record an alert re-delivery that was skipped because a watch already exists."""
     watch_duplicate_alerts_suppressed_total.inc()
+
+
+def record_watch_pending_outcome_corrupt() -> None:
+    """Record a pending outcome that failed to deserialize and was left stuck.
+
+    The watch it belongs to is already complete and off the active set, so this
+    is the only remaining signal that a label needs manual recovery.
+    """
+    watch_pending_outcome_corrupt_total.inc()
 
 
 def record_watch_poll_cycle(status: str, timestamp_unixtime: float | None = None) -> None:

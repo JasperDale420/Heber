@@ -364,16 +364,32 @@ class WatchService:
         )
 
     async def _check_and_write_loop(self) -> None:
-        """Periodically check for completed watches and write labels."""
+        """Periodically check for completed watches and write labels.
+
+        Outcomes are durably staged in Redis by BarrierChecker as soon as
+        they're computed (see BarrierChecker.check_all), so a failed Gold
+        write here — or a crash before the next tick — does not lose the
+        label. Every iteration retries whatever is still pending, not just
+        outcomes discovered this tick, which is also what recovers a batch
+        left over from before a restart.
+        """
         import asyncio
 
         while self._running:
             try:
-                outcomes = await asyncio.to_thread(self.checker.check_all)
+                await asyncio.to_thread(self.checker.check_all)
 
-                if outcomes:
-                    self.writer.write_outcomes(outcomes)
-                    logger.info("Wrote outcomes", count=len(outcomes))
+                pending = await asyncio.to_thread(self.manager.get_pending_outcomes)
+                if pending:
+                    # Reset first: the buffer can still hold rows from a
+                    # previous failed flush, and `pending` already includes
+                    # those same watch_ids (they're only cleared below on
+                    # success) — appending on top would duplicate them.
+                    self.writer._buffer = []
+                    self.writer.write_outcomes(pending)
+                    for outcome in pending:
+                        await asyncio.to_thread(self.manager.clear_pending_outcome, outcome.watch_id)
+                    logger.info("Wrote outcomes", count=len(pending))
 
             except Exception as e:
                 logger.error("Check/write error", error=str(e), exc_info=True)

@@ -57,6 +57,11 @@ class BarrierChecker:
         for watch in active:
             outcome = self.check_watch(watch)
             if outcome:
+                # Stage durably before returning: check_watch() has already
+                # completed the watch and dropped it from the active set, so
+                # this is the last point a crash or downstream write failure
+                # could otherwise lose the label for good.
+                self.manager.stage_pending_outcome(outcome)
                 outcomes.append(outcome)
 
         return outcomes
