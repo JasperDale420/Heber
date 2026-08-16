@@ -485,6 +485,91 @@ class TestPredictabilityBounds:
 
 
 # ===========================================================================
+# test_quality_flag_filtering
+# ===========================================================================
+
+
+class TestQualityFlagFiltering:
+    """Rows carrying quality_flags=['label_window_truncated'] must not count.
+
+    These labels were resolved against a collapsed barrier-check window
+    (see MarketCalendar.add_trading_hours session-boundary bug), so their
+    hit_tp_first answers "did TP hit in ~3-5h" rather than the alert's real
+    horizon. MetaLabelDatasetBuilder already excludes them as training
+    targets; ticker_base_rates must exclude them as feature inputs too.
+    """
+
+    def test_flagged_alert_excluded_from_later_windows(self) -> None:
+        """A flagged win must not count as a prior for a later clean alert."""
+        rows = [
+            {
+                "underlying": "AAPL",
+                "ts_event": "2025-06-01",
+                "hit_tp_first": 1,
+                "quality_flags": ["label_window_truncated"],
+            },
+            {"underlying": "AAPL", "ts_event": "2025-06-15", "hit_tp_first": 0},
+        ]
+        labels = _make_labels(rows)
+        result = compute_ticker_base_rates(labels)
+
+        clean_row = result[result["ts_event"] == pd.Timestamp("2025-06-15", tz="UTC")]
+        assert len(clean_row) == 1
+        # The flagged win must not be counted as a prior alert.
+        assert clean_row["ticker_alert_frequency"].iloc[0] == 0
+        assert np.isnan(clean_row["ticker_win_rate_90d"].iloc[0])
+
+    def test_flagged_alert_has_no_own_output_row(self) -> None:
+        """A flagged alert must not produce a ticker_base_rates row itself."""
+        rows = [
+            {
+                "underlying": "AAPL",
+                "ts_event": "2025-06-01",
+                "hit_tp_first": 1,
+                "quality_flags": ["label_window_truncated"],
+            },
+        ]
+        labels = _make_labels(rows)
+        result = compute_ticker_base_rates(labels)
+        assert result.empty
+
+    def test_mixed_flagged_and_clean_priors(self) -> None:
+        """Window stats must only reflect clean priors, not flagged ones."""
+        rows = [
+            {"underlying": "AAPL", "ts_event": "2025-06-01", "hit_tp_first": 1},
+            {
+                "underlying": "AAPL",
+                "ts_event": "2025-06-05",
+                "hit_tp_first": 0,
+                "quality_flags": ["label_window_truncated"],
+            },
+            {"underlying": "AAPL", "ts_event": "2025-06-10", "hit_tp_first": 1},
+            {"underlying": "AAPL", "ts_event": "2025-06-20", "hit_tp_first": 0},
+        ]
+        labels = _make_labels(rows)
+        result = compute_ticker_base_rates(labels)
+
+        last_row = result.sort_values("ts_event").iloc[-1]
+        # Only the 06-01 (win) and 06-10 (win) clean alerts should count as
+        # priors for the 06-20 row — the flagged 06-05 loss is excluded, so
+        # win rate is 2/2 = 1.0, not 2/3.
+        assert last_row["ticker_alert_frequency"] == 2
+        assert last_row["ticker_win_rate_90d"] == 1.0
+
+    def test_missing_quality_flags_column_treated_as_clean(self) -> None:
+        """No quality_flags column at all (legacy rows) means nothing is filtered."""
+        rows = [
+            {"underlying": "AAPL", "ts_event": "2025-06-01", "hit_tp_first": 1},
+            {"underlying": "AAPL", "ts_event": "2025-06-02", "hit_tp_first": 0},
+        ]
+        labels = _make_labels(rows)
+        assert "quality_flags" not in labels.columns
+        result = compute_ticker_base_rates(labels)
+        last_row = result.sort_values("ts_event").iloc[-1]
+        assert last_row["ticker_alert_frequency"] == 1
+
+
+# ===========================================================================
 # test_no_self_leakage
 # ===========================================================================
 
