@@ -61,6 +61,24 @@ def resolve_dataset_root(root: Path, expected: Path) -> Path:
     return resolved
 
 
+def _keep_staged_file_for_autopsy(temp_path: Path, parent: Path) -> Path:
+    """Rename a staged file aside and make the rename durable.
+
+    Used when the writer returned cleanly but something about verifying the
+    result is unexplained (unreadable, wrong type, wrong row count) — the
+    file is evidence, not garbage, so it is kept rather than deleted. The
+    rename alone doesn't survive a crash on this non-journaling volume any
+    more than the primary publish does, so the renamed file's bytes and the
+    directory entry recording the rename are flushed before returning.
+    """
+    autopsy_path = temp_path.with_name(f".corrupt-{os.getpid()}-{temp_path.name}")
+    temp_path.rename(autopsy_path)
+    with open(autopsy_path, "rb") as autopsy_fd:
+        os.fsync(autopsy_fd.fileno())
+    fsync_directory(parent)
+    return autopsy_path
+
+
 def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
     """Replace only the ``expiry`` column, keeping the original as a backup.
 
@@ -81,10 +99,22 @@ def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
     temp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         pq.write_table(new_table, temp_path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    try:
         # Read the replacement back before it can displace anything.
         check = pq.read_schema(temp_path)
-        if check.field("expiry").type != pa.date32() or pq.read_metadata(temp_path).num_rows != table.num_rows:
-            raise RuntimeError(f"rewritten file failed verification: {temp_path}")
+        mismatched = check.field("expiry").type != pa.date32() or pq.read_metadata(temp_path).num_rows != table.num_rows
+    except BaseException as verify_exc:
+        autopsy_path = _keep_staged_file_for_autopsy(temp_path, path.parent)
+        raise RuntimeError(f"rewritten file failed verification, kept for autopsy: {autopsy_path}") from verify_exc
+    if mismatched:
+        autopsy_path = _keep_staged_file_for_autopsy(temp_path, path.parent)
+        raise RuntimeError(f"rewritten file failed verification, kept for autopsy: {autopsy_path}")
+
+    try:
         shutil.copy2(path, backup_path)
         # The backup becomes the only surviving copy of the original once the
         # publish below replaces it — flush its bytes and directory entry

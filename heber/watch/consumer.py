@@ -1076,22 +1076,23 @@ class AlertWatchConsumer:
         )
         return None
 
-    def _calculate_dte(self, expiry: str | None) -> int:
-        """Calculate days to expiry from expiry string.
+    def _calculate_dte(self, expiry: object) -> int:
+        """Calculate days to expiry from a raw expiry value.
 
         ``today`` is the ET market date, not ``date.today()`` (UTC/local): in the
         evening ET (past UTC midnight) a UTC-based today is already tomorrow, so
         DTE would be understated by a day for every alert processed after ~20:00 ET.
+
+        Routes through the shared ``coerce_expiry_to_date`` rather than
+        truncating the value itself, so a malformed expiry falls back to the
+        default DTE instead of silently producing one computed from a
+        fabricated date.
         """
-        if not expiry:
+        exp_date = coerce_expiry_to_date(expiry)
+        if exp_date is None:
             return 5
-        try:
-            exp_date = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
-            et_today = datetime.now(ZoneInfo("America/New_York")).date()
-            return (exp_date - et_today).days
-        except Exception:
-            logger.warning("dte_calculation_fallback", expiry=expiry, exc_info=True)
-            return 5
+        et_today = datetime.now(ZoneInfo("America/New_York")).date()
+        return (exp_date - et_today).days
 
     def _parse_timestamp(self, parsed: dict) -> datetime:
         """Parse timestamp from various field formats."""

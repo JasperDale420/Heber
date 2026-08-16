@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -284,6 +284,7 @@ class EnrichmentBackfillScanner:
             The enrichable fields the fresh extract can fill (empty when there is
             nothing to add), or None on failure.
         """
+        from heber.ml.datasets import coerce_expiry_to_date
         from heber.models.silver import FlowAlertRecord
         from heber.watch.features import feature_row_for_gold
 
@@ -306,11 +307,18 @@ class EnrichmentBackfillScanner:
 
         alert_time = alert_time.to_pydatetime()
 
-        expiry = row.get("expiry")
-        if isinstance(expiry, str):
-            expiry = date.fromisoformat(expiry[:10])
+        # A malformed or missing expiry must not be truncated or fabricated
+        # into a plausible-looking date: re-enrichment fetches Greeks keyed
+        # on this exact value, so a wrong expiry silently patches the wrong
+        # contract's Greeks into Gold with nothing marking them as bad.
+        expiry = coerce_expiry_to_date(row.get("expiry"))
         if expiry is None:
-            expiry = date.today()
+            logger.warning(
+                "Failed to re-enrich row: cannot coerce expiry to date",
+                alert_id=row.get("alert_id"),
+                raw_expiry=row.get("expiry"),
+            )
+            return None
 
         try:
             record = FlowAlertRecord(

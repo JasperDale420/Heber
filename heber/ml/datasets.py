@@ -37,7 +37,7 @@ DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
 
-_EXACT_EXPIRY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$")
+_EXACT_EXPIRY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$", re.ASCII)
 
 
 def coerce_expiry_to_date(val: object) -> date | None:
@@ -49,14 +49,16 @@ def coerce_expiry_to_date(val: object) -> date | None:
       - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
       - None / NaN / unparseable → None
 
-    Only an exact match is accepted — a fractional number, or a string with
-    extra leading/trailing characters or digits, is rejected rather than
-    truncated to the first 8 digits. Truncating would fabricate a
-    real-looking ``date32`` value with no trace the input was malformed,
-    which is worse than the null a reject produces: row-completeness checks
-    catch nulls, not wrong-looking-fine dates.
+    Only an exact ASCII match is accepted — a fractional number, a string
+    with extra leading/trailing characters or digits, or one built from
+    non-ASCII decimal digits (``\\d`` without ``re.ASCII`` matches those
+    too), is rejected rather than truncated to the first 8 digits.
+    Truncating would fabricate a real-looking ``date32`` value with no
+    trace the input was malformed, which is worse than the null a reject
+    produces: row-completeness checks catch nulls, not wrong-looking-fine
+    dates.
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if val is None or val is pd.NaT or (isinstance(val, float) and pd.isna(val)):
         return None
     # datetime is a subclass of date — check it first.
     if isinstance(val, datetime):
@@ -754,6 +756,7 @@ def persist_features_to_gold(
     df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date
+    failed_dates: list[str] = []
     for dt_val in df["dt"].unique():
         partition_df = df[df["dt"] == dt_val].drop(columns=["dt"]).reset_index(drop=True)
         dt_str = pd.Timestamp(dt_val).strftime("%Y-%m-%d")
@@ -839,6 +842,22 @@ def persist_features_to_gold(
                 lock_file=str(lock_file),
             )
             continue
+        except OSError as write_exc:
+            # A durability failure on one date's partition (empty/truncated
+            # staged file, row-count mismatch, or a post-publish fsync that
+            # failed after the rename itself already landed) must not discard
+            # every other date already queued in this call. It also must not
+            # be silently swallowed: raised once as an aggregate failure below
+            # so a caller can't mistake a partial batch for a complete one.
+            logger.error(
+                "Failed to durably persist features partition for this date",
+                date=dt_str,
+                path=str(out_file),
+                error=str(write_exc),
+                exc_info=True,
+            )
+            failed_dates.append(dt_str)
+            continue
 
         logger.info(
             "Persisted features partition",
@@ -846,3 +865,6 @@ def persist_features_to_gold(
             rows=len(partition_df),
             path=str(out_file),
         )
+
+    if failed_dates:
+        raise OSError(f"Failed to persist Gold features for {len(failed_dates)} date(s): {failed_dates}")

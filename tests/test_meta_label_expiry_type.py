@@ -229,6 +229,19 @@ class TestCoerceExpiryToDate:
         for v in ("2026-09-18", "20260918", 20260918, date(2026, 9, 18)):
             assert isinstance(coerce_expiry_to_date(v), date)
 
+    def test_non_ascii_digits_are_rejected_not_fabricated(self) -> None:
+        # \d without re.ASCII matches any Unicode decimal digit, so a string of
+        # Arabic-Indic digits used to pass the "exact match" gate and get
+        # parsed into a real, fabricated date by strptime/int().
+        assert coerce_expiry_to_date("٢٠٢٦-04-18") is None
+        assert coerce_expiry_to_date("٢٠٢٦0418") is None
+
+    def test_nat_returns_none(self) -> None:
+        # pandas.NaT is `isinstance(..., datetime)` (for backward-compat
+        # reasons), so it used to fall into the datetime branch and return
+        # NaT itself rather than None.
+        assert coerce_expiry_to_date(pd.NaT) is None
+
     def test_exact_float_with_no_fraction_still_accepted(self) -> None:
         assert coerce_expiry_to_date(20260918.0) == date(2026, 9, 18)
 
