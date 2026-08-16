@@ -26,6 +26,7 @@ from heber.features.templates.alert_labels import (
     ContractBarrierConfig,
     classify_horizon,
 )
+from heber.ml.datasets import coerce_expiry_to_date
 from heber.ops.metrics import (
     record_watch_alert_parse,
     record_watch_duplicate_alert_suppressed,
@@ -1377,6 +1378,10 @@ class AlertWatchConsumer:
             # Build a FlowAlertRecord-like object for feature extraction
             from heber.models.silver import FlowAlertRecord
 
+            expiry = coerce_expiry_to_date(alert.get("expiry"))
+            if expiry is None:
+                raise ValueError(f"Cannot coerce alert expiry to date: {alert.get('expiry')!r}")
+
             # Create minimal record for feature extraction
             record = FlowAlertRecord(
                 event_id=alert["id"],
@@ -1391,9 +1396,7 @@ class AlertWatchConsumer:
                 source="watch_consumer",
                 underlying=alert["underlying"],
                 occ_symbol=alert.get("occ_symbol"),
-                expiry=alert.get("expiry")
-                if isinstance(alert.get("expiry"), type(None)) or hasattr(alert.get("expiry"), "year")
-                else datetime.strptime(str(alert["expiry"])[:10], "%Y-%m-%d").date(),
+                expiry=expiry,
                 strike=alert.get("strike", 0.0),
                 put_call=alert["put_call"],
                 premium=alert.get("premium", 0.0),
