@@ -6,6 +6,7 @@ Builds training datasets by joining captured features with outcomes.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ import structlog
 
 from heber.config import settings
 from heber.reader import HeberReader
+from heber.writer.utils import fsync_directory, publish_parquet_atomically
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -35,6 +37,8 @@ DEFAULT_GOLD_PATH = settings.gold_path
 DEFAULT_FEATURES_PATH = DEFAULT_GOLD_PATH / "dataset=meta_label_features" / _PROJECT_WATCH / _VERSION_V1
 DEFAULT_OUTCOMES_PATH = DEFAULT_GOLD_PATH / "dataset=labels_alert_barriers" / _PROJECT_WATCH / _VERSION_V1
 
+_EXACT_EXPIRY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$", re.ASCII)
+
 
 def coerce_expiry_to_date(val: object) -> date | None:
     """Convert an expiry value to a ``datetime.date`` (Arrow ``date32`` on write).
@@ -44,8 +48,17 @@ def coerce_expiry_to_date(val: object) -> date | None:
       - ISO date strings  ("2026-04-18")
       - compact strings / ints in YYYYMMDD form ("20260418" / 20260418)
       - None / NaN / unparseable → None
+
+    Only an exact ASCII match is accepted — a fractional number, a string
+    with extra leading/trailing characters or digits, or one built from
+    non-ASCII decimal digits (``\\d`` without ``re.ASCII`` matches those
+    too), is rejected rather than truncated to the first 8 digits.
+    Truncating would fabricate a real-looking ``date32`` value with no
+    trace the input was malformed, which is worse than the null a reject
+    produces: row-completeness checks catch nulls, not wrong-looking-fine
+    dates.
     """
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if val is None or val is pd.NaT or (isinstance(val, float) and pd.isna(val)):
         return None
     # datetime is a subclass of date — check it first.
     if isinstance(val, datetime):
@@ -53,15 +66,21 @@ def coerce_expiry_to_date(val: object) -> date | None:
     if isinstance(val, date):
         return val
     if isinstance(val, int | float):
+        if isinstance(val, float) and not val.is_integer():
+            logger.warning("Cannot coerce expiry to date", raw_value=val)
+            return None
         cleaned = str(int(val))
     elif isinstance(val, str):
-        cleaned = val.strip().replace("-", "")
+        cleaned = val.strip()
     else:
         return None
     if not cleaned:
         return None
+    if not _EXACT_EXPIRY_RE.match(cleaned):
+        logger.warning("Cannot coerce expiry to date", raw_value=val)
+        return None
     try:
-        return datetime.strptime(cleaned[:8], "%Y%m%d").date()
+        return datetime.strptime(cleaned.replace("-", ""), "%Y%m%d").date()
     except ValueError:
         logger.warning("Cannot coerce expiry to date", raw_value=val)
         return None
@@ -113,9 +132,14 @@ def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         df.to_parquet(temp_path, index=False)
-        os.replace(temp_path, out_file)
-    finally:
+    except BaseException:
         temp_path.unlink(missing_ok=True)
+        raise
+    publish_parquet_atomically(temp_path, out_file, expected_rows=len(df))
+    # Flush the publish's own directory entry too, so the rename that
+    # displaces any existing partition (the merge-and-rewrite callers of this
+    # function) cannot be lost on this non-journaling volume.
+    fsync_directory(out_file.parent)
 
 
 @dataclass
@@ -135,6 +159,12 @@ class DatasetConfig:
     # Gold (their other features are point-in-time correct) but are excluded
     # from training by default — opt in only if the model handles the gap.
     include_unrecoverable_greeks: bool = False
+    # Rows whose observation window closed before its horizon's nominal span
+    # had elapsed. Their outcome answers a shorter horizon than the one they
+    # are filed under, so they are excluded from training by default — opt in
+    # only for an analysis that treats the horizon as observed rather than
+    # nominal.
+    include_truncated_label_windows: bool = False
 
     # Train/validation split
     train_ratio: float = 0.8
@@ -301,6 +331,13 @@ class MetaLabelDatasetBuilder:
             logger.error("Outcomes missing alert_id column")
             return pd.DataFrame()
 
+        if not outcomes.empty:
+            outcomes = self._mark_truncated_label_windows(outcomes)
+            # The features side carries no label-window information, so a column
+            # of this name there is stale and would otherwise reach the filter
+            # as a `_x`/`_y` suffixed pair with the check nowhere to be found.
+            features = features.drop(columns=[LABEL_WINDOW_TRUNCATED_COLUMN], errors="ignore")
+
         # Select outcome columns for join
         outcome_cols = [
             "alert_id",
@@ -311,6 +348,7 @@ class MetaLabelDatasetBuilder:
             "bars_to_hit",
             "trading_minutes_to_hit",
             "hit_tp_first",
+            LABEL_WINDOW_TRUNCATED_COLUMN,
         ]
         available_outcome_cols = [c for c in outcome_cols if c in outcomes.columns]
 
@@ -321,6 +359,32 @@ class MetaLabelDatasetBuilder:
             on="alert_id",
             how="inner",
         )
+
+    @staticmethod
+    def _mark_truncated_label_windows(outcomes: pd.DataFrame) -> pd.DataFrame:
+        """Attach the truncated-window verdict to the outcomes frame.
+
+        Evaluated here rather than downstream because the join carries a fixed
+        list of columns: a ``quality_flags`` marker on the label rows would not
+        survive it, and the flag filter further down sees the *features* flags.
+
+        Two sources are combined. The recomputed check is authoritative and
+        needs no migration to have run; the persisted flag covers anything a
+        future writer marks that this rule does not model. A frame that supports
+        neither cannot be shown sound, and training on unverifiable labels
+        silently is the failure this exists to prevent — so it raises.
+        """
+        flagged = quality_flag_series(outcomes).apply(lambda flags: QUALITY_FLAG_LABEL_WINDOW_TRUNCATED in flags)
+
+        missing = [c for c in ("horizon", "window_duration_hours") if c not in outcomes.columns]
+        if missing:
+            raise ValueError(
+                f"Outcomes are missing {', '.join(missing)}, so their observation windows cannot be "
+                "verified against their horizons. Refusing to build a dataset that may contain "
+                "labels resolved against a truncated window."
+            )
+
+        return outcomes.assign(**{LABEL_WINDOW_TRUNCATED_COLUMN: label_window_truncated_mask(outcomes) | flagged})
 
     def _normalize_outcomes(self, outcomes: pd.DataFrame) -> pd.DataFrame:
         """Normalize outcome columns for backward compatibility."""
@@ -374,6 +438,20 @@ class MetaLabelDatasetBuilder:
                     total=len(df),
                 )
                 df = df[~unrecoverable].reset_index(drop=True)
+
+        # Drop rows whose observation window closed before its horizon's
+        # nominal span. Their outcome is a real observation of a shorter
+        # horizon, so training on it as if it answered the nominal one biases
+        # every horizon-conditional estimate.
+        if not self.config.include_truncated_label_windows and LABEL_WINDOW_TRUNCATED_COLUMN in df.columns:
+            truncated = df[LABEL_WINDOW_TRUNCATED_COLUMN].fillna(True).astype(bool)
+            if truncated.any():
+                logger.info(
+                    "Excluded rows with truncated label windows from dataset",
+                    rows=int(truncated.sum()),
+                    total=len(df),
+                )
+                df = df[~truncated].reset_index(drop=True)
 
         # Exclude expired if configured
         if self.config.exclude_expired and "outcome" in df.columns:
@@ -487,6 +565,7 @@ class MetaLabelDatasetBuilder:
             "put_call",
             # Provenance metadata, not a model input
             "quality_flags",
+            LABEL_WINDOW_TRUNCATED_COLUMN,
         }
 
         return [c for c in df.columns if c not in exclude]
@@ -627,6 +706,75 @@ def _carries_live_enrichment(df: pd.DataFrame, flags: pd.Series) -> pd.Series:
     return carries
 
 
+# Defined by the watch domain, which stamps it on the rows it writes
+# (`heber.watch.models.QUALITY_FLAG_LABEL_WINDOW_TRUNCATED`). Repeated rather
+# than imported because `heber/watch/__init__.py` eagerly loads the whole watch
+# package, which imports this module — a module-level import here is a cycle.
+# `test_label_window_stamped_at_write` pins the two together.
+QUALITY_FLAG_LABEL_WINDOW_TRUNCATED = "label_window_truncated"
+
+# Same name as a plain boolean column, for frames that carry the check as data
+# rather than as provenance (the dataset builder joins it onto training rows).
+LABEL_WINDOW_TRUNCATED_COLUMN = QUALITY_FLAG_LABEL_WINDOW_TRUNCATED
+
+
+def _nominal_window_hours() -> dict[str, float]:
+    from heber.watch.models import POLL_CONFIG, WatchHorizon
+
+    return {h.value: float(POLL_CONFIG[h]["max_duration_hours"]) for h in WatchHorizon}
+
+
+def label_window_truncated_mask(df: pd.DataFrame) -> pd.Series:
+    """True for label rows whose observation window closed short of its horizon.
+
+    ``window_duration_hours`` is wall-clock ``window_end - alert_time``, and
+    ``MarketCalendar.add_trading_hours`` only ever advances the cursor — it skips
+    non-trading time rather than consuming it. A correctly computed window
+    therefore always spans at least its nominal count of hours in wall clock, so
+    anything shorter could not have come from an intact calendar. That makes the
+    test sound (it cannot flag a correct row) without needing the calendar, and
+    it holds under any horizon definition at least as long as the current one.
+
+    Rows that cannot be checked — unknown horizon, missing duration — are
+    reported as truncated rather than assumed sound. A frame that carries
+    neither column is not a label frame and is left alone.
+    """
+    if "horizon" not in df.columns or "window_duration_hours" not in df.columns:
+        return pd.Series(False, index=df.index)
+
+    nominal = _nominal_window_hours()
+    # Stored values have appeared both bare ("swing") and enum-repr
+    # ("WatchHorizon.SWING") depending on the writer that produced them.
+    horizon = df["horizon"].astype(str).str.lower().str.rsplit(".", n=1).str[-1]
+    recorded = pd.to_numeric(df["window_duration_hours"], errors="coerce")
+    required = horizon.map(nominal)
+
+    return ~(recorded >= required)
+
+
+def add_label_window_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Append ``label_window_truncated`` to rows whose window closed early.
+
+    Returns a copy; only ``quality_flags`` is modified, and re-running is a
+    no-op. ``horizon`` and ``window_duration_hours`` stay on every row, so a
+    consumer can recompute the exact shortfall and apply a rule of its own.
+    """
+    if "horizon" not in df.columns or "window_duration_hours" not in df.columns:
+        return df
+
+    out = df.copy()
+    truncated = label_window_truncated_mask(out)
+
+    # Assign positionally: label-based assignment raises on a duplicated index.
+    flag_lists = list(quality_flag_series(out))
+    for pos, is_truncated in enumerate(truncated):
+        if is_truncated and QUALITY_FLAG_LABEL_WINDOW_TRUNCATED not in flag_lists[pos]:
+            flag_lists[pos] = [*flag_lists[pos], QUALITY_FLAG_LABEL_WINDOW_TRUNCATED]
+
+    out["quality_flags"] = pd.Series(flag_lists, index=out.index, dtype=object)
+    return out
+
+
 def provenance_bound() -> timedelta:
     """Capture-lag bound for provenance flagging, independent of the gate's switch.
 
@@ -732,6 +880,7 @@ def persist_features_to_gold(
     df["dt"] = pd.to_datetime(df[partition_col]).dt.date
 
     # Write partitioned by date
+    failed_dates: list[str] = []
     for dt_val in df["dt"].unique():
         partition_df = df[df["dt"] == dt_val].drop(columns=["dt"]).reset_index(drop=True)
         dt_str = pd.Timestamp(dt_val).strftime("%Y-%m-%d")
@@ -817,6 +966,22 @@ def persist_features_to_gold(
                 lock_file=str(lock_file),
             )
             continue
+        except OSError as write_exc:
+            # A durability failure on one date's partition (empty/truncated
+            # staged file, row-count mismatch, or a post-publish fsync that
+            # failed after the rename itself already landed) must not discard
+            # every other date already queued in this call. It also must not
+            # be silently swallowed: raised once as an aggregate failure below
+            # so a caller can't mistake a partial batch for a complete one.
+            logger.error(
+                "Failed to durably persist features partition for this date",
+                date=dt_str,
+                path=str(out_file),
+                error=str(write_exc),
+                exc_info=True,
+            )
+            failed_dates.append(dt_str)
+            continue
 
         logger.info(
             "Persisted features partition",
@@ -824,3 +989,6 @@ def persist_features_to_gold(
             rows=len(partition_df),
             path=str(out_file),
         )
+
+    if failed_dates:
+        raise OSError(f"Failed to persist Gold features for {len(failed_dates)} date(s): {failed_dates}")

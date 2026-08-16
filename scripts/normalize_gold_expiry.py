@@ -34,9 +34,7 @@ Usage:
 
 import argparse
 import os
-import re
 import shutil
-from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -47,12 +45,12 @@ import structlog
 from filelock import FileLock
 
 from heber.ml.datasets import coerce_expiry_to_date
+from heber.writer.utils import fsync_directory, publish_file_atomically
 
 logger = structlog.get_logger("heber-normalize-expiry")
 
 BACKUP_SUFFIX = ".pre-expiry-migration"
 DEFAULT_LOCK_TIMEOUT = 30.0
-_EXACT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$|^\d{8}$")
 
 
 def resolve_dataset_root(root: Path, expected: Path) -> Path:
@@ -63,24 +61,22 @@ def resolve_dataset_root(root: Path, expected: Path) -> Path:
     return resolved
 
 
-def _coerce_for_migration(val: object) -> date | None:
-    """Coerce one expiry value, accepting only an unambiguous whole date.
+def _keep_staged_file_for_autopsy(temp_path: Path, parent: Path) -> Path:
+    """Rename a staged file aside and make the rename durable.
 
-    ``coerce_expiry_to_date`` is deliberately forgiving — it truncates
-    ``20260320.5`` and ``"2026-03-20junk"`` to 2026-03-20. Guessing at a
-    malformed value is tolerable when writing a fresh row; permanently
-    replacing the original with the guess is not, so anything that is not
-    exactly a date, ``YYYY-MM-DD`` or ``YYYYMMDD`` is refused here.
+    Used when the writer returned cleanly but something about verifying the
+    result is unexplained (unreadable, wrong type, wrong row count) — the
+    file is evidence, not garbage, so it is kept rather than deleted. The
+    rename alone doesn't survive a crash on this non-journaling volume any
+    more than the primary publish does, so the renamed file's bytes and the
+    directory entry recording the rename are flushed before returning.
     """
-    if isinstance(val, datetime | date):
-        return coerce_expiry_to_date(val)
-    if isinstance(val, str):
-        return coerce_expiry_to_date(val) if _EXACT_DATE_RE.match(val.strip()) else None
-    if isinstance(val, int | float) and not isinstance(val, bool):
-        if pd.isna(val) or not float(val).is_integer():
-            return None
-        return coerce_expiry_to_date(val) if _EXACT_DATE_RE.match(str(int(val))) else None
-    return None
+    autopsy_path = temp_path.with_name(f".corrupt-{os.getpid()}-{temp_path.name}")
+    temp_path.rename(autopsy_path)
+    with open(autopsy_path, "rb") as autopsy_fd:
+        os.fsync(autopsy_fd.fileno())
+    fsync_directory(parent)
+    return autopsy_path
 
 
 def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
@@ -97,20 +93,44 @@ def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
         raise RuntimeError(f"backup already exists, resolve it before re-running: {backup_path}")
 
     idx = table.schema.get_field_index("expiry")
-    coerced = pa.array([_coerce_for_migration(v) for v in values], type=pa.date32())
+    coerced = pa.array([coerce_expiry_to_date(v) for v in values], type=pa.date32())
     new_table = table.set_column(idx, pa.field("expiry", pa.date32()), coerced)
 
     temp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         pq.write_table(new_table, temp_path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    try:
         # Read the replacement back before it can displace anything.
         check = pq.read_schema(temp_path)
-        if check.field("expiry").type != pa.date32() or pq.read_metadata(temp_path).num_rows != table.num_rows:
-            raise RuntimeError(f"rewritten file failed verification: {temp_path}")
+        mismatched = check.field("expiry").type != pa.date32() or pq.read_metadata(temp_path).num_rows != table.num_rows
+    except BaseException as verify_exc:
+        autopsy_path = _keep_staged_file_for_autopsy(temp_path, path.parent)
+        raise RuntimeError(f"rewritten file failed verification, kept for autopsy: {autopsy_path}") from verify_exc
+    if mismatched:
+        autopsy_path = _keep_staged_file_for_autopsy(temp_path, path.parent)
+        raise RuntimeError(f"rewritten file failed verification, kept for autopsy: {autopsy_path}")
+
+    try:
         shutil.copy2(path, backup_path)
-        os.replace(temp_path, path)
-    finally:
+        # The backup becomes the only surviving copy of the original once the
+        # publish below replaces it — flush its bytes and directory entry
+        # durable first, or a crash right after the replace can leave the
+        # replace done and the backup missing or truncated, with no way to
+        # recover the pre-migration file. copy2 does not fsync on its own.
+        with open(backup_path, "rb") as backup_fd:
+            os.fsync(backup_fd.fileno())
+        fsync_directory(path.parent)
+    except BaseException:
         temp_path.unlink(missing_ok=True)
+        raise
+    publish_file_atomically(temp_path, path)
+    # Flush the replacement's own directory entry too, so the rename itself
+    # cannot be lost on this non-journaling volume once success is reported.
+    fsync_directory(path.parent)
 
 
 def _target_files(root: Path, include_quarantine: bool) -> list[Path]:
@@ -165,7 +185,7 @@ def normalize_expiry(
             table = pq.read_table(path)
             values = table.column("expiry").to_pylist()
             unparseable = sum(
-                1 for raw in values if raw is not None and not pd.isna(raw) and _coerce_for_migration(raw) is None
+                1 for raw in values if raw is not None and not pd.isna(raw) and coerce_expiry_to_date(raw) is None
             )
 
             if apply:

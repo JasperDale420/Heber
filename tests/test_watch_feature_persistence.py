@@ -86,3 +86,44 @@ async def test_consumer_extract_and_store_features_persists_to_gold(monkeypatch:
     await consumer._extract_and_store_features(alert, watch_id="w1")
 
     persist_mock.assert_called_once_with(mocked_features)
+
+
+@pytest.mark.asyncio
+async def test_consumer_rejects_junk_suffixed_expiry_instead_of_truncating(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed raw expiry must not be silently truncated into a fake clean date.
+
+    The old conversion (``str(alert["expiry"])[:10]``) sliced off anything past
+    the 10th character, so "2026-02-20junk" parsed as a valid 2026-02-20 with
+    no trace anything was wrong. It must now be rejected and the row skipped,
+    same as any other malformed feature-extraction input.
+    """
+    consumer = AlertWatchConsumer(
+        redis_client=SimpleNamespace(),
+        watch_manager=SimpleNamespace(),
+    )
+
+    mocked_features = _sample_features()
+    consumer.feature_extractor.extract = AsyncMock(return_value=mocked_features)  # type: ignore[method-assign]
+    persist_mock = MagicMock()
+    monkeypatch.setattr(consumer_module, "persist_features_to_gold", persist_mock)
+
+    alert = {
+        "id": "a1",
+        "underlying": "AAPL",
+        "occ_symbol": "AAPL260220C00100000",
+        "put_call": "C",
+        "expiry": "2026-02-20junk",
+        "strike": 100.0,
+        "spot_px": 200.0,
+        "contract_px": 1.25,
+        "premium": 10000.0,
+        "volume": 100.0,
+        "open_interest": 200.0,
+        "alert_type": "SWEEP",
+        "ts_event": datetime(2026, 2, 7, 15, 0, tzinfo=UTC),
+    }
+
+    await consumer._extract_and_store_features(alert, watch_id="w1")
+
+    consumer.feature_extractor.extract.assert_not_called()
+    persist_mock.assert_not_called()

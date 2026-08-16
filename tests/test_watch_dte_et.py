@@ -43,3 +43,15 @@ def test_dte_missing_expiry_falls_back(monkeypatch) -> None:
     monkeypatch.setattr(wc, "datetime", _FrozenDateTime)
     assert AlertWatchConsumer._calculate_dte(None, None) == 5
     assert AlertWatchConsumer._calculate_dte(None, "not-a-date") == 5
+
+
+@pytest.mark.unit
+def test_dte_rejects_malformed_expiry_instead_of_truncating(monkeypatch) -> None:
+    """A malformed expiry must fall back to the default DTE, not a fabricated one.
+
+    ``str(expiry)[:10]`` used to slice off anything past the 10th character,
+    so "2026-02-20junk" silently parsed as a clean, wrong 2026-02-20.
+    """
+    _FrozenDateTime._frozen = datetime(2026, 2, 7, 10, 0, tzinfo=ET)
+    monkeypatch.setattr(wc, "datetime", _FrozenDateTime)
+    assert AlertWatchConsumer._calculate_dte(None, "2026-02-20junk") == 5

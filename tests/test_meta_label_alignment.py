@@ -64,6 +64,10 @@ def test_meta_label_builder_normalizes_legacy_columns():
             "contract_bars_to_hit": [3],
             "outcome_return": [0.25],
             "trading_minutes_to_hit": [45],
+            # Written on every label row since the first version of the writer;
+            # the builder refuses outcomes it cannot check against their horizon.
+            "horizon": ["swing"],
+            "window_duration_hours": [448.0],
         }
     )
 

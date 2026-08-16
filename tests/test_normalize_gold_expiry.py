@@ -6,8 +6,10 @@ touched; every case builds a throwaway Gold tree under ``tmp_path``.
 """
 
 import importlib.util
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow as pa
@@ -325,6 +327,147 @@ class TestPromotionFailure:
 
         assert path.exists()
         assert path.read_bytes() == original
+
+    def test_verification_failure_keeps_the_rewritten_file_for_autopsy(self, tmp_path: Path, monkeypatch) -> None:
+        """An unexplained row-count mismatch on the rewrite must not destroy the
+        only evidence of what pyarrow actually wrote — same as the established
+        publish_parquet_atomically pattern used elsewhere in this codebase."""
+        root = _version_root(tmp_path)
+        path = _write_partition(root, "2026-03-01", ["2026-03-20"])
+        original = path.read_bytes()
+
+        real_read_metadata = _mod.pq.read_metadata
+
+        def lying_read_metadata(temp_path):
+            metadata = real_read_metadata(temp_path)
+            return SimpleNamespace(num_rows=metadata.num_rows + 1)
+
+        monkeypatch.setattr(_mod.pq, "read_metadata", lying_read_metadata)
+
+        with pytest.raises(RuntimeError, match="failed verification"):
+            normalize_expiry(root, apply=True)
+
+        assert path.exists()
+        assert path.read_bytes() == original, "original partition was replaced despite a failed verification"
+        kept = list(path.parent.glob(".corrupt-*"))
+        assert len(kept) == 1, f"verification-failure evidence was not preserved, found {list(path.parent.iterdir())}"
+        # The kept file's dotted name keeps it invisible to every *.parquet
+        # glob in the codebase regardless of what else is in the name.
+        assert kept[0].name.startswith(".corrupt-")
+
+    def test_verification_failure_survives_a_failed_autopsy_rename(self, tmp_path: Path, monkeypatch) -> None:
+        """Even if renaming the staged file aside for autopsy itself fails, the
+        original bare unlink() must not run — that would delete the only
+        evidence for the exact reason the rename was attempted in the first
+        place."""
+        root = _version_root(tmp_path)
+        path = _write_partition(root, "2026-03-01", ["2026-03-20"])
+        original = path.read_bytes()
+
+        real_read_metadata = _mod.pq.read_metadata
+
+        def lying_read_metadata(temp_path):
+            metadata = real_read_metadata(temp_path)
+            return SimpleNamespace(num_rows=metadata.num_rows + 1)
+
+        monkeypatch.setattr(_mod.pq, "read_metadata", lying_read_metadata)
+
+        real_rename = Path.rename
+
+        def failing_rename(self, target):
+            # Only fail the specific autopsy rename this test cares about — a
+            # temp file being renamed to a .corrupt-* name.
+            if Path(target).name.startswith(".corrupt-"):
+                raise OSError("simulated volume error during rename")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", failing_rename)
+
+        with pytest.raises(OSError, match="simulated volume error"):
+            normalize_expiry(root, apply=True)
+
+        assert path.exists()
+        assert path.read_bytes() == original, "original partition was replaced despite a failed verification"
+        lock_file = path.with_suffix(".parquet.lock")
+        staging = [p for p in path.parent.iterdir() if p.name.startswith(".") and p != lock_file]
+        assert len(staging) == 1, f"verification-failure evidence was lost, found {list(path.parent.iterdir())}"
+
+    def test_autopsy_evidence_is_flushed_before_verification_error_propagates(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A successful autopsy rename must be made durable before the failure
+        is raised — otherwise the evidence a crash-recovery reader relies on
+        can itself be lost to the exact page-cache window this whole script
+        exists to close for the primary write."""
+        root = _version_root(tmp_path)
+        _write_partition(root, "2026-03-01", ["2026-03-20"])
+
+        real_read_metadata = _mod.pq.read_metadata
+
+        def lying_read_metadata(temp_path):
+            metadata = real_read_metadata(temp_path)
+            return SimpleNamespace(num_rows=metadata.num_rows + 1)
+
+        monkeypatch.setattr(_mod.pq, "read_metadata", lying_read_metadata)
+
+        events: list[str] = []
+        real_fsync = os.fsync
+        real_rename = Path.rename
+
+        def tracked_fsync(fd: int) -> None:
+            events.append("fsync_dir" if os.path.isdir(f"/dev/fd/{fd}") else "fsync_file")
+            real_fsync(fd)
+
+        def tracked_rename(self, target):
+            events.append("rename")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(os, "fsync", tracked_fsync)
+        monkeypatch.setattr(Path, "rename", tracked_rename)
+
+        with pytest.raises(RuntimeError, match="failed verification"):
+            normalize_expiry(root, apply=True)
+
+        assert "rename" in events
+        assert "fsync_file" in events, f"the renamed autopsy file's bytes were never flushed: {events}"
+        assert "fsync_dir" in events, f"the rename's own directory entry was never flushed: {events}"
+        rename_idx = events.index("rename")
+        file_fsync_idx = events.index("fsync_file")
+        dir_fsync_idx = events.index("fsync_dir")
+        # A crash between the file fsync and the directory fsync can persist
+        # the renamed entry (visible) before its bytes (durable) — same
+        # ordering requirement as the primary publish elsewhere in this file.
+        assert rename_idx < file_fsync_idx < dir_fsync_idx, (
+            f"expected rename, then file fsync, then directory fsync, saw {events}"
+        )
+
+    def test_unreadable_rewrite_is_preserved_for_autopsy_not_discarded(self, tmp_path: Path, monkeypatch) -> None:
+        """The writer returned cleanly, so a staged file that can't even be
+        read back is just as unexplained as a row-count mismatch and must be
+        kept for autopsy too, not silently discarded."""
+        root = _version_root(tmp_path)
+        path = _write_partition(root, "2026-03-01", ["2026-03-20"])
+        original = path.read_bytes()
+
+        real_read_schema = _mod.pq.read_schema
+
+        def raising_read_schema(target_path):
+            # Only fail the inner _rewrite_expiry readback (against the
+            # temp staging file), not normalize_expiry's own outer schema
+            # check against the original partition file.
+            if ".tmp-" in Path(target_path).name:
+                raise OSError("simulated unreadable staged file")
+            return real_read_schema(target_path)
+
+        monkeypatch.setattr(_mod.pq, "read_schema", raising_read_schema)
+
+        with pytest.raises(RuntimeError, match="failed verification"):
+            normalize_expiry(root, apply=True)
+
+        assert path.exists()
+        assert path.read_bytes() == original, "original partition was replaced despite a failed verification"
+        kept = list(path.parent.glob(".corrupt-*"))
+        assert len(kept) == 1, f"unreadable-rewrite evidence was not preserved, found {list(path.parent.iterdir())}"
 
 
 class TestStrictStringParsing:
