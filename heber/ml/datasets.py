@@ -20,6 +20,7 @@ import structlog
 
 from heber.config import settings
 from heber.reader import HeberReader
+from heber.writer.utils import fsync_directory, publish_parquet_atomically
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -129,9 +130,14 @@ def _atomic_write_parquet(df: pd.DataFrame, out_file: Path) -> None:
     temp_path = out_file.with_name(f".{out_file.name}.tmp-{os.getpid()}-{uuid4().hex}")
     try:
         df.to_parquet(temp_path, index=False)
-        os.replace(temp_path, out_file)
-    finally:
+    except BaseException:
         temp_path.unlink(missing_ok=True)
+        raise
+    publish_parquet_atomically(temp_path, out_file, expected_rows=len(df))
+    # Flush the publish's own directory entry too, so the rename that
+    # displaces any existing partition (the merge-and-rewrite callers of this
+    # function) cannot be lost on this non-journaling volume.
+    fsync_directory(out_file.parent)
 
 
 @dataclass

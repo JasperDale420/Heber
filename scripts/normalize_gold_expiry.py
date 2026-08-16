@@ -45,6 +45,7 @@ import structlog
 from filelock import FileLock
 
 from heber.ml.datasets import coerce_expiry_to_date
+from heber.writer.utils import fsync_directory, publish_file_atomically
 
 logger = structlog.get_logger("heber-normalize-expiry")
 
@@ -85,9 +86,21 @@ def _rewrite_expiry(path: Path, table: pa.Table, values: list) -> None:
         if check.field("expiry").type != pa.date32() or pq.read_metadata(temp_path).num_rows != table.num_rows:
             raise RuntimeError(f"rewritten file failed verification: {temp_path}")
         shutil.copy2(path, backup_path)
-        os.replace(temp_path, path)
-    finally:
+        # The backup becomes the only surviving copy of the original once the
+        # publish below replaces it — flush its bytes and directory entry
+        # durable first, or a crash right after the replace can leave the
+        # replace done and the backup missing or truncated, with no way to
+        # recover the pre-migration file. copy2 does not fsync on its own.
+        with open(backup_path, "rb") as backup_fd:
+            os.fsync(backup_fd.fileno())
+        fsync_directory(path.parent)
+    except BaseException:
         temp_path.unlink(missing_ok=True)
+        raise
+    publish_file_atomically(temp_path, path)
+    # Flush the replacement's own directory entry too, so the rename itself
+    # cannot be lost on this non-journaling volume once success is reported.
+    fsync_directory(path.parent)
 
 
 def _target_files(root: Path, include_quarantine: bool) -> list[Path]:
