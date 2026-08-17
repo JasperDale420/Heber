@@ -33,6 +33,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from heber.writer import compactor as compactor_module
 from heber.writer.compactor import MAX_BATCH_COMPRESSED_BYTES, Compactor
@@ -208,7 +209,7 @@ def test_a_wide_dataset_cannot_starve_a_deep_one(tmp_path: Path) -> None:
     cycle it had still not arrived. Depth-first drained whichever dataset it
     entered first instead. Either way one dataset's shape starved another.
     """
-    wide = tmp_path / "massive_bars"
+    wide = tmp_path / "feed=wide"  # a Heber dataset with thousands of flat children (massive_* is not walked at all)
     for i in range(300):
         (wide / f"instrument_key=equity:T{i:04d}").mkdir(parents=True)
     deep = tmp_path / "feed=quotes" / "instrument_type=option" / "dt=2026-06-18" / "hour=14"
@@ -280,3 +281,61 @@ def test_walk_cost_is_independent_of_how_many_files_a_partition_holds(tmp_path: 
 
     # few/, few/dt=, many/, many/dt=  — the root itself is never yielded
     assert len(found) == 4, f"walk yielded {len(found)} entries; it is counting files, not directories"
+
+
+def test_atlas_owned_massive_trees_are_never_walked(tmp_path: Path) -> None:
+    """Atlas keeps its own silver trees under the lake root, named ``massive_*``
+    (``massive_bars``, ``massive_intraday_daily``, ``massive_taq_*`` and their
+    staged ``_v2_<stamp>``, ``.sealing`` and ``_pre_v1_<stamp>`` generations).
+    Their layouts are Atlas's contract — a flat ``year=*.parquet`` directory is
+    read by year-file name, so merging it would silently drop years — and the
+    hourly walk over ``massive_bars``' 11k one-file dirs left a lock file in
+    each and held handles a cache swap has to wait out. Heber's own Massive
+    backfill also promotes one canonical ``dt=*/part-00000.parquet`` there, so
+    the trees are reserved from generic compaction as a cross-repo boundary.
+    """
+    for name in (
+        "massive_bars",
+        "massive_bars_v2_20260816b.sealing",
+        "massive_intraday_daily_pre_v1_20260816b",
+        "massive_taq_secagg_1s",
+    ):
+        _write(tmp_path / name / "sub", "a.parquet")
+        _write(tmp_path / name / "sub", "b.parquet")
+    live = tmp_path / "feed=data" / "dt=2026-02-11"
+    _write(live, "part-0.parquet")
+
+    found = list(Compactor()._iter_partition_dirs(tmp_path))
+
+    assert live in found, "the live partition must still be walked"
+    assert not any(part.startswith("massive_") for p in found for part in p.relative_to(tmp_path).parts), (
+        f"the walk entered an Atlas-owned tree: {[str(p.relative_to(tmp_path)) for p in found]}"
+    )
+
+
+def test_scan_and_compact_leaves_atlas_trees_untouched_and_still_compacts_feeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a full scan merges an ordinary feed partition but neither
+    merges, locks, nor writes anything inside a ``massive_*`` dataset."""
+    data_root = tmp_path
+    (data_root / ".heber-sentinel").touch()
+    silver = data_root / "silver"
+    atlas = silver / "massive_intraday_daily"
+    _write(atlas, "year=2003.parquet")
+    _write(atlas, "year=2026.parquet")
+    feed = silver / "feed=data" / "dt=2026-02-11"
+    _write(feed, "part-0.parquet")
+    _write(feed, "part-1.parquet")
+    monkeypatch.setattr(compactor_module.settings, "data_root", data_root)
+
+    result = Compactor().scan_and_compact("silver")
+
+    assert sorted(p.name for p in atlas.iterdir()) == ["year=2003.parquet", "year=2026.parquet"], (
+        f"the Atlas tree was modified: {sorted(p.name for p in atlas.iterdir())}"
+    )
+    assert not (atlas / ".compaction.lock").exists()
+    assert result["files_merged"] == 2, result
+    assert not (feed / "part-0.parquet").exists() and list(feed.glob("compacted-*.parquet")), (
+        "the ordinary feed partition was not compacted"
+    )

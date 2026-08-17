@@ -34,6 +34,9 @@ MAX_FILES_PER_BATCH = 1000
 # ~600 MB with concat copy — safe under typical 4 GB Docker Desktop limits.
 MAX_BATCH_COMPRESSED_BYTES = 50 * 1024 * 1024  # 50 MB
 
+# Top-level silver datasets reserved from generic compaction (Atlasv2's ``massive_*`` trees); never walked.
+ATLAS_DATASET_PREFIX = "massive_"
+
 
 def _is_temporal_type(dt: pa.DataType) -> bool:
     """Check if a type is a date, timestamp, time, or duration type."""
@@ -573,6 +576,17 @@ class Compactor:
         whatever it merges, so walking in there risks destroying the evidence
         it exists to preserve. pyarrow and Hive tooling ignore `_`-prefixed
         paths for the same reason.
+
+        Top-level datasets named ``massive_*`` (``massive_bars``,
+        ``massive_intraday_daily``, ``massive_taq_*`` and their staged
+        ``_v2_<stamp>`` / ``.sealing`` / ``_pre_v1_<stamp>`` generations) are
+        reserved from generic compaction: Atlasv2 writes and reads them under
+        its own layout contract — a flat ``year=*.parquet`` directory is read
+        by file name, so merging it would silently drop years — and Heber's own
+        Massive backfill promotes one canonical ``dt=*/part-00000.parquet``
+        there. Walking them also touched 11k one-file directories every hour,
+        holding handles that a cache swap has to wait out. The walk never
+        enters them.
         """
 
         def subdirectories(directory: Path) -> list[Path]:
@@ -601,7 +615,8 @@ class Compactor:
             yield root
             yield from interleave(subdirectories(root))
 
-        yield from interleave(subdirectories(layer_path))
+        datasets = [d for d in subdirectories(layer_path) if not d.name.startswith(ATLAS_DATASET_PREFIX)]
+        yield from interleave(datasets)
 
     def scan_and_compact(self, layer: str = "silver") -> dict:
         """Scan layer for partitions that need compaction."""
