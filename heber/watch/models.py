@@ -185,6 +185,14 @@ class WatchKeys:
     # String: watch:by_alert:{alert_id} -> watch_id (SET NX claim, one watch per alert)
     BY_ALERT = "heber:watch:by_alert:{alert_id}"
 
+    # String: watch:pending_outcome:{watch_id} -> WatchOutcome JSON, durable
+    # until the Gold write for it succeeds (survives a crash between
+    # completing the watch and writing its label).
+    PENDING_OUTCOME = "heber:watch:pending_outcome:{watch_id}"
+
+    # Set: watch:pending_outcomes -> watch_ids awaiting a durable Gold write
+    PENDING_OUTCOMES = "heber:watch:pending_outcomes"
+
     @classmethod
     def watch_key(cls, watch_id: str) -> str:
         return cls.WATCH.format(watch_id=watch_id)
@@ -200,6 +208,10 @@ class WatchKeys:
     @classmethod
     def snapshots_key(cls, watch_id: str) -> str:
         return cls.SNAPSHOTS.format(watch_id=watch_id)
+
+    @classmethod
+    def pending_outcome_key(cls, watch_id: str) -> str:
+        return cls.PENDING_OUTCOME.format(watch_id=watch_id)
 
 
 # The row's observation window closed before its horizon's nominal span had

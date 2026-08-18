@@ -16,15 +16,16 @@ class _CheckerManagerStub:
     def get_snapshots(self, _watch_id: str) -> list[WatchSnapshot]:
         return self._snapshots
 
-    def complete_watch(
+    def complete_watch_and_stage_outcome(
         self,
-        watch_id: str,
+        watch: AlertWatch,
         status: WatchStatus,
         outcome_return: float,
-        bars_to_hit: int | None = None,
-        outcome_time: datetime | None = None,
+        bars_to_hit: int | None,
+        outcome_time: datetime | None,
+        outcome: object,
     ) -> None:
-        self.completed = (watch_id, status, outcome_return, bars_to_hit, outcome_time)
+        self.completed = (watch.watch_id, status, outcome_return, bars_to_hit, outcome_time)
 
 
 class _CalendarStub:
