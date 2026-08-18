@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Heber now reaches Data-Gateway container-to-container instead of via the host** (`docker-compose.yml`, `Data-Gateway/docker-compose.yml`): every service dialled `host.docker.internal:6379` and `:8080`, so traffic left the container, crossed Docker Desktop's port forwarder, and came back in through a published port. When that forwarder broke, the consumers got `Errno 101 Network is unreachable` and crash-looped — 1h38m on 2026-08-08 and 25m on 08-11 — for a Redis that was up the whole time. Both projects now attach to a shared external `empire-bus` network and Heber dials `data-gateway-redis:6379` and `data-gateway:8080` by name. Create the network once with `docker network create empire-bus`; it is external so neither project owns it and a `compose down` in either cannot remove it from under the other. Only the seven services that actually talk to Redis or the gateway are attached — `heber-postgres` and `heber-compactor` stay off it.
+- **Docs updated to match the container-to-container networking change above** (`docs/configuration-guide.md`, `docs/deployment-guide.md`, `docs/operations/runbook.md`): three docs still told readers the consumer reaches Data-Gateway's Redis at `host.docker.internal:6379` in dev. All three now say `data-gateway-redis:6379` over the shared `empire-bus` docker network, matching current `docker-compose.yml`.
 
 ### Fixed
 

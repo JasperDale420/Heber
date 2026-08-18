@@ -61,7 +61,7 @@ Day-to-day operational guide for the Heber Data Lakehouse.
 | heber-watch         | —                | Flow alert outcome tracker     |
 
 > [!NOTE]
-> The consumer reads from Data Gateway's Redis (`host.docker.internal:6379`) by default, not Heber's own Redis. The stream name is `heber:events` with consumer group `heber-writers`.
+> The consumer reads from Data Gateway's Redis at `data-gateway-redis:6379` over the shared `empire-bus` docker network, not Heber's own Redis. The stream name is `heber:events` with consumer group `heber-writers`.
 
 ---
 

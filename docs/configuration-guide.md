@@ -203,7 +203,7 @@ See `.env.example` for the canonical list.
 
 **From inside containers**, use the service names: `postgres`, `redis`, `clickhouse`, `heber-catalog`, etc., with their internal ports.
 
-> The consumer reads Data-Gateway's Redis (`host.docker.internal:6379` in dev) by default, not Heber's own Redis. The stream is always `heber:events` with consumer group `heber-writers`.
+> Under Docker Compose, the consumer reaches Data-Gateway's Redis at `data-gateway-redis:6379` over the shared `empire-bus` docker network (container name, not `host.docker.internal`), not Heber's own Redis. The stream is always `heber:events` with consumer group `heber-writers`.
 
 ## One-Time Volume Initialization
 

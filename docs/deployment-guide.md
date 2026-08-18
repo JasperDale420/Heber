@@ -8,7 +8,7 @@ Sister docs: [system architecture](./system-architecture.md), [configuration gui
 
 - Docker + Docker Compose
 - Python 3.12+ and [uv](https://github.com/astral-sh/uv)
-- An accessible Data-Gateway instance (default `host.docker.internal:6379` for Redis ingest)
+- An accessible Data-Gateway instance, reachable at `data-gateway-redis:6379` over the shared `empire-bus` docker network for Redis ingest
 - External volume mountable at `/Volumes/heber` (or override via `HEBER_VOLUME_ROOT`)
 - `.env` configured from `.env.example`
 
@@ -37,7 +37,7 @@ docker compose up -d            # bring up the stack
 | `heber-compactor` | Parquet compaction | — |
 | `heber-watch` | Flow-alert outcome tracker | metrics `9091` |
 
-The consumer reads from Data-Gateway's Redis (`host.docker.internal:6379`) by default. The stream is `heber:events` with consumer group `heber-writers`. Override via [`HEBER_REDIS_URL` and friends](./configuration-guide.md#redis-event-bus).
+The consumer reads from Data-Gateway's Redis at `data-gateway-redis:6379` over the shared `empire-bus` docker network. The stream is `heber:events` with consumer group `heber-writers`. Override via [`HEBER_REDIS_URL` and friends](./configuration-guide.md#redis-event-bus).
 
 ## Health Checks
 
