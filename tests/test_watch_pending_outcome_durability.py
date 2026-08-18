@@ -79,6 +79,21 @@ class _FakeRedis:
         # empty snapshot list (the "expired with no snapshots" path).
         return []
 
+    def eval(self, script: str, numkeys: int, *args: str) -> int:  # noqa: ARG002
+        """Apply the complete-and-stage Lua atomically (see manager.COMPLETE_AND_STAGE_LUA)."""
+        keys = list(args[:numkeys])
+        watch_json, watch_id, outcome_json, outcome_watch_id = list(args[numkeys:])
+        watch_key, active_key, by_symbol_key, pending_outcome_key, pending_index_key = keys
+        with self._lock:
+            self._kv[watch_key] = self._to_bytes(watch_json)
+            for bucket_key in (active_key, by_symbol_key):
+                bucket = self._sets.get(bucket_key)
+                if bucket:
+                    bucket.discard(self._to_bytes(watch_id))
+            self._kv[pending_outcome_key] = self._to_bytes(outcome_json)
+            self._sets.setdefault(pending_index_key, set()).add(self._to_bytes(outcome_watch_id))
+        return 1
+
     def pipeline(self) -> _FakePipeline:
         return _FakePipeline(self)
 
@@ -116,23 +131,11 @@ class _FakePipeline:
         self._ops = []
 
 
-class _BoomPipeline:
-    """A pipeline whose execute() fails before applying anything — models a
-    connection drop between queuing commands and the server ever seeing
-    EXEC, so nothing in the batch takes effect.
+def _boom_eval(*_args, **_kwargs) -> int:  # noqa: ANN003
+    """Models the EVAL never reaching the server — a connection drop before
+    Redis runs the script, so none of its writes take effect.
     """
-
-    def set(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
-        return self
-
-    def sadd(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
-        return self
-
-    def srem(self, *_args, **_kwargs) -> _BoomPipeline:  # noqa: ANN003
-        return self
-
-    def execute(self) -> None:
-        raise ConnectionError("redis unreachable")
+    raise ConnectionError("redis unreachable")
 
 
 class _CalendarStub:
@@ -269,7 +272,7 @@ async def test_write_failure_does_not_permanently_lose_the_label(
 
 
 @pytest.mark.unit
-def test_pipeline_failure_leaves_watch_active_instead_of_done_but_unstaged() -> None:
+def test_atomic_write_failure_leaves_watch_active_instead_of_done_but_unstaged() -> None:
     """Completing a watch and staging its outcome must be one atomic step.
 
     Before this, complete_watch and stage_pending_outcome were separate
@@ -284,7 +287,7 @@ def test_pipeline_failure_leaves_watch_active_instead_of_done_but_unstaged() -> 
     assert watch is not None
     checker = BarrierChecker(manager, calendar=_CalendarStub())
 
-    manager.redis.pipeline = lambda: _BoomPipeline()  # type: ignore[method-assign]
+    manager.redis.eval = _boom_eval  # type: ignore[method-assign]
 
     with pytest.raises(ConnectionError):
         checker.check_all()

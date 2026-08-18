@@ -45,7 +45,6 @@ FEED_ALIASES: dict[str, str] = {
     "cash-flow": "cash_flow",
     "cash-flows": "cash_flow",
 }
-FEED_ALIAS_MAP = FEED_ALIASES
 
 CONTRACTED_RAW_FEEDS: tuple[str, ...] = (
     "bars",
@@ -1114,7 +1113,6 @@ __all__ = [
     "CONTRACTED_RAW_FEEDS",
     "DATA_GATEWAY_FEEDS",
     "DLQ_REASON_UNCONTRACTED",
-    "FEED_ALIAS_MAP",
     "FEED_ALIASES",
     "FIELD_MAPPINGS",
     "LEGACY_MAPPABLE_FEEDS",
