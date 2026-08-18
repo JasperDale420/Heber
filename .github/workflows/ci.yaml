@@ -75,6 +75,19 @@ jobs:
   # ===========================================================================
   test:
     runs-on: ubuntu-latest
+    services:
+      # Scratch Redis so the watch-outcome Lua regression runs for real rather
+      # than being skipped. Empty and job-scoped; the test refuses any Redis
+      # that is not empty.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -106,6 +119,8 @@ jobs:
         run: bandit -c pyproject.toml -r heber --severity-level high --confidence-level high
 
       - name: Run unit tests with coverage
+        env:
+          HEBER_TEST_REDIS_URL: redis://127.0.0.1:6399/0
         run: pytest tests/ -v --cov=heber --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
