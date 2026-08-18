@@ -112,6 +112,23 @@ pulls), so per-date backfill restores them. See
 `docs/operations/postmortem-2026-07-19-power-outage.md` and the
 2026-07-21 CHANGELOG entries for the overload remediation.
 
+### Gold `labels_alert_barriers`: one lost write at `dt=2026-06-09`
+
+| Dataset | Missing | Cause | Recoverable? |
+|---------|---------|-------|--------------|
+| `labels_alert_barriers` | one write within `dt=2026-06-09` | The rename that publishes a part file completed before its data reached the disk — the lakehouse volume is exFAT, which has no journaling — leaving `part-20260609161826320314-62f8971d.parquet` at zero bytes. The write never landed, so the rows it would have held were never on disk. The partition retains 28 healthy part files. The empty file was removed on 2026-08-15 to unblock strict reads; the record is at `~/heber-repair-backups/lost-fragments/`. | **No** — permanent, row count unknown |
+
+The row count is unknowable — the file never had a Parquet footer — so this day
+is under-represented in the label set by an unmeasurable amount. Anything
+training on `labels_alert_barriers` should treat 2026-06-09 as short by an
+unknown margin rather than complete.
+
+Writers now stage to a temporary file, verify its footer reads back, and fsync
+before publishing (`heber/writer/utils.py`, `publish_parquet_atomically`), which
+makes this much less likely. It is not eliminated: on this volume a reported
+successful flush is still not a full durability guarantee, tracked as
+[#55](https://github.com/JasperDale420/Heber/issues/55).
+
 ### Gold `meta_label_features`: Greeks are not reconstructable for past dates
 
 Option Greeks (`delta`, `gamma`, `theta`, `vega`, `iv`) and the `iv_rank`, `gex`,
