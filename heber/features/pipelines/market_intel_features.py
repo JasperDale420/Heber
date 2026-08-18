@@ -370,13 +370,6 @@ def compute_ftd_features(ftd: pd.DataFrame) -> pd.DataFrame:
         ftd_avg_price=("price", "mean"),
     ).reset_index()
 
-    # Days outstanding: count distinct ftd_dates per (symbol, date) as proxy
-    if "ftd_date" in df.columns:
-        days_out = groups["ftd_date"].nunique().reset_index(name="ftd_days_outstanding")
-        agg = agg.merge(days_out, on=["instrument_key", "date"], how="left")
-    else:
-        agg["ftd_days_outstanding"] = 1
-
     agg = agg.rename(columns={"date": "ts_event"})
     agg["ts_event"] = pd.to_datetime(agg["ts_event"], utc=True)
 

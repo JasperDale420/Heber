@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Excursion analytics no longer scans for two trading systems that no longer exist** (`heber/features/pipelines/excursion_analytics.py`): the ledger map still listed `whalehunter/ledger.db` and `trading-bot/ledger.db`. Neither repo exists anywhere in the monorepo, so those two entries could only ever miss. The five remaining systems all still have their directories.
 - **`FEED_ALIAS_MAP` is gone** (`heber/writer/ingest_contracts.py`): it was a backwards-compatibility alias for `FEED_ALIASES` with no production caller — the only reference in the whole monorepo was one test, now pointed at `FEED_ALIASES` directly.
+- **`ftd_days_outstanding` is no longer computed or served** (`heber/features/pipelines/market_intel_features.py`, `features/feature_views/market_intel.py`): the column was `nunique(ftd_date)` within each `(instrument_key, event date)` group, labelled in the code as a "proxy" for how long a fail-to-deliver had been open. It never measured that, and there is no correct version of it to write — SEC fails-to-deliver records are aggregate outstanding balances for a settlement date, and how long an individual fail has been open is not derivable from them. What it actually produced was a second copy of the row count: with one FTD record per settlement date in a group, `nunique(ftd_date)` equals `count(quantity)`. Measured over a 13,616-row sample of `gold/dataset=ftd_features`, 82.6% of rows had it exactly equal to `ftd_trade_count`. No consumer outside Heber referenced it.
+
+  This also resolves a live mismatch: every `ftd_features` part written since 2026-07-31 (42 files) already lacks the column, while the Feast view still declared it as a required field. Older parts still carry it, so `gold/dataset=ftd_features` holds both shapes; readers tolerate the missing column, and no backfill is needed to drop a feature nothing consumes.
 
 ### Added
 
