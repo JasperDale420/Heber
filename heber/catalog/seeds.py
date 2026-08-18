@@ -20,7 +20,7 @@ from typing import NamedTuple
 import pyarrow as pa
 import pyarrow.parquet as pq
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from heber.catalog.db import DataCoverage, Dataset, DatasetVersion, FeedMapping
@@ -405,7 +405,6 @@ class _DirectoryListing(NamedTuple):
     subdirs: list[tuple[Path, str | None]]
     files: list[tuple[str, Path]]
     mtimes: list[tuple[str, float]]
-    skipped_empty: int
 
 
 class _FeedWalk(NamedTuple):
@@ -414,7 +413,6 @@ class _FeedWalk(NamedTuple):
     files_by_date: dict[str, list[Path]]
     mtime_by_date: dict[str, float]
     dirs_scanned: int
-    skipped_empty: int
 
 
 def _list_one_directory(directory: Path, date_str: str | None) -> _DirectoryListing:
@@ -432,7 +430,6 @@ def _list_one_directory(directory: Path, date_str: str | None) -> _DirectoryList
     subdirs: list[tuple[Path, str | None]] = []
     files: list[tuple[str, Path]] = []
     mtimes: list[tuple[str, float]] = []
-    skipped_empty = 0
 
     try:
         with os.scandir(directory) as entries:
@@ -452,19 +449,19 @@ def _list_one_directory(directory: Path, date_str: str | None) -> _DirectoryList
                             # Unknown mtime must never look unchanged.
                             mtimes.append((child_date, float("inf")))
                 elif date_str is not None and entry.name.endswith(".parquet"):
-                    try:
-                        if entry.stat().st_size == 0:
-                            skipped_empty += 1
-                            continue
-                    except OSError:
-                        # Size unknown is not the same as empty — keep the file
-                        # so the footer read reports why it could not be used.
-                        pass
+                    # Deliberately no stat() here. Zero-byte files are filtered
+                    # at read time instead: this ran on every file on every
+                    # pass, including the ones a reuse pass never opens, and on
+                    # the lakehouse mount a per-file stat costs 4.24ms against
+                    # 0.15ms for the scandir entry itself — 29x, measured. With
+                    # parallelism per directory, one leaf holding ~800 files
+                    # serialised 800 stats while occupying a worker, which is
+                    # why feed=quotes (~825k files) never once finished a walk.
                     files.append((date_str, Path(entry.path)))
     except OSError as exc:
         logger.warning("catalog_partition_scan_oserror", path=str(directory), error=str(exc)[:200])
 
-    return _DirectoryListing(subdirs, files, mtimes, skipped_empty)
+    return _DirectoryListing(subdirs, files, mtimes)
 
 
 def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> _FeedWalk:
@@ -476,7 +473,6 @@ def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> _FeedWalk
     files_by_date: dict[str, list[Path]] = {}
     mtime_by_date: dict[str, float] = {}
     dirs_scanned = 0
-    skipped_empty = 0
 
     level: list[tuple[Path, str | None]] = [(feed_dir, None)]
     while level:
@@ -484,7 +480,6 @@ def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> _FeedWalk
         next_level: list[tuple[Path, str | None]] = []
         for listing in pool.map(lambda item: _list_one_directory(*item), level):
             next_level.extend(listing.subdirs)
-            skipped_empty += listing.skipped_empty
             for date_str, path in listing.files:
                 files_by_date.setdefault(date_str, []).append(path)
             for date_str, mtime in listing.mtimes:
@@ -492,7 +487,7 @@ def _walk_partition_files(feed_dir: Path, pool: ThreadPoolExecutor) -> _FeedWalk
                     mtime_by_date[date_str] = mtime
         level = next_level
 
-    return _FeedWalk(files_by_date, mtime_by_date, dirs_scanned, skipped_empty)
+    return _FeedWalk(files_by_date, mtime_by_date, dirs_scanned)
 
 
 def _read_row_count(path: Path) -> int | None:
@@ -501,7 +496,18 @@ def _read_row_count(path: Path) -> int | None:
     None rather than 0 so an unreadable file is distinguishable from an empty
     one: both contribute no rows, but only one of them means coverage is now
     undercounting.
+
+    The zero-byte check lives here rather than in the walk. A file of zero bytes
+    is a write that never landed, not corruption, and pyarrow raises on it —
+    checking here keeps the two apart while paying the stat only for files
+    being opened anyway, where 4ms disappears beside a 106ms footer read.
     """
+    try:
+        if path.stat().st_size == 0:
+            return 0
+    except OSError:
+        # Size unknown is not the same as empty; let the footer read say why.
+        pass
     try:
         return int(pq.read_metadata(path).num_rows)
     except Exception as exc:
@@ -574,10 +580,15 @@ def _scan_partition_dates(
         counts = list(pool.map(_read_row_count, [path for _, path in to_read]))
 
     unreadable = 0
+    skipped_empty = 0
     for (date_str, _), rows in zip(to_read, counts, strict=True):
         if rows is None:
             unreadable += 1
             continue
+        if rows == 0:
+            # A write that never landed, or a genuinely empty part file. Benign
+            # either way, and deliberately not counted as unreadable.
+            skipped_empty += 1
         totals[date_str] = totals.get(date_str, 0) + rows
 
     results = [(date_str, rows) for date_str, rows in sorted(totals.items()) if rows > 0]
@@ -596,7 +607,7 @@ def _scan_partition_dates(
         files=len(to_read),
         dirs=walk.dirs_scanned,
         reused_dates=reused,
-        skipped_empty=walk.skipped_empty,
+        skipped_empty=skipped_empty,
         unreadable=unreadable,
         newest_mtime_age_seconds=round(time.time() - newest_mtime, 1) if newest_mtime else None,
         elapsed_seconds=round(time.monotonic() - started, 2),
@@ -638,6 +649,49 @@ async def _load_recorded_coverage(session: AsyncSession) -> dict[str, dict[str, 
     # days — the walk must hold no transaction at all.
     await session.rollback()
     return recorded
+
+
+def _present_feed_names() -> set[str]:
+    """Feed names that currently have a directory under Silver."""
+    return {
+        e.name.split("=", 1)[1]
+        for e in settings.silver_path.iterdir()
+        if e.name.startswith("feed=") and not e.name.startswith(".")
+    }
+
+
+async def _prune_vanished_feeds(session: AsyncSession, recorded_feeds: set[str]) -> bool:
+    """Drop coverage for feeds with no directory left. Returns whether anything was pruned.
+
+    Coverage is derived entirely from disk and rebuilt every pass, so a row for
+    a feed that has no directory is stale metadata the catalog is presenting as
+    fact — `bars_1m`, `data` and `stocks` sat there for months after the feeds
+    were gone. It also makes per-feed staleness unusable, because the oldest
+    coverage is then always a decommissioned feed.
+
+    The listing is taken fresh rather than reusing the walk, so an interrupted
+    pass cannot mistake feeds it never reached for feeds that vanished. An empty
+    or failed listing prunes nothing: that is a missing mount, not a decommission.
+    """
+    if not recorded_feeds:
+        return False
+    try:
+        present = await asyncio.to_thread(_present_feed_names)
+    except OSError:
+        logger.warning("coverage_prune_skipped", reason="feed_listing_failed", exc_info=True)
+        return False
+    if not present:
+        logger.warning("coverage_prune_skipped", reason="empty_feed_listing", recorded=len(recorded_feeds))
+        return False
+
+    vanished = sorted(recorded_feeds - present)
+    if not vanished:
+        return False
+
+    await session.execute(delete(DataCoverage).where(DataCoverage.dataset_name.in_(vanished)))
+    await session.commit()
+    logger.info("coverage_pruned_vanished_feeds", feeds=vanished, count=len(vanished))
+    return True
 
 
 async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = True) -> int:
@@ -719,8 +773,20 @@ async def seed_coverage_from_disk(session: AsyncSession, reuse_recorded: bool = 
         upserted += await _write_feed_coverage(session, feed_name, scan_results, scan_started_at)
 
     logger.info("coverage_scan_complete", feeds=len(manifest), failed_feeds=failed_feeds, upserted=upserted)
+
+    # Only after a pass that walked everything: a run cut short partway through
+    # has not seen the feeds it never reached, and must not read them as gone.
+    if not failed_feeds:
+        await _prune_vanished_feeds(session, await _recorded_feed_names(session))
+
     logger.info("coverage_seeded_from_disk", upserted=upserted)
     return upserted
+
+
+async def _recorded_feed_names(session: AsyncSession) -> set[str]:
+    """Feed names that currently hold coverage rows."""
+    result = await session.execute(select(DataCoverage.dataset_name).distinct())
+    return {name for (name,) in result.all()}
 
 
 async def _write_feed_coverage(

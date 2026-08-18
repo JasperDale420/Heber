@@ -26,14 +26,18 @@ from fastapi.testclient import TestClient
 from heber.catalog import api as catalog_api
 
 
-def _session_returning(last_updated: datetime | None, rows: int = 14303):
-    """Stub async_session whose scalar/first answers the coverage query."""
+def _session_returning(last_updated: datetime | None, rows: int = 14303, stalest: str = "quotes"):
+    """Stub async_session whose scalar/first answers the coverage query.
+
+    The query reports the OLDEST per-feed scan and names that feed, so the row
+    is (min_last_updated_ts, feed_count, stalest_feed_name).
+    """
 
     @asynccontextmanager
     async def _stub():
         session = AsyncMock()
         result = MagicMock()
-        result.first.return_value = (last_updated, rows)
+        result.first.return_value = (last_updated, rows, stalest, last_updated)
         result.scalar_one_or_none.return_value = last_updated
         session.execute = AsyncMock(return_value=result)
         yield session
@@ -152,3 +156,37 @@ class TestDataflowReportSurfacesStaleCoverage:
 
         assert result["status"] == "fail"
         assert result["id"] == "catalog_coverage"
+
+
+def test_the_stalest_feed_is_named(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Knowing coverage is stale is not much use without knowing which feed."""
+    monkeypatch.setattr(
+        catalog_api,
+        "async_session",
+        _session_returning(datetime.now(UTC) - timedelta(days=2), stalest="quotes"),
+    )
+
+    body = client.get("/health/coverage").json()
+
+    assert body["status"] == "stale"
+    assert body["stalest_feed"] == "quotes"
+
+
+def test_the_starved_feed_is_surfaced_even_while_status_is_ok(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh max() must not be the only thing reported.
+
+    feed=quotes has never finished a walk, so every feed after it
+    alphabetically goes unscanned while earlier feeds keep the maximum current.
+    Status still gates on the newest scan — gating on the oldest would report
+    stale permanently until that walk is pruned — but the oldest is reported
+    beside it so the starvation is visible rather than hidden.
+    """
+    monkeypatch.setattr(catalog_api, "async_session", _session_returning(datetime.now(UTC), stalest="trades"))
+
+    body = client.get("/health/coverage").json()
+
+    assert body["status"] == "ok"
+    assert body["stalest_feed"] == "trades"
+    assert body["stalest_feed_age_seconds"] is not None

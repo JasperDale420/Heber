@@ -134,6 +134,18 @@ QUALITY_FLAG_GREEKS_NO_POINT_IN_TIME_SOURCE = "greeks_no_point_in_time_source"
 QUALITY_FLAG_MARKET_TIDE_FROM_SILVER = "market_tide_recovered_from_silver"
 QUALITY_FLAG_GEX_FROM_SILVER = "gex_recovered_from_silver"
 
+# _enrich_greeks leaves every Greek column null in four different situations
+# that used to be indistinguishable downstream (the row just came out all-null,
+# with no record of why). These flags mark which one happened so a quarantined
+# row is diagnosable from the Gold data itself instead of requiring a live
+# reproduction. They are observability only — they do not exempt the row from
+# the all-Greeks-null quarantine in heber.ml.datasets.
+QUALITY_FLAG_GREEKS_REQUEST_FAILED = "greeks_request_failed"
+QUALITY_FLAG_GREEKS_NO_CONTRACTS_RETURNED = "greeks_no_contracts_returned"
+QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT = "greeks_no_matching_contract"
+QUALITY_FLAG_GREEKS_PROVIDER_RETURNED_NULL = "greeks_provider_returned_null"
+QUALITY_FLAG_GREEKS_INVALID_PAYLOAD = "greeks_invalid_payload"
+
 
 class _Unset:
     """Sentinel distinguishing "argument omitted" from an explicit ``None``."""
@@ -1054,23 +1066,38 @@ class AlertFeatureExtractor:
                 timeout_seconds=self.request_timeout_option_chain_seconds,
             )
             if data is None:
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_REQUEST_FAILED)
                 return features
 
             contracts = data.get("data", {}).get("contracts", [])
             if not contracts:
                 logger.debug("No contracts found for Greeks", symbol=features.underlying)
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_NO_CONTRACTS_RETURNED)
                 return features
 
             contract = self._find_matching_contract(contracts, features.strike)
             if not contract:
                 logger.debug("No valid contracts found for Greeks", symbol=features.underlying)
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT)
                 return features
+
+            # _find_matching_contract falls back to any valid-strike contract
+            # when the alert's exact strike isn't present, so a "found" contract
+            # is not necessarily the alert's contract — flag it the same as a
+            # true no-match, even though its Greeks (belonging to a different
+            # strike) still get populated below to preserve existing behavior.
+            contract_strike = coerce_optional_float(contract.get("strike_price", contract.get("strike")))
+            if contract_strike is None or abs(contract_strike - features.strike) >= 0.01:
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT)
 
             features.delta = coerce_optional_float(contract.get("delta"))
             features.gamma = coerce_optional_float(contract.get("gamma"))
             features.theta = coerce_optional_float(contract.get("theta"))
             features.vega = coerce_optional_float(contract.get("vega"))
             features.iv = coerce_optional_float(contract.get("implied_volatility", contract.get("iv")))
+
+            if all(v is None for v in (features.delta, features.gamma, features.theta, features.vega, features.iv)):
+                features.quality_flags.append(QUALITY_FLAG_GREEKS_PROVIDER_RETURNED_NULL)
 
             logger.debug(
                 "Enriched Greeks",
@@ -1084,6 +1111,7 @@ class AlertFeatureExtractor:
             raise
         except _ENRICHMENT_PAYLOAD_ERRORS as e:
             self._record_enrichment_failure(features, "Greeks", e, underlying=features.underlying)
+            features.quality_flags.append(QUALITY_FLAG_GREEKS_INVALID_PAYLOAD)
 
         return features
 

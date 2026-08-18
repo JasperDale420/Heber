@@ -16,6 +16,11 @@ import pytest
 
 from heber.models.silver import FlowAlertRecord
 from heber.watch.features import (
+    QUALITY_FLAG_GREEKS_INVALID_PAYLOAD,
+    QUALITY_FLAG_GREEKS_NO_CONTRACTS_RETURNED,
+    QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT,
+    QUALITY_FLAG_GREEKS_PROVIDER_RETURNED_NULL,
+    QUALITY_FLAG_GREEKS_REQUEST_FAILED,
     AlertFeatureExtractor,
     AlertFeatures,
     _backfill_gex_vex,
@@ -148,6 +153,137 @@ async def test_skipped_step_no_gateway_records_no_failure() -> None:
     extractor = AlertFeatureExtractor(gateway_url=None)
     enriched = await extractor._enrich_gex(_base_features())
     assert enriched.enrichment_failures == []
+
+
+# --- _enrich_greeks: distinguish the silent all-null paths (no exception,
+# no enrichment_failures entry) so a quarantined row is diagnosable from the
+# Gold data itself instead of requiring a live reproduction. ---
+
+
+@pytest.mark.asyncio
+async def test_greeks_request_failed_flags_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _no_response(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return None
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _no_response)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.enrichment_failures == []
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_REQUEST_FAILED]
+
+
+@pytest.mark.asyncio
+async def test_greeks_empty_chain_flags_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _empty_chain(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {"data": {"contracts": []}}
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _empty_chain)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_NO_CONTRACTS_RETURNED]
+
+
+@pytest.mark.asyncio
+async def test_greeks_no_matching_contract_flags_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _no_valid_strike(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {"data": {"contracts": [{"strike_price": None}]}}
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _no_valid_strike)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT]
+
+
+@pytest.mark.asyncio
+async def test_greeks_provider_returned_null_flags_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _null_greeks(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {
+            "data": {
+                "contracts": [
+                    {
+                        "strike_price": 100.0,
+                        "delta": None,
+                        "gamma": None,
+                        "theta": None,
+                        "vega": None,
+                        "iv": None,
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _null_greeks)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_PROVIDER_RETURNED_NULL]
+
+
+@pytest.mark.asyncio
+async def test_greeks_fallback_contract_flags_no_matching_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_find_matching_contract falls back to any valid-strike contract when the
+    alert's exact strike isn't present. The fallback's Greeks belong to a
+    different contract than the alert, so this must be flagged even though
+    Greeks end up populated — the old behavior silently attributed another
+    contract's Greeks to the alert with no record at all."""
+    extractor = _make_extractor()
+
+    async def _wrong_strike_contract(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {"data": {"contracts": [{"strike_price": 105.0, "delta": 0.4}]}}
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _wrong_strike_contract)
+
+    # _base_features() alerts at strike=100.0; no 100.0 contract is returned.
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta == 0.4  # fallback behavior preserved
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_NO_MATCHING_CONTRACT]
+
+
+@pytest.mark.asyncio
+async def test_greeks_invalid_payload_flags_quality(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _malformed_payload(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {"data": None}
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _malformed_payload)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta is None
+    assert enriched.enrichment_failures == ["Greeks"]
+    assert enriched.quality_flags == [QUALITY_FLAG_GREEKS_INVALID_PAYLOAD]
+
+
+@pytest.mark.asyncio
+async def test_greeks_success_records_no_quality_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_extractor()
+
+    async def _real_greeks(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return {"data": {"contracts": [{"strike_price": 100.0, "delta": 0.5}]}}
+
+    monkeypatch.setattr(extractor, "_request_json_with_retry", _real_greeks)
+
+    enriched = await extractor._enrich_greeks(_base_features())
+
+    assert enriched.delta == 0.5
+    assert enriched.quality_flags == []
 
 
 # --- extract() aggregates failures across steps ---
