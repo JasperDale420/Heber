@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import threading
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -316,49 +317,60 @@ def test_no_prefix_of_the_script_can_strand_a_watch(fail_after: int) -> None:
     )
 
 
+_NAMESPACED_KEYS = (
+    "WATCH",
+    "ACTIVE_WATCHES",
+    "BY_SYMBOL",
+    "EXPIRING",
+    "SNAPSHOTS",
+    "BY_ALERT",
+    "PENDING_OUTCOME",
+    "PENDING_OUTCOMES",
+)
+
+
+@pytest.fixture
+def namespaced_watch_keys(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Point every WatchKeys constant at a per-run namespace.
+
+    Without this, a real-Redis test writes and deletes the same global keys the
+    live watch service uses (`heber:watches:active`, `heber:watch:pending_outcomes`),
+    so a mispointed HEBER_TEST_REDIS_URL would destroy production watch state.
+    Namespacing removes the possibility rather than guarding against it — the
+    test cannot name a production key even if aimed at production.
+    """
+    namespace = f"heber-test:{uuid.uuid4().hex}"
+    for attr in _NAMESPACED_KEYS:
+        original = getattr(WatchKeys, attr)
+        monkeypatch.setattr(WatchKeys, attr, original.replace("heber:", f"{namespace}:", 1))
+    return namespace
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not os.environ.get("HEBER_TEST_REDIS_URL"),
-    reason="set HEBER_TEST_REDIS_URL to an EMPTY scratch Redis to run this",
+    reason="set HEBER_TEST_REDIS_URL to a scratch Redis to run this",
 )
-def test_lua_against_real_redis() -> None:
+def test_lua_against_real_redis(namespaced_watch_keys: str) -> None:
     """Exercise the actual Lua on a real Redis, both paths.
 
     The happy path is asserted first and deliberately: a script with a syntax
     error would make *every* call raise, so a test that only checked the
     WRONGTYPE abort would pass on a completely broken script.
 
-    This test writes a deliberately malformed key, so it refuses to run against
-    anything but a scratch instance: it aborts unless the target database is
-    already empty, and it never flushes — it deletes only the specific keys it
-    created. The empty-database check is what stops a mispointed
-    HEBER_TEST_REDIS_URL from touching the live event bus. Spin one up with
+    Every key this touches lives under a per-run namespace (see the fixture),
+    so it cannot read or delete live watch state even if HEBER_TEST_REDIS_URL
+    is pointed somewhere it should not be. Spin up a scratch instance with
     `docker run -d --rm -p 6399:6379 redis:7-alpine`.
     """
     import redis as redis_lib
 
     client = redis_lib.from_url(os.environ["HEBER_TEST_REDIS_URL"])
-    if client.dbsize() != 0:
-        pytest.skip("refusing to run against a non-empty Redis — point HEBER_TEST_REDIS_URL at a scratch instance")
-
-    created: list[str] = [WatchKeys.ACTIVE_WATCHES, WatchKeys.PENDING_OUTCOMES]
-
-    def _track(watch) -> None:  # noqa: ANN001
-        created.extend(
-            [
-                WatchKeys.watch_key(watch.watch_id),
-                WatchKeys.by_symbol_key(watch.occ_symbol),
-                WatchKeys.pending_outcome_key(watch.watch_id),
-                WatchKeys.by_alert_key(watch.alert_id),
-            ]
-        )
-
     try:
         # Happy path: the script completes the watch and stages its outcome.
         manager = WatchManager(redis_client=client, calendar=_CalendarStub())
         watch = _create_already_expired_watch(manager, alert_id="alert-happy")
         assert watch is not None
-        _track(watch)
         outcomes = BarrierChecker(manager, calendar=_CalendarStub()).check_all()
         assert len(outcomes) == 1
         assert not client.sismember(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
@@ -366,14 +378,11 @@ def test_lua_against_real_redis() -> None:
         assert len(manager.get_pending_outcomes()) == 1
 
         # WRONGTYPE path: nothing is mutated, the watch stays retryable.
-        for key in created:
-            client.delete(key)
+        client.delete(WatchKeys.PENDING_OUTCOMES)
+        client.set(WatchKeys.PENDING_OUTCOMES, "not-a-set")
         manager = WatchManager(redis_client=client, calendar=_CalendarStub())
         watch = _create_already_expired_watch(manager, alert_id="alert-wrongtype")
         assert watch is not None
-        _track(watch)
-        client.delete(WatchKeys.PENDING_OUTCOMES)
-        client.set(WatchKeys.PENDING_OUTCOMES, "not-a-set")
 
         with pytest.raises(redis_lib.exceptions.ResponseError):
             BarrierChecker(manager, calendar=_CalendarStub()).check_all()
@@ -383,5 +392,5 @@ def test_lua_against_real_redis() -> None:
         )
         assert client.type(WatchKeys.PENDING_OUTCOMES) == b"string", "the bad key must be left untouched"
     finally:
-        for key in created:
+        for key in client.scan_iter(match=f"{namespaced_watch_keys}:*"):
             client.delete(key)

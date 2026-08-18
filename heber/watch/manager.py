@@ -613,7 +613,20 @@ class WatchManager:
         return outcomes
 
     def clear_pending_outcome(self, watch_id: str) -> None:
-        """Clear a pending outcome once it has been durably written to Gold."""
+        """Clear a pending outcome once it has been durably written to Gold.
+
+        Clears by watch_id, not by payload, which assumes one writer. That
+        holds today: WatchService._check_and_write_loop stages every outcome
+        via check_all(), *then* reads the pending set, writes it, and clears
+        it — all sequentially in one process, and heber-watch runs as a single
+        instance with no replicas. Two watch services would break the
+        assumption: one could stage a newer outcome for a watch between
+        another's read and clear, and the clear would discard it.
+
+        ponytail: single-writer clear. Scaling heber-watch past one instance
+        requires versioning the staged payload and making this a Lua
+        compare-and-delete that only clears the payload it actually wrote.
+        """
         self.redis.delete(WatchKeys.pending_outcome_key(watch_id))
         self.redis.srem(WatchKeys.PENDING_OUTCOMES, watch_id)
 
