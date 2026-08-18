@@ -5,25 +5,25 @@ from heber.schemas.silver import SILVER_SCHEMAS
 from heber.writer.ingest_contracts import (
     BRONZE_ONLY_SILVER_DATASETS,
     DATA_GATEWAY_FEEDS,
-    FEED_ALIAS_MAP,
+    FEED_ALIASES,
     resolve_feed_alias,
 )
 
 
 def test_alias_map_matches_contract() -> None:
-    assert FEED_ALIAS_MAP["ftds"] == "ftd"
-    assert FEED_ALIAS_MAP["short_interest"] == "short_data"
-    assert FEED_ALIAS_MAP["short_volume"] == "short_data"
-    assert FEED_ALIAS_MAP["historic_option_volume"] == "historic_option_volume"
-    assert FEED_ALIAS_MAP["flow"] == "flow_alerts"
-    assert FEED_ALIAS_MAP["ticker_flow"] == "flow_alerts"
-    assert FEED_ALIAS_MAP["greeks"] == "greek_exposure"
-    assert FEED_ALIAS_MAP["gex"] == "greek_exposure"
-    assert FEED_ALIAS_MAP["darkpool_ticker"] == "darkpool"
-    assert FEED_ALIAS_MAP["option_trades"] == "trades"
-    assert FEED_ALIAS_MAP["crypto_bars"] == "bars"
-    assert FEED_ALIAS_MAP["crypto_trades"] == "trades"
-    assert FEED_ALIAS_MAP["institutions"] == "institution_holdings"
+    assert FEED_ALIASES["ftds"] == "ftd"
+    assert FEED_ALIASES["short_interest"] == "short_data"
+    assert FEED_ALIASES["short_volume"] == "short_data"
+    assert FEED_ALIASES["historic_option_volume"] == "historic_option_volume"
+    assert FEED_ALIASES["flow"] == "flow_alerts"
+    assert FEED_ALIASES["ticker_flow"] == "flow_alerts"
+    assert FEED_ALIASES["greeks"] == "greek_exposure"
+    assert FEED_ALIASES["gex"] == "greek_exposure"
+    assert FEED_ALIASES["darkpool_ticker"] == "darkpool"
+    assert FEED_ALIASES["option_trades"] == "trades"
+    assert FEED_ALIASES["crypto_bars"] == "bars"
+    assert FEED_ALIASES["crypto_trades"] == "trades"
+    assert FEED_ALIASES["institutions"] == "institution_holdings"
 
 
 def test_all_data_gateway_feeds_route_to_mapped_silver_schema() -> None:

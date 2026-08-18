@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Excursion analytics no longer scans for two trading systems that no longer exist** (`heber/features/pipelines/excursion_analytics.py`): the ledger map still listed `whalehunter/ledger.db` and `trading-bot/ledger.db`. Neither repo exists anywhere in the monorepo, so those two entries could only ever miss. The five remaining systems all still have their directories.
+- **`FEED_ALIAS_MAP` is gone** (`heber/writer/ingest_contracts.py`): it was a backwards-compatibility alias for `FEED_ALIASES` with no production caller — the only reference in the whole monorepo was one test, now pointed at `FEED_ALIASES` directly.
+
 ### Added
 
 - **A quarantined `meta_label_features` row now records why its Greeks came back null** (`heber/watch/features.py`): `_enrich_greeks` had four distinct silent-null outcomes — the gateway request failing outright, the option chain coming back empty, no contract matching the alert's strike, and a contract being found but every Greek value still null — and none of them left a trace; the row just came out identical to a genuinely broken one, and `enrichment_failures` (which would have distinguished "an exception was thrown" from "nothing was thrown") is deliberately excluded from the Gold write. Investigating why ~4%/day of rows land in the `all_greeks_null` quarantine (`heber/ml/datasets.py`) required a live reproduction against production instead of just reading the data. Each of the four outcomes now appends a distinct `quality_flags` entry (`greeks_request_failed`, `greeks_no_contracts_returned`, `greeks_no_matching_contract`, `greeks_provider_returned_null`) so the next occurrence is diagnosable from the Gold row itself. This is observability only — none of the new flags are added to the quarantine-exemption list, so quarantine behavior is unchanged; whether any of these should later exempt a row from quarantine is a separate decision that needs the Gold-data consumer contract nailed down first.
