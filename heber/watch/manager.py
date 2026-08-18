@@ -26,6 +26,53 @@ from heber.watch.models import (
 logger = structlog.get_logger(__name__)
 
 
+# Completes a watch and stages its outcome in one step.
+#
+# Redis MULTI/EXEC cannot do this: it queues commands and then runs all of
+# them, so a command that fails at execution time (WRONGTYPE) leaves the
+# commands around it applied. Half-applying here is a permanent data loss —
+# the watch leaves the active set, so no checker pass revisits it, while its
+# outcome never reaches the pending index, so no retry pass finds it.
+#
+# Two things prevent that. First, the script validates every key's type before
+# its first write, so the WRONGTYPE case aborts with nothing mutated. Second —
+# because Lua gives isolation, not rollback, and a later command can still fail
+# (OOM, for one) leaving earlier ones applied — the writes are ordered so that
+# every prefix of them is a recoverable state:
+#
+#   1-2. stage the outcome and index it. Failing here leaves the watch fully
+#        active: nothing was removed, so the next checker pass redoes it.
+#   3-5. mark the watch terminal and drop it from the active indexes. Failing
+#        here leaves the outcome already indexed, so the retry pass finds it.
+#
+# The overlap in the middle — outcome staged while the watch is still active —
+# is the safe direction to fail. It can cost one redundant re-check, which
+# re-stages the same outcome under the same key and whose Gold row is written
+# to the deterministic outcome-{watch_id}.parquet, so it overwrites rather
+# than duplicating. The unsafe direction (watch gone, outcome unindexed) is
+# unreachable.
+COMPLETE_AND_STAGE_LUA = """
+local function check(key, want)
+  local t = redis.call('TYPE', key)['ok']
+  if t ~= 'none' and t ~= want then
+    return redis.error_reply('WRONGTYPE ' .. key .. ' holds ' .. t .. ', expected ' .. want)
+  end
+  return nil
+end
+
+local err = check(KEYS[1], 'string') or check(KEYS[2], 'set') or check(KEYS[3], 'set')
+             or check(KEYS[4], 'string') or check(KEYS[5], 'set')
+if err then return err end
+
+redis.call('SET', KEYS[4], ARGV[3])
+redis.call('SADD', KEYS[5], ARGV[4])
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SREM', KEYS[2], ARGV[2])
+redis.call('SREM', KEYS[3], ARGV[2])
+return 1
+"""
+
+
 class WatchManager:
     """Manages alert watches in Redis.
 
@@ -481,13 +528,24 @@ class WatchManager:
         watch.bars_to_hit = bars_to_hit
         watch.updated_at = datetime.now(UTC)
 
-        pipeline = self.redis.pipeline()
-        pipeline.set(WatchKeys.watch_key(watch.watch_id), watch.model_dump_json())
-        pipeline.srem(WatchKeys.ACTIVE_WATCHES, watch.watch_id)
-        pipeline.srem(WatchKeys.by_symbol_key(watch.occ_symbol), watch.watch_id)
-        pipeline.set(WatchKeys.pending_outcome_key(outcome.watch_id), outcome.model_dump_json())
-        pipeline.sadd(WatchKeys.PENDING_OUTCOMES, outcome.watch_id)
-        pipeline.execute()
+        # Server-side Lua (Redis EVAL), not Python eval — see
+        # COMPLETE_AND_STAGE_LUA for why a pipeline cannot give this guarantee.
+        # ponytail: plain EVAL rather than register_script/EVALSHA; watch
+        # completions run at tens per minute, so re-sending the script body is
+        # not worth the NOSCRIPT-retry handling. Switch if that rate changes.
+        self.redis.eval(
+            COMPLETE_AND_STAGE_LUA,
+            5,
+            WatchKeys.watch_key(watch.watch_id),
+            WatchKeys.ACTIVE_WATCHES,
+            WatchKeys.by_symbol_key(watch.occ_symbol),
+            WatchKeys.pending_outcome_key(outcome.watch_id),
+            WatchKeys.PENDING_OUTCOMES,
+            watch.model_dump_json(),
+            watch.watch_id,
+            outcome.model_dump_json(),
+            outcome.watch_id,
+        )
 
         if status != WatchStatus.EXPIRED:
             logger.info(
