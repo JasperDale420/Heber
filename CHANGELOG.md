@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`sqlparse` is pinned to 0.6.0 or newer** (`pyproject.toml`, `uv.lock`): the resolver had settled on 0.5.5, which carries three HIGH-severity advisories (CVE-2026-54284, CVE-2026-59893, CVE-2026-71491), all fixed in 0.6.0. This has been failing CI's Trivy `scan` job on master and on every pull request, so a genuine new finding would have been indistinguishable from the standing red. `sqlparse` is not a direct dependency — it arrives through `soda-core`, whose own requirement (`sqlparse~=0.4`) already admits 0.6.0, so a uv constraint was enough and no `soda-core` upgrade was needed. Nothing else in the lockfile moved.
+
 ### Removed
 
 - **Excursion analytics no longer scans for two trading systems that no longer exist** (`heber/features/pipelines/excursion_analytics.py`): the ledger map still listed `whalehunter/ledger.db` and `trading-bot/ledger.db`. Neither repo exists anywhere in the monorepo, so those two entries could only ever miss. The five remaining systems all still have their directories.

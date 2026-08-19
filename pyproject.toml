@@ -189,6 +189,15 @@ disallow_untyped_defs = false
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"]  # Skip assert warnings in tests
 
+[tool.uv]
+# sqlparse reaches us only through soda-core, which asks for `sqlparse~=0.4`
+# and would otherwise resolve to 0.5.5 — carrying CVE-2026-54284,
+# CVE-2026-59893 and CVE-2026-71491, all HIGH and all fixed in 0.6.0. That
+# range already admits 0.6.0, so this floor needs no soda-core upgrade; it
+# only stops the resolver picking a vulnerable build. Drop it once soda-core
+# requires 0.6.0 or newer itself.
+constraint-dependencies = ["sqlparse>=0.6.0"]
+
 [tool.uv.sources]
 empire-core = { path = "../empire-core", editable = true }
 empire-schemas = { path = "../empire-schemas", editable = true }
