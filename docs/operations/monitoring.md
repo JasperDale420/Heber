@@ -119,7 +119,7 @@ Current state:
 ## Daily Checks
 
 ```bash
-# End-of-day health report (partition freshness, cross-feed, Soda, fill rate, zero-leakage, DLQ, Gold)
+# End-of-day health report (cross-feed completeness, Silver value invariants, Gold freshness)
 heber health-daily
 heber health-daily --verbose    # full JSON output
 # Reports are written to /Volumes/heber/data/ops/daily-health/{date}.json

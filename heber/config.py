@@ -443,12 +443,6 @@ class Settings(BaseSettings):
     gold_project: str = Field(default="*", description="Glob pattern for gold project dirs")
     gold_version: str = Field(default="*", description="Glob pattern for gold version dirs")
 
-    # Soda quality checks
-    soda_checks_dir: Path = Field(
-        default=Path("soda/checks"),
-        validation_alias=AliasChoices("HEBER_SODA_CHECKS_DIR", "SODA_CHECKS_DIR"),
-    )
-
     # Backfill service
     backfill_host: str = Field(
         default="127.0.0.1",
