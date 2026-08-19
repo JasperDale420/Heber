@@ -34,10 +34,6 @@ dependencies = [
     # Feature Store
     "feast>=0.38",
 
-    # Data Quality (Soda Core)
-    "soda-core-duckdb>=3.0",
-
-
     # Observability
     "structlog>=24.1.0",
     "prometheus-client>=0.19",
@@ -153,7 +149,6 @@ module = [
     "pandas.*",
     "pyarrow",
     "pyarrow.*",
-    "soda.*",
     "lakefs",
     "lakefs.*",
     "exchange_calendars",

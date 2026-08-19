@@ -113,8 +113,8 @@ docker logs heber-consumer --tail 50 | grep -i hotstore
 **Diagnosis**:
 
 ```bash
-# Run Soda scan
-docker exec heber-catalog python -m heber.quality.soda_scanner
+# Run the daily health report (includes the Silver invariant scan)
+docker exec heber-catalog python -m heber.cli health-daily
 
 # Check dead letter queue
 docker exec data-gateway-redis redis-cli XLEN heber:events:dlq

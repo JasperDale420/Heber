@@ -154,7 +154,7 @@ class TestGenerateReport:
                 report_date=date(2026, 3, 7),
                 settings=settings,
                 force=True,
-                skip_soda=True,
+                skip_invariants=True,
             )
         assert report["overall_status"] != "skipped"
         assert len(report["checks"]) > 0
@@ -185,7 +185,7 @@ class TestGenerateReport:
             report = generate_daily_health_report(
                 report_date=dt,
                 settings=settings,
-                skip_soda=True,
+                skip_invariants=True,
             )
 
         assert report["overall_status"] == "ok"
@@ -197,7 +197,7 @@ class TestGenerateReport:
             report = generate_daily_health_report(
                 report_date=date(2026, 3, 9),
                 settings=settings,
-                skip_soda=True,
+                skip_invariants=True,
             )
         assert "ts_utc" in report
         assert "report_date" in report

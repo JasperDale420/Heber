@@ -61,27 +61,3 @@ class TestAlertLabelsModuleAfterCleanup:
         mod = importlib.import_module("heber.features.templates.alert_labels")
         for name in ("AlertHorizon", "VixRegime", "BarrierConfig", "ContractBarrierConfig", "SlippageModel"):
             assert hasattr(mod, name), f"{name} should still be present"
-
-
-class TestSodaScannerModuleAfterCleanup:
-    """Verify soda_scanner still works after removing get_quality_scanner."""
-
-    def test_module_imports(self):
-        """The soda_scanner module should still be importable."""
-        mod = importlib.import_module("heber.quality.soda_scanner")
-        assert mod is not None
-
-    def test_soda_quality_scanner_exists(self):
-        """SodaQualityScanner class must remain (it is the core implementation)."""
-        mod = importlib.import_module("heber.quality.soda_scanner")
-        assert hasattr(mod, "SodaQualityScanner")
-
-    def test_no_get_quality_scanner(self):
-        """get_quality_scanner singleton was dead code and should be removed."""
-        mod = importlib.import_module("heber.quality.soda_scanner")
-        assert not hasattr(mod, "get_quality_scanner")
-
-    def test_no_singleton_variable(self):
-        """The _scanner singleton variable should be removed."""
-        mod = importlib.import_module("heber.quality.soda_scanner")
-        assert not hasattr(mod, "_scanner")

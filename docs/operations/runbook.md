@@ -154,7 +154,7 @@ cat /Volumes/HeberDocker/data/ops/dataflow-health/latest.json
 
 ### Daily Health Report
 
-Runs 7 end-of-day checks: partition freshness, cross-feed completeness, Soda quality, fill rate, zero-leakage audit, DLQ status, and Gold freshness. Skips non-trading days unless `--force` is passed.
+Runs 3 end-of-day checks: cross-feed completeness, Silver value invariants, and Gold freshness. Skips non-trading days unless `--force` is passed. Partition freshness, fill rate, zero-leakage and DLQ status moved to `heber.health_monitor`, which alerts on them continuously rather than once a day.
 
 ```bash
 # Today's report
@@ -265,7 +265,7 @@ Is a container down?
     │   ├── Check for schema errors (most common cause)
     │   └── See troubleshooting.md §3
     ├── Data quality alert?
-    │   ├── Run quality scan: docker exec heber-catalog python -m heber.quality.soda_scanner
+    │   ├── Run quality scan: docker exec heber-catalog python -m heber.cli health-daily
     │   └── See troubleshooting.md §4
     └── Disk space?
         └── df -h ${HEBER_VOLUME_ROOT}
