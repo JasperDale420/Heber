@@ -37,7 +37,9 @@ from heber.ops.metrics import (
 from heber.ops.runtime_retry import calculate_retry_delay, classify_runtime_error
 from heber.watch.features import (
     FEATURES_KEY,
+    PENDING_FEATURES_KEY,
     AlertFeatureExtractor,
+    AlertFeatures,
     EnrichmentAuthFailure,
     persist_features_to_gold,
     store_features,
@@ -137,6 +139,12 @@ class AlertWatchConsumer:
         )
         self.retry_backoff_seconds = max(0.0, configured_backoff)
         self._running = False
+        # The consumer and the service's pending-write loop share this process.
+        # Serializing their Gold calls prevents the retry worker from timing out
+        # on a lock held by the initial write and mistaking a skipped write for
+        # success. docker-compose runs one watch-service instance, so no
+        # cross-process coordinator is needed for the current deployment.
+        self._feature_persist_lock = asyncio.Lock()
 
         # Feature extractor for meta-labeling
         self.feature_extractor = AlertFeatureExtractor(
@@ -1368,6 +1376,136 @@ class AlertWatchConsumer:
             )
         return None
 
+    async def _stage_pending_feature_write(self, features: AlertFeatures) -> bool:
+        """Stage one extracted row before attempting its Gold write.
+
+        The entire retry record lives in one Redis hash field. Unlike a
+        payload key plus a separate set index, one HSET cannot leave an
+        unindexed payload after a process crash. Returns False only when the
+        supplied Redis client cannot stage the record; the caller still tries
+        the Gold write so a marker outage does not manufacture data loss by
+        itself.
+        """
+        hset = getattr(self.redis, "hset", None)
+        if not callable(hset):
+            logger.error(
+                "Cannot stage Gold feature write: Redis client has no HSET",
+                alert_id=features.alert_id,
+            )
+            return False
+
+        try:
+            await asyncio.to_thread(
+                hset,
+                PENDING_FEATURES_KEY,
+                features.alert_id,
+                json.dumps(features.to_dict()),
+            )
+        except Exception as exc:  # noqa: BLE001 - Gold is still attempted below
+            logger.error(
+                "Failed to stage Gold feature write for retry",
+                alert_id=features.alert_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+        return True
+
+    async def _clear_pending_feature_write(self, alert_id: str) -> bool:
+        """Clear a staged row only after its Gold write succeeds."""
+        hdel = getattr(self.redis, "hdel", None)
+        if not callable(hdel):
+            logger.error(
+                "Gold feature write succeeded but retry marker cannot be cleared",
+                alert_id=alert_id,
+                reason="redis_client_has_no_hdel",
+            )
+            return False
+
+        try:
+            await asyncio.to_thread(hdel, PENDING_FEATURES_KEY, alert_id)
+        except Exception as exc:  # noqa: BLE001 - retaining the marker is the safe failure
+            logger.error(
+                "Gold feature write succeeded but retry marker could not be cleared",
+                alert_id=alert_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            return False
+        return True
+
+    async def _persist_feature_to_gold_once(self, features: AlertFeatures) -> None:
+        """Run one Gold write without racing this service's retry worker."""
+        async with self._feature_persist_lock:
+            await asyncio.to_thread(persist_features_to_gold, features)
+
+    @staticmethod
+    def _decode_pending_feature(value: Any) -> AlertFeatures:
+        """Deserialize one Redis hash value, accepting bytes or text clients."""
+        if isinstance(value, bytes):
+            value = value.decode()
+        if not isinstance(value, str):
+            raise TypeError(f"Pending feature payload must be bytes or str, got {type(value).__name__}")
+        decoded = json.loads(value)
+        if not isinstance(decoded, dict):
+            raise TypeError(f"Pending feature payload must decode to a dict, got {type(decoded).__name__}")
+        return AlertFeatures.from_dict(decoded)
+
+    async def retry_pending_feature_writes(self) -> int:
+        """Retry every extracted feature row still awaiting a Gold write.
+
+        Entries are independent: one broken payload or continuing filesystem
+        failure does not prevent healthy rows from recovering. A successful
+        write is idempotent because the Gold writer deduplicates by alert_id;
+        if the process dies after Gold succeeds but before HDEL, the next pass
+        safely writes the same row again and then clears it.
+        """
+        hgetall = getattr(self.redis, "hgetall", None)
+        if not callable(hgetall):
+            logger.error("Cannot retry pending Gold feature writes: Redis client has no HGETALL")
+            return 0
+
+        pending = await asyncio.to_thread(hgetall, PENDING_FEATURES_KEY)
+        if not pending:
+            return 0
+
+        recovered = 0
+        for raw_alert_id, raw_payload in pending.items():
+            alert_id = raw_alert_id.decode() if isinstance(raw_alert_id, bytes) else str(raw_alert_id)
+            try:
+                features = self._decode_pending_feature(raw_payload)
+            except Exception as exc:  # noqa: BLE001 - keep corrupt marker queryable for repair
+                logger.error(
+                    "Pending Gold feature payload is corrupt and cannot be retried",
+                    alert_id=alert_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                continue
+
+            try:
+                await self._persist_feature_to_gold_once(features)
+            except Exception as exc:  # noqa: BLE001 - marker remains for the next pass
+                logger.error(
+                    "Pending Gold feature write retry failed",
+                    alert_id=alert_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
+                continue
+
+            if await self._clear_pending_feature_write(alert_id):
+                recovered += 1
+
+        if recovered:
+            logger.info(
+                "Recovered pending Gold feature writes",
+                recovered=recovered,
+                attempted=len(pending),
+            )
+        return recovered
+
     async def _extract_and_store_features(self, alert: dict, watch_id: str) -> None:
         """Extract features from alert and store for meta-labeling.
 
@@ -1414,7 +1552,33 @@ class AlertWatchConsumer:
             # Extract features
             features = await self.feature_extractor.extract(record)
 
-            # Store in Redis with async client when available.
+        except EnrichmentAuthFailure:
+            logger.error(
+                "Feature extraction failed due to repeated auth failures",
+                alert_id=alert.get("id"),
+                watch_id=watch_id,
+                exc_info=True,
+            )
+            raise
+        except Exception as exc:
+            # Extraction and input-shape failures deliberately remain
+            # non-blocking: the watch already exists and must still run.
+            logger.warning(
+                "Failed to extract features",
+                alert_id=alert.get("id"),
+                watch_id=watch_id,
+                error=str(exc),
+            )
+            return
+
+        # Stage the complete extracted payload before touching Gold. A crash or
+        # an I/O failure after this point leaves a self-contained retry record.
+        staged = await self._stage_pending_feature_write(features)
+
+        try:
+            # The seven-day Redis feature cache is useful for compatibility
+            # callers but is not the durability record. A cache failure must
+            # not prevent either the Gold attempt or its pending marker.
             if self.async_redis:
                 await store_features(self.async_redis, features)
                 logger.debug(
@@ -1445,22 +1609,31 @@ class AlertWatchConsumer:
                     alert_id=alert["id"],
                     sync_redis_has_set=bool(getattr(self.redis, "set", None)),
                 )
-
-            # Persist feature row to Gold dataset for training-set assembly.
-            await asyncio.to_thread(persist_features_to_gold, features)
-
-        except EnrichmentAuthFailure:
-            logger.error(
-                "Feature extraction failed due to repeated auth failures",
+        except Exception as exc:  # noqa: BLE001 - the pending Gold write is unaffected
+            logger.warning(
+                "Failed to cache extracted features",
                 alert_id=alert.get("id"),
                 watch_id=watch_id,
+                error=str(exc),
+            )
+
+        # Persistence failures are different from extraction failures: they do
+        # not fail watch creation, but their staged payload must remain for the
+        # service retry loop instead of being swallowed.
+        try:
+            await self._persist_feature_to_gold_once(features)
+        except Exception as exc:  # noqa: BLE001 - marker makes the failure recoverable
+            logger.error(
+                "Gold feature persistence failed",
+                alert_id=alert.get("id"),
+                watch_id=watch_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                retry_marker_created=staged,
+                recovery_state="pending_retry" if staged else "no_retry_marker",
                 exc_info=True,
             )
-            raise
-        except Exception as e:
-            # Don't fail watch creation if feature extraction fails
-            logger.warning(
-                "Failed to extract/store features",
-                alert_id=alert.get("id"),
-                error=str(e),
-            )
+            return
+
+        if staged:
+            await self._clear_pending_feature_write(features.alert_id)

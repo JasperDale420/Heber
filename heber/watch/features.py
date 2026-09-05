@@ -1228,6 +1228,12 @@ class AlertFeatureExtractor:
 
 # Redis key pattern for feature storage
 FEATURES_KEY = "heber:watch:features:{alert_id}"
+# Hash: alert_id -> serialized AlertFeatures awaiting a durable Gold write.
+#
+# A hash is deliberate: each HSET/HDEL is a single atomic Redis command, so a
+# process crash cannot split a payload write from a separate index update and
+# leave the retry loop unable to find the row.
+PENDING_FEATURES_KEY = "heber:watch:pending_features"
 DEFAULT_FEATURES_OUTPUT_PATH = settings.gold_path / "dataset=meta_label_features" / "project=watch" / "version=v1"
 
 
@@ -1302,6 +1308,7 @@ def persist_features_to_gold(features: AlertFeatures, output_path: Path | None =
         features_df=features_df,
         output_path=output_path or DEFAULT_FEATURES_OUTPUT_PATH,
         partition_col="alert_time",
+        raise_on_lock_timeout=True,
     )
 
 

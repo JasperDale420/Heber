@@ -845,6 +845,8 @@ def persist_features_to_gold(
     features_df: pd.DataFrame,
     output_path: Path,
     partition_col: str = "alert_time",
+    *,
+    raise_on_lock_timeout: bool = False,
 ) -> None:
     """Persist features DataFrame to Gold layer with date partitioning.
 
@@ -868,6 +870,10 @@ def persist_features_to_gold(
         features_df: DataFrame with feature rows
         output_path: Base path for features
         partition_col: Column to partition by (must be datetime)
+        raise_on_lock_timeout: Surface a partition-lock timeout as a failed
+            write. The live watch path enables this so its durable pending
+            record is not cleared when no row was written; bulk callers keep
+            the historical best-effort behavior by default.
     """
     if features_df.empty:
         return
@@ -965,6 +971,8 @@ def persist_features_to_gold(
                 path=str(out_file),
                 lock_file=str(lock_file),
             )
+            if raise_on_lock_timeout:
+                failed_dates.append(dt_str)
             continue
         except OSError as write_exc:
             # A durability failure on one date's partition (empty/truncated
