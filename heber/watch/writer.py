@@ -385,7 +385,7 @@ class WatchService:
         )
 
     async def _check_and_write_loop(self) -> None:
-        """Periodically check for completed watches and write labels.
+        """Retry pending feature rows, then check and write completed labels.
 
         Outcomes are durably staged in Redis by BarrierChecker as soon as
         they're computed (see BarrierChecker.check_all), so a failed Gold
@@ -397,6 +397,13 @@ class WatchService:
         import asyncio
 
         while self._running:
+            try:
+                await self.consumer.retry_pending_feature_writes()
+            except Exception as e:
+                # Feature-row recovery is independent of label completion. A
+                # Redis/read failure here must not postpone pending outcomes.
+                logger.error("Pending feature retry error", error=str(e), exc_info=True)
+
             try:
                 await asyncio.to_thread(self.checker.check_all)
 
