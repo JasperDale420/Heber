@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
@@ -35,16 +34,6 @@ catalog_operation_duration = Histogram(
     ["operation"],
     buckets=[0.1, 0.5, 1, 2, 5, 10],
 )
-
-
-class TableType(StrEnum):
-    """Table type classification."""
-
-    REGULAR = "Regular"
-    VIEW = "View"
-    MATERIALIZED_VIEW = "MaterializedView"
-    ICEBERG = "Iceberg"
-    EXTERNAL = "External"
 
 
 @dataclass
