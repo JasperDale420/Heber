@@ -5,10 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
-import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,11 +14,16 @@ from urllib.parse import urlencode, urlsplit
 
 import structlog
 
-logger = structlog.get_logger(__name__)
+from heber.backfill.massive.http import (
+    BASE_URL,
+    HttpGet,
+    fetch_with_retry,
+    urllib_get_json,
+    validate_next_url,
+    write_json_gz,
+)
 
-BASE_URL = "https://api.massive.com"
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-HttpGet = Callable[[str, dict[str, str], float], dict[str, Any]]
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -105,20 +107,6 @@ DEFAULT_DATASETS: dict[str, MassiveRestBacklogDataset] = {
 }
 
 
-def _urllib_get_json(url: str, headers: dict[str, str], timeout: float) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return cast(dict[str, Any], json.loads(resp.read().decode("utf-8")))
-
-
-def _write_json_gz(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-    os.replace(tmp, path)
-
-
 def _read_json_gz(path: Path) -> dict[str, Any]:
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         return cast(dict[str, Any], json.load(fh))
@@ -150,7 +138,7 @@ class MassiveRestBacklogSweeper:
             raise ValueError("MASSIVE_API_KEY is required for Massive REST backlog capture")
         self._api_key = api_key
         self._out_root = Path(out_root)
-        self._http_get = http_get or _urllib_get_json
+        self._http_get = http_get or urllib_get_json
         self._base_url = base_url.rstrip("/")
         self._api_host = urlsplit(self._base_url).netloc
         self._timeout_seconds = timeout_seconds
@@ -196,10 +184,10 @@ class MassiveRestBacklogSweeper:
             self._validate_status(dataset.name, payload)
             next_url = payload.get("next_url")
             if next_url:
-                self._validate_next_url(str(next_url))
+                validate_next_url(str(next_url), self._api_host)
 
             page_path = out_dir / f"page_{page_index:06d}.json.gz"
-            _write_json_gz(page_path, payload)
+            write_json_gz(page_path, payload)
             records += _result_count(payload)
             page_index += 1
             fetched_pages += 1
@@ -248,29 +236,17 @@ class MassiveRestBacklogSweeper:
         return len(pages), records, str(next_url) if next_url else None
 
     def _fetch(self, url: str) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        for attempt in range(self._max_retries):
-            try:
-                return self._http_get(url, headers, self._timeout_seconds)
-            except urllib.error.HTTPError as exc:
-                if exc.code in RETRYABLE_STATUS_CODES and attempt < self._max_retries - 1:
-                    time.sleep(min(90, 2**attempt))
-                    continue
-                raise
-            except (urllib.error.URLError, TimeoutError, ConnectionError):
-                if attempt < self._max_retries - 1:
-                    time.sleep(min(90, 2**attempt))
-                    continue
-                raise
-        raise RuntimeError(f"exhausted Massive REST retries for {url[:120]}")
+        return fetch_with_retry(
+            self._http_get,
+            url,
+            api_key=self._api_key,
+            timeout_seconds=self._timeout_seconds,
+            max_retries=self._max_retries,
+            max_sleep_seconds=90.0,
+        )
 
     def _initial_url(self, dataset: MassiveRestBacklogDataset) -> str:
         return f"{self._base_url}{dataset.path}?{urlencode(dict(dataset.params))}"
-
-    def _validate_next_url(self, next_url: str) -> None:
-        parsed = urlsplit(next_url)
-        if parsed.netloc and parsed.netloc != self._api_host:
-            raise RuntimeError(f"Massive next_url host changed unexpectedly: {parsed.netloc}")
 
     @staticmethod
     def _validate_status(dataset: str, payload: dict[str, Any]) -> None:

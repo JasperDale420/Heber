@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
-import gzip
 import json
 import os
-import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 import structlog
 
-logger = structlog.get_logger(__name__)
+from heber.backfill.massive.http import (
+    BASE_URL,
+    HttpGet,
+    fetch_with_retry,
+    urllib_get_json,
+    validate_next_url,
+    write_json_gz,
+)
 
-BASE_URL = "https://api.massive.com"
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-HttpGet = Callable[[str, dict[str, str], float], dict[str, Any]]
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,20 +61,6 @@ DAILY_DATASETS: dict[str, DailyRestDataset] = {
 }
 
 
-def _urllib_get_json(url: str, headers: dict[str, str], timeout: float) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return cast(dict[str, Any], json.loads(resp.read().decode("utf-8")))
-
-
-def _write_json_gz(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-    os.replace(tmp, path)
-
-
 class MassiveCorporateActionsDownloader:
     """Daily raw REST capture for splits, dividends, and the active US stock ticker snapshot."""
 
@@ -91,7 +78,7 @@ class MassiveCorporateActionsDownloader:
             raise ValueError("MASSIVE_API_KEY is required for corporate-action capture")
         self._api_key = api_key
         self._archive_root = Path(archive_root)
-        self._http_get = http_get or _urllib_get_json
+        self._http_get = http_get or urllib_get_json
         self._base_url = base_url.rstrip("/")
         self._api_host = urlsplit(self._base_url).netloc
         self._timeout_seconds = timeout_seconds
@@ -139,14 +126,14 @@ class MassiveCorporateActionsDownloader:
 
             results = payload.get("results") or []
             page_path = out_dir / f"page_{page:05d}.json.gz"
-            _write_json_gz(page_path, payload)
+            write_json_gz(page_path, payload)
             page_files.append(page_path.name)
             total += len(results)
             page += 1
 
             next_url = payload.get("next_url")
             if next_url:
-                self._validate_next_url(str(next_url))
+                validate_next_url(str(next_url), self._api_host)
             url = str(next_url) if next_url else None
 
         manifest_payload = {
@@ -164,26 +151,14 @@ class MassiveCorporateActionsDownloader:
         return total
 
     def _fetch(self, url: str) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        for attempt in range(self._max_retries):
-            try:
-                return self._http_get(url, headers, self._timeout_seconds)
-            except urllib.error.HTTPError as exc:
-                if exc.code in RETRYABLE_STATUS_CODES and attempt < self._max_retries - 1:
-                    time.sleep(min(60, 2**attempt))
-                    continue
-                raise
-            except (urllib.error.URLError, TimeoutError, ConnectionError):
-                if attempt < self._max_retries - 1:
-                    time.sleep(min(60, 2**attempt))
-                    continue
-                raise
-        raise RuntimeError(f"exhausted Massive REST retries for {url[:120]}")
-
-    def _validate_next_url(self, next_url: str) -> None:
-        parsed = urlsplit(next_url)
-        if parsed.netloc and parsed.netloc != self._api_host:
-            raise RuntimeError(f"Massive next_url host changed unexpectedly: {parsed.netloc}")
+        return fetch_with_retry(
+            self._http_get,
+            url,
+            api_key=self._api_key,
+            timeout_seconds=self._timeout_seconds,
+            max_retries=self._max_retries,
+            max_sleep_seconds=60.0,
+        )
 
     @staticmethod
     def _read_completed_count(manifest: Path) -> int:
