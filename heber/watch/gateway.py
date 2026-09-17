@@ -277,6 +277,30 @@ def coerce_optional_float(value: Any) -> float | None:
         return None
 
 
+def extract_bid_ask(quote: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Extract bid/ask prices from a quote payload.
+
+    Prefers the compact route keys (``bp``/``ap``); falls back to the
+    unabbreviated ``bid_price``/``ask_price`` keys some routes use instead.
+    Shared by consumer (entry price) and poller (snapshot) quote parsing so
+    the two do not drift apart on which keys they read.
+    """
+    bid = coerce_optional_float(quote.get("bp"))
+    if bid is None:
+        bid = coerce_optional_float(quote.get("bid_price"))
+    ask = coerce_optional_float(quote.get("ap"))
+    if ask is None:
+        ask = coerce_optional_float(quote.get("ask_price"))
+    return bid, ask
+
+
+def mid_or_last_price(bid: float | None, ask: float | None, last_price: float | None) -> float | None:
+    """Return the bid/ask midpoint when both sides are present, else ``last_price``."""
+    if bid is not None and ask is not None:
+        return (bid + ask) / 2
+    return last_price
+
+
 def should_continue_route_fallback(route_failures: list[dict[str, Any]]) -> bool:
     """Return True when it is useful to try legacy route fallback URLs.
 
