@@ -48,8 +48,10 @@ from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     coerce_optional_float,
     coerce_utc_timestamp,
+    extract_bid_ask,
     gateway_auth_headers,
     gateway_url_candidates,
+    mid_or_last_price,
     quote_age_seconds,
     route_failure_for_exception,
     route_failure_for_http_status,
@@ -1325,20 +1327,11 @@ class AlertWatchConsumer:
         route_failures: list[dict[str, Any]],
     ) -> float | None:
         """Extract mid or last price from a validated quote payload."""
-        bid = coerce_optional_float(quote_payload.get("bp"))
-        if bid is None:
-            bid = coerce_optional_float(quote_payload.get("bid_price"))
-
-        ask = coerce_optional_float(quote_payload.get("ap"))
-        if ask is None:
-            ask = coerce_optional_float(quote_payload.get("ask_price"))
-
-        if bid is not None and ask is not None:
-            return (bid + ask) / 2
-
+        bid, ask = extract_bid_ask(quote_payload)
         last_price = coerce_optional_float(quote_payload.get("last_price"))
-        if last_price is not None:
-            return last_price
+        price = mid_or_last_price(bid, ask, last_price)
+        if price is not None:
+            return price
 
         route_failures.append({"route": route, "failure": "quote_price_unusable", "symbol": occ_symbol})
         return None

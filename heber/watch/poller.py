@@ -17,9 +17,11 @@ from heber.ops.metrics import record_watch_gateway_request, record_watch_poll_cy
 from heber.watch.gateway import (
     DEFAULT_ROUTE_QUOTE_MAX_AGE_SECONDS,
     coerce_optional_float,
+    extract_bid_ask,
     extract_quote_timestamp,
     gateway_auth_headers,
     gateway_url_candidates,
+    mid_or_last_price,
     quote_age_seconds,
     route_failure_for_exception,
     route_failure_for_http_status,
@@ -558,21 +560,10 @@ class SnapshotPoller:
         quote: dict,
     ) -> WatchSnapshot:
         """Create a snapshot from quote data."""
-        bid = coerce_optional_float(quote.get("bp"))
-        if bid is None:
-            bid = coerce_optional_float(quote.get("bid_price"))
-
-        ask = coerce_optional_float(quote.get("ap"))
-        if ask is None:
-            ask = coerce_optional_float(quote.get("ask_price"))
-
+        bid, ask = extract_bid_ask(quote)
         last_price = coerce_optional_float(quote.get("last_price"))
         underlying_price = coerce_optional_float(quote.get("underlying_price"))
-
-        if bid is not None and ask is not None:
-            mid = (bid + ask) / 2
-        else:
-            mid = last_price
+        mid = mid_or_last_price(bid, ask, last_price)
 
         return_pct = None
         if mid is not None and watch.entry_price > 0:
