@@ -29,10 +29,6 @@ class SilverNormalizationError(ValueError):
         self.details = details or {}
 
 
-class MissingInstrumentIdentifierError(SilverNormalizationError):
-    """Raised when a feed cannot produce a required instrument identifier."""
-
-
 class InvalidInstrumentKeyError(SilverNormalizationError):
     """Raised when a normalized event still has an invalid instrument key."""
 
