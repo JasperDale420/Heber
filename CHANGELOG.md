@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security: upgraded the locked `anyio` from 4.12.1 to 4.14.2** (`uv.lock`), closing CRITICAL CVE-2026-63374 (TLS host-name spoofing via IDNA 2003 encoding in `TLSStream`). This was failing the CI Trivy scan on every PR. Lockfile-only change; `anyio` is a transitive dependency.
+
 ### Changed
 
 - **Option-quote bid/ask/mid price extraction is unified between the watch consumer's entry-price fetch and the snapshot poller** (`heber/watch/gateway.py`, `heber/watch/consumer.py`, `heber/watch/poller.py`): both `AlertWatchConsumer._extract_price_from_quote` and `SnapshotPoller._create_snapshot` carried the same copy-pasted bid/ask extraction (`bp`/`bid_price`, `ap`/`ask_price` fallback) and mid-with-last-price-fallback rule. The shared logic now lives as `extract_bid_ask()` and `mid_or_last_price()` in `heber/watch/gateway.py`, alongside the other quote-parsing helpers (`coerce_optional_float`, `quote_age_seconds`) both call sites already shared. No behavior change — same field precedence, same zero/NaN/bool handling via the existing `coerce_optional_float`.
