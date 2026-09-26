@@ -53,6 +53,59 @@ def ensure_market_instrument_key(df: pd.DataFrame, instrument_key: str) -> pd.Da
     return df
 
 
+def to_daily_close(bars: pd.DataFrame) -> pd.DataFrame:
+    """Reduce bars to one daily close per instrument_key.
+
+    Prefers pre-aggregated ``1Day`` bars where available, falling back to the
+    last intraday close of the day otherwise.
+    """
+    if bars.empty:
+        return bars
+
+    df = bars.copy()
+    df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["date"] = df["ts_event"].dt.date
+
+    # Prefer pre-aggregated daily bars
+    if "timeframe" in df.columns:
+        daily_mask = df["timeframe"] == "1Day"
+        if daily_mask.any():
+            daily = df[daily_mask].copy()
+            daily_keys = set(zip(daily["instrument_key"], daily["date"], strict=False))
+            intraday = df[~daily_mask].copy()
+            if not intraday.empty:
+                intraday["_key"] = list(zip(intraday["instrument_key"], intraday["date"], strict=False))
+                intraday = intraday[~intraday["_key"].isin(daily_keys)].drop(columns=["_key"])
+            df = pd.concat([daily, intraday], ignore_index=True)
+
+    # Take last close per (instrument_key, date)
+    df = df.sort_values(["instrument_key", "ts_event"])
+    daily = df.groupby(["instrument_key", "date"]).agg(close=("close", "last")).reset_index()
+    daily["ts_event"] = pd.to_datetime(daily["date"], utc=True)
+
+    return daily[["instrument_key", "ts_event", "close"]]
+
+
+def merge_features(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Outer-merge all feature DataFrames on ts_event."""
+    merged: pd.DataFrame | None = None
+
+    for _name, df in frames.items():
+        if df.empty:
+            continue
+
+        df = df.copy()
+        df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
+
+        if merged is None:
+            merged = df
+        else:
+            merged = merged.merge(df, on="ts_event", how="outer")
+
+    return merged if merged is not None else pd.DataFrame()
+
+
 def gold_dataset_result(
     *,
     status: str,

@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from heber.features.pipelines.base import to_daily_close
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -275,7 +276,7 @@ class TrendScanPipeline:
             return {"trend_scan_features": {"status": "no_data", "rows": 0}}
 
         # Reduce to daily close
-        daily = self._to_daily_close(bars)
+        daily = to_daily_close(bars)
         logger.info("Daily close records", rows=len(daily))
 
         # Compute labels
@@ -321,36 +322,6 @@ class TrendScanPipeline:
 
         logger.info("Trend scan pipeline complete", **stats)
         return {"trend_scan_features": stats}
-
-    @staticmethod
-    def _to_daily_close(bars: pd.DataFrame) -> pd.DataFrame:
-        """Reduce bars to one daily close per instrument_key."""
-        if bars.empty:
-            return bars
-
-        df = bars.copy()
-        df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df["date"] = df["ts_event"].dt.date
-
-        # Prefer pre-aggregated daily bars
-        if "timeframe" in df.columns:
-            daily_mask = df["timeframe"] == "1Day"
-            if daily_mask.any():
-                daily = df[daily_mask].copy()
-                daily_keys = set(zip(daily["instrument_key"], daily["date"], strict=False))
-                intraday = df[~daily_mask].copy()
-                if not intraday.empty:
-                    intraday["_key"] = list(zip(intraday["instrument_key"], intraday["date"], strict=False))
-                    intraday = intraday[~intraday["_key"].isin(daily_keys)].drop(columns=["_key"])
-                df = pd.concat([daily, intraday], ignore_index=True)
-
-        # Take last close per (instrument_key, date)
-        df = df.sort_values(["instrument_key", "ts_event"])
-        daily = df.groupby(["instrument_key", "date"]).agg(close=("close", "last")).reset_index()
-        daily["ts_event"] = pd.to_datetime(daily["date"], utc=True)
-
-        return daily[["instrument_key", "ts_event", "close"]]
 
 
 def main() -> None:

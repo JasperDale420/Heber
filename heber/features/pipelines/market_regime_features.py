@@ -24,7 +24,13 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from heber.features.pipelines.base import ensure_market_instrument_key, ensure_ts_available, gold_dataset_result
+from heber.features.pipelines.base import (
+    ensure_market_instrument_key,
+    ensure_ts_available,
+    gold_dataset_result,
+    merge_features,
+    to_daily_close,
+)
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -281,7 +287,7 @@ class MarketRegimePipeline:
                 component_stats[ds_name] = {"status": "error", "rows": 0, "error": str(exc)}
 
         # Merge all feature frames on ts_event into a single Gold output
-        merged = self._merge_features(feature_frames)
+        merged = merge_features(feature_frames)
 
         if merged.empty:
             logger.warning("No regime features computed")
@@ -383,7 +389,7 @@ class MarketRegimePipeline:
         # mixing the two into a cross-sectional return SD adds asynchronous
         # pricing noise for exactly the thinnest-data tickers.
         #
-        # PRECONDITION: chunk edges must be UTC midnight. _to_daily_close buckets
+        # PRECONDITION: chunk edges must be UTC midnight. to_daily_close buckets
         # on ts_event.dt.date in UTC, so an edge at any other time splits one UTC
         # day across two chunks and emits two rows for the same
         # (instrument_key, date) — which compute_dispersion then reads as an
@@ -415,7 +421,7 @@ class MarketRegimePipeline:
             chunk_start = next_month
             if chunk.empty:
                 continue
-            daily_parts.append(self._to_daily_close(chunk))
+            daily_parts.append(to_daily_close(chunk))
             del chunk
             gc.collect()
 
@@ -519,55 +525,6 @@ class MarketRegimePipeline:
             return pd.DataFrame()
 
         return compute_yield_curve_slope(yields_df)
-
-    @staticmethod
-    def _to_daily_close(bars: pd.DataFrame) -> pd.DataFrame:
-        """Reduce bars to one daily close per instrument_key."""
-        if bars.empty:
-            return bars
-
-        df = bars.copy()
-        df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-        df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df["date"] = df["ts_event"].dt.date
-
-        # Prefer pre-aggregated daily bars
-        if "timeframe" in df.columns:
-            daily_mask = df["timeframe"] == "1Day"
-            if daily_mask.any():
-                daily = df[daily_mask].copy()
-                daily_keys = set(zip(daily["instrument_key"], daily["date"], strict=False))
-                intraday = df[~daily_mask].copy()
-                if not intraday.empty:
-                    intraday["_key"] = list(zip(intraday["instrument_key"], intraday["date"], strict=False))
-                    intraday = intraday[~intraday["_key"].isin(daily_keys)].drop(columns=["_key"])
-                df = pd.concat([daily, intraday], ignore_index=True)
-
-        # Take last close per (instrument_key, date)
-        df = df.sort_values(["instrument_key", "ts_event"])
-        daily = df.groupby(["instrument_key", "date"]).agg(close=("close", "last")).reset_index()
-        daily["ts_event"] = pd.to_datetime(daily["date"], utc=True)
-
-        return daily[["instrument_key", "ts_event", "close"]]
-
-    @staticmethod
-    def _merge_features(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """Outer-merge all feature DataFrames on ts_event."""
-        merged: pd.DataFrame | None = None
-
-        for _name, df in frames.items():
-            if df.empty:
-                continue
-
-            df = df.copy()
-            df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-
-            if merged is None:
-                merged = df
-            else:
-                merged = merged.merge(df, on="ts_event", how="outer")
-
-        return merged if merged is not None else pd.DataFrame()
 
 
 def main() -> None:

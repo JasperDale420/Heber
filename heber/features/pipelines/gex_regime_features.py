@@ -22,7 +22,12 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from heber.features.pipelines.base import ensure_market_instrument_key, ensure_ts_available, gold_dataset_result
+from heber.features.pipelines.base import (
+    ensure_market_instrument_key,
+    ensure_ts_available,
+    gold_dataset_result,
+    merge_features,
+)
 from heber.reader import HeberReader
 
 logger = structlog.get_logger(__name__)
@@ -294,7 +299,7 @@ class GexRegimePipeline:
                 component_stats[ds_name] = {"status": "error", "rows": 0, "error": str(exc)}
 
         # Merge all feature frames on ts_event into a single Gold output
-        merged = self._merge_features(feature_frames)
+        merged = merge_features(feature_frames)
 
         if merged.empty:
             logger.warning("No GEX regime features computed")
@@ -361,25 +366,6 @@ class GexRegimePipeline:
                 components=component_stats,
             )
         }
-
-    @staticmethod
-    def _merge_features(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """Outer-merge all feature DataFrames on ts_event."""
-        merged: pd.DataFrame | None = None
-
-        for _name, df in frames.items():
-            if df.empty:
-                continue
-
-            df = df.copy()
-            df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
-
-            if merged is None:
-                merged = df
-            else:
-                merged = merged.merge(df, on="ts_event", how="outer")
-
-        return merged if merged is not None else pd.DataFrame()
 
 
 def main() -> None:

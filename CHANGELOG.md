@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security: upgraded the locked `anyio` from 4.12.1 to 4.14.2** (`uv.lock`), closing CRITICAL CVE-2026-63374 (TLS host-name spoofing via IDNA 2003 encoding in `TLSStream`). This was failing the CI Trivy scan on every PR. Lockfile-only change; `anyio` is a transitive dependency.
+
 ### Changed
 
 - **Option-quote bid/ask/mid price extraction is unified between the watch consumer's entry-price fetch and the snapshot poller** (`heber/watch/gateway.py`, `heber/watch/consumer.py`, `heber/watch/poller.py`): both `AlertWatchConsumer._extract_price_from_quote` and `SnapshotPoller._create_snapshot` carried the same copy-pasted bid/ask extraction (`bp`/`bid_price`, `ap`/`ask_price` fallback) and mid-with-last-price-fallback rule. The shared logic now lives as `extract_bid_ask()` and `mid_or_last_price()` in `heber/watch/gateway.py`, alongside the other quote-parsing helpers (`coerce_optional_float`, `quote_age_seconds`) both call sites already shared. No behavior change — same field precedence, same zero/NaN/bool handling via the existing `coerce_optional_float`.
@@ -53,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs updated to match the container-to-container networking change above** (`docs/configuration-guide.md`, `docs/deployment-guide.md`, `docs/operations/runbook.md`): three docs still told readers the consumer reaches Data-Gateway's Redis at `host.docker.internal:6379` in dev. All three now say `data-gateway-redis:6379` over the shared `empire-bus` docker network, matching current `docker-compose.yml`.
 
 ### Fixed
+
+- **`test_gold_pipeline_memory_scoping.py` updated for the `_to_daily_close`/`_merge_features` → `base.py` relocation**: the daily-close/merge-helper unification (see "Massive REST retry/pagination-guard logic is unified..." pattern above, same maintenance pass) moved `MarketRegimePipeline._to_daily_close` from a private pipeline method to the shared, module-level `to_daily_close()` in `heber/features/pipelines/base.py`. Two tests still called the removed method directly (`MarketRegimePipeline(...)._to_daily_close(...)` and a class-level spy monkeypatching `MarketRegimePipeline._to_daily_close`), so both raised `AttributeError` in CI. Neither test exercises different behavior — they now call the shared `to_daily_close()` function directly, and the spy patches it where `market_regime_features` imported it, via `monkeypatch.setattr`, instead of shadowing a nonexistent instance attribute. No production logic changed.
 
 - **A failed Gold feature write no longer disappears after its watch is created** (`heber/watch/consumer.py`, `heber/watch/features.py`, `heber/watch/writer.py`): feature extraction remains best-effort — malformed input or an enrichment error still cannot block an already-created watch — but a successfully extracted row is now staged in the `heber:watch:pending_features` Redis hash before its Gold write begins. A filesystem error, process restart, or crash after the write but before cleanup leaves that self-contained payload queryable and retryable. The watch service retries the hash on every existing one-minute check tick and removes a field only after the Gold write succeeds; replay is safe because the writer already replaces duplicate `alert_id` rows. The payload and its index are the same hash field, so staging is one atomic Redis command instead of a two-key state that can split during a crash. Live writes also opt into fail-loud partition-lock timeouts and share an in-process lock with the retry pass, preventing a skipped lock acquisition from being mistaken for a successful write and clearing the marker. This closes [#58](https://github.com/JasperDale420/Heber/issues/58) without changing stream ACK or watch-claim semantics.
 

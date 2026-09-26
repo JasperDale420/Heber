@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from heber.features.pipelines import market_regime_features as market_regime_features_module
+from heber.features.pipelines.base import to_daily_close
 from heber.features.pipelines.darkpool_features import DarkpoolPipeline
 from heber.features.pipelines.market_regime_features import (
     LOOKBACK_DAYS,
@@ -27,7 +29,7 @@ WINDOW_END = datetime(2026, 8, 9, tzinfo=UTC)
 def _bars(days: int = 130, tickers: tuple[str, ...] = ("AAPL", "MSFT")) -> pd.DataFrame:
     """Daily bars plus intraday, including one ticker-date with intraday ONLY.
 
-    The intraday-only case is the gap-fill path in `_to_daily_close`: intraday
+    The intraday-only case is the gap-fill path in `to_daily_close`: intraday
     rows supply a close for (ticker, date) pairs that have no 1Day bar. Any
     rescoping must preserve it.
 
@@ -140,7 +142,7 @@ class TestMarketRegimeDispersionScoping:
     def test_chunked_dispersion_matches_whole_window(self, start: datetime) -> None:
         """Chunking must be exactly equivalent for any caller-supplied start time.
 
-        `_to_daily_close` buckets on `ts_event.dt.date` in UTC. If a chunk edge is
+        `to_daily_close` buckets on `ts_event.dt.date` in UTC. If a chunk edge is
         not UTC midnight, one UTC day is split across two chunks and reduced
         twice, emitting two rows for the same (instrument_key, date) — which
         `compute_dispersion` reads as an intra-date return. A mid-day start
@@ -160,7 +162,7 @@ class TestMarketRegimeDispersionScoping:
         bar_start = (start - timedelta(days=LOOKBACK_DAYS)).replace(hour=0, minute=0, second=0, microsecond=0)
         ts = pd.to_datetime(frame["ts_event"], utc=True)
         window = frame[(ts >= pd.to_datetime(bar_start, utc=True)) & (ts <= pd.to_datetime(end, utc=True))]
-        reference = MarketRegimePipeline(reader=MagicMock())._to_daily_close(window.copy())
+        reference = to_daily_close(window.copy())
         expected = compute_dispersion(reference)
 
         assert not chunked.empty, "fixture must actually span multiple chunks"
@@ -174,7 +176,7 @@ class TestMarketRegimeDispersionScoping:
         """AAPL has no 1Day bar on one date; its intraday close must still appear.
 
         Goes through `_compute_dispersion` so the chunked path is exercised — an
-        earlier version called `_to_daily_close` directly and so tested code the
+        earlier version called `to_daily_close` directly and so tested code the
         rescoping never touched.
         """
         frame = _bars()
@@ -259,8 +261,8 @@ class TestTimeframePushdown:
         for call in mock_reader.read_silver.call_args_list:
             assert call.kwargs.get("timeframe") == "1Day", "reduced client-side instead of filtering at the scan"
 
-    def test_only_daily_rows_reach_the_reduction(self) -> None:
-        """With the filter honoured, no intraday row may reach _to_daily_close.
+    def test_only_daily_rows_reach_the_reduction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With the filter honoured, no intraday row may reach to_daily_close.
 
         The deliberate consequence is that a ticker-date with intraday bars but
         no 1Day bar contributes no close. That restores the behaviour every Gold
@@ -273,14 +275,17 @@ class TestTimeframePushdown:
         mock_reader.read_silver.side_effect = _daily_only_reader(frame)
 
         seen: list[pd.DataFrame] = []
-        original = MarketRegimePipeline._to_daily_close
+        original = to_daily_close
 
         def _spy(chunk: pd.DataFrame) -> pd.DataFrame:
             seen.append(chunk)
             return original(chunk)
 
+        # to_daily_close is a shared module-level helper (heber.features.pipelines.base),
+        # not a pipeline method, so the spy patches the name as market_regime_features
+        # imported it rather than shadowing an instance attribute.
+        monkeypatch.setattr(market_regime_features_module, "to_daily_close", _spy)
         pipeline = MarketRegimePipeline(reader=mock_reader)
-        pipeline._to_daily_close = _spy  # type: ignore[method-assign]
         pipeline._compute_dispersion(WINDOW_START, WINDOW_END)
 
         assert seen, "no chunk reached the reduction"
