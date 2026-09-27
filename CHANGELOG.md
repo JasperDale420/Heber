@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI was failing every PR with `ModuleNotFoundError: No module named 'greenlet'`** (`pyproject.toml`): CI installs with `uv pip install -e ".[dev]"`, which resolves against PyPI's current index rather than the lockfile. SQLAlchemy 2.1.1 (released after this project last pinned near 2.0.x) moved `greenlet` behind its `asyncio` extra instead of shipping it as an unconditional dependency, so every fresh CI install silently lost the package the async engine needs, even though nothing in this repo's code changed. Declaring `sqlalchemy[asyncio]` makes the actual runtime requirement explicit again.
 - **Security: upgraded the locked `anyio` from 4.12.1 to 4.14.2** (`uv.lock`), closing CRITICAL CVE-2026-63374 (TLS host-name spoofing via IDNA 2003 encoding in `TLSStream`). This was failing the CI Trivy scan on every PR. Lockfile-only change; `anyio` is a transitive dependency.
 
 ### Changed
