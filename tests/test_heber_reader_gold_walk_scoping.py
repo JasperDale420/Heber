@@ -48,9 +48,9 @@ def _spy_walk(monkeypatch: pytest.MonkeyPatch) -> list:
     seen: list = []
     original = reader_core._collect_parquet_files
 
-    def _spy(root, dt_range=None):
+    def _spy(root, dt_range=None, **kwargs):
         seen.append(dt_range)
-        return original(root, dt_range=dt_range)
+        return original(root, dt_range=dt_range, **kwargs)
 
     monkeypatch.setattr(reader_core, "_collect_parquet_files", _spy)
     return seen

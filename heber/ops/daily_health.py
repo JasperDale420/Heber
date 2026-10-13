@@ -34,7 +34,14 @@ from heber.quality.silver_invariants import (
     duplicate_row_count,
     split_by_tolerance,
 )
-from heber.reader.core import _collect_parquet_files
+from heber.reader.core import (
+    HeberReadError,
+    _collect_parquet_files,
+    _is_data_dir,
+    _is_skipped_name,
+    _list_dir,
+    _requested_path_exists,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -122,6 +129,25 @@ def _check_cross_feed_completeness(
     )
 
 
+def _report_partitions(feed_dir: Path, dt_str: str) -> list[Path]:
+    """The feed's ``instrument_type=*/dt=<dt_str>`` partitions.
+
+    Fails with ``HeberReadError`` when the feed or one of its instrument-type
+    directories cannot be listed or statted, rather than quietly checking
+    fewer partitions than exist — glob would have left them out silently.
+    """
+    if not _requested_path_exists(feed_dir):
+        return []
+    partitions: list[Path] = []
+    for entry in _list_dir(feed_dir):
+        if _is_skipped_name(entry.name) or not entry.name.startswith("instrument_type="):
+            continue
+        partition = feed_dir / entry.name / f"dt={dt_str}"
+        if _is_data_dir(partition):
+            partitions.append(partition)
+    return partitions
+
+
 def _check_silver_invariants(
     report_date: date,
     settings: Settings,
@@ -147,7 +173,12 @@ def _check_silver_invariants(
 
     for feed, spec in FEED_INVARIANTS.items():
         feed_dir = settings.silver_path / f"feed={feed}"
-        part_dirs = list(feed_dir.glob(f"instrument_type=*/dt={dt_str}")) if feed_dir.exists() else []
+        try:
+            part_dirs = _report_partitions(feed_dir, dt_str)
+        except HeberReadError:
+            logger.warning("silver_invariants_read_failed", feed=feed, date=dt_str, exc_info=True)
+            read_failures.append(feed)
+            continue
         if not part_dirs:
             continue
         feed_violations: dict[str, int] = {}
@@ -165,10 +196,12 @@ def _check_silver_invariants(
             # partial writes are ordinary noise on this volume, and letting
             # pyarrow auto-discover them turns a healthy partition into a
             # failed critical check.
-            files = _collect_parquet_files(partition)
-            if not files:
-                continue
             try:
+                # strict: this is one named dt= partition, so a zero-byte part
+                # file in it is a lost write to report, not a file to skip.
+                files = _collect_parquet_files(partition, strict=True)
+                if not files:
+                    continue
                 # One dataset over the collected files rather than per-file
                 # frames concatenated, so fragments are unified the way the
                 # canonical reader unifies them. Detecting *schema drift* is

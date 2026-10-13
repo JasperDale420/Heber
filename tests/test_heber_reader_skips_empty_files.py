@@ -74,16 +74,16 @@ def test_healthy_partitions_still_read_past_a_zero_byte_file(tmp_path: Path) -> 
     assert len(rows) == 6, "a single zero-byte file emptied the feed"
 
 
-def test_zero_byte_file_is_skipped_when_the_walk_is_scoped(tmp_path: Path) -> None:
-    """dt-scoped walks take a different code path and need the same filter."""
+def test_zero_byte_file_fails_a_scoped_walk(tmp_path: Path) -> None:
+    """A dt-scoped walk is asking about that partition, so a lost write in it
+    raises rather than handing back the readable remainder (#46). Unscoped
+    walks keep skipping it, as the tests above pin; the full contract lives in
+    `test_heber_reader_lost_fragments`."""
     _write_rows(_partition(tmp_path, "2026-08-01"), "a.parquet")
     (_partition(tmp_path, "2026-08-01") / "part-truncated.parquet").write_bytes(b"")
 
-    collected = _collect_parquet_files(
-        str(tmp_path / "silver" / "feed=darkpool"), dt_range=("2026-08-01", "2026-08-31")
-    )
-
-    assert len(collected) == 1
+    with pytest.raises(HeberReadError, match="part-truncated.parquet"):
+        _collect_parquet_files(str(tmp_path / "silver" / "feed=darkpool"), dt_range=("2026-08-01", "2026-08-31"))
 
 
 class TestCorruptionIsRaisedNotSwallowed:
