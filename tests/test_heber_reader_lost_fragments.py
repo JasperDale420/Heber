@@ -260,3 +260,30 @@ class TestReadParquetDataset:
 def _mkdir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+class TestUnstatableRequestedPath:
+    """A path the caller names that cannot be statted is unknown, not absent.
+
+    `Path.exists()` reports only ENOENT-style errors as False; EIO or EACCES
+    escape it as a raw OSError, outside the reader's HeberReadError contract.
+    """
+
+    def test_read_parquet_dataset_on_an_unstatable_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        part = _mkdir(tmp_path / "gold" / "dataset=labels" / "version=v1")
+        _write_rows(part, "data.parquet", "2026-08-07")
+        _unstatable(monkeypatch, "data.parquet")
+
+        with pytest.raises(HeberReadError, match=r"data\.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(part / "data.parquet")
+
+    def test_read_silver_on_an_unstatable_feed_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-good.parquet", "2026-08-07")
+        _unstatable(monkeypatch, "feed=darkpool")
+
+        with pytest.raises(HeberReadError, match="feed=darkpool"):
+            HeberReader(tmp_path).read_silver("darkpool")
+
+    def test_a_missing_path_still_reads_empty(self, tmp_path: Path) -> None:
+        assert HeberReader(tmp_path).read_parquet_dataset(tmp_path / "nope" / "data.parquet").empty
+        assert HeberReader(tmp_path).read_silver("never_written").empty

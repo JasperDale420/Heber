@@ -218,6 +218,22 @@ def _parquet_files_in(base: Path, *, strict: bool = False) -> list[str]:
     return files
 
 
+def _requested_path_exists(path: Path) -> bool:
+    """``path.exists()`` for a path the caller asked to read, without hiding I/O errors.
+
+    ``Path.exists()`` answers False only for "not there" errors (ENOENT,
+    ENOTDIR and the like) and lets anything else — EIO from a degraded mount,
+    EACCES — escape as a bare ``OSError``. Absent data is an honest empty
+    result; a path that cannot even be statted is an unknown, so it becomes
+    ``HeberReadError`` like every other unreadable-data failure.
+    """
+    try:
+        return path.exists()
+    except OSError as exc:
+        logger.error("heber_reader_unstatable_path", path=str(path), exc_info=True)
+        raise HeberReadError(f"Cannot stat {path}; the read cannot tell whether data is there: {exc}") from exc
+
+
 def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = None) -> bool:
     """True when the walk found a data parquet it could not use.
 
@@ -892,7 +908,7 @@ class HeberReader:
         if instrument_type:
             base_path = base_path / f"instrument_type={instrument_type}"
 
-        if not base_path.exists():
+        if not _requested_path_exists(base_path):
             logger.warning("heber_reader_path_missing", path=str(base_path))
             return pd.DataFrame()
 
@@ -1169,7 +1185,7 @@ class HeberReader:
         if project:
             gold_path = gold_path / f"project={project}"
 
-        if not gold_path.exists():
+        if not _requested_path_exists(gold_path):
             logger.warning("heber_reader_gold_not_found", path=str(gold_path))
             return pd.DataFrame()
 
@@ -1416,7 +1432,7 @@ class HeberReader:
         ``[("column", "op", value), ...]``.  Use this when the caller already
         knows the full partition path (e.g. ``DatasetConfig.features_path``).
         """
-        if not path.exists():
+        if not _requested_path_exists(path):
             return pd.DataFrame()
 
         try:
