@@ -32,6 +32,7 @@ import json
 import os
 import stat
 import uuid
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -221,6 +222,38 @@ def _is_skipped_name(name: str) -> bool:
     return name.startswith(("._", "_"))
 
 
+def _walk_strict(
+    base: Path,
+    *,
+    descend: Callable[[str], bool] = lambda name: True,
+) -> Iterator[tuple[os.DirEntry[str], bool]]:
+    """Yield ``(entry, is_dir)`` for everything under ``base``, depth first.
+
+    Unlike ``os.walk`` or pathlib's ``glob``, nothing is dropped silently: a
+    directory that cannot be listed, or an entry whose type cannot be
+    determined, raises ``HeberReadError``. Names :func:`_is_skipped_name`
+    rejects are skipped before any filesystem call. Directories are descended
+    into when ``descend(name)`` allows it, except symlinked ones, which are
+    reported but not followed (as before, with ``rglob``).
+    """
+    stack = [base]
+    while stack:
+        for entry in _list_dir(stack.pop()):
+            if _is_skipped_name(entry.name):
+                continue
+            try:
+                is_dir = entry.is_dir()
+                follow = is_dir and not entry.is_symlink()
+            except OSError as exc:
+                logger.error("heber_reader_unstatable_path", path=entry.path, exc_info=True)
+                raise HeberReadError(
+                    f"Cannot stat {entry.path}; the read cannot tell whether it holds data: {exc}"
+                ) from exc
+            if follow and descend(entry.name):
+                stack.append(Path(entry.path))
+            yield entry, is_dir
+
+
 def _is_dir_lenient(entry: os.DirEntry[str]) -> bool:
     """``entry.is_dir()`` for a partition outside the requested range.
 
@@ -239,23 +272,22 @@ def _parquet_files_in(base: Path, *, strict: bool = False) -> list[str]:
 
     Each candidate goes through :func:`_is_usable_data_file`, which raises on an
     unstatable file and, when ``strict``, on a zero-byte one. A subdirectory
-    that cannot be listed raises ``HeberReadError`` rather than being left out.
-    ``._`` sidecars and underscore-prefixed trees below ``base`` are skipped by
-    name and never listed or statted. The underscore rule applies below
+    that cannot be listed or classified raises ``HeberReadError`` rather than
+    being left out (see :func:`_walk_strict`). ``._`` sidecars and
+    underscore-prefixed files and trees below ``base`` are skipped by name and
+    never listed or statted. The underscore rule applies below
     ``base`` only, so a caller inspecting a quarantine tree directly still sees
     its data.
     """
     if any(part.startswith("._") for part in base.parts):
         return []
     files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(base, onerror=_enumeration_failed):
-        dirnames[:] = [d for d in dirnames if not _is_skipped_name(d)]
-        for name in filenames:
-            if not name.endswith(".parquet") or name.startswith("._"):
-                continue
-            f = Path(dirpath) / name
-            if _is_usable_data_file(f, strict=strict):
-                files.append(str(f))
+    for entry, is_dir in _walk_strict(base):
+        if is_dir or not entry.name.endswith(".parquet"):
+            continue
+        f = Path(entry.path)
+        if _is_usable_data_file(f, strict=strict):
+            files.append(str(f))
     return files
 
 
@@ -808,16 +840,14 @@ def _discover_version_dirs(base_path: Path) -> list[Path]:
     version as the latest, and so does a directory that cannot be listed.
     ``._`` sidecar paths are skipped by name first.
     """
-    dirs: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(base_path, onerror=_enumeration_failed):
-        dirnames[:] = [d for d in dirnames if not d.startswith("._")]
-        # A looped or unreadable `version=` entry can be classified as a file
-        # by the walk, so names from both lists are checked; versions do not
-        # nest, so the walk never descends into one.
-        for name in [*dirnames, *filenames]:
-            if name.startswith(_VERSION_PREFIX) and _is_data_dir(Path(dirpath) / name):
-                dirs.append(Path(dirpath) / name)
-        dirnames[:] = [d for d in dirnames if not d.startswith(_VERSION_PREFIX)]
+    # Versions do not nest, so the walk never descends into one; `_quarantine`
+    # and other underscore trees are never walked, so a quarantined version
+    # cannot be served as the latest.
+    dirs = [
+        Path(entry.path)
+        for entry, is_dir in _walk_strict(base_path, descend=lambda name: not name.startswith(_VERSION_PREFIX))
+        if is_dir and entry.name.startswith(_VERSION_PREFIX)
+    ]
     return sorted(
         dirs,
         key=lambda d: _version_sort_key(d.name.removeprefix(_VERSION_PREFIX)),

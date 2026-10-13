@@ -453,3 +453,76 @@ def test_list_gold_versions_does_not_report_a_looped_root_as_empty(tmp_path: Pat
     with pytest.raises(HeberReadError, match="dataset=looped"):
         HeberReader(tmp_path).list_gold_versions("looped")
     assert HeberReader(tmp_path).list_gold_versions("never_written") == []
+
+
+def _unclassifiable(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make `DirEntry.is_dir()` fail with EIO for one entry. `os.walk` treats
+    that as "not a directory", so the directory's contents silently vanish."""
+    import os
+
+    real_scandir = os.scandir
+
+    class _Entry:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+            self.name = real.name
+            self.path = real.path
+
+        def is_dir(self, *, follow_symlinks: bool = True) -> bool:
+            if self.name == name:
+                raise OSError(errno.EIO, "Input/output error", self.path)
+            return bool(self._real.is_dir(follow_symlinks=follow_symlinks))
+
+        def is_file(self, *, follow_symlinks: bool = True) -> bool:
+            return bool(self._real.is_file(follow_symlinks=follow_symlinks))
+
+        def is_symlink(self) -> bool:
+            return bool(self._real.is_symlink())
+
+    class _Scandir:
+        def __init__(self, path: Any) -> None:
+            self._it = real_scandir(path)
+
+        def __enter__(self) -> _Scandir:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._it.close()
+
+        def __iter__(self) -> _Scandir:
+            return self
+
+        def __next__(self) -> _Entry:
+            return _Entry(next(self._it))
+
+        def close(self) -> None:
+            self._it.close()
+
+    monkeypatch.setattr(os, "scandir", _Scandir)
+
+
+class TestWalkClassificationAndSkips:
+    def test_an_unclassifiable_partition_fails_the_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-01"), "part-good.parquet", "2026-08-01")
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-hidden.parquet", "2026-08-07")
+        _unclassifiable(monkeypatch, "dt=2026-08-07")
+
+        with pytest.raises(HeberReadError, match="dt=2026-08-07"):
+            HeberReader(tmp_path).read_silver("darkpool")
+
+    def test_underscore_prefixed_files_are_never_read(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path, "2026-08-07")
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        _write_rows(part, "_staging.parquet", "2026-08-07")
+
+        assert len(HeberReader(tmp_path).read_silver("darkpool")) == 3
+
+    def test_a_quarantined_newer_version_is_never_served_as_latest(self, tmp_path: Path) -> None:
+        project = _mkdir(tmp_path / "gold" / "dataset=feat" / "project=kairos")
+        _write_rows(_mkdir(project / "version=v0" / "dt=2026-08-07"), "part-good.parquet", "2026-08-07")
+        _write_rows(
+            _mkdir(project / "_quarantine" / "version=v9" / "dt=2026-08-07"), "part-bad.parquet", "2026-08-07", 7
+        )
+
+        assert HeberReader(tmp_path).list_gold_versions("feat", project="kairos") == ["v0"]
+        assert len(HeberReader(tmp_path).read_gold("feat", project="kairos")) == 3
