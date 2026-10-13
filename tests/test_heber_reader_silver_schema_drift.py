@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 
@@ -151,6 +152,31 @@ def test_timezone_drift_is_caught_when_a_widening_forces_the_recovery_scan(
     early, late = (naive, aware) if first_is_a else (aware, naive)
     write("2026-08-01", *early)
     write("2026-08-02", *late)
+
+    # Which fragment pyarrow samples first follows directory enumeration order,
+    # which differs between filesystems, so this read-level test only asserts
+    # the outcome. The recovery path itself is pinned deterministically below.
+    with pytest.raises(SchemaContractError, match="bar_start_ts"):
+        HeberReader(tmp_path).read_silver("drift")
+
+
+def test_recovery_scan_runs_the_timezone_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deterministic: the int64 fragment is first in the file list, so the first
+    scan raises on 2.5 and `_scan_to_table` recovers through `_unified_dataset`,
+    which only warns on the naive-vs-UTC column. The Silver check must still run."""
+    when = pd.Timestamp("2026-08-01T09:30:00").to_pydatetime()
+    first, second = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    pq.write_table(
+        pa.table({"volume": pa.array([1], pa.int64()), "bar_start_ts": pa.array([when], pa.timestamp("us"))}),
+        str(first),
+    )
+    pq.write_table(
+        pa.table(
+            {"volume": pa.array([2.5], pa.float64()), "bar_start_ts": pa.array([when], pa.timestamp("us", tz="UTC"))}
+        ),
+        str(second),
+    )
+    dataset_obj = ds.dataset([str(first), str(second)], format="parquet")
     recovered: list[bool] = []
     real_unified = core._unified_dataset
 
@@ -161,9 +187,8 @@ def test_timezone_drift_is_caught_when_a_widening_forces_the_recovery_scan(
     monkeypatch.setattr(core, "_unified_dataset", spy)
 
     with pytest.raises(SchemaContractError, match="bar_start_ts"):
-        HeberReader(tmp_path).read_silver("drift")
-    if first_is_a:
-        assert recovered, "the int64-first order must exercise the recovery path"
+        core._scan_to_table(dataset_obj, str(tmp_path), check_fragment_types=True)
+    assert recovered, "the first scan must have raised and gone through the recovery path"
 
 
 def test_timestamp_unit_difference_still_reads(tmp_path: Path) -> None:
