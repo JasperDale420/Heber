@@ -166,7 +166,9 @@ def _check_silver_invariants(
             # pyarrow auto-discover them turns a healthy partition into a
             # failed critical check.
             try:
-                files = _collect_parquet_files(partition)
+                # strict: this is one named dt= partition, so a zero-byte part
+                # file in it is a lost write to report, not a file to skip.
+                files = _collect_parquet_files(partition, strict=True)
                 if not files:
                     continue
                 # One dataset over the collected files rather than per-file

@@ -145,8 +145,8 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     return pa.table(arrays, schema=pa.schema(fields))
 
 
-def _parquet_files_in(base: Path, *, scoped: bool = False) -> list[str]:
-    """Recursively collect readable parquet files under one directory.
+def _is_usable_data_file(f: Path, *, strict: bool) -> bool:
+    """Decide whether a name-filtered ``*.parquet`` path is a readable fragment.
 
     A data file the walk lists but cannot use is a lost fragment, not an empty
     one, so it fails the read with ``HeberReadError`` rather than letting its
@@ -154,15 +154,44 @@ def _parquet_files_in(base: Path, *, scoped: bool = False) -> list[str]:
 
     * A file whose ``stat()`` fails always raises. That is a degraded mount or a
       file vanishing mid-read, and there is no way to know what it held.
-    * A zero-byte file raises when ``scoped`` — the walk is limited to ``dt=``
-      partitions the caller asked for, where a hole is most likely to be read as
-      absence. An unscoped walk skips it with a warning, because historical
-      writer-killed stubs sit in old partitions of high-volume feeds and failing
-      every whole-feed read on their account would turn a bounded hole into an
-      outage.
+    * A zero-byte file raises when ``strict`` — the caller named this data
+      specifically (a ``dt=``-scoped walk, an explicit partition path), where a
+      hole is most likely to be read as absence. A whole-feed walk skips it with
+      a warning, because historical writer-killed stubs sit in old partitions of
+      high-volume feeds and failing every whole-feed read on their account would
+      turn a bounded hole into an outage.
 
-    AppleDouble sidecars, ``._`` sidecar directories and underscore-prefixed
-    trees are filtered by name before any ``stat()`` and are never errors.
+    Returns False for non-regular files and skipped zero-byte files.
+    """
+    try:
+        stat_result = f.stat()
+    except OSError as exc:
+        logger.error("heber_reader_unstatable_file", path=str(f), exc_info=True)
+        raise HeberReadError(f"Cannot stat {f}; the read cannot tell what that fragment holds: {exc}") from exc
+    if not stat.S_ISREG(stat_result.st_mode):
+        return False
+    # Zero-byte parquet is a writer killed mid-write. pyarrow refuses to open
+    # it, and before the walk filtered it one such file under feed=darkpool
+    # made every read of that feed fail and look empty.
+    if stat_result.st_size == 0:
+        if strict:
+            logger.error("heber_reader_lost_fragment", path=str(f), reason="zero_byte")
+            raise HeberReadError(
+                f"{f} is zero bytes — a lost write in requested data, not an empty partition; "
+                "quarantine it and replay the partition from Bronze"
+            )
+        logger.warning("heber_reader_skip_empty_file", path=str(f))
+        return False
+    return True
+
+
+def _parquet_files_in(base: Path, *, strict: bool = False) -> list[str]:
+    """Recursively collect readable parquet files under one directory.
+
+    Each candidate goes through :func:`_is_usable_data_file`, which raises on an
+    unstatable file and, when ``strict``, on a zero-byte one. AppleDouble
+    sidecars, ``._`` sidecar directories and underscore-prefixed trees are
+    filtered by name before any ``stat()`` and are never errors.
     """
     files: list[str] = []
     for f in base.rglob("*.parquet"):
@@ -184,29 +213,8 @@ def _parquet_files_in(base: Path, *, scoped: bool = False) -> list[str]:
         # directly) still sees its data.
         if any(part.startswith("_") for part in f.relative_to(base).parts):
             continue
-        try:
-            stat_result = f.stat()
-        except OSError as exc:
-            logger.error("heber_reader_unstatable_file", path=str(f), exc_info=True)
-            raise HeberReadError(f"Cannot stat {f}; the read cannot tell what that fragment holds: {exc}") from exc
-        if not stat.S_ISREG(stat_result.st_mode):
-            continue
-        # Zero-byte parquet is a writer killed mid-write. pyarrow refuses to
-        # open it, and before the walk filtered it one such file under
-        # feed=darkpool made every read of that feed fail and look empty. An
-        # unscoped walk still skips it so the rest of the feed stays readable;
-        # a scoped one is asking about this partition, and gets told it is
-        # missing data rather than handed the readable remainder.
-        if stat_result.st_size == 0:
-            if scoped:
-                logger.error("heber_reader_lost_fragment", path=str(f), reason="zero_byte")
-                raise HeberReadError(
-                    f"{f} is zero bytes — a lost write in a requested partition, not an empty one; "
-                    "quarantine it and replay the partition from Bronze"
-                )
-            logger.warning("heber_reader_skip_empty_file", path=str(f))
-            continue
-        files.append(str(f))
+        if _is_usable_data_file(f, strict=strict):
+            files.append(str(f))
     return files
 
 
@@ -281,7 +289,12 @@ def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path] | None:
     return [] if seen_any else None
 
 
-def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = None) -> list[str]:
+def _collect_parquet_files(
+    root: str | Path,
+    dt_range: tuple[str, str] | None = None,
+    *,
+    strict: bool = False,
+) -> list[str]:
     """Walk a Parquet dataset root and return only readable parquet files.
 
     Skips three classes of files that would otherwise cause pyarrow to
@@ -310,6 +323,11 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
     ``prune_by_dt``, which already declares the same range to the scan filter.
     Falls back to the full walk when no ``dt=`` directories are found, so
     unpartitioned layouts still read.
+
+    A file whose ``stat()`` fails always raises ``HeberReadError``. A zero-byte
+    data file raises when the walk is ``dt_range``-scoped or ``strict`` (the
+    caller named this path as the data it wants), and is skipped with a warning
+    on a whole-dataset walk — see :func:`_is_usable_data_file`.
     """
     base = Path(root)
     if not base.exists():
@@ -329,6 +347,7 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
             # matching the underscore-prefix convention `_parquet_files_in`
             # applies to the recursive walk below.
             and not any(part.startswith("_") for part in base.parts)
+            and _is_usable_data_file(base, strict=strict)
         ):
             return [str(base)]
         return []
@@ -347,10 +366,10 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
         if scoped is not None:
             files: list[str] = []
             for partition in scoped:
-                files.extend(_parquet_files_in(partition, scoped=True))
+                files.extend(_parquet_files_in(partition, strict=True))
             return files
 
-    return _parquet_files_in(base)
+    return _parquet_files_in(base, strict=strict)
 
 
 def _normalize_string_type(dt: pa.DataType) -> pa.DataType:
@@ -414,6 +433,7 @@ def _open_dataset_safe(
     partitioning: ds.Partitioning | None = None,
     dt_range: tuple[str, str] | None = None,
     unify_evolved: bool = False,
+    strict: bool = False,
 ) -> ds.Dataset | None:
     """Open a Parquet dataset, recovering from string/dictionary schema conflicts.
 
@@ -452,7 +472,7 @@ def _open_dataset_safe(
     (Silver reads) leave ``unify_evolved`` at its default and keep the
     reactive-only recovery.
     """
-    file_list = _collect_parquet_files(path, dt_range=dt_range)
+    file_list = _collect_parquet_files(path, dt_range=dt_range, strict=strict)
     if not file_list:
         return None
 
@@ -1400,10 +1420,14 @@ class HeberReader:
             return pd.DataFrame()
 
         try:
+            # The caller named this path as the data it wants, so a lost
+            # zero-byte fragment anywhere under it fails the read rather than
+            # being skipped the way a whole-feed Silver walk skips it.
             dataset_obj = _open_dataset_safe(
                 str(path),
                 partitioning=ds.partitioning(flavor="hive"),
                 unify_evolved=True,
+                strict=True,
             )
         except OSError as exc:
             logger.error("heber_reader_arbitrary_open_failed", path=str(path), exc_info=True)
@@ -1413,7 +1437,7 @@ class HeberReader:
             # Same split as the Silver and Gold reads: nothing readable found is
             # an honest empty, but files that were found and could not be opened
             # are an unknown row count, not zero.
-            if _collect_parquet_files(str(path)) or _failed_write_present(str(path)):
+            if _collect_parquet_files(str(path), strict=True) or _failed_write_present(str(path)):
                 logger.error("heber_reader_arbitrary_open_failed", path=str(path))
                 raise HeberReadError(
                     f"Could not open dataset at {path} — files are present but their schemas could not be unified"

@@ -115,9 +115,9 @@ def test_read_silver_scopes_the_walk_when_pruning_by_dt(tmp_path: Path, monkeypa
 
     original = reader_core._collect_parquet_files
 
-    def _spy(root, dt_range=None):
+    def _spy(root, dt_range=None, **kwargs):
         seen.append(dt_range)
-        return original(root, dt_range=dt_range)
+        return original(root, dt_range=dt_range, **kwargs)
 
     monkeypatch.setattr(reader_core, "_collect_parquet_files", _spy)
 

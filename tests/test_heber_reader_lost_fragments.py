@@ -190,3 +190,73 @@ def test_daily_health_reports_an_unstatable_file_instead_of_crashing(
 
     assert result["status"] == "fail"
     assert result["observed"]["read_failures"]
+
+
+def test_daily_health_reports_a_zero_byte_file_in_the_report_partition(tmp_path: Path) -> None:
+    """The scan reads one specific dt= partition, so a lost write in it is a
+    read failure, not a healthy partition with fewer rows."""
+    from datetime import date
+
+    from heber.ops.daily_health import _check_silver_invariants
+
+    part = tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-08-07"
+    part.mkdir(parents=True)
+    _write_rows(part, "part-good.parquet", "2026-08-07")
+    (part / "part-truncated.parquet").write_bytes(b"")
+
+    class _Settings:
+        silver_path = tmp_path / "silver"
+
+    result = _check_silver_invariants(date(2026, 8, 7), _Settings())  # type: ignore[arg-type]
+
+    assert result["status"] == "fail"
+    assert result["observed"]["read_failures"] == ["bars/instrument_type=equity"]
+
+
+class TestReadParquetDataset:
+    """The arbitrary-path read is for callers that name the exact data they want."""
+
+    def test_zero_byte_sibling_in_a_named_partition_fails_the_read(self, tmp_path: Path) -> None:
+        part = tmp_path / "gold" / "dataset=feat" / "dt=2026-08-07"
+        part.mkdir(parents=True)
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        (part / "part-truncated.parquet").write_bytes(b"")
+
+        with pytest.raises(HeberReadError, match="part-truncated.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(part)
+
+    def test_zero_byte_file_anywhere_under_the_named_path_fails_the_read(self, tmp_path: Path) -> None:
+        root = tmp_path / "gold" / "dataset=feat"
+        _write_rows(_mkdir(root / "dt=2026-08-01"), "part-good.parquet", "2026-08-01")
+        (_mkdir(root / "dt=2026-08-07") / "part-truncated.parquet").write_bytes(b"")
+
+        with pytest.raises(HeberReadError, match="part-truncated.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(root)
+
+    def test_unstatable_sibling_fails_the_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        part = _mkdir(tmp_path / "gold" / "dataset=feat" / "dt=2026-08-07")
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        _write_rows(part, "part-lost.parquet", "2026-08-07")
+        _unstatable(monkeypatch, "part-lost.parquet")
+
+        with pytest.raises(HeberReadError, match="part-lost.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(part)
+
+    def test_a_zero_byte_file_named_directly_fails_the_read(self, tmp_path: Path) -> None:
+        part = _mkdir(tmp_path / "gold" / "dataset=labels" / "version=v1")
+        (part / "data.parquet").write_bytes(b"")
+
+        with pytest.raises(HeberReadError, match=r"data\.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(part / "data.parquet")
+
+    def test_all_good_partition_reads_unchanged(self, tmp_path: Path) -> None:
+        part = _mkdir(tmp_path / "gold" / "dataset=feat" / "dt=2026-08-07")
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        (part / "._part-good.parquet").write_bytes(b"")
+
+        assert len(HeberReader(tmp_path).read_parquet_dataset(part)) == 3
+
+
+def _mkdir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
