@@ -29,11 +29,12 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import stat
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pandas as pd
 import pyarrow as pa
@@ -185,36 +186,76 @@ def _is_usable_data_file(f: Path, *, strict: bool) -> bool:
     return True
 
 
+def _enumeration_failed(exc: OSError) -> NoReturn:
+    """Turn a failure to list a directory of requested data into ``HeberReadError``.
+
+    pathlib's ``glob``/``rglob`` swallow these errors and simply leave the
+    directory's contents out, so one unreadable partition silently shortened
+    the result. A directory the read needed but could not list is unknown, not
+    empty.
+    """
+    logger.error("heber_reader_unlistable_directory", path=str(exc.filename), exc_info=exc)
+    raise HeberReadError(f"Cannot list {exc.filename}; the read cannot tell what it holds: {exc}") from exc
+
+
+def _list_dir(path: Path) -> list[os.DirEntry[str]]:
+    """List ``path``, raising ``HeberReadError`` instead of hiding a listing failure."""
+    try:
+        with os.scandir(path) as entries:
+            return list(entries)
+    except OSError as exc:
+        _enumeration_failed(exc)
+
+
+def _is_skipped_name(name: str) -> bool:
+    """Directory and file names readers never open or list.
+
+    ``._`` AppleDouble sidecars raise EPERM from ``stat()`` and ``scandir()``
+    on macOS bind mounts inside Docker, so they are filtered by name before any
+    filesystem call. Underscore-prefixed directories are not data: writers
+    divert rows they refuse to serve into a sibling ``_quarantine`` tree, and
+    ``_locks``/``_source_backup`` hold coordination and recovery files. Real
+    partitions are ``dt=``, ``hour=``, ``project=``, ``version=``, ``feed=``,
+    ``instrument_type=`` — none start with an underscore.
+    """
+    return name.startswith(("._", "_"))
+
+
+def _is_dir_lenient(entry: os.DirEntry[str]) -> bool:
+    """``entry.is_dir()`` for a partition outside the requested range.
+
+    Only used to decide whether a dataset is ``dt=``-partitioned at all, so a
+    partition the caller did not ask for must not fail the read: a looped or
+    unstatable one counts as not a directory, as ``Path.is_dir()`` treats it.
+    """
+    try:
+        return entry.is_dir()
+    except OSError:
+        return False
+
+
 def _parquet_files_in(base: Path, *, strict: bool = False) -> list[str]:
     """Recursively collect readable parquet files under one directory.
 
     Each candidate goes through :func:`_is_usable_data_file`, which raises on an
-    unstatable file and, when ``strict``, on a zero-byte one. AppleDouble
-    sidecars, ``._`` sidecar directories and underscore-prefixed trees are
-    filtered by name before any ``stat()`` and are never errors.
+    unstatable file and, when ``strict``, on a zero-byte one. A subdirectory
+    that cannot be listed raises ``HeberReadError`` rather than being left out.
+    ``._`` sidecars and underscore-prefixed trees below ``base`` are skipped by
+    name and never listed or statted. The underscore rule applies below
+    ``base`` only, so a caller inspecting a quarantine tree directly still sees
+    its data.
     """
+    if any(part.startswith("._") for part in base.parts):
+        return []
     files: list[str] = []
-    for f in base.rglob("*.parquet"):
-        # Filter by name BEFORE any stat() call. On macOS bind mounts inside
-        # Docker, `._<name>.parquet` AppleDouble sidecars raise EPERM from
-        # stat(), so calling f.is_file() first crashes the walk before we
-        # get a chance to skip them by name. Ordering matters here.
-        if f.name.startswith("._"):
-            continue
-        if any(part.startswith("._") for part in f.parts):
-            continue
-        # Underscore-prefixed directories are not data. Writers divert rows
-        # they refuse to serve into a sibling `_quarantine` tree, and
-        # `_locks`/`_source_backup` hold coordination and recovery files, all
-        # of which readers must never walk. Real partitions are `dt=`,
-        # `hour=`, `project=`, `version=`, `feed=`, `instrument_type=` — none
-        # start with an underscore. Checked relative to `base` so a caller
-        # whose own path contains one (e.g. inspecting a quarantine tree
-        # directly) still sees its data.
-        if any(part.startswith("_") for part in f.relative_to(base).parts):
-            continue
-        if _is_usable_data_file(f, strict=strict):
-            files.append(str(f))
+    for dirpath, dirnames, filenames in os.walk(base, onerror=_enumeration_failed):
+        dirnames[:] = [d for d in dirnames if not _is_skipped_name(d)]
+        for name in filenames:
+            if not name.endswith(".parquet") or name.startswith("._"):
+                continue
+            f = Path(dirpath) / name
+            if _is_usable_data_file(f, strict=strict):
+                files.append(str(f))
     return files
 
 
@@ -308,30 +349,44 @@ def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path] | None:
 
     ``dt=`` sits directly under the dataset root when a caller scopes by
     ``instrument_type``, and one level lower when it does not, so both depths
-    are probed. Two shallow globs cost far less than the recursive walk they
-    replace. ``dt`` values are ISO dates, which sort lexically — the same
-    property the existing ``prune_by_dt`` scan predicate relies on.
+    are probed. Two shallow listings cost far less than the recursive walk they
+    replace; a listing that fails raises ``HeberReadError``. ``dt`` values are
+    ISO dates, which sort lexically — the same property the existing
+    ``prune_by_dt`` scan predicate relies on.
     """
     lo, hi = dt_range
     seen_any = False
-    for pattern in ("dt=*", "*/dt=*"):
+    for depth in (0, 1):
+        if depth == 0:
+            parents = [base]
+        else:
+            # Children that could hold `dt=` directories (instrument_type=…).
+            # `dt=` children are partitions, not parents, so they are not
+            # listed again; skipped names are never listed or statted.
+            parents = [
+                base / entry.name
+                for entry in _list_dir(base)
+                if not _is_skipped_name(entry.name)
+                and not entry.name.startswith("dt=")
+                and _is_data_dir(base / entry.name)
+            ]
         matched: list[Path] = []
-        for candidate in base.glob(pattern):
-            # Name filters first: `._` sidecars raise EPERM from stat() on
-            # macOS bind mounts, at the dt= level or the instrument_type= one.
-            if any(part.startswith("._") for part in candidate.relative_to(base).parts):
-                continue
-            value = candidate.name.removeprefix("dt=")
-            if lo <= value <= hi:
-                # A requested partition that cannot be statted is unknown, not
-                # absent; skipping it would hand back a partial result.
-                if not _is_data_dir(candidate):
+        for parent in parents:
+            for entry in _list_dir(parent):
+                if not entry.name.startswith("dt="):
                     continue
-                seen_any = True
-                matched.append(candidate)
-            elif candidate.is_dir():
-                seen_any = True
-        # Keep probing the deeper pattern when the shallow one held `dt=`
+                candidate = parent / entry.name
+                value = entry.name.removeprefix("dt=")
+                if lo <= value <= hi:
+                    # A requested partition that cannot be statted is unknown,
+                    # not absent; skipping it would hand back a partial result.
+                    if not _is_data_dir(candidate):
+                        continue
+                    seen_any = True
+                    matched.append(candidate)
+                elif _is_dir_lenient(entry):
+                    seen_any = True
+        # Keep probing the deeper level when the shallow one held `dt=`
         # directories but none in range — returning early there would hide data
         # in a layout carrying partitions at both depths.
         if matched:
@@ -750,13 +805,19 @@ def _discover_version_dirs(base_path: Path) -> list[Path]:
 
     A ``version=`` entry that cannot be statted raises ``HeberReadError``
     rather than dropping out of the list, which would quietly serve an older
-    version as the latest. ``._`` sidecar paths are skipped by name first.
+    version as the latest, and so does a directory that cannot be listed.
+    ``._`` sidecar paths are skipped by name first.
     """
-    dirs = [
-        d
-        for d in base_path.glob("**/version=*")
-        if not any(part.startswith("._") for part in d.relative_to(base_path).parts) and _is_data_dir(d)
-    ]
+    dirs: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(base_path, onerror=_enumeration_failed):
+        dirnames[:] = [d for d in dirnames if not d.startswith("._")]
+        # A looped or unreadable `version=` entry can be classified as a file
+        # by the walk, so names from both lists are checked; versions do not
+        # nest, so the walk never descends into one.
+        for name in [*dirnames, *filenames]:
+            if name.startswith(_VERSION_PREFIX) and _is_data_dir(Path(dirpath) / name):
+                dirs.append(Path(dirpath) / name)
+        dirnames[:] = [d for d in dirnames if not d.startswith(_VERSION_PREFIX)]
     return sorted(
         dirs,
         key=lambda d: _version_sort_key(d.name.removeprefix(_VERSION_PREFIX)),
@@ -1561,7 +1622,7 @@ class HeberReader:
         if project:
             base = base / f"project={project}"
 
-        if not base.exists():
+        if not _requested_path_exists(base):
             return []
 
         return [d.name.removeprefix(_VERSION_PREFIX) for d in _discover_version_dirs(base)]

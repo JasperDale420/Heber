@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import errno
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pyarrow as pa
@@ -353,3 +354,102 @@ class TestUnstatableRequestedPath:
     def test_a_missing_path_still_reads_empty(self, tmp_path: Path) -> None:
         assert HeberReader(tmp_path).read_parquet_dataset(tmp_path / "nope" / "data.parquet").empty
         assert HeberReader(tmp_path).read_silver("never_written").empty
+
+
+def _unlistable(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make listing one directory fail with EACCES, the way a permissions or
+    mount fault does. pathlib's glob/rglob swallow this and simply omit the
+    directory's contents."""
+    import os
+
+    real_scandir = os.scandir
+
+    def flaky_scandir(path: Any = ".") -> Any:
+        if Path(path).name == name:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", flaky_scandir)
+
+
+class TestUnlistableDirectory:
+    def test_whole_feed_read_fails_instead_of_dropping_a_partition(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-01"), "part-good.parquet", "2026-08-01")
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-hidden.parquet", "2026-08-07")
+        _unlistable(monkeypatch, "dt=2026-08-07")
+
+        with pytest.raises(HeberReadError, match="dt=2026-08-07"):
+            HeberReader(tmp_path).read_silver("darkpool")
+
+    def test_scoped_read_fails_when_an_instrument_type_cannot_be_listed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-good.parquet", "2026-08-07")
+        crypto = tmp_path / "silver" / "feed=darkpool" / "instrument_type=crypto" / "dt=2026-08-07"
+        _write_rows(_mkdir(crypto), "part-hidden.parquet", "2026-08-07")
+        _unlistable(monkeypatch, "instrument_type=crypto")
+
+        with pytest.raises(HeberReadError, match="instrument_type=crypto"):
+            HeberReader(tmp_path).read_silver("darkpool", **_SCOPED)
+
+    def test_latest_gold_read_fails_when_versions_cannot_be_listed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = _mkdir(tmp_path / "gold" / "dataset=feat" / "project=kairos")
+        _write_rows(_mkdir(project / "version=v0" / "dt=2026-08-07"), "part-good.parquet", "2026-08-07")
+        _unlistable(monkeypatch, "project=kairos")
+
+        with pytest.raises(HeberReadError, match="project=kairos"):
+            HeberReader(tmp_path).read_gold("feat", project="kairos")
+
+    def test_daily_health_reports_an_unlistable_feed_instead_of_skipping_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import date
+
+        from heber.ops.daily_health import _check_silver_invariants
+
+        part = _mkdir(tmp_path / "silver" / "feed=bars" / "instrument_type=equity" / "dt=2026-08-07")
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        _unlistable(monkeypatch, "feed=bars")
+
+        class _Settings:
+            silver_path = tmp_path / "silver"
+
+        result = _check_silver_invariants(date(2026, 8, 7), _Settings())  # type: ignore[arg-type]
+
+        assert result["status"] == "fail"
+        assert result["observed"]["read_failures"] == ["bars"]
+
+    def test_quarantine_and_sidecar_trees_are_still_never_listed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        part = _partition(tmp_path, "2026-08-07")
+        _write_rows(part, "part-good.parquet", "2026-08-07")
+        _write_rows(_mkdir(part / "_quarantine"), "part-bad.parquet", "2026-08-07")
+        _mkdir(part / "._sidecar")
+        _unlistable(monkeypatch, "_quarantine")
+        import os
+
+        real_scandir = os.scandir
+
+        def no_sidecars(path: Any = ".") -> Any:
+            if Path(path).name.startswith("._"):
+                raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", no_sidecars)
+
+        assert len(HeberReader(tmp_path).read_silver("darkpool")) == 3
+        assert len(HeberReader(tmp_path).read_silver("darkpool", **_SCOPED)) == 3
+
+
+def test_list_gold_versions_does_not_report_a_looped_root_as_empty(tmp_path: Path) -> None:
+    gold = _mkdir(tmp_path / "gold")
+    (gold / "dataset=looped").symlink_to(gold / "dataset=looped")
+
+    with pytest.raises(HeberReadError, match="dataset=looped"):
+        HeberReader(tmp_path).list_gold_versions("looped")
+    assert HeberReader(tmp_path).list_gold_versions("never_written") == []
