@@ -121,6 +121,51 @@ def test_naive_vs_aware_timestamp_on_any_column_raises(tmp_path: Path, first_is_
         HeberReader(tmp_path).read_silver("drift")
 
 
+@_ORDERS
+def test_timezone_drift_is_caught_when_a_widening_forces_the_recovery_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_is_a: bool
+) -> None:
+    """An int64-then-2.5 column makes the first scan raise, so the read recovers
+    through the unified-schema path; the timezone check must still run there."""
+    when = pd.Timestamp("2026-08-01T09:30:00").to_pydatetime()
+
+    def write(dt: str, volume: pa.Array, start: pa.Array) -> None:
+        part = tmp_path / "silver" / "feed=drift" / "instrument_type=equity" / f"dt={dt}"
+        part.mkdir(parents=True, exist_ok=True)
+        ts = pd.Timestamp(f"{dt}T15:00:00", tz="UTC").to_pydatetime()
+        pq.write_table(
+            pa.table(
+                {
+                    "ts_event": pa.array([ts], _TS),
+                    "ts_available": pa.array([ts], _TS),
+                    "instrument_key": ["equity:AAPL"],
+                    "volume": volume,
+                    "bar_start_ts": start,
+                }
+            ),
+            str(part / "part-0.parquet"),
+        )
+
+    naive = (pa.array([1], pa.int64()), pa.array([when], pa.timestamp("us")))
+    aware = (pa.array([2.5], pa.float64()), pa.array([when], pa.timestamp("us", tz="UTC")))
+    early, late = (naive, aware) if first_is_a else (aware, naive)
+    write("2026-08-01", *early)
+    write("2026-08-02", *late)
+    recovered: list[bool] = []
+    real_unified = core._unified_dataset
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        recovered.append(True)
+        return real_unified(*args, **kwargs)
+
+    monkeypatch.setattr(core, "_unified_dataset", spy)
+
+    with pytest.raises(SchemaContractError, match="bar_start_ts"):
+        HeberReader(tmp_path).read_silver("drift")
+    if first_is_a:
+        assert recovered, "the int64-first order must exercise the recovery path"
+
+
 def test_timestamp_unit_difference_still_reads(tmp_path: Path) -> None:
     """ms vs us on the same timezone is a widening, not drift."""
     when = pd.Timestamp("2026-08-01T09:30:00", tz="UTC").to_pydatetime()

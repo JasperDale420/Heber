@@ -788,10 +788,11 @@ def _scan_to_table(
     conflicts actually surface.
 
     ``check_fragment_types`` additionally runs
-    :func:`_check_scanned_fragment_types` when the first scan succeeds, so a
-    disagreement pyarrow cast through silently still fails the read. The
-    recovery path needs no such check: :func:`_unified_dataset` already
-    validated every fragment.
+    :func:`_check_scanned_fragment_types` after whichever scan produced the
+    result, so a disagreement pyarrow cast through silently still fails the
+    read. The recovery path needs it too: :func:`_unified_dataset` settles a
+    timezone disagreement on a non-predicate column with only a warning, and
+    the stricter Silver rule must hold however the read was reached.
     """
 
     def _scan(target: ds.Dataset) -> pa.Table:
@@ -818,7 +819,10 @@ def _scan_to_table(
         # Unification could not produce a readable dataset. Surface the
         # original conflict rather than masking it as an empty result.
         raise conflict
-    return _scan(unified)
+    table = _scan(unified)
+    if check_fragment_types:
+        _check_scanned_fragment_types(unified, scan_filter)
+    return table
 
 
 class HeberReader:
