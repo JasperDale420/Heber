@@ -348,8 +348,9 @@ def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = N
     rows that file should hold are missing, and a caller told "no data" will
     skip the date and report success.
 
-    AppleDouble sidecars and ``.tmp`` partial writes stay ignorable — those are
-    normal filesystem noise rather than a lost write.
+    AppleDouble sidecars, ``.tmp`` partial writes and underscore-prefixed files
+    and trees (``_quarantine``, staging, locks) stay ignorable — those are not
+    data, so they cannot be a lost write.
     """
     base = Path(root)
     if not base.exists():
@@ -361,6 +362,10 @@ def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = N
             if f.name.startswith("._") or f.name.endswith(".tmp"):
                 continue
             if any(part.startswith("._") for part in f.parts):
+                continue
+            # Quarantine, staging and lock artifacts are not data, the same rule
+            # the collector's walk applies, so they cannot signal a lost write.
+            if any(_is_skipped_name(part) for part in f.relative_to(scope).parts):
                 continue
             try:
                 if f.stat().st_size == 0:

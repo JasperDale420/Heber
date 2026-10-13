@@ -526,3 +526,26 @@ class TestWalkClassificationAndSkips:
 
         assert HeberReader(tmp_path).list_gold_versions("feat", project="kairos") == ["v0"]
         assert len(HeberReader(tmp_path).read_gold("feat", project="kairos")) == 3
+
+
+class TestFailedWriteSearchSkipsNonData:
+    """`_failed_write_present` decides whether "nothing readable" means a lost
+    write. Quarantine and staging artifacts are not data, so they must not turn
+    an honestly empty read into a failure."""
+
+    def test_zero_byte_file_in_quarantine_is_not_a_lost_write(self, tmp_path: Path) -> None:
+        part = _partition(tmp_path, "2026-08-07")
+        (_mkdir(part / "_quarantine") / "part-bad.parquet").write_bytes(b"")
+
+        assert HeberReader(tmp_path).read_silver("darkpool").empty
+
+    def test_zero_byte_staging_file_is_not_a_lost_write(self, tmp_path: Path) -> None:
+        (_partition(tmp_path, "2026-08-07") / "_staging.parquet").write_bytes(b"")
+
+        assert HeberReader(tmp_path).read_silver("darkpool").empty
+
+    def test_a_real_lost_write_still_raises(self, tmp_path: Path) -> None:
+        (_partition(tmp_path, "2026-08-07") / "part-truncated.parquet").write_bytes(b"")
+
+        with pytest.raises(HeberReadError):
+            HeberReader(tmp_path).read_silver("darkpool")
