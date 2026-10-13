@@ -81,19 +81,24 @@ _TIMESTAMP_UNIT_ORDER = ("s", "ms", "us", "ns")
 _PREDICATE_COLUMNS = ("ts_event", "ts_label", "ts_available", "instrument_key")
 
 
-def _finer_timestamp(left: pa.DataType, right: pa.DataType, column: str = "") -> pa.DataType:
+def _finer_timestamp(
+    left: pa.DataType, right: pa.DataType, column: str = "", *, strict_timezones: bool = False
+) -> pa.DataType:
     """Return whichever timestamp type holds both without losing precision.
 
     Different writers emit ``alert_time``/``ts_event`` at different resolutions.
     Casting the finer one down raises ``ArrowInvalid`` the moment a value has
     precision the coarser unit cannot express, so always widen.
+
+    ``strict_timezones`` refuses a timezone disagreement on every column, not
+    just the predicate columns.
     """
     if left.tz != right.tz:
         # The lakehouse contract is timezone-aware UTC everywhere, so this is a
         # producer bug. Arrow reads a naive value as a UTC instant; if it was
         # ever local time that silently moves a row across a cutoff. On the
         # columns cutoffs are built from, refuse rather than pick a side.
-        if column in _PREDICATE_COLUMNS:
+        if column in _PREDICATE_COLUMNS or strict_timezones:
             raise SchemaContractError(
                 f"fragments disagree on the timezone of {column} ({left} vs {right}); "
                 "refusing to guess a point-in-time boundary"
@@ -424,9 +429,11 @@ def _open_dataset_safe(
     not for a type flip-flopping across writers, so a `string -> int64 ->
     string` sequence would pass the probe, open under the string schema, and
     silently coerce the middle fragment's numbers to text. Callers that need
-    the guarantee pay for every fragment's footer read; callers that don't
-    (Silver reads) leave ``unify_evolved`` at its default and keep the
-    reactive-only recovery.
+    the guarantee pay for every fragment's footer read up front. Silver reads
+    leave ``unify_evolved`` at its default and get the type-drift half of the
+    guarantee from :func:`_check_scanned_fragment_types` instead, which reads
+    the footers the scan already cached; a column added partway through a
+    feed's life is not covered there.
     """
     file_list = _collect_parquet_files(path, dt_range=dt_range)
     if not file_list:
@@ -442,6 +449,95 @@ def _open_dataset_safe(
         logger.info("heber_reader_schema_conflict_detected", path=path)
 
     return _unified_dataset(file_list, partitioning)
+
+
+def _merge_fragment_schema(
+    field_map: dict[str, pa.DataType],
+    field_order: list[str],
+    schema: pa.Schema,
+    *,
+    strict_timezones: bool = False,
+) -> None:
+    """Fold one fragment's physical schema into a running cross-fragment union.
+
+    Mutates ``field_map`` (column name to unified type) and ``field_order``
+    (first-seen column order) in place, so callers can fold fragments one at a
+    time without keeping every schema alive. ``strict_timezones`` is passed to
+    :func:`_finer_timestamp`.
+
+    Raises:
+        SchemaContractError: If the fragment disagrees with an earlier one on a
+            column's type in a way no merge can settle without changing values.
+    """
+    # Build the data-column unified schema. Fold all string-family
+    # encodings (dictionary, large_string) down to plain pa.string()
+    # so the scanner has a single cast target — pyarrow can cast
+    # string<->large_string and decode dictionaries on read, but it
+    # refuses to *merge* across fragments with these mismatches.
+    # Numeric mismatches (e.g. ``trade_count`` int64 vs double from
+    # different writers) widen to the more general type — float64
+    # losslessly holds int values up to 2^53 and avoids the
+    # ``ArrowInvalid: Float value X was truncated converting to int64``
+    # that fires when a float-typed fragment is read into an int-typed
+    # schema.
+    #
+    # Everything else is a disagreement no merge can settle without
+    # changing the column's meaning (or, for decimal, its precision) —
+    # e.g. ``expiry`` written as ``int64`` in one partition and
+    # ``string`` in another. pyarrow's own dataset scan does not reject
+    # this uniformly: whether it raises depends on which fragment it
+    # samples first, so the same feed can read fine on one host and
+    # silently coerce every value to string on another. Reject instead.
+    for field in schema:
+        incoming = _normalize_string_type(field.type)
+        if field.name not in field_map:
+            field_order.append(field.name)
+            field_map[field.name] = incoming
+        else:
+            existing = field_map[field.name]
+            if existing.equals(incoming):
+                continue
+            if _is_null_like(existing) and not _is_null_like(incoming):
+                # ``null`` / ``list<null>`` carry no values, so any
+                # concrete type from another fragment wins outright —
+                # null is the one type nothing can be cast *into*.
+                # Order-independent: whichever side is null-like loses.
+                field_map[field.name] = incoming
+            elif _is_null_like(incoming):
+                continue
+            elif pa.types.is_decimal(existing) or pa.types.is_decimal(incoming):
+                # pyarrow casts decimal<->double without raising, but
+                # decimal->double drops precision beyond 2^53 and
+                # double->decimal can overflow — neither is a
+                # widening, both are the producer disagreeing on
+                # what the column holds.
+                raise SchemaContractError(
+                    f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                    f"{incoming}); a decimal column cannot be merged with another type "
+                    "without silently losing precision"
+                )
+            elif pa.types.is_string(existing) or pa.types.is_string(incoming):
+                # Only a genuine cross-family mismatch reaches this
+                # branch — same-family string encodings (dictionary,
+                # large_string) were already normalized above and
+                # took the ``existing.equals(incoming)`` exit.
+                raise SchemaContractError(
+                    f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                    f"{incoming}); casting to string would silently change what the "
+                    "column holds rather than merely how it's encoded"
+                )
+            elif pa.types.is_timestamp(existing) and pa.types.is_timestamp(incoming):
+                field_map[field.name] = _finer_timestamp(
+                    existing, incoming, field.name, strict_timezones=strict_timezones
+                )
+            elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
+                # int64 vs float64 → widen to float64
+                field_map[field.name] = pa.float64()
+            else:
+                raise SchemaContractError(
+                    f"fragments disagree on the type of {field.name!r} ({existing} vs "
+                    f"{incoming}) in a way that cannot be safely unified"
+                )
 
 
 def _unified_dataset(
@@ -464,86 +560,19 @@ def _unified_dataset(
         # of fragment.physical_schema, so this read is partition-agnostic
         # and avoids the cross-fragment merge that just failed above.
         raw = ds.dataset(file_list, format="parquet")
-        schemas: list[pa.Schema] = []
+        field_map: dict[str, pa.DataType] = {}
+        field_order: list[str] = []
+        read_any = False
         for fragment in raw.get_fragments():
             try:
-                schemas.append(fragment.physical_schema)
+                schema = fragment.physical_schema
             except Exception:
                 logger.debug("fragment_schema_read_failed", path=fragment.path, exc_info=True)
                 continue
-        if not schemas:
+            read_any = True
+            _merge_fragment_schema(field_map, field_order, schema)
+        if not read_any:
             return None
-
-        # Build the data-column unified schema. Fold all string-family
-        # encodings (dictionary, large_string) down to plain pa.string()
-        # so the scanner has a single cast target — pyarrow can cast
-        # string<->large_string and decode dictionaries on read, but it
-        # refuses to *merge* across fragments with these mismatches.
-        # Numeric mismatches (e.g. ``trade_count`` int64 vs double from
-        # different writers) widen to the more general type — float64
-        # losslessly holds int values up to 2^53 and avoids the
-        # ``ArrowInvalid: Float value X was truncated converting to int64``
-        # that fires when a float-typed fragment is read into an int-typed
-        # schema.
-        #
-        # Everything else is a disagreement no merge can settle without
-        # changing the column's meaning (or, for decimal, its precision) —
-        # e.g. ``expiry`` written as ``int64`` in one partition and
-        # ``string`` in another. pyarrow's own dataset scan does not reject
-        # this uniformly: whether it raises depends on which fragment it
-        # samples first, so the same feed can read fine on one host and
-        # silently coerce every value to string on another. Reject instead.
-        field_map: dict[str, pa.DataType] = {}
-        field_order: list[str] = []
-        for schema in schemas:
-            for field in schema:
-                incoming = _normalize_string_type(field.type)
-                if field.name not in field_map:
-                    field_order.append(field.name)
-                    field_map[field.name] = incoming
-                else:
-                    existing = field_map[field.name]
-                    if existing.equals(incoming):
-                        continue
-                    if _is_null_like(existing) and not _is_null_like(incoming):
-                        # ``null`` / ``list<null>`` carry no values, so any
-                        # concrete type from another fragment wins outright —
-                        # null is the one type nothing can be cast *into*.
-                        # Order-independent: whichever side is null-like loses.
-                        field_map[field.name] = incoming
-                    elif _is_null_like(incoming):
-                        continue
-                    elif pa.types.is_decimal(existing) or pa.types.is_decimal(incoming):
-                        # pyarrow casts decimal<->double without raising, but
-                        # decimal->double drops precision beyond 2^53 and
-                        # double->decimal can overflow — neither is a
-                        # widening, both are the producer disagreeing on
-                        # what the column holds.
-                        raise SchemaContractError(
-                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
-                            f"{incoming}); a decimal column cannot be merged with another type "
-                            "without silently losing precision"
-                        )
-                    elif pa.types.is_string(existing) or pa.types.is_string(incoming):
-                        # Only a genuine cross-family mismatch reaches this
-                        # branch — same-family string encodings (dictionary,
-                        # large_string) were already normalized above and
-                        # took the ``existing.equals(incoming)`` exit.
-                        raise SchemaContractError(
-                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
-                            f"{incoming}); casting to string would silently change what the "
-                            "column holds rather than merely how it's encoded"
-                        )
-                    elif pa.types.is_timestamp(existing) and pa.types.is_timestamp(incoming):
-                        field_map[field.name] = _finer_timestamp(existing, incoming, field.name)
-                    elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
-                        # int64 vs float64 → widen to float64
-                        field_map[field.name] = pa.float64()
-                    else:
-                        raise SchemaContractError(
-                            f"fragments disagree on the type of {field.name!r} ({existing} vs "
-                            f"{incoming}) in a way that cannot be safely unified"
-                        )
 
         # Append hive partition columns to the unified schema. Without
         # them, ``ds.dataset(file_list, schema=unified, partitioning=hive)``
@@ -697,6 +726,44 @@ def _scan_batched(
     return pa.Table.from_batches(batches, schema=batches[0].schema)
 
 
+def _check_scanned_fragment_types(dataset_obj: ds.Dataset, scan_filter: ds.Expression | None) -> None:
+    """Fail closed if the fragments a successful scan read disagree on a column's type.
+
+    ``pyarrow.dataset`` casts every fragment into a schema inferred from one of
+    them, and some of those casts (int64 to string, decimal to double) succeed
+    silently, so a scan that did not raise can still have rewritten values.
+    This folds each scanned fragment's physical schema through the same rules
+    :func:`_unified_dataset` applies and raises on the disagreements it refuses
+    to settle. Benign differences (string encodings, int/float widening,
+    null-typed columns, timestamp units) pass, because the scan already cast
+    them without changing a value or it would have raised. A timezone
+    disagreement is not benign even when the cast succeeds — Arrow reads a
+    naive value as a UTC instant — so it is refused on every column, matching
+    Silver's timezone-aware-UTC contract.
+
+    It runs after the scan on purpose: the scan has already parsed and cached
+    every fragment's footer, so reading ``physical_schema`` here costs no file
+    opens or reads. ``scan_filter`` restricts the check to fragments the scan
+    could not prune by partition, i.e. the ones it actually read.
+
+    Raises:
+        SchemaContractError: On a disagreement no merge can settle.
+    """
+    field_map: dict[str, pa.DataType] = {}
+    field_order: list[str] = []
+    previous: pa.Schema | None = None
+    for fragment in dataset_obj.get_fragments(filter=scan_filter):
+        schema = fragment.physical_schema
+        if previous is not None and schema.equals(previous):
+            continue
+        try:
+            _merge_fragment_schema(field_map, field_order, schema, strict_timezones=True)
+        except SchemaContractError:
+            logger.error("heber_reader_fragment_type_drift", path=fragment.path, exc_info=True)
+            raise
+        previous = schema
+
+
 def _scan_to_table(
     dataset_obj: ds.Dataset,
     path: str,
@@ -705,6 +772,7 @@ def _scan_to_table(
     scan_filter: ds.Expression | None = None,
     projection: list[str] | None = None,
     batch_size: int | None = None,
+    check_fragment_types: bool = False,
 ) -> pa.Table:
     """Materialize a scan, retrying once under a manually unified schema.
 
@@ -718,6 +786,13 @@ def _scan_to_table(
     The recovery is the same schema unification :func:`_open_dataset_safe`
     applies when the *open* fails — reached from the scan side, where these
     conflicts actually surface.
+
+    ``check_fragment_types`` additionally runs
+    :func:`_check_scanned_fragment_types` after whichever scan produced the
+    result, so a disagreement pyarrow cast through silently still fails the
+    read. The recovery path needs it too: :func:`_unified_dataset` settles a
+    timezone disagreement on a non-predicate column with only a warning, and
+    the stricter Silver rule must hold however the read was reached.
     """
 
     def _scan(target: ds.Dataset) -> pa.Table:
@@ -726,10 +801,14 @@ def _scan_to_table(
         return target.to_table(filter=scan_filter, columns=projection)
 
     try:
-        return _scan(dataset_obj)
+        table = _scan(dataset_obj)
     except _SCHEMA_CONFLICT_ERRORS as exc:
         logger.info("heber_reader_scan_schema_conflict", path=path)
         conflict = exc
+    else:
+        if check_fragment_types:
+            _check_scanned_fragment_types(dataset_obj, scan_filter)
+        return table
 
     # Unify over the fragments this dataset was actually built from, not a
     # fresh directory walk: re-walking would both repeat the I/O and risk
@@ -740,7 +819,10 @@ def _scan_to_table(
         # Unification could not produce a readable dataset. Surface the
         # original conflict rather than masking it as an empty result.
         raise conflict
-    return _scan(unified)
+    table = _scan(unified)
+    if check_fragment_types:
+        _check_scanned_fragment_types(unified, scan_filter)
+    return table
 
 
 class HeberReader:
@@ -936,6 +1018,7 @@ class HeberReader:
                 scan_filter=scan_filter,
                 projection=projection,
                 batch_size=batch_size,
+                check_fragment_types=True,
             )
             table = _coerce_dict_columns_to_string(table)
             df = table.to_pandas()
