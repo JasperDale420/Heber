@@ -14,6 +14,7 @@ contract this exists to satisfy.
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import os
 from pathlib import Path
@@ -24,6 +25,17 @@ import pytest
 from heber.ml.datasets import _atomic_write_parquet
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _plain_fsync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route every flush through ``os.fsync`` so these ordering tests can observe it.
+
+    On Darwin the writer flushes with ``fcntl(F_FULLFSYNC)`` instead; that path
+    has its own tests in ``tests/test_full_fsync.py``.
+    """
+    monkeypatch.delattr(fcntl, "F_FULLFSYNC", raising=False)
+
 
 # scripts/ is not an importable package — load the migration tool by path,
 # same as tests/test_normalize_gold_expiry.py.

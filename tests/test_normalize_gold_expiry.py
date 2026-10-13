@@ -5,6 +5,7 @@ and preservation as much as the coercion itself. No real lakehouse data is
 touched; every case builds a throwaway Gold tree under ``tmp_path``.
 """
 
+import fcntl
 import importlib.util
 import os
 from datetime import UTC, date, datetime
@@ -424,6 +425,9 @@ class TestPromotionFailure:
 
         monkeypatch.setattr(os, "fsync", tracked_fsync)
         monkeypatch.setattr(Path, "rename", tracked_rename)
+        # Route the directory flush through os.fsync so it is observable here;
+        # the Darwin F_FULLFSYNC path is covered in tests/test_full_fsync.py.
+        monkeypatch.delattr(fcntl, "F_FULLFSYNC", raising=False)
 
         with pytest.raises(RuntimeError, match="failed verification"):
             normalize_expiry(root, apply=True)
