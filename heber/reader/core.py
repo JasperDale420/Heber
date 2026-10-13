@@ -145,8 +145,25 @@ def _coerce_dict_columns_to_string(table: pa.Table) -> pa.Table:
     return pa.table(arrays, schema=pa.schema(fields))
 
 
-def _parquet_files_in(base: Path) -> list[str]:
-    """Recursively collect readable parquet files under one directory."""
+def _parquet_files_in(base: Path, *, scoped: bool = False) -> list[str]:
+    """Recursively collect readable parquet files under one directory.
+
+    A data file the walk lists but cannot use is a lost fragment, not an empty
+    one, so it fails the read with ``HeberReadError`` rather than letting its
+    readable siblings answer for it:
+
+    * A file whose ``stat()`` fails always raises. That is a degraded mount or a
+      file vanishing mid-read, and there is no way to know what it held.
+    * A zero-byte file raises when ``scoped`` — the walk is limited to ``dt=``
+      partitions the caller asked for, where a hole is most likely to be read as
+      absence. An unscoped walk skips it with a warning, because historical
+      writer-killed stubs sit in old partitions of high-volume feeds and failing
+      every whole-feed read on their account would turn a bounded hole into an
+      outage.
+
+    AppleDouble sidecars, ``._`` sidecar directories and underscore-prefixed
+    trees are filtered by name before any ``stat()`` and are never errors.
+    """
     files: list[str] = []
     for f in base.rglob("*.parquet"):
         # Filter by name BEFORE any stat() call. On macOS bind mounts inside
@@ -169,18 +186,24 @@ def _parquet_files_in(base: Path) -> list[str]:
             continue
         try:
             stat_result = f.stat()
-        except OSError:
-            # Defensive: any other unstattable path (rare) is also skipped.
-            continue
+        except OSError as exc:
+            logger.error("heber_reader_unstatable_file", path=str(f), exc_info=True)
+            raise HeberReadError(f"Cannot stat {f}; the read cannot tell what that fragment holds: {exc}") from exc
         if not stat.S_ISREG(stat_result.st_mode):
             continue
-        # Zero-byte parquet is a writer killed mid-write. pyarrow raises
-        # "Parquet file size is 0 bytes" on it, read_silver catches that and
-        # returns an empty frame, so one truncated file makes an entire feed
-        # look like it produced nothing — observed live on feed=darkpool, whose
-        # months of healthy partitions all became invisible. The compactor has
-        # skipped these since it was written; the reader had not.
+        # Zero-byte parquet is a writer killed mid-write. pyarrow refuses to
+        # open it, and before the walk filtered it one such file under
+        # feed=darkpool made every read of that feed fail and look empty. An
+        # unscoped walk still skips it so the rest of the feed stays readable;
+        # a scoped one is asking about this partition, and gets told it is
+        # missing data rather than handed the readable remainder.
         if stat_result.st_size == 0:
+            if scoped:
+                logger.error("heber_reader_lost_fragment", path=str(f), reason="zero_byte")
+                raise HeberReadError(
+                    f"{f} is zero bytes — a lost write in a requested partition, not an empty one; "
+                    "quarantine it and replay the partition from Bronze"
+                )
             logger.warning("heber_reader_skip_empty_file", path=str(f))
             continue
         files.append(str(f))
@@ -190,11 +213,12 @@ def _parquet_files_in(base: Path) -> list[str]:
 def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = None) -> bool:
     """True when the walk found a data parquet it could not use.
 
-    ``_collect_parquet_files`` drops zero-byte files, so a partition whose only
-    artifact is a writer-killed ``part-*.parquet`` collects to nothing and would
-    otherwise be indistinguishable from a partition nobody has written. It is
-    not the same thing: the rows that file should hold are missing, and a caller
-    told "no data" will skip the date and report success.
+    An unscoped ``_collect_parquet_files`` walk drops zero-byte files (a scoped
+    one raises on them instead), so a dataset whose only artifact is a
+    writer-killed ``part-*.parquet`` collects to nothing and would otherwise be
+    indistinguishable from one nobody has written. It is not the same thing: the
+    rows that file should hold are missing, and a caller told "no data" will
+    skip the date and report success.
 
     AppleDouble sidecars and ``.tmp`` partial writes stay ignorable — those are
     normal filesystem noise rather than a lost write.
@@ -323,7 +347,7 @@ def _collect_parquet_files(root: str | Path, dt_range: tuple[str, str] | None = 
         if scoped is not None:
             files: list[str] = []
             for partition in scoped:
-                files.extend(_parquet_files_in(partition))
+                files.extend(_parquet_files_in(partition, scoped=True))
             return files
 
     return _parquet_files_in(base)
@@ -875,11 +899,12 @@ class HeberReader:
         if dataset_obj is None:
             # `None` covers two very different situations. If the walk found no
             # readable file at all — an empty partition, or one holding only
-            # AppleDouble sidecars, `.tmp` partial writes or zero-byte stubs —
-            # there is genuinely nothing to read and an empty frame is the
-            # honest answer. If files *were* found, the open failed on them, and
-            # reporting that as "no data" is what let a corrupt fragment hide an
-            # entire feed.
+            # AppleDouble sidecars or `.tmp` partial writes — there is genuinely
+            # nothing to read and an empty frame is the honest answer. Zero-byte
+            # stubs are not that: a scoped walk has already raised on them, and
+            # `_failed_write_present` catches them on an unscoped one. If files
+            # *were* found, the open failed on them, and reporting that as "no
+            # data" is what let a corrupt fragment hide an entire feed.
             if _collect_parquet_files(str(base_path), dt_range=walk_dt_range) or _failed_write_present(
                 str(base_path), dt_range=walk_dt_range
             ):

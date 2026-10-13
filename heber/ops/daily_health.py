@@ -165,10 +165,10 @@ def _check_silver_invariants(
             # partial writes are ordinary noise on this volume, and letting
             # pyarrow auto-discover them turns a healthy partition into a
             # failed critical check.
-            files = _collect_parquet_files(partition)
-            if not files:
-                continue
             try:
+                files = _collect_parquet_files(partition)
+                if not files:
+                    continue
                 # One dataset over the collected files rather than per-file
                 # frames concatenated, so fragments are unified the way the
                 # canonical reader unifies them. Detecting *schema drift* is
