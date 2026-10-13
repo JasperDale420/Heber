@@ -296,6 +296,15 @@ class TestUnstatableRequestedPath:
         with pytest.raises(HeberReadError, match="looped.parquet"):
             HeberReader(tmp_path).read_parquet_dataset(loop_file)
 
+    def test_a_looped_explicit_gold_version_is_not_read_as_absent(self, tmp_path: Path) -> None:
+        project = _mkdir(tmp_path / "gold" / "dataset=feat" / "project=kairos")
+        _write_rows(_mkdir(project / "version=v0" / "dt=2026-08-07"), "part-good.parquet", "2026-08-07")
+        (project / "version=v1").symlink_to(project / "version=v1")
+
+        with pytest.raises(HeberReadError, match="version=v1"):
+            HeberReader(tmp_path).read_gold("feat", project="kairos", version="v1")
+        assert HeberReader(tmp_path).read_gold("feat", project="kairos", version="v9").empty
+
     def test_a_missing_path_still_reads_empty(self, tmp_path: Path) -> None:
         assert HeberReader(tmp_path).read_parquet_dataset(tmp_path / "nope" / "data.parquet").empty
         assert HeberReader(tmp_path).read_silver("never_written").empty

@@ -351,7 +351,9 @@ def _collect_parquet_files(
     on a whole-dataset walk — see :func:`_is_usable_data_file`.
     """
     base = Path(root)
-    if not base.exists():
+    # Absent is an honest empty result; a root that cannot be statted (a
+    # symlink loop, EIO, EACCES) is not, and raises HeberReadError.
+    if not _requested_path_exists(base):
         return []
     if base.is_file():
         # Callers like read_label() pass the data file directly; rglob on a
