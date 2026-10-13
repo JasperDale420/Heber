@@ -239,6 +239,27 @@ def _requested_path_exists(path: Path) -> bool:
     return True
 
 
+def _is_data_dir(path: Path) -> bool:
+    """Whether ``path`` is a directory, without hiding why it could not be checked.
+
+    ``Path.is_dir()`` answers False for a symlink loop and for most stat
+    errors, which lets partition and version discovery silently skip a
+    directory it should have read — a partial result, or an older Gold version
+    served as "latest". Only "not found" (ENOENT, ENOTDIR) means not a
+    directory here; any other ``stat()`` failure raises ``HeberReadError``.
+    Callers filter ``._`` AppleDouble names before calling this, because
+    ``stat()`` on those raises EPERM on macOS bind mounts.
+    """
+    try:
+        mode = path.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        logger.error("heber_reader_unstatable_path", path=str(path), exc_info=True)
+        raise HeberReadError(f"Cannot stat {path}; the read cannot tell whether it holds data: {exc}") from exc
+    return stat.S_ISDIR(mode)
+
+
 def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = None) -> bool:
     """True when the walk found a data parquet it could not use.
 
@@ -296,12 +317,20 @@ def _scoped_dt_dirs(base: Path, dt_range: tuple[str, str]) -> list[Path] | None:
     for pattern in ("dt=*", "*/dt=*"):
         matched: list[Path] = []
         for candidate in base.glob(pattern):
-            if candidate.name.startswith("._") or not candidate.is_dir():
+            # Name filters first: `._` sidecars raise EPERM from stat() on
+            # macOS bind mounts, at the dt= level or the instrument_type= one.
+            if any(part.startswith("._") for part in candidate.relative_to(base).parts):
                 continue
-            seen_any = True
             value = candidate.name.removeprefix("dt=")
             if lo <= value <= hi:
+                # A requested partition that cannot be statted is unknown, not
+                # absent; skipping it would hand back a partial result.
+                if not _is_data_dir(candidate):
+                    continue
+                seen_any = True
                 matched.append(candidate)
+            elif candidate.is_dir():
+                seen_any = True
         # Keep probing the deeper pattern when the shallow one held `dt=`
         # directories but none in range — returning early there would hide data
         # in a layout carrying partitions at both depths.
@@ -717,8 +746,17 @@ def _tuple_filters_to_exprs(
 
 
 def _discover_version_dirs(base_path: Path) -> list[Path]:
-    """Return version= directories under *base_path*, sorted newest-first by semver."""
-    dirs = [d for d in base_path.glob("**/version=*") if d.is_dir()]
+    """Return version= directories under *base_path*, sorted newest-first by semver.
+
+    A ``version=`` entry that cannot be statted raises ``HeberReadError``
+    rather than dropping out of the list, which would quietly serve an older
+    version as the latest. ``._`` sidecar paths are skipped by name first.
+    """
+    dirs = [
+        d
+        for d in base_path.glob("**/version=*")
+        if not any(part.startswith("._") for part in d.relative_to(base_path).parts) and _is_data_dir(d)
+    ]
     return sorted(
         dirs,
         key=lambda d: _version_sort_key(d.name.removeprefix(_VERSION_PREFIX)),

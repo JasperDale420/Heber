@@ -305,6 +305,51 @@ class TestUnstatableRequestedPath:
             HeberReader(tmp_path).read_gold("feat", project="kairos", version="v1")
         assert HeberReader(tmp_path).read_gold("feat", project="kairos", version="v9").empty
 
+    def test_a_looped_newer_version_fails_a_latest_read_instead_of_serving_an_older_one(self, tmp_path: Path) -> None:
+        project = _mkdir(tmp_path / "gold" / "dataset=feat" / "project=kairos")
+        _write_rows(_mkdir(project / "version=v0" / "dt=2026-08-07"), "part-good.parquet", "2026-08-07")
+        (project / "version=v1").symlink_to(project / "version=v1")
+
+        with pytest.raises(HeberReadError, match="version=v1"):
+            HeberReader(tmp_path).read_gold("feat", project="kairos")
+
+    def test_a_looped_requested_dt_partition_fails_a_scoped_read(self, tmp_path: Path) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-good.parquet", "2026-08-07")
+        crypto = _mkdir(tmp_path / "silver" / "feed=darkpool" / "instrument_type=crypto")
+        (crypto / "dt=2026-08-07").symlink_to(crypto / "dt=2026-08-07")
+
+        with pytest.raises(HeberReadError, match="dt=2026-08-07"):
+            HeberReader(tmp_path).read_silver("darkpool", **_SCOPED)
+
+    def test_a_looped_dt_partition_outside_the_range_does_not_fail_the_read(self, tmp_path: Path) -> None:
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-good.parquet", "2026-08-07")
+        crypto = _mkdir(tmp_path / "silver" / "feed=darkpool" / "instrument_type=crypto")
+        (crypto / "dt=2026-08-01").symlink_to(crypto / "dt=2026-08-01")
+
+        assert len(HeberReader(tmp_path).read_silver("darkpool", **_SCOPED)) == 3
+
+    def test_appledouble_sidecar_directories_are_skipped_before_any_stat(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On Docker bind mounts stat() on a `._` sidecar raises EPERM; discovery
+        must filter them by name first, as the file walk already does."""
+        _write_rows(_partition(tmp_path, "2026-08-07"), "part-good.parquet", "2026-08-07")
+        _mkdir(tmp_path / "silver" / "feed=darkpool" / "._instrument_type=equity" / "dt=2026-08-07")
+        project = _mkdir(tmp_path / "gold" / "dataset=feat" / "project=kairos")
+        _write_rows(_mkdir(project / "version=v0" / "dt=2026-08-07"), "part-good.parquet", "2026-08-07")
+        _mkdir(project / "._sidecar" / "version=v9")
+        real_stat = Path.stat
+
+        def eperm_on_sidecars(self: Path, *args: object, **kwargs: object) -> object:
+            if any(part.startswith("._") for part in self.parts):
+                raise OSError(errno.EPERM, "Operation not permitted", str(self))
+            return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "stat", eperm_on_sidecars)
+
+        assert len(HeberReader(tmp_path).read_silver("darkpool", **_SCOPED)) == 3
+        assert len(HeberReader(tmp_path).read_gold("feat", project="kairos")) == 3
+
     def test_a_missing_path_still_reads_empty(self, tmp_path: Path) -> None:
         assert HeberReader(tmp_path).read_parquet_dataset(tmp_path / "nope" / "data.parquet").empty
         assert HeberReader(tmp_path).read_silver("never_written").empty
