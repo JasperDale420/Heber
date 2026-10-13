@@ -102,6 +102,36 @@ def test_read_asof_raises_on_the_same_drift(tmp_path: Path, first_is_a: bool) ->
         HeberReader(tmp_path).read_asof("drift", asof_time="2026-08-03T00:00:00Z")
 
 
+@_ORDERS
+def test_naive_vs_aware_timestamp_on_any_column_raises(tmp_path: Path, first_is_a: bool) -> None:
+    """Arrow reads a naive value as a UTC instant without complaint, so a
+    column written naive by one producer and UTC by another can shift by the
+    producer's offset. The scan succeeding proves nothing here, and Silver's
+    contract is timezone-aware UTC on every timestamp column."""
+    when = pd.Timestamp("2026-08-01T09:30:00").to_pydatetime()
+    _write_pair(
+        tmp_path,
+        "bar_start_ts",
+        pa.array([when], pa.timestamp("us")),
+        pa.array([when], pa.timestamp("us", tz="UTC")),
+        first_is_a,
+    )
+
+    with pytest.raises(SchemaContractError, match="bar_start_ts"):
+        HeberReader(tmp_path).read_silver("drift")
+
+
+def test_timestamp_unit_difference_still_reads(tmp_path: Path) -> None:
+    """ms vs us on the same timezone is a widening, not drift."""
+    when = pd.Timestamp("2026-08-01T09:30:00", tz="UTC").to_pydatetime()
+    _write(tmp_path, "2026-08-01", "bar_start_ts", pa.array([when], pa.timestamp("ms", tz="UTC")))
+    _write(tmp_path, "2026-08-02", "bar_start_ts", pa.array([when], pa.timestamp("us", tz="UTC")))
+
+    df = HeberReader(tmp_path).read_silver("drift")
+
+    assert len(df) == 2
+
+
 def test_drift_in_a_middle_fragment_is_caught(tmp_path: Path) -> None:
     """A string -> int64 -> string sequence; an endpoint-only probe misses it."""
     _write(tmp_path, "2026-08-01", "expiry", pa.array(["2026-09-18"], pa.string()))

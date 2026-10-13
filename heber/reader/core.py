@@ -81,19 +81,24 @@ _TIMESTAMP_UNIT_ORDER = ("s", "ms", "us", "ns")
 _PREDICATE_COLUMNS = ("ts_event", "ts_label", "ts_available", "instrument_key")
 
 
-def _finer_timestamp(left: pa.DataType, right: pa.DataType, column: str = "") -> pa.DataType:
+def _finer_timestamp(
+    left: pa.DataType, right: pa.DataType, column: str = "", *, strict_timezones: bool = False
+) -> pa.DataType:
     """Return whichever timestamp type holds both without losing precision.
 
     Different writers emit ``alert_time``/``ts_event`` at different resolutions.
     Casting the finer one down raises ``ArrowInvalid`` the moment a value has
     precision the coarser unit cannot express, so always widen.
+
+    ``strict_timezones`` refuses a timezone disagreement on every column, not
+    just the predicate columns.
     """
     if left.tz != right.tz:
         # The lakehouse contract is timezone-aware UTC everywhere, so this is a
         # producer bug. Arrow reads a naive value as a UTC instant; if it was
         # ever local time that silently moves a row across a cutoff. On the
         # columns cutoffs are built from, refuse rather than pick a side.
-        if column in _PREDICATE_COLUMNS:
+        if column in _PREDICATE_COLUMNS or strict_timezones:
             raise SchemaContractError(
                 f"fragments disagree on the timezone of {column} ({left} vs {right}); "
                 "refusing to guess a point-in-time boundary"
@@ -446,12 +451,19 @@ def _open_dataset_safe(
     return _unified_dataset(file_list, partitioning)
 
 
-def _merge_fragment_schema(field_map: dict[str, pa.DataType], field_order: list[str], schema: pa.Schema) -> None:
+def _merge_fragment_schema(
+    field_map: dict[str, pa.DataType],
+    field_order: list[str],
+    schema: pa.Schema,
+    *,
+    strict_timezones: bool = False,
+) -> None:
     """Fold one fragment's physical schema into a running cross-fragment union.
 
     Mutates ``field_map`` (column name to unified type) and ``field_order``
     (first-seen column order) in place, so callers can fold fragments one at a
-    time without keeping every schema alive.
+    time without keeping every schema alive. ``strict_timezones`` is passed to
+    :func:`_finer_timestamp`.
 
     Raises:
         SchemaContractError: If the fragment disagrees with an earlier one on a
@@ -515,7 +527,9 @@ def _merge_fragment_schema(field_map: dict[str, pa.DataType], field_order: list[
                     "column holds rather than merely how it's encoded"
                 )
             elif pa.types.is_timestamp(existing) and pa.types.is_timestamp(incoming):
-                field_map[field.name] = _finer_timestamp(existing, incoming, field.name)
+                field_map[field.name] = _finer_timestamp(
+                    existing, incoming, field.name, strict_timezones=strict_timezones
+                )
             elif pa.types.is_floating(existing) or pa.types.is_floating(incoming):
                 # int64 vs float64 → widen to float64
                 field_map[field.name] = pa.float64()
@@ -722,7 +736,10 @@ def _check_scanned_fragment_types(dataset_obj: ds.Dataset, scan_filter: ds.Expre
     :func:`_unified_dataset` applies and raises on the disagreements it refuses
     to settle. Benign differences (string encodings, int/float widening,
     null-typed columns, timestamp units) pass, because the scan already cast
-    them without changing a value or it would have raised.
+    them without changing a value or it would have raised. A timezone
+    disagreement is not benign even when the cast succeeds — Arrow reads a
+    naive value as a UTC instant — so it is refused on every column, matching
+    Silver's timezone-aware-UTC contract.
 
     It runs after the scan on purpose: the scan has already parsed and cached
     every fragment's footer, so reading ``physical_schema`` here costs no file
@@ -740,7 +757,7 @@ def _check_scanned_fragment_types(dataset_obj: ds.Dataset, scan_filter: ds.Expre
         if previous is not None and schema.equals(previous):
             continue
         try:
-            _merge_fragment_schema(field_map, field_order, schema)
+            _merge_fragment_schema(field_map, field_order, schema, strict_timezones=True)
         except SchemaContractError:
             logger.error("heber_reader_fragment_type_drift", path=fragment.path, exc_info=True)
             raise
