@@ -284,6 +284,18 @@ class TestUnstatableRequestedPath:
         with pytest.raises(HeberReadError, match="feed=darkpool"):
             HeberReader(tmp_path).read_silver("darkpool")
 
+    def test_a_symlink_loop_is_not_read_as_absent(self, tmp_path: Path) -> None:
+        """`Path.exists()` answers False for ELOOP; a looped path is broken, not missing."""
+        silver = _mkdir(tmp_path / "silver")
+        (silver / "feed=looped").symlink_to(silver / "feed=looped")
+        loop_file = tmp_path / "looped.parquet"
+        loop_file.symlink_to(loop_file)
+
+        with pytest.raises(HeberReadError, match="feed=looped"):
+            HeberReader(tmp_path).read_silver("looped")
+        with pytest.raises(HeberReadError, match="looped.parquet"):
+            HeberReader(tmp_path).read_parquet_dataset(loop_file)
+
     def test_a_missing_path_still_reads_empty(self, tmp_path: Path) -> None:
         assert HeberReader(tmp_path).read_parquet_dataset(tmp_path / "nope" / "data.parquet").empty
         assert HeberReader(tmp_path).read_silver("never_written").empty

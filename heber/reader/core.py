@@ -219,19 +219,24 @@ def _parquet_files_in(base: Path, *, strict: bool = False) -> list[str]:
 
 
 def _requested_path_exists(path: Path) -> bool:
-    """``path.exists()`` for a path the caller asked to read, without hiding I/O errors.
+    """Whether a path the caller asked to read exists, without hiding I/O errors.
 
-    ``Path.exists()`` answers False only for "not there" errors (ENOENT,
-    ENOTDIR and the like) and lets anything else — EIO from a degraded mount,
-    EACCES — escape as a bare ``OSError``. Absent data is an honest empty
-    result; a path that cannot even be statted is an unknown, so it becomes
-    ``HeberReadError`` like every other unreadable-data failure.
+    Only "not found" (ENOENT) and "a parent is not a directory" (ENOTDIR) mean
+    the data is absent, which is an honest empty result. Any other ``stat()``
+    failure — EIO from a degraded mount, EACCES, a symlink loop (ELOOP) — means
+    the answer is unknown and becomes ``HeberReadError`` like every other
+    unreadable-data failure. ``Path.exists()`` is not used because it also
+    reports ELOOP and EBADF as plain absence and lets the rest escape as a bare
+    ``OSError``.
     """
     try:
-        return path.exists()
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
     except OSError as exc:
         logger.error("heber_reader_unstatable_path", path=str(path), exc_info=True)
         raise HeberReadError(f"Cannot stat {path}; the read cannot tell whether data is there: {exc}") from exc
+    return True
 
 
 def _failed_write_present(root: str | Path, dt_range: tuple[str, str] | None = None) -> bool:
