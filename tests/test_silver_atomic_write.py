@@ -10,6 +10,7 @@ on disk.
 
 from __future__ import annotations
 
+import fcntl
 import os
 from pathlib import Path
 
@@ -20,6 +21,17 @@ import pytest
 from heber.writer.utils import write_silver_parquet
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _plain_fsync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route every flush through ``os.fsync`` so these ordering tests can observe it.
+
+    On Darwin the writer flushes with ``fcntl(F_FULLFSYNC)`` instead; that path
+    has its own tests in ``tests/test_full_fsync.py``.
+    """
+    monkeypatch.delattr(fcntl, "F_FULLFSYNC", raising=False)
+
 
 SCHEMA = pa.schema(
     [

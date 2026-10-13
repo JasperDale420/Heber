@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+import sys
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -106,11 +108,32 @@ def _keep_staging_for_autopsy(tmp_path: Path) -> None:
         _discard_staging(tmp_path)
 
 
+def _flush_to_device(fd: int) -> None:
+    """Flush ``fd`` all the way to the storage device, not just to the drive.
+
+    On Darwin plain ``fsync()`` hands the data to the drive, which may still be
+    holding it in its own write cache when power is lost; ``F_FULLFSYNC`` asks
+    the drive to flush that cache too, the same reason SQLite's macOS VFS uses
+    it. Some filesystems and drivers reject it (``ENOTSUP``), and a Python build
+    may not expose the constant; either way the plain ``fsync`` still runs, and a
+    rejection is logged so the weaker guarantee is visible rather than silent.
+    Other platforms use ``fsync`` alone.
+    """
+    full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
+    if sys.platform == "darwin" and full_fsync is not None:
+        try:
+            fcntl.fcntl(fd, full_fsync)
+            return
+        except OSError as exc:
+            logger.warning("heber_full_fsync_unsupported", errno=exc.errno, error=str(exc))
+    os.fsync(fd)
+
+
 def fsync_directory(path: Path) -> None:
     """Flush a directory's own entries, making renames and deletes inside it durable."""
     fd = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(fd)
+        _flush_to_device(fd)
     finally:
         os.close(fd)
 
@@ -127,6 +150,9 @@ def publish_file_atomically(tmp_path: Path, file_path: Path) -> None:
     renamed into place; a failure deletes the staging file instead of publishing
     it.
 
+    On Darwin the flush uses ``F_FULLFSYNC`` so the drive's own write cache is
+    emptied too, falling back to plain ``fsync`` where that is rejected.
+
     This narrows the window rather than closing it. Inside a container the fsync
     reaches the host's virtiofs layer, and whether the USB enclosure has the data
     by then is a property of that stack, not something POSIX promises.
@@ -141,7 +167,7 @@ def publish_file_atomically(tmp_path: Path, file_path: Path) -> None:
         with open(tmp_path, "rb") as handle:
             if os.fstat(handle.fileno()).st_size == 0:
                 raise OSError(f"write produced an empty file: {tmp_path}")
-            os.fsync(handle.fileno())
+            _flush_to_device(handle.fileno())
         os.replace(tmp_path, file_path)
     except BaseException:
         _discard_staging(tmp_path)
