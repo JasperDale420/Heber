@@ -47,6 +47,70 @@ docker compose up -d            # bring up the stack
 | `HEBER_REDIS_READ_BLOCK_MS` | (see `heber/config.py`) | Block ms on XREADGROUP |
 | `HEBER_REDIS_PROCESS_CONCURRENCY` | (see `heber/config.py`) | Parallel envelope processing |
 
+## JetStream Ingest (opt-in)
+
+Data-Gateway's durable outbox can publish the same EventEnvelope JSON to JetStream
+work-queue streams it provisions: `heber:events` to `HEBER_LIVE` (`heber.live.<feed>`)
+and `heber:events:backfill` to `HEBER_BACKFILL` (`heber.backfill.<feed>`), with the
+`Nats-Msg-Id` header set to the envelope's `event_id`. Each writer lane can switch to
+it independently; Redis stays the default and nothing changes until you opt in.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HEBER_INGEST_TRANSPORT` | `redis` | `redis` or `jetstream`. Compose maps it from `HEBER_LIVE_INGEST_TRANSPORT` / `HEBER_BACKFILL_INGEST_TRANSPORT` |
+| `HEBER_INGEST_LANE` | `live` | `live` or `backfill`; selects stream, durable consumer and subject filter |
+| `HEBER_NATS_URL` | `nats://localhost:4222` | Broker URL (compose: `nats://host.docker.internal:4222`) |
+| `HEBER_NATS_USERNAME` / `HEBER_NATS_PASSWORD` | empty | Required when the transport is `jetstream` |
+| `HEBER_JETSTREAM_LIVE_STREAM_NAME` / `..._BACKFILL_STREAM_NAME` | `HEBER_LIVE` / `HEBER_BACKFILL` | Streams owned by Data-Gateway; Heber never creates them |
+| `HEBER_JETSTREAM_LIVE_DURABLE_NAME` / `..._BACKFILL_DURABLE_NAME` | `heber-live-writers` / `heber-backfill-writers` | Durable pull consumers; the backfill name must match Data-Gateway's `GATEWAY_JETSTREAM_BACKFILL_DURABLE_NAME` |
+| `HEBER_JETSTREAM_FETCH_BATCH_SIZE` | `500` | Messages per pull |
+| `HEBER_JETSTREAM_FETCH_TIMEOUT_SECONDS` | `2.0` | Pull wait before the loop treats the stream as idle |
+| `HEBER_JETSTREAM_ACK_BARRIER_SECONDS` | `30` | Longest a processed message waits before a full flush + acknowledgement |
+| `HEBER_JETSTREAM_MAX_HELD_MESSAGES` | `50000` | Held (processed, unacknowledged) messages that force a barrier |
+| `HEBER_JETSTREAM_ACK_WAIT_SECONDS` | `300` | Durable `ack_wait`; must be at least 2x the barrier |
+| `HEBER_JETSTREAM_MAX_ACK_PENDING` | `60000` | Durable `max_ack_pending`; must be at least held limit + fetch batch |
+| `HEBER_JETSTREAM_RECONNECT_BACKOFF_SECONDS` | `2.0` | Pause before re-binding, and NAK delay when a DLQ write fails |
+
+Behavior:
+
+- **Binding.** On start the receiver checks that the lane's stream exists, carries
+  `heber.<lane>.>`, and is a work queue. It creates its durable consumer if missing
+  (explicit ACK, deliver-all, unlimited deliveries, the configured `ack_wait` /
+  `max_ack_pending`). It refuses to start if an existing durable has a different filter,
+  ack policy, `ack_wait`, `max_ack_pending`, a deliver policy other than all, or a finite
+  `max_deliver`. Fix drift by hand.
+- **Acknowledgement.** A message is acknowledged only after a flush leaves both
+  writers with nothing buffered. A failed flush acknowledges nothing; the broker
+  redelivers.
+  While messages wait for their flush, the receiver signals "in progress" for them every
+  third of `ack_wait`, including during a long flush, so they are not redelivered.
+- **Malformed messages** (unparseable, invalid envelope, missing `Nats-Msg-Id`, or a
+  header that names a different `event_id`) go to the on-disk DLQ under
+  `<data_root>/dlq_fallback/dt=*/jetstream_<STREAM>_*.json` with
+  `source_transport=jetstream`. The file, its directory and any newly created parent
+  directories are fsynced before the message can be acknowledged at the next durable barrier. If the
+  DLQ file cannot be written the message is NAKed, never acknowledged. This transport
+  has no Redis DLQ stream copy.
+- **Idempotency** matches the Redis path. In-process redeliveries are recognised by
+  stream sequence and not written twice; a re-published `event_id` is dropped by the
+  event-id dedupe. A crash between flush and acknowledgement can repeat rows in
+  Bronze; compaction's exact dedupe removes them.
+
+Rollout order: switch the backfill lane first (`GATEWAY_JETSTREAM_LANES=backfill`,
+`HEBER_BACKFILL_INGEST_TRANSPORT=jetstream`), as Data-Gateway's runbook describes. Two
+limits apply for now:
+
+- Data-Gateway's backfill *job* engine also waits for a Heber readiness record and
+  per-chunk acknowledgements in Redis. Heber does not write those yet on either
+  transport, so those jobs stay blocked. Bulk EOD publishes to the backfill lane do
+  flow.
+- Do not set `GATEWAY_JETSTREAM_LANES` to `live` or `both` yet. That also moves
+  flow-alert watch traffic to `HEBER_WATCH`, and `heber-watch` has no JetStream
+  receiver.
+
+Changing these variables recreates the consumer containers; rebuild and recreate them
+deliberately (`./scripts/deploy.sh heber-consumer heber-backfill-consumer`).
+
 ## Writer Tuning (Bronze + Silver)
 
 | Variable | Default | Description |

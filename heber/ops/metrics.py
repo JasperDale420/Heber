@@ -105,6 +105,23 @@ consumer_acked_total = _get_or_create(
     "progress signal that distinguishes 'flushing slowly' from 'wedged'.",
 )
 
+jetstream_held_messages = _get_or_create(
+    Gauge,
+    "heber_jetstream_held_messages",
+    "JetStream messages processed into the writer buffers but not yet acknowledged, waiting for "
+    "the flush that makes them durable. Growth without a matching rise in acked_total means the "
+    "flush barrier is failing.",
+    ["stream"],
+)
+
+jetstream_ack_failures_total = _get_or_create(
+    Counter,
+    "heber_jetstream_ack_failures_total",
+    "JetStream acknowledgements that failed after the data was already durable. The broker "
+    "redelivers these; the writer's event-id dedupe drops the repeat.",
+    ["stream"],
+)
+
 consumer_last_xread_success_unixtime = _get_or_create(
     Gauge,
     "heber_consumer_last_xread_success_unixtime",

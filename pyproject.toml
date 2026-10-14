@@ -30,6 +30,8 @@ dependencies = [
 
     # Event bus
     "redis>=5.0",
+    # JetStream transport (opt-in; pinned to the version Data-Gateway's sender uses)
+    "nats-py==2.16.0",
 
     # Feature Store
     "feast>=0.38",

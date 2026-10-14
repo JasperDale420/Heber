@@ -406,6 +406,15 @@ class EventConsumer:
                 raise last_error
             raise ValueError("all_aggregate_items_failed")
 
+    def _is_backfill_source(self) -> bool:
+        """Whether this consumer reads the historical backfill lane.
+
+        Old ``ts_event`` values are expected there and must not raise the
+        stale-live-source warning. Transports override this with their own lane
+        identity.
+        """
+        return settings.redis_stream_name == settings.redis_backfill_stream_name
+
     def _process_event_once(self, event_data: dict) -> tuple[bool, str | None, bool]:
         """Process an event one time and return `(success, error, retryable)`."""
         feed = "unknown"
@@ -430,7 +439,7 @@ class EventConsumer:
             # backfill: `source` is the delivery method ("websocket"/"rest") and
             # the backfill driver emits "rest", so keying off it never suppressed
             # anything and buried the log under one warning per backfilled record.
-            on_backfill_stream = settings.redis_stream_name == settings.redis_backfill_stream_name
+            on_backfill_stream = self._is_backfill_source()
             now_utc = datetime.now(UTC)
             if envelope.ts_event > now_utc + timedelta(hours=1):
                 logger.warning(
@@ -1187,6 +1196,15 @@ class EventConsumer:
         self.running = False
 
 
+def build_ingest_consumer() -> EventConsumer:
+    """Build the writer for the configured transport; Redis Streams unless JetStream is selected."""
+    if settings.ingest_transport == "jetstream":
+        from heber.writer.jetstream_consumer import JetStreamEventConsumer
+
+        return JetStreamEventConsumer()
+    return EventConsumer()
+
+
 async def main():
     """Entry point for the consumer."""
     configure_logging(service_name="heber-consumer", log_level=settings.log_level, json_output=True)
@@ -1194,7 +1212,7 @@ async def main():
         start_metrics_server_from_env(default_port=9090)
     except Exception as exc:
         logger.warning("metrics_server_startup_skipped", error=str(exc))
-    consumer = EventConsumer()
+    consumer = build_ingest_consumer()
 
     # Handle signals
     loop = asyncio.get_event_loop()

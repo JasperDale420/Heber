@@ -90,6 +90,16 @@ services:
       # loop amortizes its flush cost over the batch — 2000 left the live consumer
       # ~1.3k/s short of the producer at peak (2026-07-22).
       - HEBER_REDIS_READ_BATCH_SIZE=5000
+      # Transport switch, default redis (unchanged). Set HEBER_LIVE_INGEST_TRANSPORT=jetstream
+      # only after Data-Gateway publishes the live lane to JetStream AND heber-watch has a
+      # JetStream receiver: GATEWAY_JETSTREAM_LANES=live|both also moves flow-alert watch
+      # traffic to HEBER_WATCH, which nothing in Heber consumes yet.
+      - HEBER_INGEST_TRANSPORT=${HEBER_LIVE_INGEST_TRANSPORT:-redis}
+      - HEBER_INGEST_LANE=live
+      # The broker runs in Data-Gateway's compose project, published on host loopback.
+      - HEBER_NATS_URL=${HEBER_NATS_URL:-nats://host.docker.internal:4222}
+      - HEBER_NATS_USERNAME=${HEBER_NATS_USERNAME:-}
+      - HEBER_NATS_PASSWORD=${HEBER_NATS_PASSWORD:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Reaches data-gateway container-to-container over the shared bus instead of
@@ -173,6 +183,20 @@ services:
       # has no dedupe. Recovery must also stay above the barrier (config validator).
       - HEBER_REDIS_CLAIM_IDLE_MS=3600000
       - HEBER_REDIS_RECOVER_INTERVAL_SECONDS=1800
+      # Transport switch, default redis (unchanged); DG's runbook moves this lane first.
+      - HEBER_INGEST_TRANSPORT=${HEBER_BACKFILL_INGEST_TRANSPORT:-redis}
+      - HEBER_INGEST_LANE=backfill
+      - HEBER_NATS_URL=${HEBER_NATS_URL:-nats://host.docker.internal:4222}
+      - HEBER_NATS_USERNAME=${HEBER_NATS_USERNAME:-}
+      - HEBER_NATS_PASSWORD=${HEBER_NATS_PASSWORD:-}
+      # JetStream counterpart of the accumulator above: the Bronze/Silver thresholds are
+      # pushed out, so the ack barrier is the flush trigger. ack_wait covers barrier plus a
+      # multi-minute flush of hundreds of partitions; max_ack_pending covers held + one pull.
+      - HEBER_JETSTREAM_FETCH_BATCH_SIZE=5000
+      - HEBER_JETSTREAM_ACK_BARRIER_SECONDS=600
+      - HEBER_JETSTREAM_MAX_HELD_MESSAGES=150000
+      - HEBER_JETSTREAM_ACK_WAIT_SECONDS=1800
+      - HEBER_JETSTREAM_MAX_ACK_PENDING=160000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Reaches data-gateway container-to-container over the shared bus instead of

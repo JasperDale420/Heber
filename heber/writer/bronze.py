@@ -33,6 +33,11 @@ class BronzeWriter:
         # containers write the same partition concurrently (their .tmp staging
         # names would otherwise collide and clobber each other's partial write).
         self._writer_id = uuid.uuid4().hex[:8]
+        # Paths published by this writer, recorded only when a caller opts in by
+        # setting a list (the JetStream receiver does). Publication renames are not
+        # directory-synced here, so a caller that discards its source on the strength
+        # of a flush must sync these files' directories first. None = not tracked.
+        self.published_paths: list[Path] | None = None
 
     def _get_partition_key(self, envelope: EventEnvelope) -> str:
         """Generate partition key for an event."""
@@ -121,6 +126,8 @@ class BronzeWriter:
                 tmp_path.unlink(missing_ok=True)
                 raise
             publish_file_atomically(tmp_path, file_path)
+            if self.published_paths is not None:
+                self.published_paths.append(file_path)
 
             duration_seconds = max(0.0, time.perf_counter() - started)
             # One stat, not exists()+stat(). Each path lookup on the bind mount is

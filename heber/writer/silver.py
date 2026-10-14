@@ -52,6 +52,11 @@ class SilverWriter:
         # containers write the same partition concurrently (their .tmp staging
         # names would otherwise collide and clobber each other's partial write).
         self._writer_id = uuid.uuid4().hex[:8]
+        # Paths published by this writer, recorded only when a caller opts in by
+        # setting a list (the JetStream receiver does). Publication renames are not
+        # directory-synced here, so a caller that discards its source on the strength
+        # of a flush must sync these files' directories first. None = not tracked.
+        self.published_paths: list[Path] | None = None
 
     def _get_file_path(self, partition_key: str) -> Path:
         """Build the output Parquet path for a partition (unique per writer)."""
@@ -193,6 +198,8 @@ class SilverWriter:
                 partition_key=partition_key,
                 dataset=feed,
             )
+            if self.published_paths is not None:
+                self.published_paths.append(file_path)
         except (OSError, pa.ArrowTypeError, pa.ArrowInvalid):
             record_write_error(layer="silver", error_type="flush_failed")
             raise
