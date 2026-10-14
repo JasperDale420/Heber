@@ -75,15 +75,20 @@ Behavior:
 
 - **Binding.** On start the receiver checks that the lane's stream exists, carries
   `heber.<lane>.>`, and is a work queue. It creates its durable consumer if missing
-  (explicit ACK, the configured `ack_wait` / `max_ack_pending`), and refuses to start if
-  an existing durable has a different filter or delivery settings. Fix drift by hand.
+  (explicit ACK, deliver-all, unlimited deliveries, the configured `ack_wait` /
+  `max_ack_pending`). It refuses to start if an existing durable has a different filter,
+  ack policy, `ack_wait`, `max_ack_pending`, a deliver policy other than all, or a finite
+  `max_deliver`. Fix drift by hand.
 - **Acknowledgement.** A message is acknowledged only after a flush leaves both
   writers with nothing buffered. A failed flush acknowledges nothing; the broker
   redelivers.
+  While messages wait for their flush, the receiver signals "in progress" for them every
+  third of `ack_wait`, including during a long flush, so they are not redelivered.
 - **Malformed messages** (unparseable, invalid envelope, missing `Nats-Msg-Id`, or a
   header that names a different `event_id`) go to the on-disk DLQ under
   `<data_root>/dlq_fallback/dt=*/jetstream_<STREAM>_*.json` with
-  `source_transport=jetstream`. They are acknowledged at the next durable barrier. If the
+  `source_transport=jetstream`. The file, its directory and any newly created parent
+  directories are fsynced before the message can be acknowledged at the next durable barrier. If the
   DLQ file cannot be written the message is NAKed, never acknowledged. This transport
   has no Redis DLQ stream copy.
 - **Idempotency** matches the Redis path. In-process redeliveries are recognised by

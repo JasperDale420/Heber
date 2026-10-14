@@ -195,3 +195,41 @@ async def test_receiver_refuses_to_bind_before_the_gateway_provisions_streams(re
     consumer = JetStreamEventConsumer()
     with pytest.raises(JetStreamBindingError, match="HEBER_LIVE"):
         await consumer.connect()
+
+
+async def test_messages_held_past_ack_wait_are_not_redelivered_or_duplicated(
+    receiver_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A barrier that keeps failing holds messages across many pulls for longer than ack_wait."""
+    import heber.writer.jetstream_consumer as module
+
+    monkeypatch.setattr(settings, "jetstream_ack_wait_seconds", 10)
+    monkeypatch.setattr(settings, "jetstream_ack_barrier_seconds", 5.0)
+    monkeypatch.setattr(settings, "jetstream_reconnect_backoff_seconds", 0.1)
+    monkeypatch.setattr(module, "_HEARTBEAT_TICK_SECONDS", 0.5)
+    gateway = await _gateway(settings.nats_url)
+    await _publish(gateway, gateway_envelope())
+
+    consumer = JetStreamEventConsumer()
+    await consumer.connect()
+    real_flush_partition = consumer.bronze_writer._flush_partition
+
+    def broken_flush(*_: Any, **__: Any) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(consumer.bronze_writer, "_flush_partition", broken_flush)
+    deadline = time.monotonic() + 13  # longer than ack_wait
+    while time.monotonic() < deadline:
+        await consumer._consume_iteration()
+    assert len(consumer._held) == 1
+
+    manager = gateway.jsm()
+    assert (await manager.consumer_info("HEBER_LIVE", "heber-live-writers")).num_redelivered == 0
+
+    monkeypatch.setattr(consumer.bronze_writer, "_flush_partition", real_flush_partition)
+    await consumer._ack_barrier(force=True)
+    info = await manager.consumer_info("HEBER_LIVE", "heber-live-writers")
+    assert info.num_ack_pending == 0
+    assert len(bronze_rows(receiver_settings)) == 1
+    await consumer._shutdown()
+    await gateway.close()

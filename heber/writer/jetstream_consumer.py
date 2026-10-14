@@ -45,6 +45,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import nats
 import structlog
@@ -76,6 +77,36 @@ Connector = Callable[..., Awaitable[Any]]
 _MSG_ID_HEADER = "Nats-Msg-Id"
 _RECOVER_AFTER_CONSECUTIVE_ERRORS = 3
 _ACK_FLUSH_TIMEOUT_SECONDS = 5.0
+# How often the liveness gauge and held-message keepalive are serviced while a flush runs.
+_HEARTBEAT_TICK_SECONDS = 5.0
+
+
+def _loggable_url(servers: str) -> str:
+    """Server URL(s) with any ``user:password@`` userinfo removed, for logs."""
+    cleaned: list[str] = []
+    for server in servers.split(","):
+        parts = urlsplit(server.strip())
+        host = parts.netloc.rsplit("@", 1)[-1]
+        cleaned.append(f"{parts.scheme}://{host}" if parts.scheme else host)
+    return ",".join(cleaned)
+
+
+def _create_durable_directory(path: Path) -> None:
+    """Create ``path`` and any missing ancestors, syncing each new entry into its parent.
+
+    A file fsync makes its bytes durable and a directory fsync makes the entries
+    inside it durable, but a directory created moments ago is itself only an
+    entry in its parent; until that parent is synced, a crash can lose the whole
+    directory with everything in it.
+    """
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        fsync_directory(directory.parent)
 
 
 class JetStreamBindingError(EmpireError):  # type: ignore[misc]
@@ -101,6 +132,8 @@ class JetStreamEventConsumer(EventConsumer):
         # Stream sequence -> latest delivery of a processed, not yet acknowledged message.
         self._held: dict[int, Any] = {}
         self._oldest_held_monotonic: float | None = None
+        # Last time every held delivery was told the work is still in progress.
+        self._last_progress_monotonic: float | None = None
 
     @property
     def _stream(self) -> str:
@@ -146,7 +179,7 @@ class JetStreamEventConsumer(EventConsumer):
             durable=self._durable,
             subject=settings.jetstream_filter_subject,
             lane=settings.ingest_lane,
-            nats_url=settings.nats_url,
+            nats_url=_loggable_url(settings.nats_url),
         )
 
     async def _verify_stream(self, manager: Any) -> None:
@@ -194,8 +227,13 @@ class JetStreamEventConsumer(EventConsumer):
             return
 
         config = info.config
+        max_deliver = getattr(config, "max_deliver", None)
         checks = {
             "filter_subject": config.filter_subject == subject and not config.filter_subjects,
+            # NEW/LAST would skip the backlog already sitting in the work queue, and a
+            # finite max_deliver would abandon a message whose barrier keeps failing.
+            "deliver_policy": getattr(config, "deliver_policy", None) in (None, DeliverPolicy.ALL),
+            "max_deliver": max_deliver is None or max_deliver <= 0,
             "ack_policy": config.ack_policy == AckPolicy.EXPLICIT,
             "ack_wait": config.ack_wait is not None and abs(float(config.ack_wait) - ack_wait) < 1e-3,
             "max_ack_pending": config.max_ack_pending == settings.jetstream_max_ack_pending,
@@ -242,6 +280,7 @@ class JetStreamEventConsumer(EventConsumer):
 
     async def _consume_iteration(self) -> None:
         """Pull one batch, buffer it, and acknowledge whatever a flush made durable."""
+        await self._keep_held_alive()
         if self._barrier_due():
             await self._ack_barrier(force=True)
             if len(self._held) >= settings.jetstream_max_held_messages:
@@ -311,6 +350,26 @@ class JetStreamEventConsumer(EventConsumer):
         self._held[sequence] = message
         if self._oldest_held_monotonic is None:
             self._oldest_held_monotonic = time.monotonic()
+        if self._last_progress_monotonic is None:
+            self._last_progress_monotonic = time.monotonic()
+
+    async def _keep_held_alive(self) -> None:
+        """Reset ``ack_wait`` on every held delivery once a third of it has elapsed.
+
+        A held message waits for its barrier, and the barrier's flush can take
+        minutes, or keep failing. Without this the broker redelivers it after
+        ``ack_wait``; the redelivery would be recognised and not written twice,
+        but every held message would cycle through redelivery while it waits.
+        """
+        last = self._last_progress_monotonic
+        if not self._held or last is None:
+            return
+        if time.monotonic() - last < settings.jetstream_ack_wait_seconds / 3:
+            return
+        self._last_progress_monotonic = time.monotonic()
+        for sequence, message in list(self._held.items()):
+            await self._signal_in_progress(message, sequence)
+        logger.info("jetstream_held_messages_kept_alive", stream=self._stream, held=len(self._held))
 
     async def _signal_in_progress(self, message: Any, sequence: int) -> None:
         try:
@@ -370,7 +429,11 @@ class JetStreamEventConsumer(EventConsumer):
         return True
 
     def _write_dlq_record(self, key: str, record: dict[str, Any]) -> Path:
-        path = write_dlq_fallback_file(settings.dlq_fallback_path, f"jetstream:{self._stream}", key, record)
+        """Write the record, then make it, its directory and that directory's creation durable."""
+        now = datetime.now(UTC)
+        partition_dir = settings.dlq_fallback_path / f"dt={now.strftime('%Y-%m-%d')}"
+        _create_durable_directory(partition_dir)
+        path = write_dlq_fallback_file(settings.dlq_fallback_path, f"jetstream:{self._stream}", key, record, now=now)
         fsync_directory(path.parent)
         return path
 
@@ -385,6 +448,15 @@ class JetStreamEventConsumer(EventConsumer):
             return True
         oldest = self._oldest_held_monotonic
         return oldest is not None and time.monotonic() - oldest >= settings.jetstream_ack_barrier_seconds
+
+    async def _flush_layers_with_heartbeat(self, force: bool = False) -> bool:
+        """Flush off-loop, keeping both the liveness gauge and the held deliveries alive."""
+        task = asyncio.create_task(asyncio.to_thread(self._flush_layers, force))
+        while not task.done():
+            consumer_loop_heartbeat_unixtime.set(time.time())
+            await self._keep_held_alive()
+            await asyncio.wait({task}, timeout=_HEARTBEAT_TICK_SECONDS)
+        return task.result()
 
     def _writers_hold_rows(self) -> bool:
         return self.bronze_writer.has_buffered() or self.silver_writer.has_buffered()
@@ -410,6 +482,7 @@ class JetStreamEventConsumer(EventConsumer):
         held = self._held
         self._held = {}
         self._oldest_held_monotonic = None
+        self._last_progress_monotonic = None
         acknowledged = 0
         failed = 0
         for sequence, message in held.items():

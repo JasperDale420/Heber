@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 from nats.errors import TimeoutError as NatsTimeoutError
-from nats.js.api import AckPolicy, RetentionPolicy
+from nats.js.api import AckPolicy, DeliverPolicy, RetentionPolicy
 from nats.js.errors import NotFoundError
 from pydantic import SecretStr, ValidationError
 
@@ -685,3 +685,138 @@ def test_redis_consumer_backfill_detection_is_unchanged(monkeypatch: pytest.Monk
     assert consumer._is_backfill_source() is False
     monkeypatch.setattr(settings, "redis_stream_name", settings.redis_backfill_stream_name)
     assert consumer._is_backfill_source() is True
+
+
+# ---------------------------------------------------------------------------
+# Review hardening
+# ---------------------------------------------------------------------------
+
+
+async def test_dlq_directory_creation_is_made_durable_before_the_message_can_be_acked(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    real_fsync = __import__("heber.writer.utils", fromlist=["fsync_directory"]).fsync_directory
+
+    def recording_fsync(path: Path) -> None:
+        synced.append(Path(path))
+        real_fsync(path)
+
+    monkeypatch.setattr("heber.writer.jetstream_consumer.fsync_directory", recording_fsync)
+    broker = Broker()
+    message = wire_msg(gateway_envelope(), 5, broker.log, body=b"{not json")
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+
+    await consumer._consume_iteration()
+
+    dlq_root = jetstream_settings / "dlq_fallback"
+    (record_path,) = list(dlq_root.rglob("*.json"))
+    # Every newly created directory's entry is synced in its parent, and the
+    # record's own directory is synced after the rename.
+    assert jetstream_settings in synced
+    assert dlq_root in synced
+    assert record_path.parent in synced
+
+
+async def test_message_is_nakked_when_the_dlq_directory_cannot_be_synced(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_fsync(_: Path) -> None:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr("heber.writer.jetstream_consumer.fsync_directory", broken_fsync)
+    broker = Broker()
+    message = wire_msg(gateway_envelope(), 6, broker.log, body=b"{not json")
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+
+    await consumer._consume_iteration()
+    await consumer._ack_barrier(force=True)
+
+    assert message.acked is False
+    assert message.naks == [settings.jetstream_reconnect_backoff_seconds]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("deliver_policy", DeliverPolicy.NEW), ("max_deliver", 5)],
+)
+async def test_connect_refuses_a_durable_that_could_skip_or_abandon_messages(
+    jetstream_settings: Path, field: str, value: Any
+) -> None:
+    config = SimpleNamespace(
+        durable_name="heber-live-writers",
+        filter_subject="heber.live.>",
+        filter_subjects=None,
+        deliver_policy=DeliverPolicy.ALL,
+        max_deliver=-1,
+        ack_policy=AckPolicy.EXPLICIT,
+        ack_wait=float(settings.jetstream_ack_wait_seconds),
+        max_ack_pending=settings.jetstream_max_ack_pending,
+    )
+    setattr(config, field, value)
+    broker = Broker()
+    broker.jsm.consumers[("HEBER_LIVE", "heber-live-writers")] = config
+    with pytest.raises(JetStreamBindingError, match=field):
+        await connected(broker)
+
+
+async def test_held_messages_are_kept_alive_while_waiting_for_their_flush(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "bronze_flush_interval_seconds", 3600)
+    monkeypatch.setattr(settings, "silver_max_flush_time_seconds", 3600)
+    broker = Broker()
+    message = wire_msg(gateway_envelope(), 1, broker.log)
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+
+    await consumer._consume_iteration()
+    assert message.in_progress_calls == 0
+
+    consumer._last_progress_monotonic = 0.0  # a third of ack_wait has elapsed
+    await consumer._consume_iteration()
+    assert message.in_progress_calls == 1
+    assert message.acked is False
+
+
+async def test_held_messages_are_kept_alive_during_a_slow_flush(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import heber.writer.jetstream_consumer as module
+
+    monkeypatch.setattr(module, "_HEARTBEAT_TICK_SECONDS", 0.01)
+    broker = Broker()
+    message = wire_msg(gateway_envelope(), 1, broker.log)
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+    monkeypatch.setattr(settings, "bronze_flush_interval_seconds", 3600)
+    monkeypatch.setattr(settings, "silver_max_flush_time_seconds", 3600)
+    await consumer._consume_iteration()
+
+    real_flush = consumer._flush_layers
+
+    def slow_flush(force: bool = False) -> bool:
+        consumer._last_progress_monotonic = 0.0  # progress interval elapses mid-flush
+        import time as _time
+
+        _time.sleep(0.1)
+        return real_flush(force)
+
+    monkeypatch.setattr(consumer, "_flush_layers", slow_flush)
+    await consumer._ack_barrier(force=True)
+
+    assert message.in_progress_calls >= 1
+    assert message.acked is True
+
+
+def test_broker_url_is_logged_without_credentials() -> None:
+    from heber.writer.jetstream_consumer import _loggable_url
+
+    userinfo = f"user:{TEST_NATS_PASSWORD}@"
+    assert _loggable_url(f"nats://{userinfo}broker.internal:4222") == "nats://broker.internal:4222"
+    assert _loggable_url("nats://broker.internal:4222") == "nats://broker.internal:4222"
+    combined = _loggable_url(f"tls://{userinfo}[::1]:4222,nats://a:{TEST_NATS_PASSWORD}@other:4222")
+    assert TEST_NATS_PASSWORD not in combined
+    assert combined == "tls://[::1]:4222,nats://other:4222"
