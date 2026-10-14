@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 from urllib.parse import unquote, urlsplit
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Fallback Postgres password used only when HEBER_POSTGRES_PASSWORD is unset.
@@ -369,6 +369,74 @@ class Settings(BaseSettings):
             "Force a barrier once this many message IDs await acknowledgement, bounding the "
             "pending-entries list even if the event-count trigger is set high."
         ),
+    )
+
+    # Ingest transport. Data-Gateway's durable outbox can publish the same
+    # EventEnvelope JSON to JetStream work-queue streams it provisions
+    # (HEBER_LIVE / HEBER_BACKFILL). Redis stays the default; an operator opts a
+    # writer lane in by setting HEBER_INGEST_TRANSPORT=jetstream.
+    ingest_transport: Literal["redis", "jetstream"] = Field(
+        default="redis",
+        description="Transport the writer consumes from: Redis Streams (default) or JetStream",
+    )
+    ingest_lane: Literal["live", "backfill"] = Field(
+        default="live",
+        description="Writer lane when ingest_transport=jetstream: selects the stream, durable consumer and subject",
+    )
+    nats_url: str = Field(default="nats://localhost:4222", description="NATS server URL for JetStream ingest")
+    nats_username: str = Field(default="", description="NATS user; required when ingest_transport=jetstream")
+    nats_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="NATS password; required when ingest_transport=jetstream",
+    )
+    jetstream_live_stream_name: str = Field(default="HEBER_LIVE", min_length=1)
+    jetstream_backfill_stream_name: str = Field(default="HEBER_BACKFILL", min_length=1)
+    jetstream_live_durable_name: str = Field(default="heber-live-writers", min_length=1)
+    jetstream_backfill_durable_name: str = Field(
+        default="heber-backfill-writers",
+        min_length=1,
+        description="Must equal Data-Gateway's GATEWAY_JETSTREAM_BACKFILL_DURABLE_NAME",
+    )
+    jetstream_fetch_batch_size: int = Field(default=500, ge=1, le=5000, description="Messages per pull request")
+    jetstream_fetch_timeout_seconds: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=30.0,
+        description="How long one pull waits for messages before the loop treats the stream as idle",
+    )
+    jetstream_ack_barrier_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "Longest a processed message may wait unacknowledged before every buffered partition is "
+            "flushed and the held messages are acknowledged. Matches the Bronze flush interval so the "
+            "barrier normally coincides with the writers' own flush and file counts stay unchanged."
+        ),
+    )
+    jetstream_max_held_messages: int = Field(
+        default=50_000,
+        ge=1,
+        description="Processed-but-unacknowledged messages that force a flush barrier before the next pull",
+    )
+    jetstream_ack_wait_seconds: int = Field(
+        default=300,
+        ge=10,
+        description=(
+            "Durable consumer ack_wait. A message held past it is redelivered; the receiver recognises the "
+            "redelivery by stream sequence and keeps holding it rather than writing it twice."
+        ),
+    )
+    jetstream_max_ack_pending: int = Field(
+        default=60_000,
+        ge=1,
+        description="Durable consumer max_ack_pending; must cover the held limit plus one pull",
+    )
+    jetstream_reconnect_backoff_seconds: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=60.0,
+        description="Pause before re-binding after a fetch failure, and the NAK delay when a DLQ write fails",
     )
 
     # Silver file sizing targets (PRD §7.5)
@@ -928,6 +996,52 @@ class Settings(BaseSettings):
                 f"redeliver mid-window."
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_jetstream_ingest(self) -> "Settings":
+        """Refuse a JetStream writer configuration that cannot hold messages safely.
+
+        Only checked when the transport is selected, so the Redis default is
+        unaffected. ``ack_wait`` must comfortably exceed the barrier or every held
+        message is redelivered before it is acknowledged, and ``max_ack_pending``
+        must admit the held limit plus a full pull or the server stops delivering
+        before the held-count barrier can trigger.
+        """
+        if self.ingest_transport != "jetstream":
+            return self
+        if not self.nats_username or not self.nats_password.get_secret_value():
+            raise ValueError("ingest_transport=jetstream requires nats_username and nats_password")
+        if self.jetstream_ack_wait_seconds < 2 * self.jetstream_ack_barrier_seconds:
+            raise ValueError(
+                f"jetstream_ack_wait_seconds ({self.jetstream_ack_wait_seconds}) must be at least twice "
+                f"jetstream_ack_barrier_seconds ({self.jetstream_ack_barrier_seconds})"
+            )
+        required_pending = self.jetstream_max_held_messages + self.jetstream_fetch_batch_size
+        if self.jetstream_max_ack_pending < required_pending:
+            raise ValueError(
+                f"jetstream_max_ack_pending ({self.jetstream_max_ack_pending}) must be at least "
+                f"jetstream_max_held_messages + jetstream_fetch_batch_size ({required_pending})"
+            )
+        return self
+
+    @property
+    def jetstream_stream_name(self) -> str:
+        """JetStream stream the configured writer lane consumes."""
+        if self.ingest_lane == "backfill":
+            return self.jetstream_backfill_stream_name
+        return self.jetstream_live_stream_name
+
+    @property
+    def jetstream_durable_name(self) -> str:
+        """Durable consumer name for the configured writer lane."""
+        if self.ingest_lane == "backfill":
+            return self.jetstream_backfill_durable_name
+        return self.jetstream_live_durable_name
+
+    @property
+    def jetstream_filter_subject(self) -> str:
+        """Subject filter for the lane; Data-Gateway publishes ``heber.<lane>.<feed>``."""
+        return f"heber.{self.ingest_lane}.>"
 
     @property
     def bronze_path(self) -> Path:
