@@ -820,3 +820,73 @@ def test_broker_url_is_logged_without_credentials() -> None:
     combined = _loggable_url(f"tls://{userinfo}[::1]:4222,nats://a:{TEST_NATS_PASSWORD}@other:4222")
     assert TEST_NATS_PASSWORD not in combined
     assert combined == "tls://[::1]:4222,nats://other:4222"
+
+
+# ---------------------------------------------------------------------------
+# Re-review: a published file's directory entry must be durable before ACK
+# ---------------------------------------------------------------------------
+
+
+async def test_published_directories_are_synced_up_to_the_data_root_before_the_ack(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker = Broker()
+    real_fsync = __import__("heber.writer.utils", fromlist=["fsync_directory"]).fsync_directory
+
+    def recording_fsync(path: Path) -> None:
+        broker.log.append(f"fsync:{Path(path)}")
+        real_fsync(path)
+
+    monkeypatch.setattr("heber.writer.jetstream_consumer.fsync_directory", recording_fsync)
+    message = wire_msg(gateway_envelope(), 1, broker.log)
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+
+    await consumer._consume_iteration()
+    await consumer._ack_barrier(force=True)
+
+    ack_at = broker.log.index("ack:1")
+    synced_before_ack = {entry.removeprefix("fsync:") for entry in broker.log[:ack_at] if entry.startswith("fsync:")}
+    published = list((jetstream_settings / "bronze").rglob("*.jsonl.gz")) + list(
+        (jetstream_settings / "silver").rglob("*.parquet")
+    )
+    assert published
+    for path in published:
+        directory = path.parent
+        while True:
+            assert str(directory) in synced_before_ack, directory
+            if directory == jetstream_settings:
+                break
+            directory = directory.parent
+    assert consumer.bronze_writer.published_paths == []
+    assert consumer.silver_writer.published_paths == []
+
+
+async def test_no_ack_until_published_directories_are_synced(
+    jetstream_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker = Broker()
+    message = wire_msg(gateway_envelope(), 1, broker.log)
+    broker.subscription.batches = [[message]]
+    consumer = await connected(broker)
+    real_fsync = __import__("heber.writer.utils", fromlist=["fsync_directory"]).fsync_directory
+
+    def broken_fsync(_: Path) -> None:
+        raise OSError("directory sync failed")
+
+    monkeypatch.setattr("heber.writer.jetstream_consumer.fsync_directory", broken_fsync)
+    await consumer._consume_iteration()
+    await consumer._ack_barrier(force=True)
+    assert message.acked is False
+    assert 1 in consumer._held
+    assert consumer.bronze_writer.published_paths  # kept for the retry
+
+    monkeypatch.setattr("heber.writer.jetstream_consumer.fsync_directory", real_fsync)
+    await consumer._ack_barrier(force=True)
+    assert message.acked is True
+
+
+def test_redis_consumer_writers_do_not_track_published_paths() -> None:
+    consumer = EventConsumer()
+    assert consumer.bronze_writer.published_paths is None
+    assert consumer.silver_writer.published_paths is None

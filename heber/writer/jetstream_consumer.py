@@ -134,6 +134,10 @@ class JetStreamEventConsumer(EventConsumer):
         self._oldest_held_monotonic: float | None = None
         # Last time every held delivery was told the work is still in progress.
         self._last_progress_monotonic: float | None = None
+        # Track what each flush publishes so its directories can be synced before
+        # the broker message, the only other copy, is acknowledged away.
+        self.bronze_writer.published_paths = []
+        self.silver_writer.published_paths = []
 
     @property
     def _stream(self) -> str:
@@ -458,6 +462,34 @@ class JetStreamEventConsumer(EventConsumer):
             await asyncio.wait({task}, timeout=_HEARTBEAT_TICK_SECONDS)
         return task.result()
 
+    def _sync_published_directories(self) -> None:
+        """Make the directory entries of every file published since the last barrier durable.
+
+        The writers fsync each file before renaming it into place but leave the
+        rename itself, and any partition directories created for it, unsynced. That
+        is acceptable while the source still holds the data; an acknowledged
+        work-queue message does not. Each published file's directory and every
+        ancestor up to ``data_root`` are synced, so newly created partition
+        directories are covered too. The recorded paths are cleared only once every
+        sync succeeded, so a failure is retried at the next barrier.
+        """
+        recorded = [(writer, list(writer.published_paths or [])) for writer in (self.bronze_writer, self.silver_writer)]
+        stop = settings.data_root
+        directories: set[Path] = set()
+        for _writer, paths in recorded:
+            for path in paths:
+                directory = path.parent
+                while directory not in directories:
+                    directories.add(directory)
+                    if directory == stop or directory == directory.parent:
+                        break
+                    directory = directory.parent
+        for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+            fsync_directory(directory)
+        for writer, paths in recorded:
+            if writer.published_paths is not None:
+                del writer.published_paths[: len(paths)]
+
     def _writers_hold_rows(self) -> bool:
         return self.bronze_writer.has_buffered() or self.silver_writer.has_buffered()
 
@@ -474,6 +506,17 @@ class JetStreamEventConsumer(EventConsumer):
                     held=len(self._held),
                     buffered_events=self._buffered_event_count(),
                 )
+            return
+        try:
+            await asyncio.to_thread(self._sync_published_directories)
+        except OSError as exc:
+            logger.error(
+                "jetstream_ack_deferred_directory_sync_failed",
+                stream=self._stream,
+                held=len(self._held),
+                error=str(exc),
+                exc_info=True,
+            )
             return
         if self._held:
             await self._ack_held()
