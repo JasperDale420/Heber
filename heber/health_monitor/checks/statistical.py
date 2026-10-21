@@ -12,10 +12,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import structlog
 
+from heber.health_monitor.checks._feeds import _silver_feeds
 from heber.health_monitor.metrics import health_null_rate
 from heber.health_monitor.models import CheckContext, CheckResult, Severity, Status
-from heber.schemas.silver import SILVER_SCHEMAS
-from heber.writer.ingest_contracts import BRONZE_ONLY_SILVER_DATASETS
 
 logger = structlog.get_logger(__name__)
 
@@ -27,11 +26,6 @@ NUMERIC_DTYPES = {"float64", "float32", "int64", "int32", "int16", "int8", "Floa
 def _now_et() -> datetime:
     """Return the current time in US/Eastern.  Patchable in tests."""
     return datetime.now(tz=ET)
-
-
-def _silver_feeds() -> list[str]:
-    """Return canonical Silver feed names (those with Arrow schemas, minus bronze-only)."""
-    return sorted(name for name in SILVER_SCHEMAS if name not in BRONZE_ONLY_SILVER_DATASETS)
 
 
 def _compute_column_stats(df: pd.DataFrame) -> list[dict]:
